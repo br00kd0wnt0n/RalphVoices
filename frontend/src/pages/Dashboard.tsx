@@ -4,8 +4,56 @@ import { projects, tests, personas } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Users, TestTube, FolderOpen, ArrowRight } from 'lucide-react';
+import { Users, TestTube, FolderOpen, ArrowRight, Sparkles, BarChart3, ChevronRight } from 'lucide-react';
 import type { Project, Test, Persona } from '@/types';
+
+const WORKFLOW_STEPS = [
+  {
+    step: 1,
+    title: 'Create a Project',
+    description: 'Organize your work by client or campaign. Each project contains its own personas and tests.',
+    icon: FolderOpen,
+    link: '/projects',
+    color: 'text-blue-500',
+    bgColor: 'bg-blue-500/10',
+  },
+  {
+    step: 2,
+    title: 'Build Personas',
+    description: 'Define your target audience profiles with demographics, psychographics, media habits, and cultural context.',
+    icon: Users,
+    link: '/personas',
+    color: 'text-purple-500',
+    bgColor: 'bg-purple-500/10',
+  },
+  {
+    step: 3,
+    title: 'Generate Variants',
+    description: 'AI creates 20+ unique individuals from each persona — varying ages, attitudes, platforms, and voice styles.',
+    icon: Sparkles,
+    link: '/personas',
+    color: 'text-[#D94D8F]',
+    bgColor: 'bg-[#D94D8F]/10',
+  },
+  {
+    step: 4,
+    title: 'Run Concept Tests',
+    description: 'Submit your creative concept and watch your synthetic panel react with authentic, in-character feedback.',
+    icon: TestTube,
+    link: '/tests/new',
+    color: 'text-amber-500',
+    bgColor: 'bg-amber-500/10',
+  },
+  {
+    step: 5,
+    title: 'Analyze Results',
+    description: 'Review sentiment scores, engagement likelihood, key themes, and representative quotes from your audience.',
+    icon: BarChart3,
+    link: '/tests',
+    color: 'text-green-500',
+    bgColor: 'bg-green-500/10',
+  },
+];
 
 export function Dashboard() {
   const [recentProjects, setRecentProjects] = useState<Project[]>([]);
@@ -59,6 +107,58 @@ export function Dashboard() {
         </div>
         <div className="absolute -right-20 -top-20 w-64 h-64 bg-[#D94D8F]/5 rounded-full blur-3xl" />
         <div className="absolute -right-10 -bottom-10 w-48 h-48 bg-[#D94D8F]/10 rounded-full blur-2xl" />
+      </div>
+
+      {/* How It Works */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold">How It Works</h2>
+          <span className="text-sm text-muted-foreground">5 steps to audience insights</span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+          {WORKFLOW_STEPS.map((item, index) => (
+            <Link key={item.step} to={item.link} className="group">
+              <Card className="h-full hover:border-[#D94D8F]/50 transition-all duration-300 hover:shadow-lg hover:shadow-[#D94D8F]/5">
+                <CardContent className="pt-6 pb-4 px-4">
+                  <div className="space-y-3">
+                    {/* Step Number & Icon */}
+                    <div className="flex items-center justify-between">
+                      <div className={`p-2.5 rounded-xl ${item.bgColor}`}>
+                        <item.icon className={`h-5 w-5 ${item.color}`} />
+                      </div>
+                      <span className="text-3xl font-bold text-muted-foreground/20 group-hover:text-muted-foreground/40 transition-colors">
+                        {item.step}
+                      </span>
+                    </div>
+
+                    {/* Title */}
+                    <h3 className="font-semibold text-sm group-hover:text-[#D94D8F] transition-colors">
+                      {item.title}
+                    </h3>
+
+                    {/* Description */}
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      {item.description}
+                    </p>
+
+                    {/* Arrow indicator */}
+                    <div className="flex items-center text-xs text-muted-foreground group-hover:text-[#D94D8F] transition-colors pt-1">
+                      <span>Get started</span>
+                      <ChevronRight className="h-3 w-3 ml-1 group-hover:translate-x-1 transition-transform" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </Link>
+          ))}
+        </div>
+
+        {/* Connector line for desktop */}
+        <div className="hidden md:block relative -mt-[140px] mx-auto w-[calc(100%-120px)] pointer-events-none">
+          <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-blue-500/20 via-[#D94D8F]/30 to-green-500/20" />
+        </div>
+        <div className="hidden md:block h-[100px]" /> {/* Spacer to account for negative margin */}
       </div>
 
       {/* Stats */}
