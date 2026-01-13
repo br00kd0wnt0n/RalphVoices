@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from '@/hooks/useAuth';
 import { Layout } from '@/components/Layout';
+import { BootSequence } from '@/components/BootSequence';
 import { Login } from '@/pages/Login';
 import { Dashboard } from '@/pages/Dashboard';
 import { Projects } from '@/pages/Projects';
@@ -31,7 +32,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 }
 
 function AppRoutes() {
-  const { user, loading } = useAuth();
+  const { user, loading, booting, completeBootSequence } = useAuth();
 
   if (loading) {
     return (
@@ -42,6 +43,10 @@ function AppRoutes() {
         </div>
       </div>
     );
+  }
+
+  if (booting && user) {
+    return <BootSequence onComplete={completeBootSequence} />;
   }
 
   return (
