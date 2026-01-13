@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { personas as personasApi } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Trash2, RefreshCw, Users, MapPin, Briefcase, ChevronDown, ChevronUp } from 'lucide-react';
+import { Trash2, RefreshCw, Users, MapPin, Briefcase, ChevronDown, ChevronUp, Loader2, Sparkles, Brain, CheckCircle } from 'lucide-react';
 import type { Persona } from '@/types';
 
 interface PersonaCardProps {
@@ -12,25 +12,71 @@ interface PersonaCardProps {
   onUpdate: () => void;
 }
 
+type GenerationStep = 'idle' | 'connecting' | 'analyzing' | 'generating' | 'saving' | 'complete' | 'error';
+
+const GENERATION_STEPS: { step: GenerationStep; label: string; duration: number }[] = [
+  { step: 'connecting', label: 'Connecting to AI service...', duration: 1500 },
+  { step: 'analyzing', label: 'Analyzing persona profile...', duration: 2000 },
+  { step: 'generating', label: 'Generating unique variants...', duration: 0 }, // Runs until API returns
+  { step: 'saving', label: 'Saving to database...', duration: 1000 },
+  { step: 'complete', label: 'Generation complete!', duration: 1500 },
+];
+
 export function PersonaCard({ persona, onDelete, onUpdate }: PersonaCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [generationStep, setGenerationStep] = useState<GenerationStep>('idle');
+  const [generationError, setGenerationError] = useState<string | null>(null);
+  const [variantsGenerated, setVariantsGenerated] = useState<number | null>(null);
 
   async function handleGenerateVariants() {
     setGenerating(true);
+    setGenerationError(null);
+    setVariantsGenerated(null);
+
+    // Step 1: Connecting
+    setGenerationStep('connecting');
+    await sleep(1500);
+
+    // Step 2: Analyzing
+    setGenerationStep('analyzing');
+    await sleep(2000);
+
+    // Step 3: Generating (actual API call)
+    setGenerationStep('generating');
+
     try {
-      await personasApi.generateVariants(persona.id, {
+      const result = await personasApi.generateVariants(persona.id, {
         count: 20,
         age_spread: 5,
         attitude_distribution: 'normal',
         platforms_to_include: ['TikTok', 'Instagram', 'YouTube', 'Twitter/X'],
       });
+
+      // Step 4: Saving
+      setGenerationStep('saving');
+      setVariantsGenerated(result.variants_generated || 0);
+      await sleep(1000);
+
+      // Step 5: Complete
+      setGenerationStep('complete');
+      await sleep(1500);
+
       onUpdate();
     } catch (error) {
       console.error('Failed to generate variants:', error);
+      setGenerationStep('error');
+      setGenerationError(error instanceof Error ? error.message : 'Failed to generate variants');
     } finally {
-      setGenerating(false);
+      setTimeout(() => {
+        setGenerating(false);
+        setGenerationStep('idle');
+      }, 500);
     }
+  }
+
+  function sleep(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   async function handleDelete() {
@@ -45,8 +91,81 @@ export function PersonaCard({ persona, onDelete, onUpdate }: PersonaCardProps) {
 
   const platforms = persona.media_habits?.primary_platforms?.map((p) => p.name) || [];
 
+  const getStepIcon = (step: GenerationStep) => {
+    switch (step) {
+      case 'connecting':
+        return <Loader2 className="h-6 w-6 text-[#D94D8F] animate-spin" />;
+      case 'analyzing':
+        return <Brain className="h-6 w-6 text-[#D94D8F] animate-pulse" />;
+      case 'generating':
+        return <Sparkles className="h-6 w-6 text-[#D94D8F] animate-pulse" />;
+      case 'saving':
+        return <Loader2 className="h-6 w-6 text-[#D94D8F] animate-spin" />;
+      case 'complete':
+        return <CheckCircle className="h-6 w-6 text-green-500" />;
+      case 'error':
+        return <Trash2 className="h-6 w-6 text-red-500" />;
+      default:
+        return null;
+    }
+  };
+
+  const getStepLabel = (step: GenerationStep) => {
+    const stepConfig = GENERATION_STEPS.find(s => s.step === step);
+    if (step === 'complete' && variantsGenerated !== null) {
+      return `Generated ${variantsGenerated} variants!`;
+    }
+    if (step === 'error') {
+      return generationError || 'Generation failed';
+    }
+    return stepConfig?.label || '';
+  };
+
   return (
-    <Card className="overflow-hidden">
+    <Card className="overflow-hidden relative">
+      {/* Generation Overlay */}
+      {generating && generationStep !== 'idle' && (
+        <div className="absolute inset-0 bg-background/95 backdrop-blur-sm z-10 flex items-center justify-center">
+          <div className="text-center p-6 space-y-4">
+            <div className="flex justify-center">
+              {getStepIcon(generationStep)}
+            </div>
+            <div className="space-y-2">
+              <p className="font-medium text-foreground">
+                {getStepLabel(generationStep)}
+              </p>
+              {generationStep === 'generating' && (
+                <p className="text-sm text-muted-foreground">
+                  This may take up to 60 seconds...
+                </p>
+              )}
+            </div>
+            {/* Progress dots */}
+            {generationStep !== 'complete' && generationStep !== 'error' && (
+              <div className="flex justify-center gap-1 pt-2">
+                {['connecting', 'analyzing', 'generating', 'saving'].map((s, i) => {
+                  const currentIndex = ['connecting', 'analyzing', 'generating', 'saving'].indexOf(generationStep);
+                  const isActive = i === currentIndex;
+                  const isComplete = i < currentIndex;
+                  return (
+                    <div
+                      key={s}
+                      className={`w-2 h-2 rounded-full transition-all duration-300 ${
+                        isComplete
+                          ? 'bg-green-500'
+                          : isActive
+                          ? 'bg-[#D94D8F] animate-pulse'
+                          : 'bg-muted-foreground/30'
+                      }`}
+                    />
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between">
           <div>
