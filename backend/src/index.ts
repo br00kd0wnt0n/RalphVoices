@@ -13,11 +13,25 @@ dotenv.config();
 const app = express();
 const wsInstance = expressWs(app);
 
-// Middleware
-app.use(cors({
-  origin: true,
+// CORS configuration
+const corsOptions = {
+  origin: [
+    'https://ralphvoices.up.railway.app',
+    'https://frontend-production-a08a.up.railway.app',
+    'http://localhost:5173',
+    'http://localhost:3000',
+  ],
   credentials: true,
-}));
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+};
+
+// Middleware
+app.use(cors(corsOptions));
+
+// Handle preflight requests explicitly
+app.options('*', cors(corsOptions));
+
 app.use(express.json());
 
 // Root route
