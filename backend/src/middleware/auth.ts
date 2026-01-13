@@ -31,9 +31,29 @@ export async function authMiddleware(
 ): Promise<void> {
   const authHeader = req.headers.authorization;
 
+  // If no auth header, use demo user (public mode)
   if (!authHeader?.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'No token provided' });
-    return;
+    try {
+      // Get or create demo user
+      let result = await query(
+        "SELECT id, email, name FROM users WHERE email = 'demo@ralphvoices.com'"
+      );
+
+      if (result.rows.length === 0) {
+        // Create demo user if doesn't exist
+        result = await query(
+          "INSERT INTO users (email, password_hash, name) VALUES ('demo@ralphvoices.com', 'public-demo', 'Demo User') RETURNING id, email, name"
+        );
+      }
+
+      req.user = result.rows[0];
+      next();
+      return;
+    } catch (error) {
+      console.error('Demo user error:', error);
+      res.status(500).json({ error: 'Failed to initialize demo mode' });
+      return;
+    }
   }
 
   const token = authHeader.slice(7);

@@ -1,11 +1,8 @@
 import { Link, Outlet, useLocation } from 'react-router-dom';
-import { useAuth } from '@/hooks/useAuth';
-import { Button } from '@/components/ui/button';
 import { RalphLogo } from '@/components/RalphLogo';
-import { Users, TestTube, LayoutDashboard, LogOut, FolderOpen } from 'lucide-react';
+import { Users, TestTube, LayoutDashboard, FolderOpen } from 'lucide-react';
 
 export function Layout() {
-  const { user, logout } = useAuth();
   const location = useLocation();
 
   const navItems = [
@@ -45,11 +42,7 @@ export function Layout() {
             </nav>
           </div>
           <div className="flex items-center gap-4">
-            <span className="text-sm text-muted-foreground hidden sm:block">{user?.email}</span>
-            <Button variant="ghost" size="sm" onClick={logout} className="text-muted-foreground hover:text-foreground">
-              <LogOut className="h-4 w-4 mr-2" />
-              Logout
-            </Button>
+            <span className="text-sm text-muted-foreground">Demo Mode</span>
           </div>
         </div>
       </header>
