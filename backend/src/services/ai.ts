@@ -1,12 +1,15 @@
 import OpenAI from 'openai';
 import type { Persona, PersonaVariant, VariantConfig } from '../utils/types.js';
 
-if (!process.env.OPENAI_API_KEY) {
-  console.warn('WARNING: OPENAI_API_KEY is not set. AI features will not work.');
+const apiKey = process.env.OPENAI_API_KEY;
+console.log(`OpenAI API Key configured: ${apiKey ? 'Yes (' + apiKey.substring(0, 10) + '...)' : 'NO - AI FEATURES DISABLED'}`);
+
+if (!apiKey) {
+  console.error('ERROR: OPENAI_API_KEY is not set. AI features will not work.');
 }
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || 'missing-key',
+  apiKey: apiKey || 'missing-key',
 });
 
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
