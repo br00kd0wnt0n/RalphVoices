@@ -5,8 +5,8 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js",
+    "build": "echo 'Using tsx for runtime'",
+    "start": "tsx src/index.ts",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:seed": "tsx src/db/seed.ts"
   },
@@ -19,6 +19,7 @@
     "jsonwebtoken": "^9.0.2",
     "openai": "^4.67.3",
     "pg": "^8.13.0",
+    "tsx": "^4.19.1",
     "uuid": "^10.0.0",
     "zod": "^3.23.8"
   },
@@ -31,7 +32,6 @@
     "@types/node": "^22.7.5",
     "@types/pg": "^8.11.10",
     "@types/uuid": "^10.0.0",
-    "tsx": "^4.19.1",
     "typescript": "^5.6.3"
   }
 }
