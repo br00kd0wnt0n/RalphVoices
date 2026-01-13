@@ -15,12 +15,7 @@ const wsInstance = expressWs(app);
 
 // Middleware
 app.use(cors({
-  origin: [
-    process.env.FRONTEND_URL || 'http://localhost:5173',
-    'https://frontend-production-a08a.up.railway.app',
-    'https://voices.up.railway.app',
-    'https://ralphvoices.up.railway.app'
-  ],
+  origin: true,
   credentials: true,
 }));
 app.use(express.json());
