@@ -1,8 +1,12 @@
 import OpenAI from 'openai';
 import type { Persona, PersonaVariant, VariantConfig } from '../utils/types.js';
 
+if (!process.env.OPENAI_API_KEY) {
+  console.warn('WARNING: OPENAI_API_KEY is not set. AI features will not work.');
+}
+
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY || 'missing-key',
 });
 
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
@@ -100,27 +104,31 @@ Generate ${count} variants with this distribution:
 
 Ensure diversity across all dimensions. Make each variant feel like a real person.`;
 
-  const response = await openai.chat.completions.create({
-    model: MODEL,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-    temperature: 0.9,
-    max_tokens: 4000,
-    response_format: { type: 'json_object' },
-  });
-
-  const content = response.choices[0]?.message?.content || '{"variants":[]}';
+  console.log(`Generating ${count} variants for persona ${persona.name}...`);
 
   try {
+    const response = await openai.chat.completions.create({
+      model: MODEL,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      temperature: 0.9,
+      max_tokens: 4000,
+      response_format: { type: 'json_object' },
+    });
+
+    const content = response.choices[0]?.message?.content || '{"variants":[]}';
+    console.log(`OpenAI response received, length: ${content.length}`);
+
     const parsed = JSON.parse(content);
     // Handle both direct array and wrapped object
     const variants = Array.isArray(parsed) ? parsed : (parsed.variants || []);
+    console.log(`Parsed ${variants.length} variants`);
     return variants as GeneratedVariant[];
-  } catch (error) {
-    console.error('Failed to parse variant response:', content);
-    throw new Error('Failed to parse AI response for variants');
+  } catch (error: any) {
+    console.error('OpenAI API error:', error.message || error);
+    throw new Error(`Failed to generate variants: ${error.message || 'Unknown error'}`);
   }
 }
 
