@@ -123,10 +123,31 @@ Ensure diversity across all dimensions. Make each variant feel like a real perso
 
     const content = response.choices[0]?.message?.content || '{"variants":[]}';
     console.log(`OpenAI response received, length: ${content.length}`);
+    console.log(`OpenAI raw response (first 500 chars): ${content.substring(0, 500)}`);
 
     const parsed = JSON.parse(content);
-    // Handle both direct array and wrapped object
-    const variants = Array.isArray(parsed) ? parsed : (parsed.variants || []);
+    console.log(`Parsed response keys: ${Object.keys(parsed).join(', ')}`);
+
+    // Handle both direct array and wrapped object - check multiple possible keys
+    let variants: GeneratedVariant[];
+    if (Array.isArray(parsed)) {
+      variants = parsed;
+    } else if (Array.isArray(parsed.variants)) {
+      variants = parsed.variants;
+    } else if (Array.isArray(parsed.data)) {
+      variants = parsed.data;
+    } else {
+      // Find first array property
+      const arrayKey = Object.keys(parsed).find(key => Array.isArray(parsed[key]));
+      if (arrayKey) {
+        console.log(`Found variants in key: ${arrayKey}`);
+        variants = parsed[arrayKey];
+      } else {
+        console.log(`No array found in response. Full response: ${JSON.stringify(parsed).substring(0, 1000)}`);
+        variants = [];
+      }
+    }
+
     console.log(`Parsed ${variants.length} variants`);
     return variants as GeneratedVariant[];
   } catch (error: any) {

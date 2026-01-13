@@ -300,7 +300,13 @@ router.post('/:id/variants', authMiddleware, async (req: AuthRequest, res: Respo
       platforms_to_include: config.platforms_to_include,
     };
 
+    console.log(`Calling generateVariants for persona ${persona.name} with count ${config.count}`);
     const generatedVariants = await generateVariants(persona, config.count, variantConfig);
+    console.log(`generateVariants returned ${generatedVariants.length} variants`);
+
+    if (generatedVariants.length === 0) {
+      console.log(`No variants generated. Persona data: name=${persona.name}, age=${persona.age_base}, location=${persona.location}`);
+    }
 
     // Insert variants
     const insertedVariants = [];
