@@ -117,7 +117,7 @@ export function Dashboard() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-          {WORKFLOW_STEPS.map((item, index) => (
+          {WORKFLOW_STEPS.map((item) => (
             <Link key={item.step} to={item.link} className="group">
               <Card className="h-full hover:border-[#D94D8F]/50 transition-all duration-300 hover:shadow-lg hover:shadow-[#D94D8F]/5">
                 <CardContent className="pt-6 pb-4 px-4">
