@@ -51,7 +51,17 @@ export function PersonaCard({ persona, onDelete, onUpdate }: PersonaCardProps) {
         age_spread: 5,
         attitude_distribution: 'normal',
         platforms_to_include: ['TikTok', 'Instagram', 'YouTube', 'Twitter/X'],
-      });
+      }) as any; // Cast to any to access potential error fields
+
+      // Check if API returned an error in the response body
+      if (result.error || result.variants_generated === 0) {
+        console.error('Variant generation failed:', result);
+        setGenerationStep('error');
+        const errorMsg = result.error || 'No variants generated';
+        const debugInfo = result.debug ? `\n\nDebug: API Key Set: ${result.debug.api_key_set}, Model: ${result.debug.openai_model}` : '';
+        setGenerationError(errorMsg + debugInfo);
+        return;
+      }
 
       // Step 4: Saving
       setGenerationStep('saving');

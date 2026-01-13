@@ -301,11 +301,37 @@ router.post('/:id/variants', authMiddleware, async (req: AuthRequest, res: Respo
     };
 
     console.log(`Calling generateVariants for persona ${persona.name} with count ${config.count}`);
-    const generatedVariants = await generateVariants(persona, config.count, variantConfig);
-    console.log(`generateVariants returned ${generatedVariants.length} variants`);
+
+    let generatedVariants;
+    let generationError = null;
+
+    try {
+      generatedVariants = await generateVariants(persona, config.count, variantConfig);
+      console.log(`generateVariants returned ${generatedVariants.length} variants`);
+    } catch (err: any) {
+      console.error(`generateVariants threw error:`, err);
+      generationError = err.message || 'Unknown error during generation';
+      generatedVariants = [];
+    }
 
     if (generatedVariants.length === 0) {
       console.log(`No variants generated. Persona data: name=${persona.name}, age=${persona.age_base}, location=${persona.location}`);
+      // Return error response with details
+      res.status(200).json({
+        persona_id: persona.id,
+        variants_generated: 0,
+        variants: [],
+        error: generationError || 'OpenAI returned empty response - check API key and model settings',
+        debug: {
+          persona_name: persona.name,
+          persona_age: persona.age_base,
+          persona_location: persona.location,
+          requested_count: config.count,
+          openai_model: process.env.OPENAI_MODEL || 'gpt-4o',
+          api_key_set: !!process.env.OPENAI_API_KEY,
+        }
+      });
+      return;
     }
 
     // Insert variants
