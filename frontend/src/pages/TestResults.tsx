@@ -441,8 +441,8 @@ export function TestResultsPage() {
                 {results.themes.positive_themes.length > 0 ? (
                   <div className="space-y-2">
                     {results.themes.positive_themes.map((theme, i) => (
-                      <div key={i} className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
-                        <span>{theme.theme}</span>
+                      <div key={i} className="flex items-center justify-between p-3 bg-green-50 dark:bg-green-950 rounded-lg">
+                        <span className="text-green-900 dark:text-green-100">{theme.theme}</span>
                         <Badge variant="secondary">{theme.frequency} mentions</Badge>
                       </div>
                     ))}
@@ -465,8 +465,8 @@ export function TestResultsPage() {
                 {results.themes.concerns.length > 0 ? (
                   <div className="space-y-2">
                     {results.themes.concerns.map((theme, i) => (
-                      <div key={i} className="flex items-center justify-between p-3 bg-red-50 rounded-lg">
-                        <span>{theme.theme}</span>
+                      <div key={i} className="flex items-center justify-between p-3 bg-red-50 dark:bg-red-950 rounded-lg">
+                        <span className="text-red-900 dark:text-red-100">{theme.theme}</span>
                         <Badge variant="secondary">{theme.frequency} mentions</Badge>
                       </div>
                     ))}
@@ -489,8 +489,8 @@ export function TestResultsPage() {
                 {results.themes.unexpected.length > 0 ? (
                   <div className="space-y-2">
                     {results.themes.unexpected.map((theme, i) => (
-                      <div key={i} className="flex items-center justify-between p-3 bg-purple-50 rounded-lg">
-                        <span>{theme.theme}</span>
+                      <div key={i} className="flex items-center justify-between p-3 bg-purple-50 dark:bg-purple-950 rounded-lg">
+                        <span className="text-purple-900 dark:text-purple-100">{theme.theme}</span>
                         <Badge variant="secondary">{theme.frequency} mentions</Badge>
                       </div>
                     ))}
