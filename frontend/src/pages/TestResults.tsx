@@ -34,6 +34,52 @@ const COLORS = {
   negative: '#ef4444',
 };
 
+// Calculate live stats from responses
+function calculateLiveStats(responses: TestResponse[]) {
+  if (responses.length === 0) {
+    return null;
+  }
+
+  const sentimentCounts = {
+    positive: responses.filter(r => r.sentiment_score >= 7).length,
+    neutral: responses.filter(r => r.sentiment_score >= 4 && r.sentiment_score < 7).length,
+    negative: responses.filter(r => r.sentiment_score < 4).length,
+  };
+
+  const avgEngagement = responses.reduce((sum, r) => sum + (r.engagement_likelihood || 5), 0) / responses.length;
+  const avgShare = responses.reduce((sum, r) => sum + (r.share_likelihood || 5), 0) / responses.length;
+  const avgComprehension = responses.reduce((sum, r) => sum + (r.comprehension_score || 5), 0) / responses.length;
+
+  // Calculate by platform
+  const byPlatform: Record<string, { count: number; avgSentiment: number; avgEngagement: number }> = {};
+  for (const r of responses) {
+    const platform = r.primary_platform || 'Other';
+    if (!byPlatform[platform]) {
+      byPlatform[platform] = { count: 0, avgSentiment: 0, avgEngagement: 0 };
+    }
+    byPlatform[platform].count++;
+    byPlatform[platform].avgSentiment += r.sentiment_score || 5;
+    byPlatform[platform].avgEngagement += r.engagement_likelihood || 5;
+  }
+  for (const group of Object.values(byPlatform)) {
+    group.avgSentiment = Math.round((group.avgSentiment / group.count) * 10) / 10;
+    group.avgEngagement = Math.round((group.avgEngagement / group.count) * 10) / 10;
+  }
+
+  return {
+    summary: {
+      total_responses: responses.length,
+      sentiment: sentimentCounts,
+      avg_engagement: Math.round(avgEngagement * 10) / 10,
+      avg_share_likelihood: Math.round(avgShare * 10) / 10,
+      avg_comprehension: Math.round(avgComprehension * 10) / 10,
+    },
+    segments: {
+      by_platform: byPlatform,
+    },
+  };
+}
+
 export function TestResultsPage() {
   const { id } = useParams<{ id: string }>();
   const [test, setTest] = useState<Test | null>(null);
@@ -75,7 +121,7 @@ export function TestResultsPage() {
         setWsConnected(true);
         console.log('[TestResults] WebSocket connected');
       };
-      ws.onmessage = (event) => {
+      ws.onmessage = async (event) => {
         const data = JSON.parse(event.data);
         console.log('[TestResults] WebSocket progress:', data);
         // Map WebSocket fields to test object fields
@@ -85,6 +131,17 @@ export function TestResultsPage() {
           responses_completed: data.completed,
           responses_total: data.total,
         } : null);
+
+        // Fetch responses in real-time to show live dashboard
+        if (data.completed > 0) {
+          try {
+            const responsesData = await testsApi.getResponses(id!, { limit: 100 });
+            setResponses(responsesData.responses);
+          } catch (err) {
+            console.error('[TestResults] Failed to fetch live responses:', err);
+          }
+        }
+
         if (data.status === 'complete') {
           loadTest();
         }
@@ -192,23 +249,150 @@ export function TestResultsPage() {
         </CardContent>
       </Card>
 
-      {/* Running State */}
-      {test.status === 'running' && (
-        <Card>
-          <CardContent className="py-8">
-            <div className="text-center space-y-4">
-              <RefreshCw className="h-12 w-12 mx-auto text-primary animate-spin" />
-              <div>
-                <h3 className="text-lg font-semibold">Generating Responses...</h3>
-                <p className="text-muted-foreground">
-                  {test.responses_completed} of {test.responses_total} responses complete
-                </p>
-              </div>
-              <Progress value={progressPercent} className="max-w-md mx-auto" />
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      {/* Running State with Live Dashboard */}
+      {test.status === 'running' && (() => {
+        const liveStats = calculateLiveStats(responses);
+        const sentimentData = liveStats ? [
+          { name: 'Positive', value: liveStats.summary.sentiment.positive, color: COLORS.positive },
+          { name: 'Neutral', value: liveStats.summary.sentiment.neutral, color: COLORS.neutral },
+          { name: 'Negative', value: liveStats.summary.sentiment.negative, color: COLORS.negative },
+        ].filter(d => d.value > 0) : [];
+
+        return (
+          <div className="space-y-6">
+            {/* Progress Card */}
+            <Card className="border-primary/50 bg-primary/5">
+              <CardContent className="py-6">
+                <div className="flex items-center gap-6">
+                  <RefreshCw className="h-10 w-10 text-primary animate-spin flex-shrink-0" />
+                  <div className="flex-1 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-lg font-semibold">Generating Responses...</h3>
+                      <span className="text-sm font-medium text-primary">
+                        {test.responses_completed} / {test.responses_total}
+                      </span>
+                    </div>
+                    <Progress value={progressPercent} className="h-2" />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Live Stats - only show if we have responses */}
+            {liveStats && (
+              <>
+                {/* Summary Stats */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium flex items-center gap-2">
+                        <Users className="h-4 w-4" />
+                        Responses So Far
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-2xl font-bold">{liveStats.summary.total_responses}</div>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium flex items-center gap-2">
+                        <TrendingUp className="h-4 w-4" />
+                        Avg Engagement
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-2xl font-bold">{liveStats.summary.avg_engagement}/10</div>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium flex items-center gap-2">
+                        <MessageSquare className="h-4 w-4" />
+                        Share Likelihood
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-2xl font-bold">{liveStats.summary.avg_share_likelihood}/10</div>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium flex items-center gap-2">
+                        <Sparkles className="h-4 w-4" />
+                        Comprehension
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-2xl font-bold">{liveStats.summary.avg_comprehension}/10</div>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                {/* Sentiment Chart */}
+                {sentimentData.length > 0 && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Live Sentiment Distribution</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <ResponsiveContainer width="100%" height={200}>
+                          <PieChart>
+                            <Pie
+                              data={sentimentData}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={40}
+                              outerRadius={80}
+                              paddingAngle={5}
+                              dataKey="value"
+                            >
+                              {sentimentData.map((entry, index) => (
+                                <Cell key={`cell-${index}`} fill={entry.color} />
+                              ))}
+                            </Pie>
+                            <Tooltip />
+                            <Legend />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </CardContent>
+                    </Card>
+
+                    {/* Recent Responses Preview */}
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Latest Responses</CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-3 max-h-[250px] overflow-y-auto">
+                        {responses.slice(0, 5).map((r, i) => (
+                          <div key={i} className="p-3 bg-muted/50 rounded-lg">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="font-medium text-sm">{r.variant_name}</span>
+                              <Badge variant="outline" className="text-xs">
+                                {r.primary_platform}
+                              </Badge>
+                              <span className={`text-xs font-medium ${
+                                r.sentiment_score >= 7 ? 'text-green-600' :
+                                r.sentiment_score >= 4 ? 'text-yellow-600' : 'text-red-600'
+                              }`}>
+                                {r.sentiment_score}/10
+                              </span>
+                            </div>
+                            <p className="text-sm text-muted-foreground line-clamp-2">
+                              {r.response_text}
+                            </p>
+                          </div>
+                        ))}
+                      </CardContent>
+                    </Card>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Results */}
       {test.status === 'complete' && results && (
