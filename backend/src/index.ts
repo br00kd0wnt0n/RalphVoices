@@ -49,6 +49,54 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// OpenAI test endpoint
+app.get('/api/test-openai', async (req, res) => {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const model = process.env.OPENAI_MODEL || 'gpt-4o';
+
+  if (!apiKey) {
+    res.json({
+      status: 'error',
+      message: 'OPENAI_API_KEY not configured',
+      api_key_set: false,
+      model
+    });
+    return;
+  }
+
+  try {
+    const OpenAI = (await import('openai')).default;
+    const openai = new OpenAI({ apiKey });
+
+    const response = await openai.chat.completions.create({
+      model,
+      messages: [{ role: 'user', content: 'Say "API working" in exactly 2 words.' }],
+      max_tokens: 10,
+    });
+
+    const content = response.choices[0]?.message?.content || '';
+
+    res.json({
+      status: 'ok',
+      api_key_set: true,
+      api_key_prefix: apiKey.substring(0, 10) + '...',
+      model,
+      test_response: content,
+      finish_reason: response.choices[0]?.finish_reason,
+    });
+  } catch (error: any) {
+    res.json({
+      status: 'error',
+      api_key_set: true,
+      model,
+      error_name: error.name,
+      error_message: error.message,
+      error_status: error.status,
+      error_code: error.code,
+    });
+  }
+});
+
 // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/projects', projectRoutes);
