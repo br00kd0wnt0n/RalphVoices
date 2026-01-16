@@ -41,9 +41,9 @@ function calculateLiveStats(responses: TestResponse[]) {
   }
 
   const sentimentCounts = {
-    positive: responses.filter(r => r.sentiment_score >= 7).length,
-    neutral: responses.filter(r => r.sentiment_score >= 4 && r.sentiment_score < 7).length,
-    negative: responses.filter(r => r.sentiment_score < 4).length,
+    positive: responses.filter(r => (r.sentiment_score ?? 5) >= 7).length,
+    neutral: responses.filter(r => (r.sentiment_score ?? 5) >= 4 && (r.sentiment_score ?? 5) < 7).length,
+    negative: responses.filter(r => (r.sentiment_score ?? 5) < 4).length,
   };
 
   const avgEngagement = responses.reduce((sum, r) => sum + (r.engagement_likelihood || 5), 0) / responses.length;
@@ -373,10 +373,10 @@ export function TestResultsPage() {
                                 {r.primary_platform}
                               </Badge>
                               <span className={`text-xs font-medium ${
-                                r.sentiment_score >= 7 ? 'text-green-600' :
-                                r.sentiment_score >= 4 ? 'text-yellow-600' : 'text-red-600'
+                                (r.sentiment_score ?? 5) >= 7 ? 'text-green-600' :
+                                (r.sentiment_score ?? 5) >= 4 ? 'text-yellow-600' : 'text-red-600'
                               }`}>
-                                {r.sentiment_score}/10
+                                {r.sentiment_score ?? 5}/10
                               </span>
                             </div>
                             <p className="text-sm text-muted-foreground line-clamp-2">
