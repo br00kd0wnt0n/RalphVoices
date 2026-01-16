@@ -66,6 +66,9 @@ export function TestResultsPage() {
         wsUrl = `${protocol}//${window.location.host}/ws/tests/${id}/progress`;
       }
 
+      console.log('[TestResults] VITE_API_URL:', apiUrl);
+      console.log('[TestResults] WebSocket URL:', wsUrl);
+
       const ws = new WebSocket(wsUrl);
 
       ws.onopen = () => setWsConnected(true);

@@ -8,4 +8,4 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <App />
   </React.StrictMode>
 );
-// rebuild 1768340198
+// rebuild 1737063600 - ws fix
