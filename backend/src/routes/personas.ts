@@ -40,7 +40,7 @@ const culturalContextSchema = z.object({
 }).optional();
 
 const createPersonaSchema = z.object({
-  project_id: z.string().uuid(),
+  project_id: z.string().uuid().optional(),
   name: z.string().min(1).max(255),
   age_base: z.number().int().min(13).max(100).optional(),
   location: z.string().max(255).optional(),
@@ -65,15 +65,17 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const data = createPersonaSchema.parse(req.body);
 
-    // Verify project ownership
-    const projectCheck = await query(
-      'SELECT id FROM projects WHERE id = $1 AND created_by = $2',
-      [data.project_id, req.user!.id]
-    );
+    // Verify project ownership if project_id provided
+    if (data.project_id) {
+      const projectCheck = await query(
+        'SELECT id FROM projects WHERE id = $1 AND created_by = $2',
+        [data.project_id, req.user!.id]
+      );
 
-    if (projectCheck.rows.length === 0) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
+      if (projectCheck.rows.length === 0) {
+        res.status(404).json({ error: 'Project not found' });
+        return;
+      }
     }
 
     // Generate voice sample if requested
@@ -129,10 +131,11 @@ router.get('/', authMiddleware, async (req: AuthRequest, res: Response) => {
 
     let queryText = `
       SELECT p.*,
-        (SELECT COUNT(*) FROM persona_variants WHERE persona_id = p.id) as variant_count
+        (SELECT COUNT(*) FROM persona_variants WHERE persona_id = p.id) as variant_count,
+        pr.name as project_name
       FROM personas p
-      JOIN projects pr ON p.project_id = pr.id
-      WHERE pr.created_by = $1
+      LEFT JOIN projects pr ON p.project_id = pr.id
+      WHERE p.created_by = $1
     `;
     const params: any[] = [req.user!.id];
 
@@ -156,8 +159,7 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const personaResult = await query(
       `SELECT p.* FROM personas p
-       JOIN projects pr ON p.project_id = pr.id
-       WHERE p.id = $1 AND pr.created_by = $2`,
+       WHERE p.id = $1 AND p.created_by = $2`,
       [req.params.id, req.user!.id]
     );
 
@@ -194,8 +196,7 @@ router.put('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
     // Verify ownership
     const personaCheck = await query(
       `SELECT p.* FROM personas p
-       JOIN projects pr ON p.project_id = pr.id
-       WHERE p.id = $1 AND pr.created_by = $2`,
+       WHERE p.id = $1 AND p.created_by = $2`,
       [req.params.id, req.user!.id]
     );
 
@@ -251,10 +252,9 @@ router.put('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
 router.delete('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const result = await query(
-      `DELETE FROM personas p
-       USING projects pr
-       WHERE p.id = $1 AND p.project_id = pr.id AND pr.created_by = $2
-       RETURNING p.id`,
+      `DELETE FROM personas
+       WHERE id = $1 AND created_by = $2
+       RETURNING id`,
       [req.params.id, req.user!.id]
     );
 
@@ -278,8 +278,7 @@ router.post('/:id/variants', authMiddleware, async (req: AuthRequest, res: Respo
     // Get persona
     const personaResult = await query(
       `SELECT p.* FROM personas p
-       JOIN projects pr ON p.project_id = pr.id
-       WHERE p.id = $1 AND pr.created_by = $2`,
+       WHERE p.id = $1 AND p.created_by = $2`,
       [req.params.id, req.user!.id]
     );
 
@@ -384,8 +383,7 @@ router.get('/:id/variants', authMiddleware, async (req: AuthRequest, res: Respon
     // Verify persona ownership
     const personaCheck = await query(
       `SELECT p.id FROM personas p
-       JOIN projects pr ON p.project_id = pr.id
-       WHERE p.id = $1 AND pr.created_by = $2`,
+       WHERE p.id = $1 AND p.created_by = $2`,
       [req.params.id, req.user!.id]
     );
 
@@ -411,8 +409,7 @@ router.post('/:id/voice', authMiddleware, async (req: AuthRequest, res: Response
   try {
     const personaResult = await query(
       `SELECT p.* FROM personas p
-       JOIN projects pr ON p.project_id = pr.id
-       WHERE p.id = $1 AND pr.created_by = $2`,
+       WHERE p.id = $1 AND p.created_by = $2`,
       [req.params.id, req.user!.id]
     );
 
