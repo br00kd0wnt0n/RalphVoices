@@ -52,8 +52,21 @@ export function TestResultsPage() {
   useEffect(() => {
     if (test?.status === 'running') {
       // Connect to WebSocket for progress updates
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${protocol}//${window.location.host}/ws/tests/${id}/progress`);
+      // Get backend URL from API_URL env var or fall back to current host
+      const apiUrl = import.meta.env.VITE_API_URL || '';
+      let wsUrl: string;
+
+      if (apiUrl && apiUrl.startsWith('http')) {
+        // Convert API URL to WebSocket URL (e.g., https://backend.../api -> wss://backend.../ws/tests/...)
+        const backendUrl = apiUrl.replace(/\/api$/, '').replace(/^http/, 'ws');
+        wsUrl = `${backendUrl}/ws/tests/${id}/progress`;
+      } else {
+        // Fallback to same host (for local development)
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        wsUrl = `${protocol}//${window.location.host}/ws/tests/${id}/progress`;
+      }
+
+      const ws = new WebSocket(wsUrl);
 
       ws.onopen = () => setWsConnected(true);
       ws.onmessage = (event) => {
