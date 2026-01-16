@@ -71,10 +71,20 @@ export function TestResultsPage() {
 
       const ws = new WebSocket(wsUrl);
 
-      ws.onopen = () => setWsConnected(true);
+      ws.onopen = () => {
+        setWsConnected(true);
+        console.log('[TestResults] WebSocket connected');
+      };
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        setTest((prev) => prev ? { ...prev, ...data } : null);
+        console.log('[TestResults] WebSocket progress:', data);
+        // Map WebSocket fields to test object fields
+        setTest((prev) => prev ? {
+          ...prev,
+          status: data.status,
+          responses_completed: data.completed,
+          responses_total: data.total,
+        } : null);
         if (data.status === 'complete') {
           loadTest();
         }
