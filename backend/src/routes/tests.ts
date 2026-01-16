@@ -312,8 +312,35 @@ router.post('/:id/run', authMiddleware, async (req: AuthRequest, res: Response) 
     }
 
     // Get all variants for the selected personas
+    // Use explicit column aliases to avoid conflicts between pv and p tables
     const variantsResult = await query(
-      `SELECT pv.*, p.* FROM persona_variants pv
+      `SELECT
+         pv.id as variant_id,
+         pv.persona_id,
+         pv.variant_index,
+         pv.age_actual,
+         pv.location_variant,
+         pv.attitude_score,
+         pv.primary_platform,
+         pv.engagement_level,
+         pv.full_profile,
+         pv.variant_name,
+         pv.created_at as variant_created_at,
+         p.id as persona_id_check,
+         p.project_id,
+         p.name as persona_name,
+         p.age_base,
+         p.location as persona_location,
+         p.occupation,
+         p.household,
+         p.psychographics,
+         p.media_habits,
+         p.brand_context,
+         p.cultural_context,
+         p.voice_sample,
+         p.source_type,
+         p.created_by
+       FROM persona_variants pv
        JOIN personas p ON pv.persona_id = p.id
        WHERE pv.persona_id = ANY($1)
        ORDER BY pv.persona_id, pv.variant_index`,
@@ -346,7 +373,9 @@ router.post('/:id/run', authMiddleware, async (req: AuthRequest, res: Response) 
 
     // Process variants in background (with rate limiting)
     processTestResponses(test, variants).catch(error => {
-      console.error('Test processing error:', error);
+      console.error('[processTestResponses] Test processing error:', error);
+      console.error('[processTestResponses] Error message:', error?.message);
+      console.error('[processTestResponses] Error stack:', error?.stack);
       query(`UPDATE tests SET status = 'failed' WHERE id = $1`, [testId]);
       testProgress.set(testId, { completed: 0, total: totalResponses, status: 'failed' });
     });
@@ -369,7 +398,7 @@ async function processTestResponses(test: Test, variants: any[]) {
 
     const batchPromises = batch.map(async (variantRow) => {
       const variant: PersonaVariant = {
-        id: variantRow.id,
+        id: variantRow.variant_id,
         persona_id: variantRow.persona_id,
         variant_index: variantRow.variant_index,
         age_actual: variantRow.age_actual,
@@ -379,15 +408,15 @@ async function processTestResponses(test: Test, variants: any[]) {
         engagement_level: variantRow.engagement_level,
         full_profile: variantRow.full_profile,
         variant_name: variantRow.variant_name,
-        created_at: variantRow.created_at,
+        created_at: variantRow.variant_created_at,
       };
 
       const basePersona: Persona = {
         id: variantRow.persona_id,
         project_id: variantRow.project_id,
-        name: variantRow.name,
+        name: variantRow.persona_name,
         age_base: variantRow.age_base,
-        location: variantRow.location,
+        location: variantRow.persona_location,
         occupation: variantRow.occupation,
         household: variantRow.household,
         psychographics: variantRow.psychographics,
@@ -397,8 +426,8 @@ async function processTestResponses(test: Test, variants: any[]) {
         voice_sample: variantRow.voice_sample,
         source_type: variantRow.source_type,
         created_by: variantRow.created_by,
-        created_at: variantRow.created_at,
-        updated_at: variantRow.updated_at,
+        created_at: variantRow.variant_created_at,
+        updated_at: variantRow.variant_created_at,
       };
 
       const startTime = Date.now();
