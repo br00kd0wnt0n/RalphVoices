@@ -34,6 +34,53 @@ const COLORS = {
   negative: '#ef4444',
 };
 
+// Calculate RalphScore™ - proprietary benchmark score (0-100)
+function calculateRalphScore(summary: {
+  sentiment: { positive: number; neutral: number; negative: number };
+  avg_engagement: number;
+  avg_share_likelihood: number;
+  avg_comprehension: number;
+  total_responses: number;
+}): number {
+  const total = summary.sentiment.positive + summary.sentiment.neutral + summary.sentiment.negative;
+  if (total === 0) return 0;
+
+  // Calculate sentiment score (weighted average: positive=10, neutral=5, negative=1)
+  const sentimentScore = (
+    (summary.sentiment.positive * 10) +
+    (summary.sentiment.neutral * 5) +
+    (summary.sentiment.negative * 1)
+  ) / total;
+
+  // Base score from metrics (all out of 10, weighted)
+  const baseScore = (
+    (sentimentScore * 0.30) +           // 30% sentiment
+    (summary.avg_engagement * 0.30) +    // 30% engagement
+    (summary.avg_share_likelihood * 0.25) + // 25% share likelihood
+    (summary.avg_comprehension * 0.15)   // 15% comprehension
+  );
+
+  // Sentiment distribution modifier
+  const positiveRatio = summary.sentiment.positive / total;
+  const negativeRatio = summary.sentiment.negative / total;
+  const distributionModifier = 1 + (positiveRatio * 0.1) - (negativeRatio * 0.15);
+
+  // Calculate final score (0-100)
+  const ralphScore = Math.round(baseScore * 10 * distributionModifier);
+
+  // Clamp between 0-100
+  return Math.max(0, Math.min(100, ralphScore));
+}
+
+// Get RalphScore rating label
+function getRalphScoreLabel(score: number): { label: string; color: string } {
+  if (score >= 80) return { label: 'Excellent', color: 'text-green-500' };
+  if (score >= 65) return { label: 'Strong', color: 'text-emerald-500' };
+  if (score >= 50) return { label: 'Promising', color: 'text-yellow-500' };
+  if (score >= 35) return { label: 'Needs Work', color: 'text-orange-500' };
+  return { label: 'Reconsider', color: 'text-red-500' };
+}
+
 // Calculate live stats from responses
 function calculateLiveStats(responses: TestResponse[]) {
   if (responses.length === 0) {
@@ -281,6 +328,40 @@ export function TestResultsPage() {
             {/* Live Stats - only show if we have responses */}
             {liveStats && (
               <>
+                {/* Live RalphScore™ */}
+                {(() => {
+                  const liveRalphScore = calculateRalphScore(liveStats.summary);
+                  const { label, color } = getRalphScoreLabel(liveRalphScore);
+                  return (
+                    <Card className="bg-gradient-to-br from-[#D94D8F]/10 via-transparent to-transparent border-[#D94D8F]/30">
+                      <CardContent className="py-4">
+                        <div className="flex items-center justify-between">
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium text-muted-foreground">Live RalphScore™</p>
+                            <div className="flex items-baseline gap-2">
+                              <span className="text-3xl font-bold text-[#D94D8F]">{liveRalphScore}</span>
+                              <span className="text-sm text-muted-foreground">/100</span>
+                              <span className={`text-xs font-semibold ${color}`}>{label}</span>
+                            </div>
+                          </div>
+                          <div className="flex gap-1">
+                            {[...Array(5)].map((_, i) => (
+                              <div
+                                key={i}
+                                className={`w-2 h-2 rounded-full transition-all ${
+                                  i < Math.ceil(liveRalphScore / 20)
+                                    ? 'bg-[#D94D8F]'
+                                    : 'bg-muted'
+                                }`}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })()}
+
                 {/* Summary Stats */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   <Card>
@@ -404,6 +485,45 @@ export function TestResultsPage() {
           </TabsList>
 
           <TabsContent value="dashboard" className="space-y-6">
+            {/* RalphScore™ */}
+            {(() => {
+              const ralphScore = calculateRalphScore(results.summary);
+              const { label, color } = getRalphScoreLabel(ralphScore);
+              return (
+                <Card className="bg-gradient-to-br from-[#D94D8F]/10 via-transparent to-transparent border-[#D94D8F]/30">
+                  <CardContent className="py-6">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-1">
+                        <p className="text-sm font-medium text-muted-foreground">RalphScore™</p>
+                        <div className="flex items-baseline gap-3">
+                          <span className="text-5xl font-bold text-[#D94D8F]">{ralphScore}</span>
+                          <span className="text-lg text-muted-foreground">/100</span>
+                        </div>
+                        <p className={`text-sm font-semibold ${color}`}>{label}</p>
+                      </div>
+                      <div className="text-right space-y-2">
+                        <p className="text-xs text-muted-foreground max-w-[200px]">
+                          Proprietary benchmark combining sentiment, engagement, shareability, and comprehension.
+                        </p>
+                        <div className="flex gap-1 justify-end">
+                          {[...Array(5)].map((_, i) => (
+                            <div
+                              key={i}
+                              className={`w-3 h-3 rounded-full ${
+                                i < Math.ceil(ralphScore / 20)
+                                  ? 'bg-[#D94D8F]'
+                                  : 'bg-muted'
+                              }`}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })()}
+
             {/* Summary Stats */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <Card>
