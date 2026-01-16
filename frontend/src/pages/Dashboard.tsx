@@ -4,7 +4,7 @@ import { projects, tests, personas } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Users, TestTube, FolderOpen, ArrowRight, Sparkles, BarChart3, ChevronRight } from 'lucide-react';
+import { Users, TestTube, FolderOpen, ArrowRight, Sparkles, BarChart3, ChevronRight, Zap, Target, Clock, TrendingUp } from 'lucide-react';
 import type { Project, Test, Persona } from '@/types';
 
 const WORKFLOW_STEPS = [
@@ -84,6 +84,7 @@ export function Dashboard() {
   const stats = {
     projects: recentProjects.length,
     personas: recentPersonas.length,
+    variants: recentPersonas.reduce((sum, p) => sum + (Number(p.variant_count) || 0), 0),
     tests: recentTests.length,
     completedTests: recentTests.filter((t) => t.status === 'complete').length,
   };
@@ -161,8 +162,78 @@ export function Dashboard() {
         <div className="hidden md:block h-[100px]" /> {/* Spacer to account for negative margin */}
       </div>
 
+      {/* Why Voices? */}
+      <div className="space-y-4">
+        <h2 className="text-xl font-semibold">Why Voices?</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <Card className="bg-gradient-to-br from-amber-500/5 to-transparent border-amber-500/20">
+            <CardContent className="pt-6">
+              <div className="space-y-3">
+                <div className="p-2.5 rounded-xl bg-amber-500/10 w-fit">
+                  <Clock className="h-5 w-5 text-amber-500" />
+                </div>
+                <h3 className="font-semibold">60-Second Feedback</h3>
+                <p className="text-sm text-muted-foreground">
+                  Traditional testing takes weeks. Get authentic reactions in under a minute, iterate faster.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-gradient-to-br from-blue-500/5 to-transparent border-blue-500/20">
+            <CardContent className="pt-6">
+              <div className="space-y-3">
+                <div className="p-2.5 rounded-xl bg-blue-500/10 w-fit">
+                  <Target className="h-5 w-5 text-blue-500" />
+                </div>
+                <h3 className="font-semibold">Nuanced Reactions</h3>
+                <p className="text-sm text-muted-foreground">
+                  20+ unique voices per persona. See how skeptics differ from enthusiasts, TikTok from YouTube users.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-gradient-to-br from-green-500/5 to-transparent border-green-500/20">
+            <CardContent className="pt-6">
+              <div className="space-y-3">
+                <div className="p-2.5 rounded-xl bg-green-500/10 w-fit">
+                  <TrendingUp className="h-5 w-5 text-green-500" />
+                </div>
+                <h3 className="font-semibold">Consistent Benchmarks</h3>
+                <p className="text-sm text-muted-foreground">
+                  Same panel across all tests. Compare Concept A vs B against identical audience segments.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-gradient-to-br from-purple-500/5 to-transparent border-purple-500/20">
+            <CardContent className="pt-6">
+              <div className="space-y-3">
+                <div className="p-2.5 rounded-xl bg-purple-500/10 w-fit">
+                  <Zap className="h-5 w-5 text-purple-500" />
+                </div>
+                <h3 className="font-semibold">Kill Bad Ideas Early</h3>
+                <p className="text-sm text-muted-foreground">
+                  Stress-test before production spend. Catch concerns, find angles, bring stronger concepts to real research.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="p-4 rounded-lg bg-muted/50 border border-dashed">
+          <p className="text-sm text-muted-foreground text-center">
+            <span className="font-medium text-foreground">Best for:</span> Rapid screening, early-stage iteration, comparing concepts, identifying unexpected concerns.
+            <span className="mx-2">•</span>
+            <span className="font-medium text-foreground">Not a replacement for:</span> Final-stage qual research with real consumers.
+          </p>
+        </div>
+      </div>
+
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Projects</CardTitle>
@@ -179,6 +250,16 @@ export function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stats.personas}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Panel Size</CardTitle>
+            <Sparkles className="h-4 w-4 text-[#D94D8F]" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats.variants}</div>
+            <p className="text-xs text-muted-foreground">variants</p>
           </CardContent>
         </Card>
         <Card>

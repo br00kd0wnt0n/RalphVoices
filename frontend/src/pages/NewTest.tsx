@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { CheckCircle, Circle, Users, AlertCircle } from 'lucide-react';
+import { CheckCircle, Circle, Users, AlertCircle, GitCompare } from 'lucide-react';
 import type { Project, Persona } from '@/types';
 
 export function NewTest() {
@@ -29,7 +29,9 @@ export function NewTest() {
   // Form state
   const [projectId, setProjectId] = useState('');
   const [name, setName] = useState('');
+  const [testType, setTestType] = useState<'concept' | 'ab'>('concept');
   const [conceptText, setConceptText] = useState('');
+  const [conceptTextB, setConceptTextB] = useState(''); // For A/B testing
   const [selectedPersonaIds, setSelectedPersonaIds] = useState<string[]>([]);
   const [variantsPerPersona, setVariantsPerPersona] = useState(20);
 
@@ -57,23 +59,63 @@ export function NewTest() {
     setError('');
 
     try {
-      const test = await testsApi.create({
-        project_id: projectId,
-        name,
-        test_type: 'concept',
-        concept_text: conceptText,
-        persona_ids: selectedPersonaIds,
-        variants_per_persona: variantsPerPersona,
-        variant_config: {
-          age_spread: 5,
-          attitude_distribution: 'normal',
-          platforms_to_include: ['TikTok', 'Instagram', 'YouTube', 'Twitter/X'],
-        },
-      });
+      if (testType === 'ab') {
+        // Create two tests for A/B comparison
+        const testA = await testsApi.create({
+          project_id: projectId,
+          name: `${name} - Concept A`,
+          test_type: 'concept',
+          concept_text: conceptText,
+          persona_ids: selectedPersonaIds,
+          variants_per_persona: variantsPerPersona,
+          variant_config: {
+            age_spread: 5,
+            attitude_distribution: 'normal',
+            platforms_to_include: ['TikTok', 'Instagram', 'YouTube', 'Twitter/X'],
+          },
+        });
 
-      // Immediately run the test
-      await testsApi.run(test.id);
-      navigate(`/tests/${test.id}`);
+        const testB = await testsApi.create({
+          project_id: projectId,
+          name: `${name} - Concept B`,
+          test_type: 'concept',
+          concept_text: conceptTextB,
+          persona_ids: selectedPersonaIds,
+          variants_per_persona: variantsPerPersona,
+          variant_config: {
+            age_spread: 5,
+            attitude_distribution: 'normal',
+            platforms_to_include: ['TikTok', 'Instagram', 'YouTube', 'Twitter/X'],
+          },
+        });
+
+        // Run both tests
+        await Promise.all([
+          testsApi.run(testA.id),
+          testsApi.run(testB.id),
+        ]);
+
+        // Navigate to the first test (user can see both in tests list)
+        navigate(`/tests/${testA.id}`);
+      } else {
+        const test = await testsApi.create({
+          project_id: projectId,
+          name,
+          test_type: 'concept',
+          concept_text: conceptText,
+          persona_ids: selectedPersonaIds,
+          variants_per_persona: variantsPerPersona,
+          variant_config: {
+            age_spread: 5,
+            attitude_distribution: 'normal',
+            platforms_to_include: ['TikTok', 'Instagram', 'YouTube', 'Twitter/X'],
+          },
+        });
+
+        // Immediately run the test
+        await testsApi.run(test.id);
+        navigate(`/tests/${test.id}`);
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to create test');
     } finally {
@@ -131,6 +173,43 @@ export function NewTest() {
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g., Summer Campaign Concept A"
             />
+          </div>
+          <div className="space-y-2">
+            <Label>Test Type</Label>
+            <div className="grid grid-cols-2 gap-3">
+              <div
+                onClick={() => setTestType('concept')}
+                className={`p-4 rounded-lg border cursor-pointer transition-all ${
+                  testType === 'concept'
+                    ? 'border-primary bg-primary/5 ring-2 ring-primary/20'
+                    : 'border-border hover:border-primary/50'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <Circle className={`h-5 w-5 ${testType === 'concept' ? 'text-primary' : 'text-muted-foreground'}`} />
+                  <div>
+                    <p className="font-medium">Single Concept</p>
+                    <p className="text-sm text-muted-foreground">Test one concept against your panel</p>
+                  </div>
+                </div>
+              </div>
+              <div
+                onClick={() => setTestType('ab')}
+                className={`p-4 rounded-lg border cursor-pointer transition-all ${
+                  testType === 'ab'
+                    ? 'border-primary bg-primary/5 ring-2 ring-primary/20'
+                    : 'border-border hover:border-primary/50'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <GitCompare className={`h-5 w-5 ${testType === 'ab' ? 'text-primary' : 'text-muted-foreground'}`} />
+                  <div>
+                    <p className="font-medium">A/B Comparison</p>
+                    <p className="text-sm text-muted-foreground">Compare two concepts side by side</p>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
           {projectId && name && step === 1 && (
             <Button onClick={() => setStep(2)}>Continue</Button>
@@ -261,23 +340,60 @@ export function NewTest() {
           <CardHeader>
             <CardTitle className="text-lg flex items-center gap-2">
               <Circle className="h-5 w-5 text-primary" />
-              Step 3: Enter Concept
+              Step 3: {testType === 'ab' ? 'Enter Concepts to Compare' : 'Enter Concept'}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="concept">Concept Description *</Label>
-              <Textarea
-                id="concept"
-                value={conceptText}
-                onChange={(e) => setConceptText(e.target.value)}
-                placeholder="Describe the concept, ad, or creative idea you want to test. Be as detailed as needed - the personas will react to exactly what you write here."
-                className="min-h-[150px]"
-              />
-              <p className="text-xs text-muted-foreground">
-                {conceptText.length} characters
-              </p>
-            </div>
+            {testType === 'ab' ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="conceptA" className="flex items-center gap-2">
+                    <Badge className="bg-blue-500">A</Badge>
+                    Concept A *
+                  </Label>
+                  <Textarea
+                    id="conceptA"
+                    value={conceptText}
+                    onChange={(e) => setConceptText(e.target.value)}
+                    placeholder="Describe the first concept..."
+                    className="min-h-[200px]"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {conceptText.length} characters
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="conceptB" className="flex items-center gap-2">
+                    <Badge className="bg-purple-500">B</Badge>
+                    Concept B *
+                  </Label>
+                  <Textarea
+                    id="conceptB"
+                    value={conceptTextB}
+                    onChange={(e) => setConceptTextB(e.target.value)}
+                    placeholder="Describe the second concept..."
+                    className="min-h-[200px]"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {conceptTextB.length} characters
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Label htmlFor="concept">Concept Description *</Label>
+                <Textarea
+                  id="concept"
+                  value={conceptText}
+                  onChange={(e) => setConceptText(e.target.value)}
+                  placeholder="Describe the concept, ad, or creative idea you want to test. Be as detailed as needed - the personas will react to exactly what you write here."
+                  className="min-h-[150px]"
+                />
+                <p className="text-xs text-muted-foreground">
+                  {conceptText.length} characters
+                </p>
+              </div>
+            )}
 
             {error && (
               <div className="p-3 bg-destructive/10 text-destructive rounded-lg text-sm">
@@ -287,14 +403,22 @@ export function NewTest() {
 
             <div className="flex items-center justify-between pt-4 border-t">
               <div className="text-sm text-muted-foreground">
-                {selectedPersonaIds.length} persona(s) selected • {totalVariants} responses
+                {selectedPersonaIds.length} persona(s) selected • {testType === 'ab' ? `${totalVariants * 2} responses (${totalVariants} per concept)` : `${totalVariants} responses`}
               </div>
               <Button
                 onClick={handleCreateTest}
-                disabled={!conceptText || loading || personasNeedingVariants.length > 0}
+                disabled={
+                  !conceptText ||
+                  (testType === 'ab' && !conceptTextB) ||
+                  loading ||
+                  personasNeedingVariants.length > 0
+                }
                 size="lg"
               >
-                {loading ? 'Creating & Running Test...' : 'Run Test'}
+                {loading
+                  ? (testType === 'ab' ? 'Running A/B Test...' : 'Creating & Running Test...')
+                  : (testType === 'ab' ? 'Run A/B Test' : 'Run Test')
+                }
               </Button>
             </div>
           </CardContent>
