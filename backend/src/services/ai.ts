@@ -68,28 +68,34 @@ export async function generateVariants(
   count: number,
   config: VariantConfig
 ): Promise<GeneratedVariant[]> {
-  const systemPrompt = `You are generating variant personas for audience testing. Given a base persona,
-create ${count} variants with controlled diversity. Each variant should feel like a
-real individual who shares core traits with the base but differs in specific ways.
+  console.log(`[generateVariants] Starting for persona: ${persona.name}`);
+  console.log(`[generateVariants] Using model: ${MODEL}`);
+  console.log(`[generateVariants] API key present: ${!!apiKey}`);
 
-Return a JSON array with this structure for each variant:
-{
-  "variant_name": "First name that fits demographic",
-  "age_actual": number (within ±${config.age_spread} of base),
-  "location_variant": "Specific city/area appropriate to persona",
-  "attitude_score": number 1-10 (1=skeptic, 10=enthusiast),
-  "primary_platform": "Their main social platform",
-  "engagement_level": "heavy|moderate|light|lapsed",
-  "distinguishing_trait": "One specific thing that makes them unique",
-  "voice_modifier": "How their voice differs from base (e.g., 'more sarcastic', 'uses more emoji')"
-}
+  if (!apiKey) {
+    console.error('[generateVariants] No API key configured!');
+    throw new Error('OpenAI API key not configured');
+  }
 
-IMPORTANT: Return ONLY the JSON array, no markdown formatting or additional text.`;
+  const systemPrompt = `You are generating variant personas for audience testing. Given a base persona, create ${count} unique individual variants with controlled diversity.
+
+You MUST respond with a JSON object containing a "variants" array. Each variant object should have:
+- variant_name: string (first name that fits the demographic)
+- age_actual: number (within ±${config.age_spread} of base age)
+- location_variant: string (specific city/neighborhood)
+- attitude_score: number 1-10 (1=skeptic, 10=enthusiast)
+- primary_platform: string (their main social platform)
+- engagement_level: string (one of: heavy, moderate, light, lapsed)
+- distinguishing_trait: string (one specific thing that makes them unique)
+- voice_modifier: string (how their voice differs from base)
+
+Example response format:
+{"variants": [{"variant_name": "Alex", "age_actual": 28, "location_variant": "Williamsburg, Brooklyn", "attitude_score": 7, "primary_platform": "Instagram", "engagement_level": "heavy", "distinguishing_trait": "Always connects things to sustainability", "voice_modifier": "More casual, uses slang"}]}`;
 
   const personaJson = {
     name: persona.name,
-    age_base: persona.age_base,
-    location: persona.location,
+    age_base: persona.age_base || 30,
+    location: persona.location || 'US',
     occupation: persona.occupation,
     household: persona.household,
     psychographics: persona.psychographics,
@@ -100,35 +106,69 @@ IMPORTANT: Return ONLY the JSON array, no markdown formatting or additional text
 
   const userPrompt = `Base Persona: ${JSON.stringify(personaJson, null, 2)}
 
-Generate ${count} variants with this distribution:
-- Attitude: ${config.attitude_distribution} (normal/skew_positive/skew_negative)
-- Age spread: ±${config.age_spread} years
+Generate exactly ${count} variants with this distribution:
+- Attitude: ${config.attitude_distribution} (normal=bell curve, skew_positive=more enthusiasts, skew_negative=more skeptics)
+- Age spread: ±${config.age_spread} years from base age of ${persona.age_base || 30}
 - Platforms to include: ${config.platforms_to_include.join(', ')}
 
-Ensure diversity across all dimensions. Make each variant feel like a real person.`;
+Return a JSON object with a "variants" array containing ${count} variant objects.`;
 
-  console.log(`Generating ${count} variants for persona ${persona.name}...`);
+  console.log(`[generateVariants] Sending request to OpenAI...`);
 
   try {
-    const response = await openai.chat.completions.create({
+    const requestBody = {
       model: MODEL,
       messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
+        { role: 'system' as const, content: systemPrompt },
+        { role: 'user' as const, content: userPrompt },
       ],
       temperature: 0.9,
       max_tokens: 4000,
-      response_format: { type: 'json_object' },
-    });
+    };
 
-    const content = response.choices[0]?.message?.content || '{"variants":[]}';
-    console.log(`OpenAI response received, length: ${content.length}`);
-    console.log(`OpenAI raw response (first 500 chars): ${content.substring(0, 500)}`);
+    console.log(`[generateVariants] Request body (truncated): ${JSON.stringify(requestBody).substring(0, 500)}...`);
 
-    const parsed = JSON.parse(content);
-    console.log(`Parsed response keys: ${Object.keys(parsed).join(', ')}`);
+    const response = await openai.chat.completions.create(requestBody);
 
-    // Handle both direct array and wrapped object - check multiple possible keys
+    console.log(`[generateVariants] OpenAI response status: ${response.choices?.length ? 'OK' : 'NO CHOICES'}`);
+    console.log(`[generateVariants] Finish reason: ${response.choices?.[0]?.finish_reason}`);
+
+    const content = response.choices[0]?.message?.content;
+
+    if (!content) {
+      console.error('[generateVariants] Empty response content from OpenAI');
+      console.error('[generateVariants] Full response:', JSON.stringify(response, null, 2));
+      throw new Error('OpenAI returned empty response');
+    }
+
+    console.log(`[generateVariants] Response length: ${content.length}`);
+    console.log(`[generateVariants] Response preview: ${content.substring(0, 300)}...`);
+
+    // Clean up potential markdown code blocks
+    let cleanContent = content.trim();
+    if (cleanContent.startsWith('```json')) {
+      cleanContent = cleanContent.slice(7);
+    } else if (cleanContent.startsWith('```')) {
+      cleanContent = cleanContent.slice(3);
+    }
+    if (cleanContent.endsWith('```')) {
+      cleanContent = cleanContent.slice(0, -3);
+    }
+    cleanContent = cleanContent.trim();
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(cleanContent);
+    } catch (parseError: any) {
+      console.error('[generateVariants] JSON parse error:', parseError.message);
+      console.error('[generateVariants] Content to parse:', cleanContent.substring(0, 500));
+      throw new Error(`Failed to parse OpenAI response as JSON: ${parseError.message}`);
+    }
+
+    console.log(`[generateVariants] Parsed response type: ${typeof parsed}`);
+    console.log(`[generateVariants] Parsed response keys: ${Object.keys(parsed || {}).join(', ')}`);
+
+    // Handle various response formats
     let variants: GeneratedVariant[];
     if (Array.isArray(parsed)) {
       variants = parsed;
@@ -140,18 +180,28 @@ Ensure diversity across all dimensions. Make each variant feel like a real perso
       // Find first array property
       const arrayKey = Object.keys(parsed).find(key => Array.isArray(parsed[key]));
       if (arrayKey) {
-        console.log(`Found variants in key: ${arrayKey}`);
+        console.log(`[generateVariants] Found variants in key: ${arrayKey}`);
         variants = parsed[arrayKey];
       } else {
-        console.log(`No array found in response. Full response: ${JSON.stringify(parsed).substring(0, 1000)}`);
+        console.error('[generateVariants] No array found in response');
+        console.error('[generateVariants] Full parsed response:', JSON.stringify(parsed).substring(0, 1000));
         variants = [];
       }
     }
 
-    console.log(`Parsed ${variants.length} variants`);
+    console.log(`[generateVariants] Successfully parsed ${variants.length} variants`);
     return variants as GeneratedVariant[];
   } catch (error: any) {
-    console.error('OpenAI API error:', error.message || error);
+    console.error('[generateVariants] Error occurred:', error);
+    console.error('[generateVariants] Error name:', error.name);
+    console.error('[generateVariants] Error message:', error.message);
+    console.error('[generateVariants] Error status:', error.status);
+    console.error('[generateVariants] Error code:', error.code);
+
+    if (error.response) {
+      console.error('[generateVariants] Error response:', JSON.stringify(error.response, null, 2));
+    }
+
     throw new Error(`Failed to generate variants: ${error.message || 'Unknown error'}`);
   }
 }
