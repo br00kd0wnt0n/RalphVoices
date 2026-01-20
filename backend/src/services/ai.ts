@@ -218,9 +218,10 @@ export interface ConceptTestResponse {
 export async function generateConceptResponse(
   variant: PersonaVariant,
   basePersona: Persona,
-  conceptText: string
+  conceptText: string,
+  focusModifier: string = ''
 ): Promise<ConceptTestResponse> {
-  const systemPrompt = `You are embodying a specific persona to provide authentic feedback on a creative
+  const baseSystemPrompt = `You are embodying a specific persona to provide authentic feedback on a creative
 concept. Respond as this person would - with their vocabulary, concerns,
 enthusiasm level, and cultural frame of reference.
 
@@ -244,6 +245,11 @@ Format your final response as:
 
 ---SCORES---
 {"sentiment_score": X, "engagement_likelihood": X, "share_likelihood": X, "comprehension_score": X, "reaction_tags": ["tag1", "tag2"]}`;
+
+  // Append focus modifier if provided
+  const systemPrompt = focusModifier
+    ? `${baseSystemPrompt}\n${focusModifier}`
+    : baseSystemPrompt;
 
   const voiceModifier = variant.full_profile?.voice_modifier || '';
   const distinguishingTrait = variant.full_profile?.distinguishing_trait || '';

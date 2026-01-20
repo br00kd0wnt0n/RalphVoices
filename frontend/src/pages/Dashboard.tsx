@@ -110,6 +110,56 @@ export function Dashboard() {
         <div className="absolute -right-10 -bottom-10 w-48 h-48 bg-[#D94D8F]/10 rounded-full blur-2xl" />
       </div>
 
+      {/* Stats */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Projects</CardTitle>
+            <FolderOpen className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats.projects}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Personas</CardTitle>
+            <Users className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats.personas}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Panel Size</CardTitle>
+            <Sparkles className="h-4 w-4 text-[#D94D8F]" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats.variants}</div>
+            <p className="text-xs text-muted-foreground">variants</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Total Tests</CardTitle>
+            <TestTube className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats.tests}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Completed</CardTitle>
+            <TestTube className="h-4 w-4 text-green-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats.completedTests}</div>
+          </CardContent>
+        </Card>
+      </div>
+
       {/* How It Works */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
@@ -159,11 +209,11 @@ export function Dashboard() {
         <div className="hidden md:block relative -mt-[140px] mx-auto w-[calc(100%-120px)] pointer-events-none">
           <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-blue-500/20 via-[#D94D8F]/30 to-green-500/20" />
         </div>
-        <div className="hidden md:block h-[100px]" /> {/* Spacer to account for negative margin */}
+        <div className="hidden md:block h-[104px]" /> {/* Spacer to account for negative margin */}
       </div>
 
       {/* Why Voices? */}
-      <div className="space-y-4">
+      <div className="space-y-4 -mt-4">
         <h2 className="text-xl font-semibold">Why Voices?</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <Card className="bg-gradient-to-br from-amber-500/5 to-transparent border-amber-500/20">
@@ -230,56 +280,6 @@ export function Dashboard() {
             <span className="font-medium text-foreground">Not a replacement for:</span> Final-stage qual research with real consumers.
           </p>
         </div>
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Projects</CardTitle>
-            <FolderOpen className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.projects}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Personas</CardTitle>
-            <Users className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.personas}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Panel Size</CardTitle>
-            <Sparkles className="h-4 w-4 text-[#D94D8F]" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.variants}</div>
-            <p className="text-xs text-muted-foreground">variants</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Tests</CardTitle>
-            <TestTube className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.tests}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Completed</CardTitle>
-            <TestTube className="h-4 w-4 text-green-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.completedTests}</div>
-          </CardContent>
-        </Card>
       </div>
 
       {/* Quick Actions */}

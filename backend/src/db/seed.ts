@@ -25,7 +25,7 @@ async function seed() {
       `INSERT INTO projects (name, client_name, created_by)
        VALUES ($1, $2, $3)
        RETURNING id`,
-      ['Demo Campaign', 'Acme Corp', userId]
+      ['Care Bears', 'Acme Corp', userId]
     );
     const projectId = projectResult.rows[0].id;
     console.log('Created demo project:', projectId);

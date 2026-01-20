@@ -6,6 +6,7 @@ import { Personas } from '@/pages/Personas';
 import { TestStudio } from '@/pages/TestStudio';
 import { NewTest } from '@/pages/NewTest';
 import { TestResultsPage } from '@/pages/TestResults';
+import { Settings } from '@/pages/Settings';
 
 export default function App() {
   return (
@@ -18,6 +19,7 @@ export default function App() {
           <Route path="tests" element={<TestStudio />} />
           <Route path="tests/new" element={<NewTest />} />
           <Route path="tests/:id" element={<TestResultsPage />} />
+          <Route path="settings" element={<Settings />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

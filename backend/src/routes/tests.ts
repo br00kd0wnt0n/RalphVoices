@@ -19,6 +19,8 @@ const createTestSchema = z.object({
   options: z.array(z.any()).optional(),
   persona_ids: z.array(z.string().uuid()).min(1),
   variants_per_persona: z.number().int().min(1).max(100).default(20),
+  focus_preset: z.string().optional(),
+  focus_modifier: z.string().optional(),
   variant_config: z.object({
     age_spread: z.number().int().min(0).max(20).default(5),
     attitude_distribution: z.enum(['normal', 'skew_positive', 'skew_negative']).default('normal'),
@@ -53,6 +55,13 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    // Include focus settings in variant_config
+    const variantConfigWithFocus = {
+      ...(data.variant_config || {}),
+      focus_preset: data.focus_preset || 'baseline',
+      focus_modifier: data.focus_modifier || '',
+    };
+
     const result = await query(
       `INSERT INTO tests (
         project_id, name, test_type, concept_text, asset_url, options,
@@ -68,7 +77,7 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
         data.options ? JSON.stringify(data.options) : null,
         data.persona_ids,
         data.variants_per_persona,
-        data.variant_config ? JSON.stringify(data.variant_config) : null,
+        JSON.stringify(variantConfigWithFocus),
         req.user!.id,
       ]
     );
@@ -389,6 +398,10 @@ router.post('/:id/run', authMiddleware, async (req: AuthRequest, res: Response) 
 // Process test responses (background)
 async function processTestResponses(test: Test, variants: any[]) {
   const conceptText = test.concept_text!;
+  const variantConfig = typeof test.variant_config === 'string'
+    ? JSON.parse(test.variant_config)
+    : (test.variant_config || {});
+  const focusModifier = variantConfig.focus_modifier || '';
   const responses: any[] = [];
   const BATCH_SIZE = 3; // Process 3 at a time to respect rate limits
   const DELAY_MS = 1000; // 1 second delay between batches
@@ -431,7 +444,7 @@ async function processTestResponses(test: Test, variants: any[]) {
       };
 
       const startTime = Date.now();
-      const response = await generateConceptResponse(variant, basePersona, conceptText);
+      const response = await generateConceptResponse(variant, basePersona, conceptText, focusModifier);
       const processingTime = Date.now() - startTime;
 
       // Save response to database

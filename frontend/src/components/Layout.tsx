@@ -1,6 +1,6 @@
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { RalphLogo } from '@/components/RalphLogo';
-import { Users, TestTube, LayoutDashboard, FolderOpen } from 'lucide-react';
+import { Users, TestTube, LayoutDashboard, FolderOpen, Settings } from 'lucide-react';
 
 export function Layout() {
   const location = useLocation();
@@ -10,6 +10,7 @@ export function Layout() {
     { path: '/projects', label: 'Projects', icon: FolderOpen },
     { path: '/personas', label: 'Persona Lab', icon: Users },
     { path: '/tests', label: 'Test Studio', icon: TestTube },
+    { path: '/settings', label: 'Settings', icon: Settings },
   ];
 
   return (

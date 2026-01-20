@@ -14,8 +14,9 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { CheckCircle, Circle, Users, AlertCircle, GitCompare } from 'lucide-react';
+import { CheckCircle, Circle, Users, AlertCircle, GitCompare, Focus } from 'lucide-react';
 import type { Project, Persona } from '@/types';
+import { TEST_FOCUS_PRESETS } from './Settings';
 
 export function NewTest() {
   const navigate = useNavigate();
@@ -30,6 +31,7 @@ export function NewTest() {
   const [projectId, setProjectId] = useState('');
   const [name, setName] = useState('');
   const [testType, setTestType] = useState<'concept' | 'ab'>('concept');
+  const [focusPreset, setFocusPreset] = useState<keyof typeof TEST_FOCUS_PRESETS>('baseline');
   const [conceptText, setConceptText] = useState('');
   const [conceptTextB, setConceptTextB] = useState(''); // For A/B testing
   const [selectedPersonaIds, setSelectedPersonaIds] = useState<string[]>([]);
@@ -59,6 +61,8 @@ export function NewTest() {
     setError('');
 
     try {
+      const selectedPreset = TEST_FOCUS_PRESETS[focusPreset];
+
       if (testType === 'ab') {
         // Create two tests for A/B comparison
         const testA = await testsApi.create({
@@ -68,6 +72,8 @@ export function NewTest() {
           concept_text: conceptText,
           persona_ids: selectedPersonaIds,
           variants_per_persona: variantsPerPersona,
+          focus_preset: focusPreset,
+          focus_modifier: selectedPreset.promptModifier,
           variant_config: {
             age_spread: 5,
             attitude_distribution: 'normal',
@@ -82,6 +88,8 @@ export function NewTest() {
           concept_text: conceptTextB,
           persona_ids: selectedPersonaIds,
           variants_per_persona: variantsPerPersona,
+          focus_preset: focusPreset,
+          focus_modifier: selectedPreset.promptModifier,
           variant_config: {
             age_spread: 5,
             attitude_distribution: 'normal',
@@ -105,6 +113,8 @@ export function NewTest() {
           concept_text: conceptText,
           persona_ids: selectedPersonaIds,
           variants_per_persona: variantsPerPersona,
+          focus_preset: focusPreset,
+          focus_modifier: selectedPreset.promptModifier,
           variant_config: {
             age_spread: 5,
             attitude_distribution: 'normal',
@@ -210,6 +220,41 @@ export function NewTest() {
                 </div>
               </div>
             </div>
+          </div>
+          <div className="space-y-2">
+            <Label className="flex items-center gap-2">
+              <Focus className="h-4 w-4 text-[#D94D8F]" />
+              Test Focus
+            </Label>
+            <Select value={focusPreset} onValueChange={(v) => setFocusPreset(v as keyof typeof TEST_FOCUS_PRESETS)}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select a focus area" />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(TEST_FOCUS_PRESETS).map(([key, preset]) => (
+                  <SelectItem key={key} value={key}>
+                    <div className="flex items-center gap-2">
+                      <span>{preset.name}</span>
+                      {key === 'baseline' && (
+                        <Badge variant="secondary" className="text-xs ml-1">Default</Badge>
+                      )}
+                    </div>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {TEST_FOCUS_PRESETS[focusPreset].description}
+            </p>
+            {TEST_FOCUS_PRESETS[focusPreset].focusAreas.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {TEST_FOCUS_PRESETS[focusPreset].focusAreas.map((area) => (
+                  <Badge key={area} variant="outline" className="text-xs">
+                    {area}
+                  </Badge>
+                ))}
+              </div>
+            )}
           </div>
           {projectId && name && step === 1 && (
             <Button onClick={() => setStep(2)}>Continue</Button>
