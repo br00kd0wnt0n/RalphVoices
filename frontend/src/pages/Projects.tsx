@@ -38,6 +38,14 @@ export function Projects() {
     loadAllPersonas();
   }, []);
 
+  // De-duplicate personas by name (keep first/oldest occurrence)
+  const uniquePersonas = allPersonas.reduce<Persona[]>((acc, persona) => {
+    if (!acc.some(p => p.name === persona.name)) {
+      acc.push(persona);
+    }
+    return acc;
+  }, []);
+
   async function loadAllPersonas() {
     try {
       const data = await personasApi.list();
@@ -192,7 +200,7 @@ export function Projects() {
               </div>
             ) : (
               <div className="space-y-4 py-4">
-                {allPersonas.length === 0 ? (
+                {uniquePersonas.length === 0 ? (
                   <div className="text-center py-8 text-muted-foreground">
                     <Users className="h-10 w-10 mx-auto mb-3 opacity-50" />
                     <p>No existing personas found.</p>
@@ -207,16 +215,16 @@ export function Projects() {
                         variant="ghost"
                         size="sm"
                         onClick={() => setSelectedPersonaIds(
-                          selectedPersonaIds.length === allPersonas.length
+                          selectedPersonaIds.length === uniquePersonas.length
                             ? []
-                            : allPersonas.map(p => p.id)
+                            : uniquePersonas.map(p => p.id)
                         )}
                       >
-                        {selectedPersonaIds.length === allPersonas.length ? 'Deselect All' : 'Select All'}
+                        {selectedPersonaIds.length === uniquePersonas.length ? 'Deselect All' : 'Select All'}
                       </Button>
                     </div>
                     <div className="max-h-[300px] overflow-y-auto space-y-2 border rounded-lg p-2">
-                      {allPersonas.map((persona) => (
+                      {uniquePersonas.map((persona) => (
                         <div
                           key={persona.id}
                           className={`flex items-center gap-3 p-3 rounded-md cursor-pointer transition-colors ${

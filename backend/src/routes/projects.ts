@@ -27,15 +27,23 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
 
     // Copy personas if specified
     if (data.copy_persona_ids && data.copy_persona_ids.length > 0) {
-      for (const personaId of data.copy_persona_ids) {
-        // Get the original persona (no ownership check - if it's in the list, user can copy it)
-        const personaResult = await query(
-          `SELECT * FROM personas WHERE id = $1`,
-          [personaId]
-        );
+      console.log(`Copying ${data.copy_persona_ids.length} personas to project ${project.id}`);
 
-        if (personaResult.rows.length > 0) {
+      for (const personaId of data.copy_persona_ids) {
+        try {
+          // Get the original persona (no ownership check - if it's in the list, user can copy it)
+          const personaResult = await query(
+            `SELECT * FROM personas WHERE id = $1`,
+            [personaId]
+          );
+
+          if (personaResult.rows.length === 0) {
+            console.warn(`Persona ${personaId} not found, skipping`);
+            continue;
+          }
+
           const original = personaResult.rows[0];
+          console.log(`Copying persona: ${original.name} (${personaId})`);
 
           // Create a copy of the persona in the new project
           const copyResult = await query(
@@ -63,12 +71,15 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
           );
 
           const newPersonaId = copyResult.rows[0].id;
+          console.log(`Created persona copy: ${newPersonaId}`);
 
           // Copy variants if any exist
           const variantsResult = await query(
             `SELECT * FROM persona_variants WHERE persona_id = $1`,
             [personaId]
           );
+
+          console.log(`Copying ${variantsResult.rows.length} variants`);
 
           for (const variant of variantsResult.rows) {
             await query(
@@ -88,6 +99,9 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
               ]
             );
           }
+        } catch (copyError) {
+          console.error(`Failed to copy persona ${personaId}:`, copyError);
+          // Continue with other personas instead of failing entirely
         }
       }
     }
