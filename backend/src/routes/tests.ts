@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { query, getClient } from '../db/index.js';
 import { authMiddleware, AuthRequest } from '../middleware/auth.js';
-import { generateConceptResponse, analyzeTestResults } from '../services/ai.js';
+import { generateConceptResponse } from '../services/ai.js';
 import { z } from 'zod';
 import type { Persona, PersonaVariant, Test } from '../utils/types.js';
 
@@ -492,65 +492,73 @@ async function processTestResponses(test: Test, variants: any[]) {
     }
   }
 
-  // Generate aggregated results
-  try {
-    console.log(`Starting analysis for test ${test.id} with ${responses.length} responses`);
+  // Generate aggregated results from saved DB data
+  console.log(`Starting analysis for test ${test.id} with ${responses.length} responses`);
 
-    const analysis = await analyzeTestResults(
-      conceptText,
-      responses.map(r => ({
-        variant: r.variant,
-        response_text: r.response.response_text,
-        sentiment_score: r.response.sentiment_score,
-        engagement_likelihood: r.response.engagement_likelihood,
-        share_likelihood: r.response.share_likelihood,
-        comprehension_score: r.response.comprehension_score,
-        reaction_tags: r.response.reaction_tags,
-      }))
-    );
+  // Calculate segment breakdowns from in-memory data
+  const segments = calculateSegments(responses);
 
-    // Calculate segment breakdowns
-    const segments = calculateSegments(responses);
+  // Build summary from DB-stored structured data
+  const summary = {
+    total_responses: responses.length,
+    sentiment: {
+      positive: responses.filter(r => (r.response.sentiment_score || 5) >= 7).length,
+      neutral: responses.filter(r => (r.response.sentiment_score || 5) >= 4 && (r.response.sentiment_score || 5) < 7).length,
+      negative: responses.filter(r => (r.response.sentiment_score || 5) < 4).length,
+    },
+    avg_engagement: Math.round((responses.reduce((sum, r) => sum + (r.response.engagement_likelihood || 0), 0) / responses.length) * 10) / 10,
+    avg_share_likelihood: Math.round((responses.reduce((sum, r) => sum + (r.response.share_likelihood || 0), 0) / responses.length) * 10) / 10,
+    avg_comprehension: Math.round((responses.reduce((sum, r) => sum + (r.response.comprehension_score || 0), 0) / responses.length) * 10) / 10,
+  };
 
-    // Save results
-    await query(
-      `INSERT INTO test_results (test_id, summary, segments, themes)
-       VALUES ($1, $2, $3, $4)`,
-      [
-        test.id,
-        JSON.stringify(analysis.summary),
-        JSON.stringify(segments),
-        JSON.stringify(analysis.themes),
-      ]
-    );
-
-    console.log(`Analysis complete for test ${test.id}`);
-  } catch (analysisError) {
-    console.error(`Analysis failed for test ${test.id}:`, analysisError);
-    // Still mark as complete but with basic summary
-    const basicSummary = {
-      total_responses: responses.length,
-      sentiment: {
-        positive: responses.filter(r => (r.response.sentiment_score || 5) >= 7).length,
-        neutral: responses.filter(r => (r.response.sentiment_score || 5) >= 4 && (r.response.sentiment_score || 5) < 7).length,
-        negative: responses.filter(r => (r.response.sentiment_score || 5) < 4).length,
-      },
-      avg_engagement: responses.reduce((sum, r) => sum + (r.response.engagement_likelihood || 0), 0) / responses.length,
-      avg_share_likelihood: responses.reduce((sum, r) => sum + (r.response.share_likelihood || 0), 0) / responses.length,
-      avg_comprehension: responses.reduce((sum, r) => sum + (r.response.comprehension_score || 0), 0) / responses.length,
-    };
-
-    await query(
-      `INSERT INTO test_results (test_id, summary, segments, themes)
-       VALUES ($1, $2, $3, $4)`,
-      [
-        test.id,
-        JSON.stringify(basicSummary),
-        JSON.stringify({}),
-        JSON.stringify({ positive_themes: [], concerns: [], unexpected: [] }),
-      ]
-    );
+  // Aggregate reaction_tags from all responses (already extracted by AI per-response)
+  const tagCounts: Record<string, number> = {};
+  for (const r of responses) {
+    const tags = r.response.reaction_tags || [];
+    for (const tag of tags) {
+      tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+    }
   }
+
+  // Sort tags by frequency and categorize
+  const sortedTags = Object.entries(tagCounts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([tag, count]) => ({ theme: tag, frequency: count }));
+
+  // Categorize tags into positive/concerns/unexpected based on common patterns
+  const positiveKeywords = ['excited', 'love', 'great', 'amazing', 'interested', 'intrigued', 'impressed', 'engaging', 'innovative', 'creative', 'appealing', 'fun', 'cool', 'authentic', 'relatable'];
+  const concernKeywords = ['skeptical', 'confused', 'concerned', 'unclear', 'expensive', 'doubt', 'suspicious', 'boring', 'generic', 'annoying', 'intrusive', 'privacy', 'trust', 'overwhelmed'];
+
+  const themes = {
+    positive_themes: sortedTags.filter(t => positiveKeywords.some(kw => t.theme.toLowerCase().includes(kw))).slice(0, 8),
+    concerns: sortedTags.filter(t => concernKeywords.some(kw => t.theme.toLowerCase().includes(kw))).slice(0, 8),
+    unexpected: sortedTags.filter(t =>
+      !positiveKeywords.some(kw => t.theme.toLowerCase().includes(kw)) &&
+      !concernKeywords.some(kw => t.theme.toLowerCase().includes(kw))
+    ).slice(0, 5),
+  };
+
+  // Get representative quotes (top positive, top negative, middle neutral)
+  const sortedBysentiment = [...responses].sort((a, b) => (b.response.sentiment_score || 5) - (a.response.sentiment_score || 5));
+  const keyQuotes = [
+    sortedBysentiment[0]?.response.response_text?.substring(0, 300),
+    sortedBysentiment[Math.floor(sortedBysentiment.length / 2)]?.response.response_text?.substring(0, 300),
+    sortedBysentiment[sortedBysentiment.length - 1]?.response.response_text?.substring(0, 300),
+  ].filter(Boolean);
+
+  // Save results
+  await query(
+    `INSERT INTO test_results (test_id, summary, segments, themes)
+     VALUES ($1, $2, $3, $4)`,
+    [
+      test.id,
+      JSON.stringify(summary),
+      JSON.stringify(segments),
+      JSON.stringify({ ...themes, key_quotes: keyQuotes }),
+    ]
+  );
+
+  console.log(`Analysis complete for test ${test.id}`);
 
   // Update test status
   await query(
