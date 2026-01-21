@@ -73,16 +73,18 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
           for (const variant of variantsResult.rows) {
             await query(
               `INSERT INTO persona_variants (
-                persona_id, variant_number, age, attitude_modifier, platform_preference,
-                full_profile
-              ) VALUES ($1, $2, $3, $4, $5, $6)`,
+                persona_id, variant_index, age_actual, attitude_score, primary_platform,
+                engagement_level, full_profile, variant_name
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
               [
                 newPersonaId,
-                variant.variant_number,
-                variant.age,
-                variant.attitude_modifier,
-                variant.platform_preference,
+                variant.variant_index,
+                variant.age_actual,
+                variant.attitude_score,
+                variant.primary_platform,
+                variant.engagement_level,
                 variant.full_profile,
+                variant.variant_name,
               ]
             );
           }
