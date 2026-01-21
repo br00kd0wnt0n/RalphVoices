@@ -61,6 +61,7 @@ export interface Persona {
   updated_at: string;
   variant_count?: number;
   variants?: PersonaVariant[];
+  project_name?: string;
 }
 
 export interface PersonaVariant {

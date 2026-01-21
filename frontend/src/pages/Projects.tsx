@@ -15,7 +15,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { Plus, FolderOpen, Users, TestTube, Trash2, ChevronRight, ChevronLeft, Copy } from 'lucide-react';
+import { Plus, FolderOpen, Users, TestTube, Trash2, ChevronRight, ChevronLeft, Copy, Pencil } from 'lucide-react';
 import type { Project, Persona } from '@/types';
 
 export function Projects() {
@@ -28,6 +28,10 @@ export function Projects() {
   const [newClientName, setNewClientName] = useState('');
   const [selectedPersonaIds, setSelectedPersonaIds] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const [editProjectName, setEditProjectName] = useState('');
+  const [editClientName, setEditClientName] = useState('');
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     loadProjects();
@@ -54,8 +58,8 @@ export function Projects() {
     }
   }
 
-  async function handleCreateProject(e?: React.FormEvent | React.MouseEvent) {
-    e?.preventDefault();
+  async function handleCreateProject() {
+    if (creating) return;
     setCreating(true);
     try {
       await projectsApi.create({
@@ -63,15 +67,18 @@ export function Projects() {
         client_name: newClientName || undefined,
         copy_persona_ids: selectedPersonaIds.length > 0 ? selectedPersonaIds : undefined,
       });
+      // Reset form state
       setNewProjectName('');
       setNewClientName('');
       setSelectedPersonaIds([]);
       setCreateStep(1);
+      // Close modal
       setIsCreateOpen(false);
-      loadProjects();
-      loadAllPersonas();
+      // Reload data
+      await Promise.all([loadProjects(), loadAllPersonas()]);
     } catch (error) {
       console.error('Failed to create project:', error);
+      alert('Failed to create project. Please try again.');
     } finally {
       setCreating(false);
     }
@@ -102,6 +109,30 @@ export function Projects() {
       loadProjects();
     } catch (error) {
       console.error('Failed to delete project:', error);
+    }
+  }
+
+  function openEditDialog(project: Project) {
+    setEditingProject(project);
+    setEditProjectName(project.name);
+    setEditClientName(project.client_name || '');
+  }
+
+  async function handleSaveProject() {
+    if (!editingProject || saving) return;
+    setSaving(true);
+    try {
+      await projectsApi.update(editingProject.id, {
+        name: editProjectName,
+        client_name: editClientName || undefined,
+      });
+      setEditingProject(null);
+      loadProjects();
+    } catch (error) {
+      console.error('Failed to update project:', error);
+      alert('Failed to update project. Please try again.');
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -203,6 +234,7 @@ export function Projects() {
                             <p className="font-medium truncate">{persona.name}</p>
                             <p className="text-xs text-muted-foreground truncate">
                               {persona.occupation} • {persona.location}
+                              {persona.project_name && ` • ${persona.project_name}`}
                             </p>
                           </div>
                           {persona.variant_count && Number(persona.variant_count) > 0 && (
@@ -265,6 +297,50 @@ export function Projects() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* Edit Project Dialog */}
+        <Dialog open={!!editingProject} onOpenChange={(open) => !open && setEditingProject(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Edit Project</DialogTitle>
+              <DialogDescription>
+                Update your project details
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit-name">Project Name</Label>
+                <Input
+                  id="edit-name"
+                  value={editProjectName}
+                  onChange={(e) => setEditProjectName(e.target.value)}
+                  placeholder="e.g., Summer Campaign 2024"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-client">Client Name (optional)</Label>
+                <Input
+                  id="edit-client"
+                  value={editClientName}
+                  onChange={(e) => setEditClientName(e.target.value)}
+                  placeholder="e.g., Acme Corp"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setEditingProject(null)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={saving || !editProjectName.trim()}
+                onClick={handleSaveProject}
+              >
+                {saving ? 'Saving...' : 'Save Changes'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
 
       {projects.length === 0 ? (
@@ -294,14 +370,24 @@ export function Projects() {
                     </p>
                   )}
                 </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="text-muted-foreground hover:text-destructive"
-                  onClick={() => handleDeleteProject(project.id)}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+                <div className="flex gap-1">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="text-muted-foreground hover:text-primary"
+                    onClick={() => openEditDialog(project)}
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="text-muted-foreground hover:text-destructive"
+                    onClick={() => handleDeleteProject(project.id)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
                 <div className="flex items-center gap-4 text-sm text-muted-foreground mb-4">
