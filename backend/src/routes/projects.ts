@@ -8,6 +8,7 @@ const router = Router();
 const createProjectSchema = z.object({
   name: z.string().min(1).max(255),
   client_name: z.string().max(255).optional(),
+  copy_persona_ids: z.array(z.string().uuid()).optional(),
 });
 
 // Create project
@@ -22,7 +23,74 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
       [data.name, data.client_name || null, req.user!.id]
     );
 
-    res.status(201).json(result.rows[0]);
+    const project = result.rows[0];
+
+    // Copy personas if specified
+    if (data.copy_persona_ids && data.copy_persona_ids.length > 0) {
+      for (const personaId of data.copy_persona_ids) {
+        // Get the original persona
+        const personaResult = await query(
+          `SELECT * FROM personas WHERE id = $1 AND created_by = $2`,
+          [personaId, req.user!.id]
+        );
+
+        if (personaResult.rows.length > 0) {
+          const original = personaResult.rows[0];
+
+          // Create a copy of the persona in the new project
+          const copyResult = await query(
+            `INSERT INTO personas (
+              project_id, name, age_base, location, occupation, household,
+              psychographics, media_habits, brand_context, cultural_context,
+              voice_sample, source_type, created_by
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            RETURNING id`,
+            [
+              project.id,
+              original.name,
+              original.age_base,
+              original.location,
+              original.occupation,
+              original.household,
+              original.psychographics,
+              original.media_habits,
+              original.brand_context,
+              original.cultural_context,
+              original.voice_sample,
+              original.source_type,
+              req.user!.id,
+            ]
+          );
+
+          const newPersonaId = copyResult.rows[0].id;
+
+          // Copy variants if any exist
+          const variantsResult = await query(
+            `SELECT * FROM persona_variants WHERE persona_id = $1`,
+            [personaId]
+          );
+
+          for (const variant of variantsResult.rows) {
+            await query(
+              `INSERT INTO persona_variants (
+                persona_id, variant_number, age, attitude_modifier, platform_preference,
+                full_profile
+              ) VALUES ($1, $2, $3, $4, $5, $6)`,
+              [
+                newPersonaId,
+                variant.variant_number,
+                variant.age,
+                variant.attitude_modifier,
+                variant.platform_preference,
+                variant.full_profile,
+              ]
+            );
+          }
+        }
+      }
+    }
+
+    res.status(201).json(project);
   } catch (error) {
     if (error instanceof z.ZodError) {
       res.status(400).json({ error: 'Invalid input', details: error.errors });

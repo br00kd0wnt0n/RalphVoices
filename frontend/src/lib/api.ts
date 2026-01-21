@@ -49,7 +49,7 @@ export const auth = {
 export const projects = {
   list: () => request<any[]>('/projects'),
   get: (id: string) => request<any>(`/projects/${id}`),
-  create: (data: { name: string; client_name?: string }) =>
+  create: (data: { name: string; client_name?: string; copy_persona_ids?: string[] }) =>
     request<any>('/projects', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: string, data: { name: string; client_name?: string }) =>
     request<any>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
