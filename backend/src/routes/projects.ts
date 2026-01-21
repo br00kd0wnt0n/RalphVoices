@@ -28,10 +28,10 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
     // Copy personas if specified
     if (data.copy_persona_ids && data.copy_persona_ids.length > 0) {
       for (const personaId of data.copy_persona_ids) {
-        // Get the original persona
+        // Get the original persona (no ownership check - if it's in the list, user can copy it)
         const personaResult = await query(
-          `SELECT * FROM personas WHERE id = $1 AND created_by = $2`,
-          [personaId, req.user!.id]
+          `SELECT * FROM personas WHERE id = $1`,
+          [personaId]
         );
 
         if (personaResult.rows.length > 0) {
