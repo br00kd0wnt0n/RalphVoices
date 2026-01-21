@@ -493,33 +493,64 @@ async function processTestResponses(test: Test, variants: any[]) {
   }
 
   // Generate aggregated results
-  const analysis = await analyzeTestResults(
-    conceptText,
-    responses.map(r => ({
-      variant: r.variant,
-      response_text: r.response.response_text,
-      sentiment_score: r.response.sentiment_score,
-      engagement_likelihood: r.response.engagement_likelihood,
-      share_likelihood: r.response.share_likelihood,
-      comprehension_score: r.response.comprehension_score,
-      reaction_tags: r.response.reaction_tags,
-    }))
-  );
+  try {
+    console.log(`Starting analysis for test ${test.id} with ${responses.length} responses`);
 
-  // Calculate segment breakdowns
-  const segments = calculateSegments(responses);
+    const analysis = await analyzeTestResults(
+      conceptText,
+      responses.map(r => ({
+        variant: r.variant,
+        response_text: r.response.response_text,
+        sentiment_score: r.response.sentiment_score,
+        engagement_likelihood: r.response.engagement_likelihood,
+        share_likelihood: r.response.share_likelihood,
+        comprehension_score: r.response.comprehension_score,
+        reaction_tags: r.response.reaction_tags,
+      }))
+    );
 
-  // Save results
-  await query(
-    `INSERT INTO test_results (test_id, summary, segments, themes)
-     VALUES ($1, $2, $3, $4)`,
-    [
-      test.id,
-      JSON.stringify(analysis.summary),
-      JSON.stringify(segments),
-      JSON.stringify(analysis.themes),
-    ]
-  );
+    // Calculate segment breakdowns
+    const segments = calculateSegments(responses);
+
+    // Save results
+    await query(
+      `INSERT INTO test_results (test_id, summary, segments, themes)
+       VALUES ($1, $2, $3, $4)`,
+      [
+        test.id,
+        JSON.stringify(analysis.summary),
+        JSON.stringify(segments),
+        JSON.stringify(analysis.themes),
+      ]
+    );
+
+    console.log(`Analysis complete for test ${test.id}`);
+  } catch (analysisError) {
+    console.error(`Analysis failed for test ${test.id}:`, analysisError);
+    // Still mark as complete but with basic summary
+    const basicSummary = {
+      total_responses: responses.length,
+      sentiment: {
+        positive: responses.filter(r => (r.response.sentiment_score || 5) >= 7).length,
+        neutral: responses.filter(r => (r.response.sentiment_score || 5) >= 4 && (r.response.sentiment_score || 5) < 7).length,
+        negative: responses.filter(r => (r.response.sentiment_score || 5) < 4).length,
+      },
+      avg_engagement: responses.reduce((sum, r) => sum + (r.response.engagement_likelihood || 0), 0) / responses.length,
+      avg_share_likelihood: responses.reduce((sum, r) => sum + (r.response.share_likelihood || 0), 0) / responses.length,
+      avg_comprehension: responses.reduce((sum, r) => sum + (r.response.comprehension_score || 0), 0) / responses.length,
+    };
+
+    await query(
+      `INSERT INTO test_results (test_id, summary, segments, themes)
+       VALUES ($1, $2, $3, $4)`,
+      [
+        test.id,
+        JSON.stringify(basicSummary),
+        JSON.stringify({}),
+        JSON.stringify({ positive_themes: [], concerns: [], unexpected: [] }),
+      ]
+    );
+  }
 
   // Update test status
   await query(

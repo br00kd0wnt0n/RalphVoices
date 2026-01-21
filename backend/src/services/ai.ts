@@ -362,17 +362,42 @@ export async function analyzeTestResults(
     reaction_tags: string[];
   }>
 ): Promise<ThemeAnalysis> {
-  // Calculate basic statistics
+  // Calculate basic statistics from ALL responses
   const totalResponses = responses.length;
-  const avgEngagement = responses.reduce((sum, r) => sum + r.engagement_likelihood, 0) / totalResponses;
-  const avgShare = responses.reduce((sum, r) => sum + r.share_likelihood, 0) / totalResponses;
-  const avgComprehension = responses.reduce((sum, r) => sum + r.comprehension_score, 0) / totalResponses;
+  const avgEngagement = responses.reduce((sum, r) => sum + (r.engagement_likelihood || 0), 0) / totalResponses;
+  const avgShare = responses.reduce((sum, r) => sum + (r.share_likelihood || 0), 0) / totalResponses;
+  const avgComprehension = responses.reduce((sum, r) => sum + (r.comprehension_score || 0), 0) / totalResponses;
 
   const sentimentCounts = {
-    positive: responses.filter(r => r.sentiment_score >= 7).length,
-    neutral: responses.filter(r => r.sentiment_score >= 4 && r.sentiment_score < 7).length,
-    negative: responses.filter(r => r.sentiment_score < 4).length,
+    positive: responses.filter(r => (r.sentiment_score || 5) >= 7).length,
+    neutral: responses.filter(r => (r.sentiment_score || 5) >= 4 && (r.sentiment_score || 5) < 7).length,
+    negative: responses.filter(r => (r.sentiment_score || 5) < 4).length,
   };
+
+  // Sample responses for AI analysis if there are too many (to avoid token limits)
+  const MAX_RESPONSES_FOR_ANALYSIS = 40;
+  let sampledResponses = responses;
+  if (responses.length > MAX_RESPONSES_FOR_ANALYSIS) {
+    // Take a stratified sample: some positive, some negative, some neutral
+    const positive = responses.filter(r => (r.sentiment_score || 5) >= 7);
+    const neutral = responses.filter(r => (r.sentiment_score || 5) >= 4 && (r.sentiment_score || 5) < 7);
+    const negative = responses.filter(r => (r.sentiment_score || 5) < 4);
+
+    // Take proportional samples from each group
+    const sampleFromGroup = (group: typeof responses, count: number) => {
+      const shuffled = [...group].sort(() => Math.random() - 0.5);
+      return shuffled.slice(0, count);
+    };
+
+    const targetPerGroup = Math.floor(MAX_RESPONSES_FOR_ANALYSIS / 3);
+    sampledResponses = [
+      ...sampleFromGroup(positive, Math.min(positive.length, targetPerGroup + 5)),
+      ...sampleFromGroup(neutral, Math.min(neutral.length, targetPerGroup + 5)),
+      ...sampleFromGroup(negative, Math.min(negative.length, targetPerGroup + 5)),
+    ].slice(0, MAX_RESPONSES_FOR_ANALYSIS);
+
+    console.log(`Sampled ${sampledResponses.length} responses from ${responses.length} for theme analysis`);
+  }
 
   // Use AI to extract themes
   const systemPrompt = `You are analyzing audience feedback to extract patterns and themes. Given a set
@@ -393,36 +418,23 @@ Return as JSON:
 
 IMPORTANT: Return ONLY the JSON, no markdown formatting.`;
 
-  const responsesForAnalysis = responses.map(r => ({
-    variant_name: r.variant.variant_name,
-    age: r.variant.age_actual,
-    platform: r.variant.primary_platform,
-    attitude: r.variant.attitude_score,
-    response: r.response_text,
-    sentiment: r.sentiment_score,
-    tags: r.reaction_tags,
+  const responsesForAnalysis = sampledResponses.map(r => ({
+    variant_name: r.variant?.variant_name || 'Unknown',
+    age: r.variant?.age_actual || 30,
+    platform: r.variant?.primary_platform || 'Unknown',
+    attitude: r.variant?.attitude_score || 5,
+    response: r.response_text?.substring(0, 500) || '', // Truncate long responses
+    sentiment: r.sentiment_score || 5,
+    tags: r.reaction_tags || [],
   }));
 
   const userPrompt = `CONCEPT TESTED:
 ${conceptText}
 
-RESPONSES (${totalResponses} total):
+RESPONSES (${sampledResponses.length} sampled from ${totalResponses} total):
 ${JSON.stringify(responsesForAnalysis, null, 2)}
 
 Analyze these responses and extract actionable insights.`;
-
-  const response = await openai.chat.completions.create({
-    model: MODEL,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-    temperature: 0.5,
-    max_tokens: 2000,
-    response_format: { type: 'json_object' },
-  });
-
-  const content = response.choices[0]?.message?.content || '{}';
 
   let themes = {
     positive_themes: [] as { theme: string; frequency: number }[],
@@ -432,15 +444,35 @@ Analyze these responses and extract actionable insights.`;
   let keyQuotes: string[] = [];
 
   try {
-    const parsed = JSON.parse(content);
-    themes = {
-      positive_themes: parsed.positive_themes || [],
-      concerns: parsed.concerns || [],
-      unexpected: parsed.unexpected || [],
-    };
-    keyQuotes = parsed.key_quotes || [];
-  } catch (e) {
-    console.error('Failed to parse theme analysis');
+    console.log(`Calling OpenAI for theme analysis (${responsesForAnalysis.length} responses)`);
+
+    const response = await openai.chat.completions.create({
+      model: MODEL,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      temperature: 0.5,
+      max_tokens: 2000,
+      response_format: { type: 'json_object' },
+    });
+
+    const content = response.choices[0]?.message?.content || '{}';
+
+    try {
+      const parsed = JSON.parse(content);
+      themes = {
+        positive_themes: parsed.positive_themes || [],
+        concerns: parsed.concerns || [],
+        unexpected: parsed.unexpected || [],
+      };
+      keyQuotes = parsed.key_quotes || [];
+    } catch (parseError) {
+      console.error('Failed to parse theme analysis JSON:', parseError);
+    }
+  } catch (apiError) {
+    console.error('OpenAI theme analysis failed:', apiError);
+    // Return default empty themes rather than failing
   }
 
   return {
