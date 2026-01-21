@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { query, getClient } from '../db/index.js';
 import { authMiddleware, AuthRequest } from '../middleware/auth.js';
-import { generateConceptResponse } from '../services/ai.js';
+import { generateConceptResponse, TestAsset } from '../services/ai.js';
 import { z } from 'zod';
 import type { Persona, PersonaVariant, Test } from '../utils/types.js';
 
@@ -10,12 +10,22 @@ const router = Router();
 // Store for WebSocket progress updates
 export const testProgress = new Map<string, { completed: number; total: number; status: string }>();
 
+const assetSchema = z.object({
+  name: z.string(),
+  mimeType: z.string(),
+  base64: z.string(),
+  isImage: z.boolean(),
+  isPDF: z.boolean(),
+  extractedText: z.string().optional(),
+});
+
 const createTestSchema = z.object({
   project_id: z.string().uuid(),
   name: z.string().min(1).max(255),
   test_type: z.enum(['concept', 'asset', 'strategic', 'ab']).default('concept'),
   concept_text: z.string().optional(),
   asset_url: z.string().url().optional(),
+  assets: z.array(assetSchema).optional(), // Image and PDF uploads
   options: z.array(z.any()).optional(),
   persona_ids: z.array(z.string().uuid()).min(1),
   variants_per_persona: z.number().int().min(1).max(100).default(20),
@@ -62,6 +72,12 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
       focus_modifier: data.focus_modifier || '',
     };
 
+    // Store assets in options JSONB
+    const optionsWithAssets = {
+      ...(data.options ? { options: data.options } : {}),
+      assets: data.assets || [],
+    };
+
     const result = await query(
       `INSERT INTO tests (
         project_id, name, test_type, concept_text, asset_url, options,
@@ -74,7 +90,7 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
         data.test_type,
         data.concept_text || null,
         data.asset_url || null,
-        data.options ? JSON.stringify(data.options) : null,
+        JSON.stringify(optionsWithAssets),
         data.persona_ids,
         data.variants_per_persona,
         JSON.stringify(variantConfigWithFocus),
@@ -402,6 +418,15 @@ async function processTestResponses(test: Test, variants: any[]) {
     ? JSON.parse(test.variant_config)
     : (test.variant_config || {});
   const focusModifier = variantConfig.focus_modifier || '';
+
+  // Extract assets from test options
+  const testOptions = typeof test.options === 'string'
+    ? JSON.parse(test.options)
+    : (test.options || {});
+  const assets = testOptions.assets || [];
+
+  console.log(`Processing test with ${assets.length} assets (${assets.filter((a: any) => a.isImage).length} images, ${assets.filter((a: any) => a.isPDF).length} PDFs)`);
+
   const responses: any[] = [];
   const BATCH_SIZE = 3; // Process 3 at a time to respect rate limits
   const DELAY_MS = 1000; // 1 second delay between batches
@@ -444,7 +469,7 @@ async function processTestResponses(test: Test, variants: any[]) {
       };
 
       const startTime = Date.now();
-      const response = await generateConceptResponse(variant, basePersona, conceptText, focusModifier);
+      const response = await generateConceptResponse(variant, basePersona, conceptText, focusModifier, assets);
       const processingTime = Date.now() - startTime;
 
       // Save response to database

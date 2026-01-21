@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { tests as testsApi, projects as projectsApi, personas as personasApi } from '@/lib/api';
+import { tests as testsApi, projects as projectsApi, personas as personasApi, uploads as uploadsApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -14,9 +14,19 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { CheckCircle, Circle, Users, AlertCircle, GitCompare, Focus } from 'lucide-react';
+import { CheckCircle, Circle, Users, AlertCircle, GitCompare, Focus, Upload, X, FileText, Loader2 } from 'lucide-react';
 import type { Project, Persona } from '@/types';
 import { TEST_FOCUS_PRESETS } from './Settings';
+
+interface UploadedAsset {
+  name: string;
+  mimeType: string;
+  base64: string;
+  isImage: boolean;
+  isPDF: boolean;
+  extractedText?: string;
+  size: number;
+}
 
 export function NewTest() {
   const navigate = useNavigate();
@@ -36,6 +46,9 @@ export function NewTest() {
   const [conceptTextB, setConceptTextB] = useState(''); // For A/B testing
   const [selectedPersonaIds, setSelectedPersonaIds] = useState<string[]>([]);
   const [variantsPerPersona, setVariantsPerPersona] = useState(20);
+  const [assets, setAssets] = useState<UploadedAsset[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     projectsApi.list().then(setProjects).catch(console.error);
@@ -56,6 +69,32 @@ export function NewTest() {
     );
   }
 
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        const result = await uploadsApi.upload(file);
+        if (result.success && result.file) {
+          setAssets(prev => [...prev, result.file]);
+        }
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to upload file');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  }
+
+  function removeAsset(index: number) {
+    setAssets(prev => prev.filter((_, i) => i !== index));
+  }
+
   async function handleCreateTest() {
     setLoading(true);
     setError('');
@@ -70,6 +109,7 @@ export function NewTest() {
           name: `${name} - Concept A`,
           test_type: 'concept',
           concept_text: conceptText,
+          assets: assets,
           persona_ids: selectedPersonaIds,
           variants_per_persona: variantsPerPersona,
           focus_preset: focusPreset,
@@ -86,6 +126,7 @@ export function NewTest() {
           name: `${name} - Concept B`,
           test_type: 'concept',
           concept_text: conceptTextB,
+          assets: assets, // Same assets for both
           persona_ids: selectedPersonaIds,
           variants_per_persona: variantsPerPersona,
           focus_preset: focusPreset,
@@ -111,6 +152,7 @@ export function NewTest() {
           name,
           test_type: 'concept',
           concept_text: conceptText,
+          assets: assets,
           persona_ids: selectedPersonaIds,
           variants_per_persona: variantsPerPersona,
           focus_preset: focusPreset,
@@ -439,6 +481,80 @@ export function NewTest() {
                 </p>
               </div>
             )}
+
+            {/* File Upload Section */}
+            <div className="space-y-3 pt-4 border-t">
+              <Label className="flex items-center gap-2">
+                <Upload className="h-4 w-4" />
+                Attach Images or PDFs (optional)
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Upload images or PDFs to include with your concept. The AI will analyze these along with your text.
+              </p>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"
+                multiple
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+
+              <div className="flex flex-wrap gap-3">
+                {assets.map((asset, index) => (
+                  <div
+                    key={index}
+                    className="relative group border rounded-lg p-2 bg-muted/50"
+                  >
+                    {asset.isImage ? (
+                      <div className="w-24 h-24 flex items-center justify-center">
+                        <img
+                          src={asset.base64}
+                          alt={asset.name}
+                          className="max-w-full max-h-full object-contain rounded"
+                        />
+                      </div>
+                    ) : (
+                      <div className="w-24 h-24 flex flex-col items-center justify-center text-muted-foreground">
+                        <FileText className="h-8 w-8 mb-1" />
+                        <span className="text-xs text-center truncate w-full px-1">
+                          {asset.name}
+                        </span>
+                      </div>
+                    )}
+                    <button
+                      onClick={() => removeAsset(index)}
+                      className="absolute -top-2 -right-2 bg-destructive text-destructive-foreground rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  className="w-24 h-24 border-2 border-dashed rounded-lg flex flex-col items-center justify-center text-muted-foreground hover:text-primary hover:border-primary transition-colors"
+                >
+                  {uploading ? (
+                    <Loader2 className="h-6 w-6 animate-spin" />
+                  ) : (
+                    <>
+                      <Upload className="h-6 w-6 mb-1" />
+                      <span className="text-xs">Upload</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {assets.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  {assets.filter(a => a.isImage).length} image(s), {assets.filter(a => a.isPDF).length} PDF(s) attached
+                </p>
+              )}
+            </div>
 
             {error && (
               <div className="p-3 bg-destructive/10 text-destructive rounded-lg text-sm">

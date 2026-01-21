@@ -215,11 +215,21 @@ export interface ConceptTestResponse {
   reaction_tags: string[];
 }
 
+export interface TestAsset {
+  name: string;
+  mimeType: string;
+  base64: string;
+  isImage: boolean;
+  isPDF: boolean;
+  extractedText?: string;
+}
+
 export async function generateConceptResponse(
   variant: PersonaVariant,
   basePersona: Persona,
   conceptText: string,
-  focusModifier: string = ''
+  focusModifier: string = '',
+  assets: TestAsset[] = []
 ): Promise<ConceptTestResponse> {
   const baseSystemPrompt = `You are embodying a specific persona to provide authentic feedback on a creative
 concept. Respond as this person would - with their vocabulary, concerns,
@@ -254,7 +264,13 @@ Format your final response as:
   const voiceModifier = variant.full_profile?.voice_modifier || '';
   const distinguishingTrait = variant.full_profile?.distinguishing_trait || '';
 
-  const userPrompt = `PERSONA:
+  // Build PDF content text from assets
+  const pdfTexts = assets
+    .filter(a => a.isPDF && a.extractedText)
+    .map(a => `[Document: ${a.name}]\n${a.extractedText}`)
+    .join('\n\n');
+
+  const userPromptText = `PERSONA:
 Name: ${variant.variant_name}
 Age: ${variant.age_actual}
 Location: ${variant.location_variant}
@@ -278,8 +294,30 @@ ${voiceModifier ? `\nVoice Modifier: ${voiceModifier}` : ''}
 
 CONCEPT TO EVALUATE:
 ${conceptText}
+${pdfTexts ? `\nATTACHED DOCUMENTS:\n${pdfTexts}` : ''}
+${assets.some(a => a.isImage) ? '\n[See attached image(s) below]' : ''}
 
 Respond in character, then provide your scores and tags.`;
+
+  // Build message content - use vision format if there are images
+  const imageAssets = assets.filter(a => a.isImage);
+  let userContent: any;
+
+  if (imageAssets.length > 0) {
+    // Use vision format with images
+    userContent = [
+      { type: 'text', text: userPromptText },
+      ...imageAssets.map(img => ({
+        type: 'image_url',
+        image_url: {
+          url: img.base64, // Already in data:image/...;base64,... format
+          detail: 'low', // Use low detail to reduce tokens
+        },
+      })),
+    ];
+  } else {
+    userContent = userPromptText;
+  }
 
   const startTime = Date.now();
 
@@ -287,7 +325,7 @@ Respond in character, then provide your scores and tags.`;
     model: MODEL,
     messages: [
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
+      { role: 'user', content: userContent },
     ],
     temperature: 0.85,
     max_tokens: 800,

@@ -7,6 +7,7 @@ import authRoutes from './routes/auth.js';
 import projectRoutes from './routes/projects.js';
 import personaRoutes from './routes/personas.js';
 import testRoutes, { testProgress } from './routes/tests.js';
+import uploadRoutes from './routes/uploads.js';
 
 dotenv.config();
 
@@ -32,7 +33,8 @@ app.use(cors(corsOptions));
 // Handle preflight requests explicitly
 app.options('*', cors(corsOptions));
 
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Root route
 app.get('/', (req, res) => {
@@ -102,6 +104,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/personas', personaRoutes);
 app.use('/api/tests', testRoutes);
+app.use('/api/uploads', uploadRoutes);
 
 // WebSocket endpoint for test progress
 wsInstance.app.ws('/ws/tests/:id/progress', (ws, req) => {

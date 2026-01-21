@@ -106,4 +106,24 @@ export const tests = {
   getResults: (id: string) => request<any>(`/tests/${id}/results`),
 };
 
+// Uploads
+export const uploads = {
+  upload: async (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch(`${API_BASE}/uploads`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Upload failed' }));
+      throw new ApiError(response.status, error.error || 'Upload failed');
+    }
+
+    return response.json();
+  },
+};
+
 export { ApiError };
