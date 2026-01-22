@@ -1,7 +1,15 @@
 import { Router, Response } from 'express';
 import multer from 'multer';
-import pdfParse from 'pdf-parse';
 import { authMiddleware, AuthRequest } from '../middleware/auth.js';
+
+// Lazy load pdf-parse to avoid initialization crash in some environments
+let pdfParse: typeof import('pdf-parse') | null = null;
+const getPdfParse = async () => {
+  if (!pdfParse) {
+    pdfParse = (await import('pdf-parse')).default;
+  }
+  return pdfParse;
+};
 
 const router = Router();
 
@@ -40,7 +48,8 @@ router.post('/', authMiddleware, upload.single('file'), async (req: AuthRequest,
     // Extract text from PDF
     if (isPDF) {
       try {
-        const pdfData = await pdfParse(file.buffer);
+        const parser = await getPdfParse();
+        const pdfData = await parser(file.buffer);
         extractedText = pdfData.text;
         console.log(`Extracted ${extractedText.length} chars from PDF`);
       } catch (pdfError) {
@@ -87,7 +96,8 @@ router.post('/multiple', authMiddleware, upload.array('files', 5), async (req: A
 
       if (isPDF) {
         try {
-          const pdfData = await pdfParse(file.buffer);
+          const parser = await getPdfParse();
+          const pdfData = await parser(file.buffer);
           extractedText = pdfData.text;
         } catch (pdfError) {
           console.error('PDF extraction failed:', pdfError);
