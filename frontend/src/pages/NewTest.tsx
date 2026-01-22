@@ -47,8 +47,14 @@ export function NewTest() {
   const [selectedPersonaIds, setSelectedPersonaIds] = useState<string[]>([]);
   const [variantsPerPersona, setVariantsPerPersona] = useState(20);
   const [assets, setAssets] = useState<UploadedAsset[]>([]);
+  const [assetsA, setAssetsA] = useState<UploadedAsset[]>([]);
+  const [assetsB, setAssetsB] = useState<UploadedAsset[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [uploadingA, setUploadingA] = useState(false);
+  const [uploadingB, setUploadingB] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRefA = useRef<HTMLInputElement>(null);
+  const fileInputRefB = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     projectsApi.list().then(setProjects).catch(console.error);
@@ -69,30 +75,35 @@ export function NewTest() {
     );
   }
 
-  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>, target: 'single' | 'A' | 'B' = 'single') {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    setUploading(true);
+    const setUploadingFn = target === 'A' ? setUploadingA : target === 'B' ? setUploadingB : setUploading;
+    const setAssetsFn = target === 'A' ? setAssetsA : target === 'B' ? setAssetsB : setAssets;
+    const inputRef = target === 'A' ? fileInputRefA : target === 'B' ? fileInputRefB : fileInputRef;
+
+    setUploadingFn(true);
     try {
       for (const file of Array.from(files)) {
         const result = await uploadsApi.upload(file);
         if (result.success && result.file) {
-          setAssets(prev => [...prev, result.file]);
+          setAssetsFn(prev => [...prev, result.file]);
         }
       }
     } catch (err: any) {
       setError(err.message || 'Failed to upload file');
     } finally {
-      setUploading(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
+      setUploadingFn(false);
+      if (inputRef.current) {
+        inputRef.current.value = '';
       }
     }
   }
 
-  function removeAsset(index: number) {
-    setAssets(prev => prev.filter((_, i) => i !== index));
+  function removeAsset(index: number, target: 'single' | 'A' | 'B' = 'single') {
+    const setAssetsFn = target === 'A' ? setAssetsA : target === 'B' ? setAssetsB : setAssets;
+    setAssetsFn(prev => prev.filter((_, i) => i !== index));
   }
 
   async function handleCreateTest() {
@@ -109,7 +120,7 @@ export function NewTest() {
           name: `${name} - Concept A`,
           test_type: 'concept',
           concept_text: conceptText,
-          assets: assets,
+          assets: assetsA,
           persona_ids: selectedPersonaIds,
           variants_per_persona: variantsPerPersona,
           focus_preset: focusPreset,
@@ -126,7 +137,7 @@ export function NewTest() {
           name: `${name} - Concept B`,
           test_type: 'concept',
           concept_text: conceptTextB,
-          assets: assets, // Same assets for both
+          assets: assetsB,
           persona_ids: selectedPersonaIds,
           variants_per_persona: variantsPerPersona,
           focus_preset: focusPreset,
@@ -432,38 +443,151 @@ export function NewTest() {
           </CardHeader>
           <CardContent className="space-y-4">
             {testType === 'ab' ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="conceptA" className="flex items-center gap-2">
-                    <Badge className="bg-blue-500">A</Badge>
-                    Concept A *
-                  </Label>
-                  <Textarea
-                    id="conceptA"
-                    value={conceptText}
-                    onChange={(e) => setConceptText(e.target.value)}
-                    placeholder="Describe the first concept..."
-                    className="min-h-[200px]"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    {conceptText.length} characters
-                  </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Concept A */}
+                <div className="space-y-4 p-4 border rounded-lg bg-blue-50/30">
+                  <div className="space-y-2">
+                    <Label htmlFor="conceptA" className="flex items-center gap-2">
+                      <Badge className="bg-blue-500">A</Badge>
+                      Concept A *
+                    </Label>
+                    <Textarea
+                      id="conceptA"
+                      value={conceptText}
+                      onChange={(e) => setConceptText(e.target.value)}
+                      placeholder="Describe the first concept..."
+                      className="min-h-[150px]"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      {conceptText.length} characters
+                    </p>
+                  </div>
+
+                  {/* Upload for Concept A */}
+                  <div className="space-y-2">
+                    <Label className="flex items-center gap-2 text-sm">
+                      <Upload className="h-3 w-3" />
+                      Image A (optional)
+                    </Label>
+                    <input
+                      ref={fileInputRefA}
+                      type="file"
+                      accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"
+                      multiple
+                      onChange={(e) => handleFileUpload(e, 'A')}
+                      className="hidden"
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      {assetsA.map((asset, index) => (
+                        <div key={index} className="relative group border rounded-lg p-1.5 bg-white">
+                          {asset.isImage ? (
+                            <div className="w-16 h-16 flex items-center justify-center">
+                              <img src={asset.base64} alt={asset.name} className="max-w-full max-h-full object-contain rounded" />
+                            </div>
+                          ) : (
+                            <div className="w-16 h-16 flex flex-col items-center justify-center text-muted-foreground">
+                              <FileText className="h-6 w-6 mb-0.5" />
+                              <span className="text-[10px] text-center truncate w-full px-1">{asset.name}</span>
+                            </div>
+                          )}
+                          <button
+                            onClick={() => removeAsset(index, 'A')}
+                            className="absolute -top-1.5 -right-1.5 bg-destructive text-destructive-foreground rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => fileInputRefA.current?.click()}
+                        disabled={uploadingA}
+                        className="w-16 h-16 border-2 border-dashed rounded-lg flex flex-col items-center justify-center text-muted-foreground hover:text-blue-500 hover:border-blue-500 transition-colors"
+                      >
+                        {uploadingA ? (
+                          <Loader2 className="h-5 w-5 animate-spin" />
+                        ) : (
+                          <>
+                            <Upload className="h-5 w-5 mb-0.5" />
+                            <span className="text-[10px]">Upload</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="conceptB" className="flex items-center gap-2">
-                    <Badge className="bg-purple-500">B</Badge>
-                    Concept B *
-                  </Label>
-                  <Textarea
-                    id="conceptB"
-                    value={conceptTextB}
-                    onChange={(e) => setConceptTextB(e.target.value)}
-                    placeholder="Describe the second concept..."
-                    className="min-h-[200px]"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    {conceptTextB.length} characters
-                  </p>
+
+                {/* Concept B */}
+                <div className="space-y-4 p-4 border rounded-lg bg-purple-50/30">
+                  <div className="space-y-2">
+                    <Label htmlFor="conceptB" className="flex items-center gap-2">
+                      <Badge className="bg-purple-500">B</Badge>
+                      Concept B *
+                    </Label>
+                    <Textarea
+                      id="conceptB"
+                      value={conceptTextB}
+                      onChange={(e) => setConceptTextB(e.target.value)}
+                      placeholder="Describe the second concept..."
+                      className="min-h-[150px]"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      {conceptTextB.length} characters
+                    </p>
+                  </div>
+
+                  {/* Upload for Concept B */}
+                  <div className="space-y-2">
+                    <Label className="flex items-center gap-2 text-sm">
+                      <Upload className="h-3 w-3" />
+                      Image B (optional)
+                    </Label>
+                    <input
+                      ref={fileInputRefB}
+                      type="file"
+                      accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"
+                      multiple
+                      onChange={(e) => handleFileUpload(e, 'B')}
+                      className="hidden"
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      {assetsB.map((asset, index) => (
+                        <div key={index} className="relative group border rounded-lg p-1.5 bg-white">
+                          {asset.isImage ? (
+                            <div className="w-16 h-16 flex items-center justify-center">
+                              <img src={asset.base64} alt={asset.name} className="max-w-full max-h-full object-contain rounded" />
+                            </div>
+                          ) : (
+                            <div className="w-16 h-16 flex flex-col items-center justify-center text-muted-foreground">
+                              <FileText className="h-6 w-6 mb-0.5" />
+                              <span className="text-[10px] text-center truncate w-full px-1">{asset.name}</span>
+                            </div>
+                          )}
+                          <button
+                            onClick={() => removeAsset(index, 'B')}
+                            className="absolute -top-1.5 -right-1.5 bg-destructive text-destructive-foreground rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => fileInputRefB.current?.click()}
+                        disabled={uploadingB}
+                        className="w-16 h-16 border-2 border-dashed rounded-lg flex flex-col items-center justify-center text-muted-foreground hover:text-purple-500 hover:border-purple-500 transition-colors"
+                      >
+                        {uploadingB ? (
+                          <Loader2 className="h-5 w-5 animate-spin" />
+                        ) : (
+                          <>
+                            <Upload className="h-5 w-5 mb-0.5" />
+                            <span className="text-[10px]">Upload</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             ) : (
@@ -482,79 +606,81 @@ export function NewTest() {
               </div>
             )}
 
-            {/* File Upload Section */}
-            <div className="space-y-3 pt-4 border-t">
-              <Label className="flex items-center gap-2">
-                <Upload className="h-4 w-4" />
-                Attach Images or PDFs (optional)
-              </Label>
-              <p className="text-xs text-muted-foreground">
-                Upload images or PDFs to include with your concept. The AI will analyze these along with your text.
-              </p>
-
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"
-                multiple
-                onChange={handleFileUpload}
-                className="hidden"
-              />
-
-              <div className="flex flex-wrap gap-3">
-                {assets.map((asset, index) => (
-                  <div
-                    key={index}
-                    className="relative group border rounded-lg p-2 bg-muted/50"
-                  >
-                    {asset.isImage ? (
-                      <div className="w-24 h-24 flex items-center justify-center">
-                        <img
-                          src={asset.base64}
-                          alt={asset.name}
-                          className="max-w-full max-h-full object-contain rounded"
-                        />
-                      </div>
-                    ) : (
-                      <div className="w-24 h-24 flex flex-col items-center justify-center text-muted-foreground">
-                        <FileText className="h-8 w-8 mb-1" />
-                        <span className="text-xs text-center truncate w-full px-1">
-                          {asset.name}
-                        </span>
-                      </div>
-                    )}
-                    <button
-                      onClick={() => removeAsset(index)}
-                      className="absolute -top-2 -right-2 bg-destructive text-destructive-foreground rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </div>
-                ))}
-
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading}
-                  className="w-24 h-24 border-2 border-dashed rounded-lg flex flex-col items-center justify-center text-muted-foreground hover:text-primary hover:border-primary transition-colors"
-                >
-                  {uploading ? (
-                    <Loader2 className="h-6 w-6 animate-spin" />
-                  ) : (
-                    <>
-                      <Upload className="h-6 w-6 mb-1" />
-                      <span className="text-xs">Upload</span>
-                    </>
-                  )}
-                </button>
-              </div>
-
-              {assets.length > 0 && (
+            {/* File Upload Section - Only for single concept tests */}
+            {testType !== 'ab' && (
+              <div className="space-y-3 pt-4 border-t">
+                <Label className="flex items-center gap-2">
+                  <Upload className="h-4 w-4" />
+                  Attach Images or PDFs (optional)
+                </Label>
                 <p className="text-xs text-muted-foreground">
-                  {assets.filter(a => a.isImage).length} image(s), {assets.filter(a => a.isPDF).length} PDF(s) attached
+                  Upload images or PDFs to include with your concept. The AI will analyze these along with your text.
                 </p>
-              )}
-            </div>
+
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"
+                  multiple
+                  onChange={(e) => handleFileUpload(e, 'single')}
+                  className="hidden"
+                />
+
+                <div className="flex flex-wrap gap-3">
+                  {assets.map((asset, index) => (
+                    <div
+                      key={index}
+                      className="relative group border rounded-lg p-2 bg-muted/50"
+                    >
+                      {asset.isImage ? (
+                        <div className="w-24 h-24 flex items-center justify-center">
+                          <img
+                            src={asset.base64}
+                            alt={asset.name}
+                            className="max-w-full max-h-full object-contain rounded"
+                          />
+                        </div>
+                      ) : (
+                        <div className="w-24 h-24 flex flex-col items-center justify-center text-muted-foreground">
+                          <FileText className="h-8 w-8 mb-1" />
+                          <span className="text-xs text-center truncate w-full px-1">
+                            {asset.name}
+                          </span>
+                        </div>
+                      )}
+                      <button
+                        onClick={() => removeAsset(index, 'single')}
+                        className="absolute -top-2 -right-2 bg-destructive text-destructive-foreground rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading}
+                    className="w-24 h-24 border-2 border-dashed rounded-lg flex flex-col items-center justify-center text-muted-foreground hover:text-primary hover:border-primary transition-colors"
+                  >
+                    {uploading ? (
+                      <Loader2 className="h-6 w-6 animate-spin" />
+                    ) : (
+                      <>
+                        <Upload className="h-6 w-6 mb-1" />
+                        <span className="text-xs">Upload</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {assets.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {assets.filter(a => a.isImage).length} image(s), {assets.filter(a => a.isPDF).length} PDF(s) attached
+                  </p>
+                )}
+              </div>
+            )}
 
             {error && (
               <div className="p-3 bg-destructive/10 text-destructive rounded-lg text-sm">
