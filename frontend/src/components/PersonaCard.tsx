@@ -179,7 +179,14 @@ export function PersonaCard({ persona, onDelete, onUpdate }: PersonaCardProps) {
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between">
           <div>
-            <CardTitle className="text-lg">{persona.name}</CardTitle>
+            <div className="flex items-center gap-2">
+              <CardTitle className="text-lg">{persona.name}</CardTitle>
+              {persona.project_name && (
+                <Badge variant="outline" className="text-xs font-normal">
+                  {persona.project_name}
+                </Badge>
+              )}
+            </div>
             <div className="flex items-center gap-3 mt-1 text-sm text-muted-foreground">
               {persona.age_base && <span>{persona.age_base} years old</span>}
               {persona.location && (
