@@ -8,6 +8,7 @@ import type { Persona } from '@/types';
 
 interface PersonaCardProps {
   persona: Persona;
+  usedInProjects?: { id: string; name: string }[];
   onDelete: () => void;
   onUpdate: () => void;
 }
@@ -22,7 +23,7 @@ const GENERATION_STEPS: { step: GenerationStep; label: string; duration: number 
   { step: 'complete', label: 'Generation complete!', duration: 1500 },
 ];
 
-export function PersonaCard({ persona, onDelete, onUpdate }: PersonaCardProps) {
+export function PersonaCard({ persona, usedInProjects, onDelete, onUpdate }: PersonaCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [generationStep, setGenerationStep] = useState<GenerationStep>('idle');
@@ -179,12 +180,16 @@ export function PersonaCard({ persona, onDelete, onUpdate }: PersonaCardProps) {
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <CardTitle className="text-lg">{persona.name}</CardTitle>
-              {persona.project_name && (
-                <Badge variant="outline" className="text-xs font-normal">
-                  {persona.project_name}
-                </Badge>
+              {usedInProjects && usedInProjects.length > 0 && (
+                <div className="flex items-center gap-1 flex-wrap">
+                  {usedInProjects.map((project) => (
+                    <Badge key={project.id} variant="outline" className="text-xs font-normal">
+                      {project.name}
+                    </Badge>
+                  ))}
+                </div>
               )}
             </div>
             <div className="flex items-center gap-3 mt-1 text-sm text-muted-foreground">
