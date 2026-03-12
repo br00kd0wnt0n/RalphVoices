@@ -11,9 +11,9 @@ import { useGwi } from '@/hooks/useGwi';
 import { GwiBadge } from '@/components/GwiBadge';
 
 export function Dashboard() {
-  const [recentProjects, setRecentProjects] = useState<Project[]>([]);
-  const [recentTests, setRecentTests] = useState<Test[]>([]);
-  const [recentPersonas, setRecentPersonas] = useState<Persona[]>([]);
+  const [allProjects, setAllProjects] = useState<Project[]>([]);
+  const [allTests, setAllTests] = useState<Test[]>([]);
+  const [allPersonas, setAllPersonas] = useState<Persona[]>([]);
   const [loading, setLoading] = useState(true);
   const { enabled: gwiEnabled } = useGwi();
 
@@ -25,9 +25,9 @@ export function Dashboard() {
           tests.list(),
           personas.list(),
         ]);
-        setRecentProjects(projectsData.slice(0, 5));
-        setRecentTests(testsData.slice(0, 5));
-        setRecentPersonas(personasData.slice(0, 5));
+        setAllProjects(projectsData);
+        setAllTests(testsData);
+        setAllPersonas(personasData);
       } catch (error) {
         console.error('Failed to load dashboard data:', error);
       } finally {
@@ -37,13 +37,17 @@ export function Dashboard() {
     loadData();
   }, []);
 
+  // Full counts for stats
   const stats = {
-    projects: recentProjects.length,
-    personas: recentPersonas.length,
-    variants: recentPersonas.reduce((sum, p) => sum + (Number(p.variant_count) || 0), 0),
-    tests: recentTests.length,
-    completedTests: recentTests.filter((t) => t.status === 'complete').length,
+    projects: allProjects.length,
+    personas: allPersonas.length,
+    variants: allPersonas.reduce((sum, p) => sum + (Number(p.variant_count) || 0), 0),
+    tests: allTests.length,
+    completedTests: allTests.filter((t) => t.status === 'complete').length,
   };
+
+  // Sliced for display
+  const recentTests = allTests.slice(0, 5);
 
   if (loading) {
     return (
@@ -101,7 +105,7 @@ export function Dashboard() {
           className="max-w-3xl mx-auto mb-10"
         >
           <p className="text-2xl md:text-3xl lg:text-4xl font-light text-white/90 leading-snug tracking-tight mb-4">
-            You're spending millions on creative
+            You're spending $$$ on creative
             <br />
             <span className="text-white/40">your audience hasn't seen yet.</span>
           </p>
