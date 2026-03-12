@@ -25,7 +25,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-import { ArrowLeft, RefreshCw, Users, TrendingUp, MessageSquare, AlertTriangle, Sparkles, Globe } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Users, TrendingUp, MessageSquare, AlertTriangle, Sparkles, Globe, Download, Lightbulb, ShieldAlert } from 'lucide-react';
 import type { Test, TestResponse } from '@/types';
 import { SENTIMENT_THRESHOLDS } from '@/lib/constants';
 import { GwiBadge } from '@/components/GwiBadge';
@@ -827,10 +827,32 @@ export function TestResultsPage() {
           {/* Market Insights Tab (GWI) */}
           {results.gwi_enrichment && (
             <TabsContent value="market-insights" className="space-y-6">
-              <div className="flex items-center gap-2 mb-2">
-                <GwiBadge />
-                <span className="text-sm text-muted-foreground">Powered by GWI Spark market data</span>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <GwiBadge />
+                  <span className="text-sm text-muted-foreground">Powered by GWI Spark market data</span>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => testsApi.exportReport(test.id)}
+                  className="gap-2"
+                >
+                  <Download className="h-4 w-4" />
+                  Export Full Report (JSON)
+                </Button>
               </div>
+
+              {/* Executive Summary */}
+              {results.gwi_enrichment.executive_summary && (
+                <Card className="border-emerald-200 bg-emerald-50/30">
+                  <CardContent className="pt-6">
+                    <p className="text-lg font-medium leading-relaxed">
+                      {results.gwi_enrichment.executive_summary}
+                    </p>
+                  </CardContent>
+                </Card>
+              )}
 
               {/* Market Context */}
               {results.gwi_enrichment.market_context?.length > 0 && (
@@ -838,20 +860,26 @@ export function TestResultsPage() {
                   <CardHeader>
                     <CardTitle className="text-lg flex items-center gap-2">
                       <TrendingUp className="h-5 w-5 text-emerald-600" />
-                      Market Context
+                      Market Alignment
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div className="space-y-4">
                       {results.gwi_enrichment.market_context.map((item: any, i: number) => (
-                        <div key={i} className="p-4 rounded-lg border bg-emerald-50/30">
-                          <p className="text-sm font-medium text-muted-foreground">{item.metric}</p>
-                          <p className="text-2xl font-bold mt-1">{item.value}</p>
-                          {item.benchmark && (
-                            <p className="text-xs text-muted-foreground mt-1">
-                              Benchmark: {item.benchmark}
-                            </p>
-                          )}
+                        <div key={i} className="p-4 rounded-lg border bg-emerald-50/20">
+                          <div className="flex items-start gap-3">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2 mb-1">
+                                <p className="font-medium">{item.metric}</p>
+                                {item.value && (
+                                  <Badge variant="outline" className="text-emerald-600 border-emerald-600">
+                                    {item.value}
+                                  </Badge>
+                                )}
+                              </div>
+                              <p className="text-sm text-muted-foreground leading-relaxed">{item.insight}</p>
+                            </div>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -866,30 +894,109 @@ export function TestResultsPage() {
                     <CardTitle className="text-lg">Ralph vs Market Benchmarks</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <div className="space-y-3">
+                    <div className="space-y-5">
                       {results.gwi_enrichment.benchmark_comparison.map((item: any, i: number) => (
-                        <div key={i} className="flex items-center gap-4">
-                          <span className="text-sm font-medium w-40 flex-shrink-0">{item.metric}</span>
-                          <div className="flex-1 flex items-center gap-3">
+                        <div key={i}>
+                          <div className="flex items-center gap-4 mb-2">
+                            <span className="text-sm font-medium w-40 flex-shrink-0">{item.metric}</span>
                             <div className="flex-1">
                               <div className="flex justify-between text-xs text-muted-foreground mb-1">
-                                <span>Ralph: {item.ralph_value}</span>
-                                <span>GWI: {item.gwi_benchmark}</span>
+                                <span>Ralph: {item.ralph_value}/10</span>
+                                {item.gwi_benchmark > 0 && <span>GWI Benchmark: {item.gwi_benchmark}/10</span>}
                               </div>
-                              <div className="relative h-2 bg-muted rounded-full">
+                              <div className="relative h-2.5 bg-muted rounded-full">
                                 <div
-                                  className="absolute h-2 bg-[#D94D8F] rounded-full"
+                                  className="absolute h-2.5 bg-[#D94D8F] rounded-full"
                                   style={{ width: `${Math.min(100, (item.ralph_value / 10) * 100)}%` }}
                                 />
-                                <div
-                                  className="absolute h-2 w-0.5 bg-emerald-600"
-                                  style={{ left: `${Math.min(100, (item.gwi_benchmark / 10) * 100)}%` }}
-                                />
+                                {item.gwi_benchmark > 0 && (
+                                  <div
+                                    className="absolute h-2.5 w-1 bg-emerald-600 rounded"
+                                    style={{ left: `${Math.min(100, (item.gwi_benchmark / 10) * 100)}%` }}
+                                  />
+                                )}
                               </div>
                             </div>
                           </div>
+                          {item.interpretation && (
+                            <p className="text-xs text-muted-foreground ml-44 leading-relaxed">{item.interpretation}</p>
+                          )}
                         </div>
                       ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Opportunities & Risks */}
+              {(results.gwi_enrichment.opportunities?.length > 0 || results.gwi_enrichment.risks?.length > 0) && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {results.gwi_enrichment.opportunities?.length > 0 && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-lg flex items-center gap-2">
+                          <Lightbulb className="h-5 w-5 text-emerald-600" />
+                          Opportunities
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <ul className="space-y-3">
+                          {results.gwi_enrichment.opportunities.map((opp: string, i: number) => (
+                            <li key={i} className="flex gap-2 text-sm">
+                              <span className="text-emerald-600 font-bold mt-0.5">•</span>
+                              <span className="leading-relaxed">{opp}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </CardContent>
+                    </Card>
+                  )}
+                  {results.gwi_enrichment.risks?.length > 0 && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-lg flex items-center gap-2">
+                          <ShieldAlert className="h-5 w-5 text-amber-500" />
+                          Risks & Watchouts
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <ul className="space-y-3">
+                          {results.gwi_enrichment.risks.map((risk: string, i: number) => (
+                            <li key={i} className="flex gap-2 text-sm">
+                              <span className="text-amber-500 font-bold mt-0.5">•</span>
+                              <span className="leading-relaxed">{risk}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </CardContent>
+                    </Card>
+                  )}
+                </div>
+              )}
+
+              {/* Full Analysis Narrative */}
+              {results.gwi_enrichment.analysis_narrative && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg flex items-center gap-2">
+                      <Globe className="h-5 w-5 text-emerald-600" />
+                      Full GWI Analysis
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="prose prose-sm max-w-none text-muted-foreground">
+                      {results.gwi_enrichment.analysis_narrative.split('\n').map((line: string, i: number) => {
+                        if (!line.trim()) return <br key={i} />;
+                        // Bold headers (lines that are all caps or start with numbers)
+                        if (/^\d+\.\s+[A-Z]/.test(line.trim()) || /^[A-Z\s&]{5,}:?$/.test(line.trim())) {
+                          return <p key={i} className="font-semibold text-foreground mt-4 mb-1">{line}</p>;
+                        }
+                        // Bullet points
+                        if (/^\s*[-•*]/.test(line)) {
+                          return <p key={i} className="ml-4">{line.replace(/^\s*[-•*]\s*/, '• ')}</p>;
+                        }
+                        return <p key={i} className="mb-1">{line}</p>;
+                      })}
                     </div>
                   </CardContent>
                 </Card>
@@ -910,7 +1017,7 @@ export function TestResultsPage() {
                         <div key={i} className="p-4 rounded-lg border">
                           <div className="flex items-center justify-between mb-2">
                             <h4 className="font-medium">{audience.name}</h4>
-                            {audience.size_percent && (
+                            {audience.size_percent > 0 && (
                               <Badge variant="outline" className="text-emerald-600 border-emerald-600">
                                 {audience.size_percent}% of market
                               </Badge>

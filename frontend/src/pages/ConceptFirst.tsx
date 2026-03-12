@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { CheckCircle, Users, AlertCircle, GitCompare, Focus, Upload, X, FileText, Loader2, Sparkles, Globe, ArrowLeft, ArrowRight } from 'lucide-react';
+import { CheckCircle, Users, AlertCircle, GitCompare, Focus, Upload, X, FileText, Loader2, Sparkles, Globe, ArrowLeft, ArrowRight, Plus } from 'lucide-react';
 import { GwiAudienceCard } from '@/components/GwiAudienceCard';
 import { GwiBadge } from '@/components/GwiBadge';
 import { PersonaBuilder } from '@/components/PersonaBuilder';
@@ -72,6 +72,9 @@ export function ConceptFirst() {
   const [name, setName] = useState('');
   const [focusPreset, setFocusPreset] = useState<FocusPresetKey>('baseline');
   const [variantsPerPersona, setVariantsPerPersona] = useState(20);
+  const [showCreateProject, setShowCreateProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [creatingProject, setCreatingProject] = useState(false);
 
   useEffect(() => {
     projectsApi.list().then(setProjects).catch(console.error);
@@ -82,6 +85,13 @@ export function ConceptFirst() {
       personasApi.list(projectIdForPersonas).then(setPersonas).catch(console.error);
     }
   }, [projectIdForPersonas]);
+
+  // Auto-show project creation if no projects exist at step 3
+  useEffect(() => {
+    if (step === 3 && projects.length === 0) {
+      setShowCreateProject(true);
+    }
+  }, [step, projects.length]);
 
   // Fetch GWI suggestions when moving to step 2
   useEffect(() => {
@@ -137,8 +147,29 @@ export function ConceptFirst() {
 
   const totalSelected = selectedPersonaIds.length + selectedGwiAudiences.length;
 
+  async function handleCreateProject() {
+    if (!newProjectName.trim()) return;
+    setCreatingProject(true);
+    try {
+      const project = await projectsApi.create({ name: newProjectName.trim() });
+      setProjects((prev) => [...prev, project]);
+      setProjectId(project.id);
+      setShowCreateProject(false);
+      setNewProjectName('');
+    } catch (err: any) {
+      setError(err.message || 'Failed to create project');
+    } finally {
+      setCreatingProject(false);
+    }
+  }
+
   async function handleRun() {
-    if (!projectId || !name || totalSelected === 0) return;
+    if (!projectId || !name || totalSelected === 0) {
+      if (!projectId) setError('Please select or create a project');
+      else if (!name) setError('Please enter a test name');
+      else setError('Please select at least one audience');
+      return;
+    }
     setLoading(true);
     setError('');
 
@@ -596,16 +627,46 @@ export function ConceptFirst() {
             </div>
             <div className="space-y-2">
               <Label>Project *</Label>
-              <Select value={projectId} onValueChange={setProjectId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select project" />
-                </SelectTrigger>
-                <SelectContent>
-                  {projects.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {showCreateProject ? (
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={newProjectName}
+                    onChange={(e) => setNewProjectName(e.target.value)}
+                    placeholder="New project name"
+                    onKeyDown={(e) => e.key === 'Enter' && handleCreateProject()}
+                    autoFocus
+                  />
+                  <Button size="sm" onClick={handleCreateProject} disabled={creatingProject || !newProjectName.trim()}>
+                    {creatingProject ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Create'}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setShowCreateProject(false)}>Cancel</Button>
+                </div>
+              ) : (
+                <Select value={projectId} onValueChange={(v) => {
+                  if (v === '__create__') {
+                    setShowCreateProject(true);
+                  } else {
+                    setProjectId(v);
+                  }
+                }}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select project" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {projects.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                    ))}
+                    <SelectItem value="__create__">
+                      <span className="flex items-center gap-1 text-[#D94D8F]">
+                        <Plus className="h-3 w-3" /> Create New Project
+                      </span>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
+              {projects.length === 0 && !showCreateProject && (
+                <p className="text-xs text-amber-600">No projects yet — create one to continue</p>
+              )}
             </div>
           </div>
 

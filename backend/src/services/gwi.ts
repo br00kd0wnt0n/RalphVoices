@@ -28,9 +28,14 @@ export interface GwiValidation {
 }
 
 export interface GwiEnrichment {
-  market_context: { metric: string; value: string; benchmark: string }[];
+  analysis_narrative: string;
+  executive_summary: string;
+  market_context: { metric: string; value: string; benchmark: string; insight: string }[];
+  benchmark_comparison: { metric: string; ralph_value: number; gwi_benchmark: number; interpretation: string }[];
   audience_recommendations: GwiAudience[];
-  benchmark_comparison: { metric: string; ralph_value: number; gwi_benchmark: number }[];
+  opportunities: string[];
+  risks: string[];
+  generated_at: string;
 }
 
 interface GwiConfig {
@@ -198,7 +203,7 @@ Please assess:
     }
   }
 
-  /** Enrich test results with market context */
+  /** Enrich test results with deep market analysis */
   async enrichResults(
     results: { summary: any; segments: any; themes: any },
     conceptText: string
@@ -206,25 +211,73 @@ Please assess:
     if (!this.isEnabled()) return null;
 
     try {
-      const prompt = `I ran a concept test with synthetic personas and got these results. Please provide market context and recommendations:
+      // Build detailed theme strings
+      const positiveThemes = (results.themes?.positive_themes || [])
+        .map((t: any) => `${t.theme} (${t.frequency} mentions)`).join(', ') || 'none identified';
+      const concerns = (results.themes?.concerns || [])
+        .map((t: any) => `${t.theme} (${t.frequency} mentions)`).join(', ') || 'none identified';
+      const unexpected = (results.themes?.unexpected || [])
+        .map((t: any) => `${t.theme} (${t.frequency} mentions)`).join(', ') || 'none identified';
 
-Concept: "${conceptText.substring(0, 300)}"
+      // Build platform breakdown
+      const platformData = results.segments?.by_platform
+        ? Object.entries(results.segments.by_platform)
+            .map(([platform, data]: [string, any]) =>
+              `${platform}: ${data.count} responses, avg sentiment ${data.avgSentiment}/10, avg engagement ${data.avgEngagement}/10`)
+            .join('\n  ')
+        : 'no platform data';
 
-Results Summary:
+      // Build attitude breakdown
+      const attitudeData = results.segments?.by_attitude
+        ? Object.entries(results.segments.by_attitude)
+            .map(([group, data]: [string, any]) =>
+              `${group}: ${data.count} responses, avg sentiment ${data.avgSentiment}/10`)
+            .join('\n  ')
+        : 'no attitude data';
+
+      const prompt = `I ran a concept test using synthetic audience personas and need your deep market analysis. Please provide a comprehensive assessment.
+
+CONCEPT TESTED:
+"${conceptText.substring(0, 800)}"
+
+TEST RESULTS:
 - Total responses: ${results.summary.total_responses}
-- Positive sentiment: ${results.summary.sentiment?.positive || 0}
-- Neutral: ${results.summary.sentiment?.neutral || 0}
-- Negative: ${results.summary.sentiment?.negative || 0}
-- Avg engagement: ${results.summary.avg_engagement}/10
+- Sentiment: ${results.summary.sentiment?.positive || 0} positive, ${results.summary.sentiment?.neutral || 0} neutral, ${results.summary.sentiment?.negative || 0} negative
+- Avg engagement score: ${results.summary.avg_engagement}/10
 - Avg share likelihood: ${results.summary.avg_share_likelihood}/10
+- Avg comprehension: ${results.summary.avg_comprehension}/10
 
-Please provide:
-1. Market context - how does this concept relate to current market trends?
-2. Audience recommendations - what other audience segments should be tested?
-3. Benchmark comparison - how do these metrics compare to typical industry benchmarks?`;
+THEMES IDENTIFIED:
+- What's working: ${positiveThemes}
+- Concerns: ${concerns}
+- Unexpected reactions: ${unexpected}
 
-      const { text } = await this.chat(prompt);
-      return this.parseEnrichmentFromText(text);
+PLATFORM BREAKDOWN:
+  ${platformData}
+
+ATTITUDE SEGMENTS:
+  ${attitudeData}
+
+Please provide your analysis in these sections:
+
+1. EXECUTIVE SUMMARY: A 2-3 sentence headline assessment of this concept's market potential.
+
+2. MARKET ALIGNMENT: How does this concept align with current consumer trends and market data? Provide 3-5 specific market metrics or trends with context. For each, state the metric, the current market value/trend, and what it means for this concept.
+
+3. BENCHMARK COMPARISON: Compare the test scores against typical industry benchmarks. For engagement (${results.summary.avg_engagement}/10), share likelihood (${results.summary.avg_share_likelihood}/10), and comprehension (${results.summary.avg_comprehension}/10) — what are typical benchmarks and how does this concept compare? Explain what the gaps mean.
+
+4. OPPORTUNITIES: What 3-5 specific growth opportunities does the data suggest? Be specific about audience segments, channels, or messaging angles.
+
+5. RISKS & WATCHOUTS: What 2-4 market risks or watchouts should be considered based on the concerns and sentiment data?
+
+6. AUDIENCE RECOMMENDATIONS: Suggest 2-3 additional audience segments that should be tested, based on market data. For each provide: name, approximate size %, age range, key platforms, and why they'd be relevant.
+
+Be specific, data-driven, and reference actual market trends where possible.`;
+
+      const { text, chatId } = await this.chat(prompt);
+      this.chatSessions.set('enrich', chatId);
+
+      return this.parseDeepEnrichment(text, results.summary);
     } catch (error) {
       console.error('GWI enrichResults error:', error);
       return null;
@@ -295,12 +348,123 @@ Please provide:
     };
   }
 
-  private parseEnrichmentFromText(text: string): GwiEnrichment {
+  private parseDeepEnrichment(text: string, summary: any): GwiEnrichment {
+    // Extract sections from the narrative
+    const execSummary = this.extractSection(text, /executive summary/i, /(?:market alignment|benchmark|2\.)/i);
+    const marketSection = this.extractSection(text, /market alignment/i, /(?:benchmark comparison|3\.)/i);
+    const benchmarkSection = this.extractSection(text, /benchmark comparison/i, /(?:opportunities|4\.)/i);
+    const opportunitiesSection = this.extractSection(text, /opportunities/i, /(?:risks|watchouts|5\.)/i);
+    const risksSection = this.extractSection(text, /risks|watchouts/i, /(?:audience recommendations|6\.)/i);
+    const audienceSection = this.extractSection(text, /audience recommendations/i, /$/i);
+
     return {
-      market_context: this.extractKeyValuePairs(text, /(?:market|trend|context)/i),
-      audience_recommendations: [], // Would need a follow-up query for full audience details
-      benchmark_comparison: this.extractBenchmarks(text),
+      analysis_narrative: text,
+      executive_summary: execSummary.replace(/^[\s\d\.\:]+/, '').trim() || 'Analysis completed — see full narrative below.',
+      market_context: this.parseMarketContext(marketSection),
+      benchmark_comparison: this.parseBenchmarkComparison(benchmarkSection, summary),
+      audience_recommendations: this.parseAudiencesFromText(audienceSection),
+      opportunities: this.extractBulletItems(opportunitiesSection),
+      risks: this.extractBulletItems(risksSection),
+      generated_at: new Date().toISOString(),
     };
+  }
+
+  private extractSection(text: string, startPattern: RegExp, endPattern: RegExp): string {
+    const startMatch = text.search(startPattern);
+    if (startMatch === -1) return '';
+
+    const afterStart = text.substring(startMatch);
+    // Skip the header line
+    const contentStart = afterStart.indexOf('\n');
+    if (contentStart === -1) return afterStart;
+
+    const content = afterStart.substring(contentStart);
+    const endMatch = content.search(endPattern);
+    return endMatch > 0 ? content.substring(0, endMatch).trim() : content.trim();
+  }
+
+  private parseMarketContext(text: string): { metric: string; value: string; benchmark: string; insight: string }[] {
+    const items: { metric: string; value: string; benchmark: string; insight: string }[] = [];
+    // Split into items by bullet points, numbered items, or double newlines
+    const chunks = text.split(/\n(?=[\-\*\d]|\n)/).filter(c => c.trim().length > 15);
+
+    for (const chunk of chunks.slice(0, 5)) {
+      const cleaned = chunk.replace(/^[\s\-\*\d\.]+/, '').trim();
+      if (cleaned.length < 10) continue;
+
+      // Try to extract metric name from bold or colon-separated text
+      const colonMatch = cleaned.match(/^([^:]+):([\s\S]*)/);
+      if (colonMatch) {
+        const metric = colonMatch[1].replace(/\*+/g, '').trim();
+        const rest = colonMatch[2].trim();
+        // Try to find a number as the value
+        const numMatch = rest.match(/(\d+[\.\d]*%?)/);
+        items.push({
+          metric,
+          value: numMatch ? numMatch[1] : '',
+          benchmark: '',
+          insight: rest,
+        });
+      } else {
+        items.push({ metric: cleaned.substring(0, 50), value: '', benchmark: '', insight: cleaned });
+      }
+    }
+
+    return items;
+  }
+
+  private parseBenchmarkComparison(text: string, summary: any): { metric: string; ralph_value: number; gwi_benchmark: number; interpretation: string }[] {
+    const benchmarks: { metric: string; ralph_value: number; gwi_benchmark: number; interpretation: string }[] = [];
+
+    // Map Ralph scores
+    const ralphScores: Record<string, number> = {
+      'Engagement': summary.avg_engagement || 0,
+      'Share Likelihood': summary.avg_share_likelihood || 0,
+      'Comprehension': summary.avg_comprehension || 0,
+    };
+
+    // Parse GWI benchmarks from text — look for numbers near our metric names
+    const chunks = text.split(/\n(?=[\-\*\d]|\n)/).filter(c => c.trim().length > 10);
+
+    for (const chunk of chunks) {
+      const cleaned = chunk.replace(/^[\s\-\*\d\.]+/, '').trim();
+      // Try to match metric name and extract numbers
+      for (const [metric, ralphValue] of Object.entries(ralphScores)) {
+        if (cleaned.toLowerCase().includes(metric.toLowerCase())) {
+          // Find benchmark numbers in text
+          const numbers = cleaned.match(/(\d+\.?\d*)/g);
+          const gwiBenchmark = numbers ? parseFloat(numbers[numbers.length > 1 ? 1 : 0]) : 0;
+          benchmarks.push({
+            metric,
+            ralph_value: ralphValue,
+            gwi_benchmark: gwiBenchmark > 10 ? gwiBenchmark / 10 : gwiBenchmark, // Normalize to 0-10 scale
+            interpretation: cleaned,
+          });
+          delete ralphScores[metric]; // Don't duplicate
+          break;
+        }
+      }
+    }
+
+    // Add any remaining metrics that weren't found in text
+    for (const [metric, ralphValue] of Object.entries(ralphScores)) {
+      benchmarks.push({
+        metric,
+        ralph_value: ralphValue,
+        gwi_benchmark: 0,
+        interpretation: 'No benchmark data available from GWI for this metric.',
+      });
+    }
+
+    return benchmarks;
+  }
+
+  private extractBulletItems(text: string): string[] {
+    return text
+      .split('\n')
+      .map(line => line.replace(/^[\s\-\*\d\.]+/, '').trim())
+      .filter(line => line.length > 10)
+      .slice(0, 6);
   }
 
   private extractField(text: string, pattern: RegExp): string {
@@ -330,34 +494,6 @@ Please provide:
       .slice(0, 5);
   }
 
-  private extractKeyValuePairs(text: string, sectionPattern: RegExp): { metric: string; value: string; benchmark: string }[] {
-    const pairs: { metric: string; value: string; benchmark: string }[] = [];
-    const lines = text.split('\n').filter(l => l.includes(':') || l.includes('-'));
-
-    for (const line of lines.slice(0, 5)) {
-      const parts = line.split(/[:\-]/).map(s => s.trim()).filter(Boolean);
-      if (parts.length >= 2) {
-        pairs.push({ metric: parts[0], value: parts[1], benchmark: parts[2] || '' });
-      }
-    }
-
-    return pairs;
-  }
-
-  private extractBenchmarks(text: string): { metric: string; ralph_value: number; gwi_benchmark: number }[] {
-    const benchmarks: { metric: string; ralph_value: number; gwi_benchmark: number }[] = [];
-    const numbers = text.match(/\d+\.?\d*/g);
-
-    // Simple extraction — real implementation would use structured GWI response
-    if (numbers && numbers.length >= 2) {
-      benchmarks.push(
-        { metric: 'Engagement Rate', ralph_value: 0, gwi_benchmark: parseFloat(numbers[0]) },
-        { metric: 'Share Rate', ralph_value: 0, gwi_benchmark: parseFloat(numbers[1]) },
-      );
-    }
-
-    return benchmarks;
-  }
 }
 
 export const gwiService = new GwiService();

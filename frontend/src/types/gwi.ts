@@ -25,7 +25,12 @@ export interface GwiValidation {
 }
 
 export interface GwiEnrichment {
-  market_context: { metric: string; value: string; benchmark: string }[];
+  analysis_narrative: string;
+  executive_summary: string;
+  market_context: { metric: string; value: string; benchmark: string; insight: string }[];
+  benchmark_comparison: { metric: string; ralph_value: number; gwi_benchmark: number; interpretation: string }[];
   audience_recommendations: GwiAudience[];
-  benchmark_comparison: { metric: string; ralph_value: number; gwi_benchmark: number }[];
+  opportunities: string[];
+  risks: string[];
+  generated_at: string;
 }

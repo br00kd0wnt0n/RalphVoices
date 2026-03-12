@@ -668,6 +668,131 @@ function calculateSegments(responses: any[]) {
   return { by_age: byAge, by_platform: byPlatform, by_attitude: byAttitude };
 }
 
+// Export full test report as JSON
+router.get('/:id/export', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    // Get test with ownership check
+    const testResult = await query(
+      `SELECT t.* FROM tests t
+       JOIN projects p ON t.project_id = p.id
+       WHERE t.id = $1 AND p.created_by = $2`,
+      [req.params.id, req.user!.id]
+    );
+
+    if (testResult.rows.length === 0) {
+      res.status(404).json({ error: 'Test not found' });
+      return;
+    }
+
+    const test = testResult.rows[0];
+
+    if (test.status !== 'complete') {
+      res.status(400).json({ error: 'Test must be complete before exporting' });
+      return;
+    }
+
+    // Get project info
+    const projectResult = await query(
+      'SELECT name, client_name FROM projects WHERE id = $1',
+      [test.project_id]
+    );
+
+    // Get personas
+    const personasResult = await query(
+      `SELECT id, name, age_base, location, occupation, psychographics, media_habits, source_type
+       FROM personas WHERE id = ANY($1)`,
+      [test.persona_ids]
+    );
+
+    // Get aggregated results
+    const resultsResult = await query(
+      'SELECT * FROM test_results WHERE test_id = $1',
+      [test.id]
+    );
+
+    // Get all responses with variant info
+    const responsesResult = await query(
+      `SELECT tr.response_text, tr.sentiment_score, tr.engagement_likelihood,
+              tr.share_likelihood, tr.comprehension_score, tr.reaction_tags,
+              tr.processing_time_ms, tr.model_used,
+              pv.variant_name, pv.age_actual, pv.primary_platform,
+              pv.attitude_score, pv.engagement_level
+       FROM test_responses tr
+       JOIN persona_variants pv ON tr.variant_id = pv.id
+       WHERE tr.test_id = $1
+       ORDER BY tr.created_at`,
+      [test.id]
+    );
+
+    const results = resultsResult.rows[0] || {};
+    const project = projectResult.rows[0] || {};
+    const variantConfig = typeof test.variant_config === 'string'
+      ? JSON.parse(test.variant_config)
+      : (test.variant_config || {});
+
+    const report = {
+      report_version: '1.0',
+      generated_at: new Date().toISOString(),
+      test: {
+        id: test.id,
+        name: test.name,
+        test_type: test.test_type,
+        concept_text: test.concept_text,
+        focus_preset: variantConfig.focus_preset || 'baseline',
+        variants_per_persona: test.variants_per_persona,
+        created_at: test.created_at,
+        completed_at: test.completed_at,
+      },
+      project: {
+        name: project.name,
+        client_name: project.client_name,
+      },
+      personas: personasResult.rows.map((p: any) => ({
+        name: p.name,
+        age_base: p.age_base,
+        location: p.location,
+        occupation: p.occupation,
+        source_type: p.source_type,
+        psychographics: p.psychographics,
+        media_habits: p.media_habits,
+      })),
+      ralph_results: {
+        summary: results.summary,
+        segments: results.segments,
+        themes: results.themes,
+      },
+      gwi_analysis: results.gwi_enrichment || null,
+      responses: responsesResult.rows.map((r: any) => ({
+        variant_name: r.variant_name,
+        age: r.age_actual,
+        platform: r.primary_platform,
+        attitude_score: r.attitude_score,
+        response_text: r.response_text,
+        sentiment_score: r.sentiment_score,
+        engagement_likelihood: r.engagement_likelihood,
+        share_likelihood: r.share_likelihood,
+        comprehension_score: r.comprehension_score,
+        reaction_tags: r.reaction_tags,
+      })),
+      metadata: {
+        total_responses: responsesResult.rows.length,
+        model_used: responsesResult.rows[0]?.model_used || 'gpt-4o',
+        avg_processing_time_ms: responsesResult.rows.length > 0
+          ? Math.round(responsesResult.rows.reduce((sum: number, r: any) => sum + (r.processing_time_ms || 0), 0) / responsesResult.rows.length)
+          : 0,
+      },
+    };
+
+    const filename = `ralph-report-${test.name.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}-${test.id.substring(0, 8)}.json`;
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.json(report);
+  } catch (error) {
+    console.error('Export test error:', error);
+    res.status(500).json({ error: 'Failed to export test report' });
+  }
+});
+
 // Delete test
 router.delete('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {

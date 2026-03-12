@@ -104,6 +104,21 @@ export const tests = {
     );
   },
   getResults: (id: string) => request<any>(`/tests/${id}/results`),
+  exportReport: async (id: string) => {
+    const response = await fetch(`${API_BASE}/tests/${id}/export`, {
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!response.ok) throw new ApiError(response.status, 'Export failed');
+    const blob = await response.blob();
+    const disposition = response.headers.get('Content-Disposition');
+    const filename = disposition?.match(/filename="(.+)"/)?.[1] || `ralph-report-${id}.json`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
 };
 
 // Uploads

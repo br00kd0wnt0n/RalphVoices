@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { CheckCircle, Circle, Users, AlertCircle, GitCompare, Focus, Upload, X, FileText, Loader2 } from 'lucide-react';
+import { CheckCircle, Circle, Users, AlertCircle, GitCompare, Focus, Upload, X, FileText, Loader2, Plus } from 'lucide-react';
 import type { Project, Persona } from '@/types';
 import { TEST_FOCUS_PRESETS } from '@/lib/constants';
 
@@ -55,6 +55,25 @@ export function PersonaFirst() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fileInputRefA = useRef<HTMLInputElement>(null);
   const fileInputRefB = useRef<HTMLInputElement>(null);
+  const [showCreateProject, setShowCreateProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [creatingProject, setCreatingProject] = useState(false);
+
+  async function handleCreateProject() {
+    if (!newProjectName.trim()) return;
+    setCreatingProject(true);
+    try {
+      const project = await projectsApi.create({ name: newProjectName.trim() });
+      setProjects((prev) => [...prev, project]);
+      setProjectId(project.id);
+      setShowCreateProject(false);
+      setNewProjectName('');
+    } catch (err: any) {
+      setError(err.message || 'Failed to create project');
+    } finally {
+      setCreatingProject(false);
+    }
+  }
 
   useEffect(() => {
     projectsApi.list().then(setProjects).catch(console.error);
@@ -215,18 +234,48 @@ export function PersonaFirst() {
         <CardContent className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="project">Project *</Label>
-            <Select value={projectId} onValueChange={setProjectId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select a project" />
-              </SelectTrigger>
-              <SelectContent>
-                {projects.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.name}
+            {showCreateProject ? (
+              <div className="flex items-center gap-2">
+                <Input
+                  value={newProjectName}
+                  onChange={(e) => setNewProjectName(e.target.value)}
+                  placeholder="New project name"
+                  onKeyDown={(e) => e.key === 'Enter' && handleCreateProject()}
+                  autoFocus
+                />
+                <Button size="sm" onClick={handleCreateProject} disabled={creatingProject || !newProjectName.trim()}>
+                  {creatingProject ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Create'}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setShowCreateProject(false)}>Cancel</Button>
+              </div>
+            ) : (
+              <Select value={projectId} onValueChange={(v) => {
+                if (v === '__create__') {
+                  setShowCreateProject(true);
+                } else {
+                  setProjectId(v);
+                }
+              }}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a project" />
+                </SelectTrigger>
+                <SelectContent>
+                  {projects.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
+                  <SelectItem value="__create__">
+                    <span className="flex items-center gap-1 text-[#D94D8F]">
+                      <Plus className="h-3 w-3" /> Create New Project
+                    </span>
                   </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+                </SelectContent>
+              </Select>
+            )}
+            {projects.length === 0 && !showCreateProject && (
+              <p className="text-xs text-amber-600">No projects yet — create one to continue</p>
+            )}
           </div>
           <div className="space-y-2">
             <Label htmlFor="name">Test Name *</Label>
