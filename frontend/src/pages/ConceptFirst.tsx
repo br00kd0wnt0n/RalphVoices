@@ -59,6 +59,11 @@ export function ConceptFirst() {
   const fileInputRefA = useRef<HTMLInputElement>(null);
   const fileInputRefB = useRef<HTMLInputElement>(null);
 
+  // Step 1: Context (optional)
+  const [creativeAmbition, setCreativeAmbition] = useState('');
+  const [strategicTruth, setStrategicTruth] = useState('');
+  const [insights, setInsights] = useState('');
+
   // Step 2: Audiences
   const [gwiAudiences, setGwiAudiences] = useState<GwiAudience[]>([]);
   const [gwiLoading, setGwiLoading] = useState(false);
@@ -231,6 +236,13 @@ export function ConceptFirst() {
       const currentAssets = testType === 'ab' ? assetsA : assets;
 
       if (testType === 'ab') {
+        // Build strategic context
+        const strategicContext = {
+          ...(creativeAmbition ? { creative_ambition: creativeAmbition } : {}),
+          ...(strategicTruth ? { strategic_truth: strategicTruth } : {}),
+          ...(insights ? { key_insight: insights } : {}),
+        };
+
         // Create two tests
         const [testA, testB] = await Promise.all([
           testsApi.create({
@@ -243,6 +255,7 @@ export function ConceptFirst() {
             variants_per_persona: variantsPerPersona,
             focus_preset: focusPreset,
             focus_modifier: focusModifier,
+            strategic_context: Object.keys(strategicContext).length > 0 ? strategicContext : undefined,
           }),
           testsApi.create({
             project_id: projectId,
@@ -254,12 +267,20 @@ export function ConceptFirst() {
             variants_per_persona: variantsPerPersona,
             focus_preset: focusPreset,
             focus_modifier: focusModifier,
+            strategic_context: Object.keys(strategicContext).length > 0 ? strategicContext : undefined,
           }),
         ]);
 
         await Promise.all([testsApi.run(testA.id), testsApi.run(testB.id)]);
         navigate(`/tests/${testA.id}`);
       } else {
+        // Build strategic context
+        const strategicContext = {
+          ...(creativeAmbition ? { creative_ambition: creativeAmbition } : {}),
+          ...(strategicTruth ? { strategic_truth: strategicTruth } : {}),
+          ...(insights ? { key_insight: insights } : {}),
+        };
+
         const test = await testsApi.create({
           project_id: projectId,
           name,
@@ -270,6 +291,7 @@ export function ConceptFirst() {
           variants_per_persona: variantsPerPersona,
           focus_preset: focusPreset,
           focus_modifier: focusModifier,
+          strategic_context: Object.keys(strategicContext).length > 0 ? strategicContext : undefined,
         });
 
         await testsApi.run(test.id);
@@ -394,7 +416,8 @@ export function ConceptFirst() {
 
               {/* File uploads */}
               <div className="space-y-2">
-                <Label>Attach files (optional)</Label>
+                <Label>Attach visuals or documents (optional)</Label>
+                <p className="text-xs text-muted-foreground">Images are analysed visually by each persona using AI vision</p>
                 <div className="flex flex-wrap gap-2">
                   {assets.map((asset, i) => (
                     <Badge key={i} variant="secondary" className="flex items-center gap-1 pr-1">
@@ -421,6 +444,35 @@ export function ConceptFirst() {
                     multiple
                     className="hidden"
                     onChange={(e) => handleFileUpload(e)}
+                  />
+                </div>
+              </div>
+
+              {/* Strategic Context (optional) */}
+              <div className="space-y-3 pt-2 border-t border-border/50">
+                <p className="text-sm font-medium text-muted-foreground">Strategic Context (optional)</p>
+                <div className="space-y-2">
+                  <Label>Creative Ambition</Label>
+                  <Input
+                    value={creativeAmbition}
+                    onChange={(e) => setCreativeAmbition(e.target.value)}
+                    placeholder="e.g., Reposition the brand as a lifestyle choice for Gen Z"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Strategic Truth</Label>
+                  <Input
+                    value={strategicTruth}
+                    onChange={(e) => setStrategicTruth(e.target.value)}
+                    placeholder="e.g., Consumers want convenience but won't sacrifice quality"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Key Insight</Label>
+                  <Input
+                    value={insights}
+                    onChange={(e) => setInsights(e.target.value)}
+                    placeholder="e.g., 73% of our audience discovers brands through short-form video"
                   />
                 </div>
               </div>

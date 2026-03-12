@@ -224,12 +224,19 @@ export interface TestAsset {
   extractedText?: string;
 }
 
+export interface StrategicContext {
+  creative_ambition?: string;
+  strategic_truth?: string;
+  key_insight?: string;
+}
+
 export async function generateConceptResponse(
   variant: PersonaVariant,
   basePersona: Persona,
   conceptText: string,
   focusModifier: string = '',
-  assets: TestAsset[] = []
+  assets: TestAsset[] = [],
+  strategicContext: StrategicContext = {}
 ): Promise<ConceptTestResponse> {
   const baseSystemPrompt = `You are embodying a specific persona to provide authentic feedback on a creative
 concept. Respond as this person would - with their vocabulary, concerns,
@@ -296,6 +303,11 @@ CONCEPT TO EVALUATE:
 ${conceptText}
 ${pdfTexts ? `\nATTACHED DOCUMENTS:\n${pdfTexts}` : ''}
 ${assets.some(a => a.isImage) ? '\n[See attached image(s) below]' : ''}
+${strategicContext.creative_ambition || strategicContext.strategic_truth || strategicContext.key_insight ? `
+STRATEGIC CONTEXT (consider this background when evaluating — it shapes the intent behind the concept):
+${strategicContext.creative_ambition ? `Creative Ambition: ${strategicContext.creative_ambition}` : ''}
+${strategicContext.strategic_truth ? `Strategic Truth: ${strategicContext.strategic_truth}` : ''}
+${strategicContext.key_insight ? `Key Insight: ${strategicContext.key_insight}` : ''}` : ''}
 
 Respond in character, then provide your scores and tags.`;
 

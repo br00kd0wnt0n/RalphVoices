@@ -33,6 +33,11 @@ const createTestSchema = z.object({
   variants_per_persona: z.number().int().min(1).max(100).default(20),
   focus_preset: z.string().optional(),
   focus_modifier: z.string().optional(),
+  strategic_context: z.object({
+    creative_ambition: z.string().optional(),
+    strategic_truth: z.string().optional(),
+    key_insight: z.string().optional(),
+  }).optional(),
   variant_config: z.object({
     age_spread: z.number().int().min(0).max(20).default(5),
     attitude_distribution: z.enum(['normal', 'skew_positive', 'skew_negative']).default('normal'),
@@ -74,10 +79,11 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
       focus_modifier: data.focus_modifier || '',
     };
 
-    // Store assets in options JSONB
+    // Store assets and strategic context in options JSONB
     const optionsWithAssets = {
       ...(data.options ? { options: data.options } : {}),
       assets: data.assets || [],
+      ...(data.strategic_context ? { strategic_context: data.strategic_context } : {}),
     };
 
     const result = await query(
@@ -421,11 +427,12 @@ async function processTestResponses(test: Test, variants: any[]) {
     : (test.variant_config || {});
   const focusModifier = variantConfig.focus_modifier || '';
 
-  // Extract assets from test options
+  // Extract assets and strategic context from test options
   const testOptions = typeof test.options === 'string'
     ? JSON.parse(test.options)
     : (test.options || {});
   const assets = testOptions.assets || [];
+  const strategicContext = testOptions.strategic_context || {};
 
   console.log(`Processing test with ${assets.length} assets (${assets.filter((a: any) => a.isImage).length} images, ${assets.filter((a: any) => a.isPDF).length} PDFs)`);
 
@@ -471,7 +478,7 @@ async function processTestResponses(test: Test, variants: any[]) {
       };
 
       const startTime = Date.now();
-      const response = await generateConceptResponse(variant, basePersona, conceptText, focusModifier, assets);
+      const response = await generateConceptResponse(variant, basePersona, conceptText, focusModifier, assets, strategicContext);
       const processingTime = Date.now() - startTime;
 
       // Save response to database

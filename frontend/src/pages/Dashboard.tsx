@@ -92,12 +92,43 @@ export function Dashboard() {
               ICES
             </span>
           </h1>
+          {/* Voice waveform animation */}
           <motion.div
-            initial={{ scaleX: 0 }}
-            animate={{ scaleX: 1 }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
             transition={{ duration: 0.6, delay: 0.5 }}
-            className="mx-auto mt-2 h-[2px] w-24 bg-gradient-to-r from-transparent via-[#D94D8F] to-transparent"
-          />
+            className="mx-auto mt-3 flex items-center justify-center gap-[3px] h-8"
+          >
+            {Array.from({ length: 24 }).map((_, i) => {
+              // Create a wave pattern that oscillates
+              const centerDistance = Math.abs(i - 11.5) / 11.5;
+              const baseHeight = 0.15 + (1 - centerDistance) * 0.85;
+              return (
+                <motion.div
+                  key={i}
+                  className="w-[2px] rounded-full bg-[#D94D8F]"
+                  initial={{ height: 2, opacity: 0 }}
+                  animate={{
+                    height: [
+                      baseHeight * 4,
+                      baseHeight * 28,
+                      baseHeight * 8,
+                      baseHeight * 22,
+                      baseHeight * 4,
+                    ],
+                    opacity: [0.3, 0.8, 0.4, 0.7, 0.3],
+                  }}
+                  transition={{
+                    duration: 2.5 + Math.random() * 1.5,
+                    delay: 0.6 + i * 0.04,
+                    repeat: Infinity,
+                    repeatType: 'reverse',
+                    ease: 'easeInOut',
+                  }}
+                />
+              );
+            })}
+          </motion.div>
         </motion.div>
 
         {/* Provocative statement */}
