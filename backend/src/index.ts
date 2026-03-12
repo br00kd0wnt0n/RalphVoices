@@ -2,7 +2,10 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import expressWs from 'express-ws';
+import { readFileSync, readdirSync } from 'fs';
+import { join } from 'path';
 
+import { pool } from './db/index.js';
 import authRoutes from './routes/auth.js';
 import projectRoutes from './routes/projects.js';
 import personaRoutes from './routes/personas.js';
@@ -11,6 +14,34 @@ import uploadRoutes from './routes/uploads.js';
 import gwiRoutes from './routes/gwi.js';
 
 dotenv.config();
+
+// Auto-run migrations on startup
+async function runMigrations() {
+  try {
+    const schemaPath = join(process.cwd(), 'src', 'db', 'schema.sql');
+    const schema = readFileSync(schemaPath, 'utf-8');
+    await pool.query(schema);
+
+    const migrationsDir = join(process.cwd(), 'src', 'db', 'migrations');
+    try {
+      const files = readdirSync(migrationsDir)
+        .filter((f) => f.endsWith('.sql'))
+        .sort();
+      for (const file of files) {
+        const sql = readFileSync(join(migrationsDir, file), 'utf-8');
+        await pool.query(sql);
+      }
+    } catch (err: any) {
+      if (err.code !== 'ENOENT') throw err;
+    }
+
+    console.log('Database migrations applied.');
+  } catch (error) {
+    console.error('Migration warning (non-fatal):', error);
+  }
+}
+
+runMigrations();
 
 const app = express();
 const wsInstance = expressWs(app);
