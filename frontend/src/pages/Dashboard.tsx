@@ -37,10 +37,13 @@ export function Dashboard() {
     loadData();
   }, []);
 
+  // Deduplicate personas by name (same persona can exist across multiple projects)
+  const uniquePersonaNames = new Set(allPersonas.map((p) => p.name));
+
   // Full counts for stats
   const stats = {
     projects: allProjects.length,
-    personas: allPersonas.length,
+    personas: uniquePersonaNames.size,
     variants: allPersonas.reduce((sum, p) => sum + (Number(p.variant_count) || 0), 0),
     tests: allTests.length,
     completedTests: allTests.filter((t) => t.status === 'complete').length,

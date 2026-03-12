@@ -45,7 +45,7 @@ export interface CulturalContext {
 
 export interface Persona {
   id: string;
-  project_id: string;
+  project_id: string | null;
   name: string;
   age_base: number | null;
   location: string | null;

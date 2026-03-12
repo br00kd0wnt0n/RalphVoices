@@ -148,11 +148,9 @@ export function Personas() {
           <Users className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
           <h3 className="text-lg font-semibold mb-2">No personas yet</h3>
           <p className="text-muted-foreground mb-4">
-            {projects.length === 0
-              ? 'Create a project first, then add personas'
-              : 'Create your first persona to start testing concepts'}
+            Create your first persona to start testing concepts
           </p>
-          <Button onClick={() => setBuilderOpen(true)} disabled={projects.length === 0}>
+          <Button onClick={() => setBuilderOpen(true)}>
             <Plus className="h-4 w-4 mr-2" />
             Create Persona
           </Button>

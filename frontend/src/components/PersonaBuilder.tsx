@@ -132,7 +132,7 @@ export function PersonaBuilder({ open, onOpenChange, onCreated, defaultProjectId
         str.split(',').map((s) => s.trim()).filter(Boolean);
 
       await personasApi.create({
-        project_id: projectId,
+        project_id: projectId || undefined,
         name,
         age_base: ageBase ? parseInt(ageBase) : undefined,
         location: location || undefined,
@@ -194,12 +194,13 @@ export function PersonaBuilder({ open, onOpenChange, onCreated, defaultProjectId
           {step === 1 && (
             <>
               <div className="space-y-2">
-                <Label htmlFor="project">Project *</Label>
-                <Select value={projectId} onValueChange={setProjectId}>
+                <Label htmlFor="project">Project</Label>
+                <Select value={projectId || '__none__'} onValueChange={(v) => setProjectId(v === '__none__' ? '' : v)}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Select a project" />
+                    <SelectValue placeholder="No project (standalone)" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="__none__">No project (standalone)</SelectItem>
                     {projects.map((p) => (
                       <SelectItem key={p.id} value={p.id}>
                         {p.name}
@@ -207,6 +208,7 @@ export function PersonaBuilder({ open, onOpenChange, onCreated, defaultProjectId
                     ))}
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground">Optional — personas can be added to projects later</p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="name">Persona Name *</Label>
@@ -394,7 +396,7 @@ export function PersonaBuilder({ open, onOpenChange, onCreated, defaultProjectId
             {step < totalSteps ? (
               <Button
                 onClick={() => setStep(step + 1)}
-                disabled={step === 1 && (!projectId || !name)}
+                disabled={step === 1 && !name}
               >
                 Next
               </Button>

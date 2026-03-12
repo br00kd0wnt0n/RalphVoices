@@ -1,6 +1,6 @@
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { RalphLogo } from '@/components/RalphLogo';
-import { Users, TestTube, LayoutDashboard, FolderOpen, Settings, Sparkles } from 'lucide-react';
+import { Users, TestTube, LayoutDashboard, FolderOpen, Settings } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 export function Layout() {
@@ -17,7 +17,7 @@ export function Layout() {
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b border-border/40 backdrop-blur-md bg-background/90 sticky top-0 z-50">
-        <div className="container mx-auto px-4 py-3 flex items-center justify-between">
+        <div className="container mx-auto px-4 py-3 flex items-center">
           <div className="flex items-center gap-8">
             <Link to="/" className="group overflow-visible">
               <RalphLogo size="md" />
@@ -51,12 +51,6 @@ export function Layout() {
               })}
             </nav>
           </div>
-          <Link to="/tests/new">
-            <button className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#D94D8F] text-white text-sm font-medium hover:bg-[#D94D8F]/90 transition-all hover:scale-[1.02] shadow-sm shadow-[#D94D8F]/20">
-              <Sparkles className="h-4 w-4" />
-              New Test
-            </button>
-          </Link>
         </div>
       </header>
       <main className="container mx-auto px-4 py-8">
