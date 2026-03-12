@@ -484,36 +484,41 @@ async function processTestResponses(test: Test, variants: any[]) {
         updated_at: variantRow.variant_created_at,
       };
 
-      const startTime = Date.now();
-      const response = await generateConceptResponse(variant, basePersona, conceptText, focusModifier, assets, strategicContext);
-      const processingTime = Date.now() - startTime;
+      try {
+        const startTime = Date.now();
+        const response = await generateConceptResponse(variant, basePersona, conceptText, focusModifier, assets, strategicContext);
+        const processingTime = Date.now() - startTime;
 
-      // Save response to database
-      await query(
-        `INSERT INTO test_responses (
-          test_id, variant_id, response_text, sentiment_score,
-          engagement_likelihood, share_likelihood, comprehension_score,
-          reaction_tags, processing_time_ms, model_used
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [
-          test.id,
-          variant.id,
-          response.response_text,
-          response.sentiment_score,
-          response.engagement_likelihood,
-          response.share_likelihood,
-          response.comprehension_score,
-          response.reaction_tags,
-          processingTime,
-          process.env.OPENAI_MODEL || 'gpt-4o',
-        ]
-      );
+        // Save response to database
+        await query(
+          `INSERT INTO test_responses (
+            test_id, variant_id, response_text, sentiment_score,
+            engagement_likelihood, share_likelihood, comprehension_score,
+            reaction_tags, processing_time_ms, model_used
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [
+            test.id,
+            variant.id,
+            response.response_text,
+            response.sentiment_score,
+            response.engagement_likelihood,
+            response.share_likelihood,
+            response.comprehension_score,
+            response.reaction_tags,
+            processingTime,
+            process.env.OPENAI_MODEL || 'gpt-4o',
+          ]
+        );
 
-      return { variant, response };
+        return { variant, response };
+      } catch (error: any) {
+        console.error(`[processTestResponses] Variant ${variant.variant_name} failed:`, error?.message);
+        return null; // Skip failed variants instead of crashing entire test
+      }
     });
 
     const batchResults = await Promise.all(batchPromises);
-    responses.push(...batchResults);
+    responses.push(...batchResults.filter(Boolean));
 
     // Update progress
     const progress = testProgress.get(test.id);
@@ -533,8 +538,16 @@ async function processTestResponses(test: Test, variants: any[]) {
     }
   }
 
+  // Check if we got any responses at all
+  if (responses.length === 0) {
+    console.error(`[processTestResponses] All variants failed for test ${test.id}`);
+    await query(`UPDATE tests SET status = 'failed' WHERE id = $1`, [test.id]);
+    testProgress.set(test.id, { completed: 0, total: variants.length, status: 'failed' });
+    return;
+  }
+
   // Generate aggregated results from saved DB data
-  console.log(`Starting analysis for test ${test.id} with ${responses.length} responses`);
+  console.log(`Starting analysis for test ${test.id} with ${responses.length} responses (${variants.length - responses.length} failed)`);
 
   // Calculate segment breakdowns from in-memory data
   const segments = calculateSegments(responses);

@@ -88,7 +88,17 @@ export function ConceptFirst() {
 
   useEffect(() => {
     if (projectIdForPersonas === '__all__') {
-      personasApi.list().then(setPersonas).catch(console.error);
+      personasApi.list().then((all) => {
+        // Deduplicate by name — keep the one with the most variants
+        const byName = new Map<string, Persona>();
+        for (const p of all) {
+          const existing = byName.get(p.name);
+          if (!existing || (Number(p.variant_count) || 0) > (Number(existing.variant_count) || 0)) {
+            byName.set(p.name, p);
+          }
+        }
+        setPersonas(Array.from(byName.values()));
+      }).catch(console.error);
     } else if (projectIdForPersonas) {
       personasApi.list(projectIdForPersonas).then(setPersonas).catch(console.error);
     }
@@ -209,7 +219,7 @@ export function ConceptFirst() {
             content_preferences: audience.media_habits.content_affinities,
           },
           cultural_context: {
-            subcultures: [],
+            subcultures: audience.psychographics.interests || [],
             language_markers: [],
           },
           gwi_audience_data: {

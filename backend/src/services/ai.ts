@@ -333,8 +333,11 @@ Respond in character, then provide your scores and tags.`;
 
   const startTime = Date.now();
 
+  // Force gpt-4o for vision requests — not all models support image_url
+  const modelToUse = imageAssets.length > 0 ? 'gpt-4o' : MODEL;
+
   const response = await openai.chat.completions.create({
-    model: MODEL,
+    model: modelToUse,
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userContent },
