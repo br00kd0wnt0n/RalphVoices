@@ -388,6 +388,95 @@ export interface ThemeAnalysis {
   key_quotes: string[];
 }
 
+export async function streamChatResponse(
+  systemPrompt: string,
+  messages: { role: 'user' | 'assistant'; content: string }[],
+  onToken: (token: string) => void,
+  onDone: () => void
+): Promise<void> {
+  const stream = await openai.chat.completions.create({
+    model: MODEL,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      ...messages.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+    ],
+    temperature: 0.7,
+    max_tokens: 1000,
+    stream: true,
+  });
+
+  for await (const chunk of stream) {
+    const content = chunk.choices[0]?.delta?.content;
+    if (content) {
+      onToken(content);
+    }
+  }
+
+  onDone();
+}
+
+export async function generateRecommendations(
+  conceptText: string,
+  summary: any,
+  themes: any,
+  segments: any,
+  gwiEnrichment: any
+): Promise<any[]> {
+  const systemPrompt = `You are a creative strategy consultant. Given concept test results and optional market data, suggest 3-5 specific executional tweaks to improve the concept's resonance with the target audience.
+
+For each recommendation, provide:
+- title: Short title (3-6 words)
+- description: Specific actionable recommendation (2-3 sentences)
+- target_segment: Which audience segment this applies to
+- impact: "high", "medium", or "low"
+- category: One of "messaging", "visual", "platform", "timing", "format"
+
+Return as JSON: { "recommendations": [...] }`;
+
+  const userPrompt = `CONCEPT: ${conceptText}
+
+RESULTS:
+- Total responses: ${summary.total_responses}
+- Sentiment: ${summary.sentiment.positive} positive, ${summary.sentiment.neutral} neutral, ${summary.sentiment.negative} negative
+- Avg engagement: ${summary.avg_engagement}/10, Share: ${summary.avg_share_likelihood}/10, Comprehension: ${summary.avg_comprehension}/10
+
+THEMES:
+- Working: ${themes.positive_themes?.map((t: any) => t.theme).join(', ') || 'None'}
+- Concerns: ${themes.concerns?.map((t: any) => t.theme).join(', ') || 'None'}
+- Unexpected: ${themes.unexpected?.map((t: any) => t.theme).join(', ') || 'None'}
+
+SEGMENTS:
+${Object.entries(segments.by_platform || {}).map(([p, d]: [string, any]) => `- ${p}: ${d.count} responses, avg sentiment ${d.avgSentiment}/10`).join('\n')}
+${Object.entries(segments.by_attitude || {}).map(([a, d]: [string, any]) => `- ${a}: ${d.count} responses, avg sentiment ${d.avgSentiment}/10`).join('\n')}
+
+${gwiEnrichment ? `GWI MARKET DATA:
+- ${gwiEnrichment.executive_summary || ''}
+- Opportunities: ${gwiEnrichment.opportunities?.join('; ') || 'N/A'}
+- Risks: ${gwiEnrichment.risks?.join('; ') || 'N/A'}` : 'No GWI market data available.'}
+
+Suggest 3-5 specific, actionable executional tweaks.`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: MODEL,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      temperature: 0.7,
+      max_tokens: 1500,
+      response_format: { type: 'json_object' },
+    });
+
+    const content = response.choices[0]?.message?.content || '{}';
+    const parsed = JSON.parse(content);
+    return parsed.recommendations || [];
+  } catch (error) {
+    console.error('Failed to generate recommendations:', error);
+    return [];
+  }
+}
+
 export async function analyzeTestResults(
   conceptText: string,
   responses: Array<{

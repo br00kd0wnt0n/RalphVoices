@@ -29,6 +29,13 @@ import { ArrowLeft, RefreshCw, Users, TrendingUp, MessageSquare, AlertTriangle, 
 import type { Test, TestResponse } from '@/types';
 import { SENTIMENT_THRESHOLDS } from '@/lib/constants';
 import { GwiBadge } from '@/components/GwiBadge';
+import { EmotionalSpectrum } from '@/components/EmotionalSpectrum';
+import { BrainBalance } from '@/components/BrainBalance';
+import { KeyAssociations } from '@/components/KeyAssociations';
+import { ShareabilityAnalysis } from '@/components/ShareabilityAnalysis';
+import { TestComparison } from '@/components/TestComparison';
+import { GwiRecommendations } from '@/components/GwiRecommendations';
+import { InsightsChat } from '@/components/InsightsChat';
 
 const COLORS = {
   positive: '#22c55e',
@@ -484,6 +491,10 @@ export function TestResultsPage() {
             <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
             <TabsTrigger value="responses">Responses ({responses.length})</TabsTrigger>
             <TabsTrigger value="themes">Themes</TabsTrigger>
+            <TabsTrigger value="insights-chat" className="flex items-center gap-1.5">
+              <MessageSquare className="h-3.5 w-3.5" />
+              Chat
+            </TabsTrigger>
             {results.gwi_enrichment && (
               <TabsTrigger value="market-insights" className="flex items-center gap-1.5">
                 <Globe className="h-3.5 w-3.5 text-emerald-600" />
@@ -665,6 +676,28 @@ export function TestResultsPage() {
                 </div>
               </CardContent>
             </Card>
+
+            {/* Brain Balance */}
+            <BrainBalance responses={responses} />
+
+            {/* Emotional Spectrum */}
+            <EmotionalSpectrum responses={responses} />
+
+            {/* Key Associations + Shareability side by side */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <KeyAssociations themes={results.themes} />
+              <ShareabilityAnalysis responses={responses} summary={results.summary} segments={results.segments} />
+            </div>
+
+            {/* Recommendations */}
+            <GwiRecommendations testId={test.id} />
+
+            {/* Test Comparison */}
+            <TestComparison
+              currentTest={test}
+              currentSummary={results.summary}
+              currentRalphScore={calculateRalphScore(results.summary)}
+            />
           </TabsContent>
 
           <TabsContent value="responses" className="space-y-4">
@@ -821,6 +854,13 @@ export function TestResultsPage() {
                   <p className="text-muted-foreground">No unexpected findings</p>
                 )}
               </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Insights Chat Tab */}
+          <TabsContent value="insights-chat">
+            <Card>
+              <InsightsChat testId={test.id} />
             </Card>
           </TabsContent>
 

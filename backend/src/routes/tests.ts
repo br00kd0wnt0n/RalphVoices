@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { query, getClient } from '../db/index.js';
 import { authMiddleware, AuthRequest } from '../middleware/auth.js';
-import { generateConceptResponse, TestAsset } from '../services/ai.js';
+import { generateConceptResponse, streamChatResponse, generateRecommendations, TestAsset } from '../services/ai.js';
 import { z } from 'zod';
 import type { Persona, PersonaVariant, Test } from '../utils/types.js';
 import { SENTIMENT_THRESHOLDS, ATTITUDE_THRESHOLDS } from '../utils/constants.js';
@@ -790,6 +790,198 @@ router.get('/:id/export', authMiddleware, async (req: AuthRequest, res: Response
   } catch (error) {
     console.error('Export test error:', error);
     res.status(500).json({ error: 'Failed to export test report' });
+  }
+});
+
+// Chat with test results (SSE streaming)
+router.post('/:id/chat', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { message, history = [] } = req.body;
+
+    if (!message || typeof message !== 'string') {
+      res.status(400).json({ error: 'Message is required' });
+      return;
+    }
+
+    // Verify test ownership and get test data
+    const testResult = await query(
+      `SELECT t.* FROM tests t
+       JOIN projects p ON t.project_id = p.id
+       WHERE t.id = $1 AND p.created_by = $2`,
+      [req.params.id, req.user!.id]
+    );
+
+    if (testResult.rows.length === 0) {
+      res.status(404).json({ error: 'Test not found' });
+      return;
+    }
+
+    const test = testResult.rows[0];
+
+    if (test.status !== 'complete') {
+      res.status(400).json({ error: 'Test must be complete to chat' });
+      return;
+    }
+
+    // Get results
+    const resultsResult = await query(
+      'SELECT * FROM test_results WHERE test_id = $1',
+      [test.id]
+    );
+    const results = resultsResult.rows[0];
+
+    if (!results) {
+      res.status(404).json({ error: 'Results not found' });
+      return;
+    }
+
+    // Get sample responses (stratified: positive, neutral, negative)
+    const responsesResult = await query(
+      `SELECT tr.response_text, tr.sentiment_score, tr.engagement_likelihood,
+              tr.share_likelihood, tr.comprehension_score, tr.reaction_tags,
+              pv.variant_name, pv.age_actual, pv.primary_platform, pv.attitude_score
+       FROM test_responses tr
+       JOIN persona_variants pv ON tr.variant_id = pv.id
+       WHERE tr.test_id = $1
+       ORDER BY tr.sentiment_score DESC
+       LIMIT 30`,
+      [test.id]
+    );
+
+    const sampleResponses = responsesResult.rows;
+    const summary = results.summary;
+    const themes = results.themes;
+    const segments = results.segments;
+
+    // Build system prompt
+    const systemPrompt = `You are an insights analyst helping a brand strategist understand concept test results. You have access to the following data:
+
+CONCEPT TESTED:
+"${test.concept_text || 'N/A'}"
+
+RESULTS SUMMARY:
+- ${summary.total_responses} total responses
+- Sentiment: ${summary.sentiment.positive} positive, ${summary.sentiment.neutral} neutral, ${summary.sentiment.negative} negative
+- Avg Engagement: ${summary.avg_engagement}/10
+- Avg Share Likelihood: ${summary.avg_share_likelihood}/10
+- Avg Comprehension: ${summary.avg_comprehension}/10
+
+THEMES:
+- Working: ${themes.positive_themes?.map((t: any) => `${t.theme} (${t.frequency})`).join(', ') || 'None'}
+- Concerns: ${themes.concerns?.map((t: any) => `${t.theme} (${t.frequency})`).join(', ') || 'None'}
+- Unexpected: ${themes.unexpected?.map((t: any) => `${t.theme} (${t.frequency})`).join(', ') || 'None'}
+
+SEGMENTS:
+By Platform: ${Object.entries(segments.by_platform || {}).map(([p, d]: [string, any]) => `${p}(n=${d.count}, sent=${d.avgSentiment}, eng=${d.avgEngagement})`).join(', ')}
+By Attitude: ${Object.entries(segments.by_attitude || {}).map(([a, d]: [string, any]) => `${a}(n=${d.count}, sent=${d.avgSentiment}, eng=${d.avgEngagement})`).join(', ')}
+By Age: ${Object.entries(segments.by_age || {}).map(([a, d]: [string, any]) => `${a}(n=${d.count}, sent=${d.avgSentiment}, eng=${d.avgEngagement})`).join(', ')}
+
+SAMPLE RESPONSES:
+${sampleResponses.map((r: any) => {
+  const sentiment = r.sentiment_score >= 7 ? 'positive' : r.sentiment_score < 4 ? 'negative' : 'neutral';
+  return `[${sentiment}] ${r.variant_name}, ${r.age_actual}yo, ${r.primary_platform} (attitude: ${r.attitude_score}/10): "${r.response_text?.substring(0, 200)}"`;
+}).join('\n')}
+
+${results.gwi_enrichment ? `GWI MARKET DATA:
+${results.gwi_enrichment.executive_summary || ''}
+Opportunities: ${results.gwi_enrichment.opportunities?.join('; ') || 'N/A'}
+Risks: ${results.gwi_enrichment.risks?.join('; ') || 'N/A'}` : ''}
+
+Answer questions about these findings. Be specific, reference data points, quote persona responses when relevant. Be concise and strategic. Use bullet points for clarity.`;
+
+    // Set up SSE
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    const messages = [
+      ...history.map((h: any) => ({ role: h.role, content: h.content })),
+      { role: 'user' as const, content: message },
+    ];
+
+    await streamChatResponse(
+      systemPrompt,
+      messages,
+      (token) => {
+        res.write(`data: ${JSON.stringify({ token })}\n\n`);
+      },
+      () => {
+        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+        res.end();
+      }
+    );
+  } catch (error) {
+    console.error('Chat error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Chat failed' });
+    } else {
+      res.write(`data: ${JSON.stringify({ error: 'Stream failed' })}\n\n`);
+      res.end();
+    }
+  }
+});
+
+// Get AI-generated recommendations for improving the concept
+router.get('/:id/recommendations', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    // Verify test ownership
+    const testResult = await query(
+      `SELECT t.* FROM tests t
+       JOIN projects p ON t.project_id = p.id
+       WHERE t.id = $1 AND p.created_by = $2`,
+      [req.params.id, req.user!.id]
+    );
+
+    if (testResult.rows.length === 0) {
+      res.status(404).json({ error: 'Test not found' });
+      return;
+    }
+
+    const test = testResult.rows[0];
+
+    if (test.status !== 'complete') {
+      res.status(400).json({ error: 'Test must be complete' });
+      return;
+    }
+
+    // Get results
+    const resultsResult = await query(
+      'SELECT * FROM test_results WHERE test_id = $1',
+      [test.id]
+    );
+    const results = resultsResult.rows[0];
+
+    if (!results) {
+      res.status(404).json({ error: 'Results not found' });
+      return;
+    }
+
+    // Check cache
+    if (results.recommendations) {
+      res.json({ recommendations: results.recommendations });
+      return;
+    }
+
+    // Generate recommendations
+    const recommendations = await generateRecommendations(
+      test.concept_text || '',
+      results.summary,
+      results.themes,
+      results.segments,
+      results.gwi_enrichment
+    );
+
+    // Cache in DB (non-blocking)
+    query(
+      'UPDATE test_results SET recommendations = $1 WHERE test_id = $2',
+      [JSON.stringify(recommendations), test.id]
+    ).catch((err) => console.error('Failed to cache recommendations:', err));
+
+    res.json({ recommendations });
+  } catch (error) {
+    console.error('Recommendations error:', error);
+    res.status(500).json({ error: 'Failed to generate recommendations' });
   }
 });
 
