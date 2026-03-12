@@ -16,7 +16,7 @@ import {
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { CheckCircle, Users, AlertCircle, GitCompare, Focus, Upload, X, FileText, Loader2, Sparkles, Globe, ArrowLeft, ArrowRight, Plus } from 'lucide-react';
+import { CheckCircle, Users, AlertCircle, GitCompare, Focus, Upload, X, FileText, Loader2, Sparkles, Globe, ArrowLeft, ArrowRight, Plus, RefreshCw } from 'lucide-react';
 import { GwiAudienceCard } from '@/components/GwiAudienceCard';
 import { GwiBadge } from '@/components/GwiBadge';
 import { PersonaBuilder } from '@/components/PersonaBuilder';
@@ -35,9 +35,14 @@ interface UploadedAsset {
   size: number;
 }
 
-export function ConceptFirst() {
+interface ConceptFirstProps {
+  retryTestId?: string;
+}
+
+export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
   const navigate = useNavigate();
   const { enabled: gwiEnabled } = useGwi();
+  const [retryLoading, setRetryLoading] = useState(false);
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -85,6 +90,40 @@ export function ConceptFirst() {
   useEffect(() => {
     projectsApi.list().then(setProjects).catch(console.error);
   }, []);
+
+  // Load test data when retrying a failed test
+  useEffect(() => {
+    if (!retryTestId) return;
+    setRetryLoading(true);
+    testsApi.get(retryTestId).then((data) => {
+      const test = data.test || data;
+      // Step 1: Concept
+      if (test.concept_text) setConceptText(test.concept_text);
+      if (test.name) setName(test.name.replace(/ - Concept [AB]$/, ''));
+
+      // Parse options for assets and strategic context
+      const opts = typeof test.options === 'string' ? JSON.parse(test.options) : (test.options || {});
+      if (opts.assets?.length) setAssets(opts.assets);
+      if (opts.strategic_context) {
+        if (opts.strategic_context.creative_ambition) setCreativeAmbition(opts.strategic_context.creative_ambition);
+        if (opts.strategic_context.strategic_truth) setStrategicTruth(opts.strategic_context.strategic_truth);
+        if (opts.strategic_context.key_insight) setInsights(opts.strategic_context.key_insight);
+      }
+
+      // Step 2: Personas
+      if (test.persona_ids?.length) setSelectedPersonaIds(test.persona_ids);
+
+      // Step 3: Config
+      if (test.project_id) setProjectId(test.project_id);
+      const vc = typeof test.variant_config === 'string' ? JSON.parse(test.variant_config) : (test.variant_config || {});
+      if (vc.focus_preset) setFocusPreset(vc.focus_preset as FocusPresetKey);
+      if (test.variants_per_persona) setVariantsPerPersona(test.variants_per_persona);
+    }).catch((err) => {
+      console.error('Failed to load test for retry:', err);
+    }).finally(() => {
+      setRetryLoading(false);
+    });
+  }, [retryTestId]);
 
   useEffect(() => {
     if (projectIdForPersonas === '__all__') {
@@ -335,13 +374,26 @@ export function ConceptFirst() {
 
   const canRun = projectId && name && totalSelected > 0;
 
+  if (retryLoading) {
+    return (
+      <div className="max-w-3xl mx-auto flex items-center justify-center py-24">
+        <div className="text-center space-y-3">
+          <RefreshCw className="h-8 w-8 animate-spin text-primary mx-auto" />
+          <p className="text-muted-foreground">Loading test data for editing...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-3xl mx-auto space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold">Test a Concept</h1>
+        <h1 className="text-3xl font-bold">{retryTestId ? 'Edit & Retry Test' : 'Test a Concept'}</h1>
         <p className="text-muted-foreground mt-1">
-          Upload your concept, select an audience, and get feedback in minutes.
+          {retryTestId
+            ? 'Review and adjust your test setup, then re-run.'
+            : 'Upload your concept, select an audience, and get feedback in minutes.'}
         </p>
       </div>
 

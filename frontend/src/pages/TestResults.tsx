@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { tests as testsApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -25,7 +25,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-import { ArrowLeft, RefreshCw, Users, TrendingUp, MessageSquare, AlertTriangle, Sparkles, Globe, Download, Lightbulb, ShieldAlert, FileText } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Users, TrendingUp, MessageSquare, AlertTriangle, Sparkles, Globe, Download, Lightbulb, ShieldAlert, FileText, Pencil } from 'lucide-react';
 import type { Test, TestResponse } from '@/types';
 import { SENTIMENT_THRESHOLDS } from '@/lib/constants';
 import { GwiBadge } from '@/components/GwiBadge';
@@ -138,6 +138,7 @@ function calculateLiveStats(responses: TestResponse[]) {
 
 export function TestResultsPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [test, setTest] = useState<Test | null>(null);
   const [responses, setResponses] = useState<TestResponse[]>([]);
   const [loading, setLoading] = useState(true);
@@ -295,21 +296,30 @@ export function TestResultsPage() {
             </Button>
           )}
           {test.status === 'failed' && (
-            <Button
-              variant="outline"
-              className="border-destructive/50 text-destructive hover:bg-destructive/10"
-              onClick={async () => {
-                try {
-                  await testsApi.run(test.id);
-                  loadTest();
-                } catch (err: any) {
-                  console.error('Failed to retry test:', err);
-                }
-              }}
-            >
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Retry Test
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                className="border-destructive/50 text-destructive hover:bg-destructive/10"
+                onClick={async () => {
+                  try {
+                    await testsApi.run(test.id);
+                    loadTest();
+                  } catch (err: any) {
+                    console.error('Failed to retry test:', err);
+                  }
+                }}
+              >
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Quick Retry
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => navigate(`/tests/new?retry=${test.id}`)}
+              >
+                <Pencil className="h-4 w-4 mr-2" />
+                Edit & Retry
+              </Button>
+            </>
           )}
         </div>
       </div>
@@ -399,21 +409,30 @@ export function TestResultsPage() {
                     {test.persona_ids?.length || 0} selected
                   </p>
                 </div>
-                <Button
-                  variant="outline"
-                  className="border-destructive/50 text-destructive hover:bg-destructive/10"
-                  onClick={async () => {
-                    try {
-                      await testsApi.run(test.id);
-                      loadTest();
-                    } catch (err: any) {
-                      console.error('Failed to retry test:', err);
-                    }
-                  }}
-                >
-                  <RefreshCw className="h-4 w-4 mr-2" />
-                  Retry Test
-                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    className="border-destructive/50 text-destructive hover:bg-destructive/10"
+                    onClick={async () => {
+                      try {
+                        await testsApi.run(test.id);
+                        loadTest();
+                      } catch (err: any) {
+                        console.error('Failed to retry test:', err);
+                      }
+                    }}
+                  >
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Quick Retry
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => navigate(`/tests/new?retry=${test.id}`)}
+                  >
+                    <Pencil className="h-4 w-4 mr-2" />
+                    Edit & Retry
+                  </Button>
+                </div>
               </div>
             </div>
           </CardContent>
