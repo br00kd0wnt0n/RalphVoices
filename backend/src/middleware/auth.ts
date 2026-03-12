@@ -4,6 +4,9 @@ import { query } from '../db/index.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'development-secret-change-me';
 
+// Cache demo user to avoid DB query on every unauthenticated request
+let cachedDemoUser: { id: string; email: string; name: string | null } | null = null;
+
 export interface AuthRequest extends Request {
   user?: {
     id: string;
@@ -34,19 +37,26 @@ export async function authMiddleware(
   // If no auth header, use demo user (public mode)
   if (!authHeader?.startsWith('Bearer ')) {
     try {
+      // Use cached demo user if available
+      if (cachedDemoUser) {
+        req.user = cachedDemoUser;
+        next();
+        return;
+      }
+
       // Get or create demo user
       let result = await query(
         "SELECT id, email, name FROM users WHERE email = 'demo@ralphvoices.com'"
       );
 
       if (result.rows.length === 0) {
-        // Create demo user if doesn't exist
         result = await query(
           "INSERT INTO users (email, password_hash, name) VALUES ('demo@ralphvoices.com', 'public-demo', 'Demo User') RETURNING id, email, name"
         );
       }
 
-      req.user = result.rows[0];
+      cachedDemoUser = result.rows[0];
+      req.user = cachedDemoUser ?? undefined;
       next();
       return;
     } catch (error) {

@@ -1,11 +1,19 @@
 import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Settings as SettingsIcon, Brain, Sparkles, BarChart3, MessageSquare, Info, Save, RotateCcw, Lock } from 'lucide-react';
+import { Settings as SettingsIcon, Brain, Sparkles, BarChart3, MessageSquare, Info, Save, RotateCcw, Lock, Globe, Eye, EyeOff, CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { gwi as gwiApi } from '@/lib/api';
+import { resetGwiCache } from '@/hooks/useGwi';
+
+import { TEST_FOCUS_PRESETS } from '@/lib/constants';
+
+// Re-export for backward compatibility (other files import from Settings)
+export { TEST_FOCUS_PRESETS } from '@/lib/constants';
 
 // Default prompts used by the system
 const DEFAULT_PROMPTS = {
@@ -87,80 +95,49 @@ responses when this persona reacts to creative concepts.`,
   },
 };
 
-// Test focus presets
-export const TEST_FOCUS_PRESETS = {
-  baseline: {
-    name: 'Baseline',
-    description: 'General audience feedback covering all aspects',
-    focusAreas: [],
-    promptModifier: '',
-  },
-  brandPerception: {
-    name: 'Brand Perception',
-    description: 'Focus on brand association, trust, and recognition',
-    focusAreas: ['brand trust', 'brand recall', 'brand fit', 'competitor comparison'],
-    promptModifier: `
-FOCUS AREAS FOR THIS TEST:
-Pay special attention to:
-- How does this concept affect your perception of the brand?
-- Does this feel authentic to what you know about this brand?
-- Would this make you trust the brand more or less?
-- How does this compare to similar brands you know?`,
-  },
-  purchaseIntent: {
-    name: 'Purchase Intent',
-    description: 'Focus on buying likelihood and barriers',
-    focusAreas: ['purchase likelihood', 'price sensitivity', 'barriers to purchase', 'urgency'],
-    promptModifier: `
-FOCUS AREAS FOR THIS TEST:
-Pay special attention to:
-- Would this make you want to buy/try this product or service?
-- What would stop you from purchasing?
-- Does the value proposition feel compelling?
-- How urgently would you want to act on this?`,
-  },
-  creativeImpact: {
-    name: 'Creative Impact',
-    description: 'Focus on emotional resonance and memorability',
-    focusAreas: ['emotional response', 'memorability', 'distinctiveness', 'attention-grabbing'],
-    promptModifier: `
-FOCUS AREAS FOR THIS TEST:
-Pay special attention to:
-- What emotions does this concept trigger in you?
-- Would you remember this tomorrow? Next week?
-- What makes this stand out from similar content you've seen?
-- Did this capture and hold your attention?`,
-  },
-  messageClarity: {
-    name: 'Message Clarity',
-    description: 'Focus on comprehension and takeaways',
-    focusAreas: ['key message', 'comprehension', 'confusion points', 'call to action'],
-    promptModifier: `
-FOCUS AREAS FOR THIS TEST:
-Pay special attention to:
-- What is the main message you're taking away?
-- Was anything confusing or unclear?
-- What action (if any) are you being asked to take?
-- Can you explain this concept to someone else?`,
-  },
-  socialShareability: {
-    name: 'Social Shareability',
-    description: 'Focus on viral potential and conversation',
-    focusAreas: ['share likelihood', 'conversation starter', 'social currency', 'platform fit'],
-    promptModifier: `
-FOCUS AREAS FOR THIS TEST:
-Pay special attention to:
-- Would you share this on your social platforms? Which ones?
-- Would this start a conversation with your friends?
-- Does sharing this make you look good/smart/funny?
-- What platform would this work best on?`,
-  },
-};
 
 export function Settings() {
-  const [activeTab, setActiveTab] = useState('prompts');
+  const [activeTab, setActiveTab] = useState('integrations');
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
   const [promptEdits, setPromptEdits] = useState<Record<string, string>>({});
+
+  // GWI integration state
+  const [gwiApiKey, setGwiApiKey] = useState('');
+  const [showGwiKey, setShowGwiKey] = useState(false);
+  const [gwiSaving, setGwiSaving] = useState(false);
+  const [gwiTesting, setGwiTesting] = useState(false);
+  const [gwiStatus, setGwiStatus] = useState<'unknown' | 'connected' | 'disconnected'>('unknown');
+  const [gwiError, setGwiError] = useState('');
+
+  async function handleTestGwi() {
+    setGwiTesting(true);
+    setGwiError('');
+    try {
+      const result = await gwiApi.status();
+      setGwiStatus(result.enabled ? 'connected' : 'disconnected');
+    } catch {
+      setGwiStatus('disconnected');
+      setGwiError('Failed to connect to GWI');
+    } finally {
+      setGwiTesting(false);
+    }
+  }
+
+  async function handleSaveGwiKey() {
+    if (!gwiApiKey.trim()) return;
+    setGwiSaving(true);
+    setGwiError('');
+    try {
+      await gwiApi.saveApiKey(gwiApiKey.trim());
+      resetGwiCache();
+      setGwiApiKey('');
+      await handleTestGwi();
+    } catch {
+      setGwiError('Failed to save API key');
+    } finally {
+      setGwiSaving(false);
+    }
+  }
 
   const handleSavePrompt = (key: string) => {
     // In the future, this would save to the backend
@@ -190,10 +167,92 @@ export function Settings() {
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid w-full grid-cols-2">
+        <TabsList className="grid w-full grid-cols-3">
+          <TabsTrigger value="integrations">Integrations</TabsTrigger>
           <TabsTrigger value="prompts">AI Prompts</TabsTrigger>
           <TabsTrigger value="presets">Test Focus Presets</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="integrations" className="space-y-4 mt-4">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-xl bg-emerald-500/10">
+                    <Globe className="h-5 w-5 text-emerald-600" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-lg">GWI Spark</CardTitle>
+                    <CardDescription>Connect to GWI for real-world audience insights</CardDescription>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {gwiStatus === 'connected' && (
+                    <Badge className="bg-emerald-600 flex items-center gap-1">
+                      <CheckCircle className="h-3 w-3" />
+                      Connected
+                    </Badge>
+                  )}
+                  {gwiStatus === 'disconnected' && (
+                    <Badge variant="destructive" className="flex items-center gap-1">
+                      <XCircle className="h-3 w-3" />
+                      Disconnected
+                    </Badge>
+                  )}
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="text-sm text-muted-foreground space-y-2">
+                <p>
+                  GWI Spark enriches your concept testing with real market data. When connected, you get:
+                </p>
+                <ul className="list-disc list-inside space-y-1 ml-2">
+                  <li>Audience suggestions based on your concept</li>
+                  <li>Persona validation against market data</li>
+                  <li>Market insights on test results</li>
+                </ul>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="gwi-key">API Key</Label>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <Input
+                      id="gwi-key"
+                      type={showGwiKey ? 'text' : 'password'}
+                      value={gwiApiKey}
+                      onChange={(e) => setGwiApiKey(e.target.value)}
+                      placeholder="Enter your GWI Spark API key"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowGwiKey(!showGwiKey)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    >
+                      {showGwiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  <Button onClick={handleSaveGwiKey} disabled={gwiSaving || !gwiApiKey.trim()}>
+                    {gwiSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
+                    Save
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={handleTestGwi} disabled={gwiTesting}>
+                  {gwiTesting ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+                  Test Connection
+                </Button>
+              </div>
+
+              {gwiError && (
+                <p className="text-sm text-destructive">{gwiError}</p>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
         <TabsContent value="prompts" className="space-y-4 mt-4">
           <div className="flex items-start gap-2 p-4 rounded-lg bg-blue-500/10 border border-blue-500/20">

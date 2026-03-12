@@ -25,8 +25,10 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-import { ArrowLeft, RefreshCw, Users, TrendingUp, MessageSquare, AlertTriangle, Sparkles } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Users, TrendingUp, MessageSquare, AlertTriangle, Sparkles, Globe } from 'lucide-react';
 import type { Test, TestResponse } from '@/types';
+import { SENTIMENT_THRESHOLDS } from '@/lib/constants';
+import { GwiBadge } from '@/components/GwiBadge';
 
 const COLORS = {
   positive: '#22c55e',
@@ -88,9 +90,9 @@ function calculateLiveStats(responses: TestResponse[]) {
   }
 
   const sentimentCounts = {
-    positive: responses.filter(r => (r.sentiment_score ?? 5) >= 7).length,
-    neutral: responses.filter(r => (r.sentiment_score ?? 5) >= 4 && (r.sentiment_score ?? 5) < 7).length,
-    negative: responses.filter(r => (r.sentiment_score ?? 5) < 4).length,
+    positive: responses.filter(r => (r.sentiment_score ?? 5) >= SENTIMENT_THRESHOLDS.POSITIVE_MIN).length,
+    neutral: responses.filter(r => (r.sentiment_score ?? 5) >= SENTIMENT_THRESHOLDS.NEUTRAL_MIN && (r.sentiment_score ?? 5) < SENTIMENT_THRESHOLDS.POSITIVE_MIN).length,
+    negative: responses.filter(r => (r.sentiment_score ?? 5) < SENTIMENT_THRESHOLDS.NEUTRAL_MIN).length,
   };
 
   const avgEngagement = responses.reduce((sum, r) => sum + (r.engagement_likelihood || 5), 0) / responses.length;
@@ -233,9 +235,9 @@ export function TestResultsPage() {
   const filteredResponses = responses.filter((r) => {
     if (sentimentFilter !== 'all') {
       const score = r.sentiment_score || 5;
-      if (sentimentFilter === 'positive' && score < 7) return false;
-      if (sentimentFilter === 'neutral' && (score < 4 || score >= 7)) return false;
-      if (sentimentFilter === 'negative' && score >= 4) return false;
+      if (sentimentFilter === 'positive' && score < SENTIMENT_THRESHOLDS.POSITIVE_MIN) return false;
+      if (sentimentFilter === 'neutral' && (score < SENTIMENT_THRESHOLDS.NEUTRAL_MIN || score >= SENTIMENT_THRESHOLDS.POSITIVE_MIN)) return false;
+      if (sentimentFilter === 'negative' && score >= SENTIMENT_THRESHOLDS.NEUTRAL_MIN) return false;
     }
     if (platformFilter !== 'all' && r.primary_platform !== platformFilter) {
       return false;
@@ -454,8 +456,8 @@ export function TestResultsPage() {
                                 {r.primary_platform}
                               </Badge>
                               <span className={`text-xs font-medium ${
-                                (r.sentiment_score ?? 5) >= 7 ? 'text-green-600' :
-                                (r.sentiment_score ?? 5) >= 4 ? 'text-yellow-600' : 'text-red-600'
+                                (r.sentiment_score ?? 5) >= SENTIMENT_THRESHOLDS.POSITIVE_MIN ? 'text-green-600' :
+                                (r.sentiment_score ?? 5) >= SENTIMENT_THRESHOLDS.NEUTRAL_MIN ? 'text-yellow-600' : 'text-red-600'
                               }`}>
                                 {r.sentiment_score ?? 5}/10
                               </span>
@@ -482,6 +484,12 @@ export function TestResultsPage() {
             <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
             <TabsTrigger value="responses">Responses ({responses.length})</TabsTrigger>
             <TabsTrigger value="themes">Themes</TabsTrigger>
+            {results.gwi_enrichment && (
+              <TabsTrigger value="market-insights" className="flex items-center gap-1.5">
+                <Globe className="h-3.5 w-3.5 text-emerald-600" />
+                Market Insights
+              </TabsTrigger>
+            )}
           </TabsList>
 
           <TabsContent value="dashboard" className="space-y-6">
@@ -711,9 +719,9 @@ export function TestResultsPage() {
                           <Badge variant="outline">{response.primary_platform}</Badge>
                           <Badge
                             variant={
-                              (response.sentiment_score || 5) >= 7
+                              (response.sentiment_score || 5) >= SENTIMENT_THRESHOLDS.POSITIVE_MIN
                                 ? 'success'
-                                : (response.sentiment_score || 5) < 4
+                                : (response.sentiment_score || 5) < SENTIMENT_THRESHOLDS.NEUTRAL_MIN
                                 ? 'destructive'
                                 : 'secondary'
                             }
@@ -815,6 +823,126 @@ export function TestResultsPage() {
               </CardContent>
             </Card>
           </TabsContent>
+
+          {/* Market Insights Tab (GWI) */}
+          {results.gwi_enrichment && (
+            <TabsContent value="market-insights" className="space-y-6">
+              <div className="flex items-center gap-2 mb-2">
+                <GwiBadge />
+                <span className="text-sm text-muted-foreground">Powered by GWI Spark market data</span>
+              </div>
+
+              {/* Market Context */}
+              {results.gwi_enrichment.market_context?.length > 0 && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg flex items-center gap-2">
+                      <TrendingUp className="h-5 w-5 text-emerald-600" />
+                      Market Context
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {results.gwi_enrichment.market_context.map((item: any, i: number) => (
+                        <div key={i} className="p-4 rounded-lg border bg-emerald-50/30">
+                          <p className="text-sm font-medium text-muted-foreground">{item.metric}</p>
+                          <p className="text-2xl font-bold mt-1">{item.value}</p>
+                          {item.benchmark && (
+                            <p className="text-xs text-muted-foreground mt-1">
+                              Benchmark: {item.benchmark}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Benchmark Comparison */}
+              {results.gwi_enrichment.benchmark_comparison?.length > 0 && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg">Ralph vs Market Benchmarks</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-3">
+                      {results.gwi_enrichment.benchmark_comparison.map((item: any, i: number) => (
+                        <div key={i} className="flex items-center gap-4">
+                          <span className="text-sm font-medium w-40 flex-shrink-0">{item.metric}</span>
+                          <div className="flex-1 flex items-center gap-3">
+                            <div className="flex-1">
+                              <div className="flex justify-between text-xs text-muted-foreground mb-1">
+                                <span>Ralph: {item.ralph_value}</span>
+                                <span>GWI: {item.gwi_benchmark}</span>
+                              </div>
+                              <div className="relative h-2 bg-muted rounded-full">
+                                <div
+                                  className="absolute h-2 bg-[#D94D8F] rounded-full"
+                                  style={{ width: `${Math.min(100, (item.ralph_value / 10) * 100)}%` }}
+                                />
+                                <div
+                                  className="absolute h-2 w-0.5 bg-emerald-600"
+                                  style={{ left: `${Math.min(100, (item.gwi_benchmark / 10) * 100)}%` }}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Audience Recommendations */}
+              {results.gwi_enrichment.audience_recommendations?.length > 0 && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg flex items-center gap-2">
+                      <Users className="h-5 w-5 text-emerald-600" />
+                      GWI Suggests Also Testing With
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {results.gwi_enrichment.audience_recommendations.map((audience: any, i: number) => (
+                        <div key={i} className="p-4 rounded-lg border">
+                          <div className="flex items-center justify-between mb-2">
+                            <h4 className="font-medium">{audience.name}</h4>
+                            {audience.size_percent && (
+                              <Badge variant="outline" className="text-emerald-600 border-emerald-600">
+                                {audience.size_percent}% of market
+                              </Badge>
+                            )}
+                          </div>
+                          {audience.demographics?.age_range && (
+                            <p className="text-sm text-muted-foreground">
+                              Age: {audience.demographics.age_range}
+                            </p>
+                          )}
+                          {audience.media_habits?.top_platforms?.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-2">
+                              {audience.media_habits.top_platforms.map((p: string) => (
+                                <Badge key={p} variant="secondary" className="text-xs">{p}</Badge>
+                              ))}
+                            </div>
+                          )}
+                          {audience.psychographics?.values?.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-2">
+                              {audience.psychographics.values.map((v: string) => (
+                                <Badge key={v} variant="outline" className="text-xs">{v}</Badge>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </TabsContent>
+          )}
         </Tabs>
       )}
     </div>

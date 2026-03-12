@@ -50,6 +50,7 @@ const createPersonaSchema = z.object({
   media_habits: mediaHabitsSchema,
   brand_context: brandContextSchema,
   cultural_context: culturalContextSchema,
+  gwi_audience_data: z.any().optional(),
   generate_voice: z.boolean().optional().default(true),
 });
 
@@ -93,8 +94,8 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
       `INSERT INTO personas (
         project_id, name, age_base, location, occupation, household,
         psychographics, media_habits, brand_context, cultural_context,
-        voice_sample, source_type, created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        gwi_audience_data, voice_sample, source_type, created_by
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       RETURNING *`,
       [
         data.project_id,
@@ -107,8 +108,9 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
         data.media_habits ? JSON.stringify(data.media_habits) : null,
         data.brand_context ? JSON.stringify(data.brand_context) : null,
         data.cultural_context ? JSON.stringify(data.cultural_context) : null,
+        data.gwi_audience_data ? JSON.stringify(data.gwi_audience_data) : null,
         voiceSample,
-        'builder',
+        data.gwi_audience_data ? 'gwi' : 'builder',
         req.user!.id,
       ]
     );

@@ -4,6 +4,8 @@ import { authMiddleware, AuthRequest } from '../middleware/auth.js';
 import { generateConceptResponse, TestAsset } from '../services/ai.js';
 import { z } from 'zod';
 import type { Persona, PersonaVariant, Test } from '../utils/types.js';
+import { SENTIMENT_THRESHOLDS, ATTITUDE_THRESHOLDS } from '../utils/constants.js';
+import { gwiService } from '../services/gwi.js';
 
 const router = Router();
 
@@ -219,11 +221,11 @@ router.get('/:id/responses', authMiddleware, async (req: AuthRequest, res: Respo
     // Apply filters
     if (sentiment) {
       if (sentiment === 'positive') {
-        queryText += ` AND tr.sentiment_score >= 7`;
+        queryText += ` AND tr.sentiment_score >= ${SENTIMENT_THRESHOLDS.POSITIVE_MIN}`;
       } else if (sentiment === 'neutral') {
-        queryText += ` AND tr.sentiment_score BETWEEN 4 AND 6`;
+        queryText += ` AND tr.sentiment_score BETWEEN ${SENTIMENT_THRESHOLDS.NEUTRAL_MIN} AND ${SENTIMENT_THRESHOLDS.POSITIVE_MIN - 1}`;
       } else if (sentiment === 'negative') {
-        queryText += ` AND tr.sentiment_score < 4`;
+        queryText += ` AND tr.sentiment_score < ${SENTIMENT_THRESHOLDS.NEUTRAL_MIN}`;
       }
     }
 
@@ -235,9 +237,9 @@ router.get('/:id/responses', authMiddleware, async (req: AuthRequest, res: Respo
 
     if (attitude) {
       if (attitude === 'enthusiasts') {
-        queryText += ` AND pv.attitude_score >= 7`;
+        queryText += ` AND pv.attitude_score >= ${ATTITUDE_THRESHOLDS.ENTHUSIAST_MIN}`;
       } else if (attitude === 'skeptics') {
-        queryText += ` AND pv.attitude_score <= 3`;
+        queryText += ` AND pv.attitude_score <= ${ATTITUDE_THRESHOLDS.SKEPTIC_MAX}`;
       }
     }
 
@@ -527,9 +529,9 @@ async function processTestResponses(test: Test, variants: any[]) {
   const summary = {
     total_responses: responses.length,
     sentiment: {
-      positive: responses.filter(r => (r.response.sentiment_score || 5) >= 7).length,
-      neutral: responses.filter(r => (r.response.sentiment_score || 5) >= 4 && (r.response.sentiment_score || 5) < 7).length,
-      negative: responses.filter(r => (r.response.sentiment_score || 5) < 4).length,
+      positive: responses.filter(r => (r.response.sentiment_score || 5) >= SENTIMENT_THRESHOLDS.POSITIVE_MIN).length,
+      neutral: responses.filter(r => (r.response.sentiment_score || 5) >= SENTIMENT_THRESHOLDS.NEUTRAL_MIN && (r.response.sentiment_score || 5) < SENTIMENT_THRESHOLDS.POSITIVE_MIN).length,
+      negative: responses.filter(r => (r.response.sentiment_score || 5) < SENTIMENT_THRESHOLDS.NEUTRAL_MIN).length,
     },
     avg_engagement: Math.round((responses.reduce((sum, r) => sum + (r.response.engagement_likelihood || 0), 0) / responses.length) * 10) / 10,
     avg_share_likelihood: Math.round((responses.reduce((sum, r) => sum + (r.response.share_likelihood || 0), 0) / responses.length) * 10) / 10,
@@ -585,6 +587,25 @@ async function processTestResponses(test: Test, variants: any[]) {
 
   console.log(`Analysis complete for test ${test.id}`);
 
+  // GWI enrichment (non-blocking — failures don't affect test completion)
+  try {
+    if (gwiService.isEnabled()) {
+      const enrichment = await gwiService.enrichResults(
+        { summary, segments, themes },
+        test.concept_text || ''
+      );
+      if (enrichment) {
+        await query(
+          'UPDATE test_results SET gwi_enrichment = $1 WHERE test_id = $2',
+          [JSON.stringify(enrichment), test.id]
+        );
+        console.log(`GWI enrichment saved for test ${test.id}`);
+      }
+    }
+  } catch (gwiError) {
+    console.error(`GWI enrichment failed for test ${test.id}:`, gwiError);
+  }
+
   // Update test status
   await query(
     `UPDATE tests SET status = 'complete', completed_at = NOW() WHERE id = $1`,
@@ -621,8 +642,8 @@ function calculateSegments(responses: any[]) {
     // Attitude segments
     const attitudeScore = variant.attitude_score || 5;
     let attitudeGroup = 'neutral';
-    if (attitudeScore >= 7) attitudeGroup = 'enthusiasts';
-    else if (attitudeScore <= 3) attitudeGroup = 'skeptics';
+    if (attitudeScore >= ATTITUDE_THRESHOLDS.ENTHUSIAST_MIN) attitudeGroup = 'enthusiasts';
+    else if (attitudeScore <= ATTITUDE_THRESHOLDS.SKEPTIC_MAX) attitudeGroup = 'skeptics';
 
     if (!byAttitude[attitudeGroup]) byAttitude[attitudeGroup] = { count: 0, avgSentiment: 0, avgEngagement: 0 };
     byAttitude[attitudeGroup].count++;

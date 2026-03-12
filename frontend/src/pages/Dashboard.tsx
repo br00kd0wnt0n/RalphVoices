@@ -4,27 +4,29 @@ import { projects, tests, personas } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Users, TestTube, FolderOpen, ArrowRight, Sparkles, BarChart3, ChevronRight, Zap, Target, Clock, TrendingUp } from 'lucide-react';
+import { Users, TestTube, FolderOpen, ArrowRight, Sparkles, BarChart3, ChevronRight, Zap, Target, Clock, TrendingUp, FileText } from 'lucide-react';
 import type { Project, Test, Persona } from '@/types';
+import { useGwi } from '@/hooks/useGwi';
+import { GwiBadge } from '@/components/GwiBadge';
 
 const WORKFLOW_STEPS = [
   {
     step: 1,
-    title: 'Create a Project',
-    description: 'Organize your work by client or campaign. Each project contains its own personas and tests.',
-    icon: FolderOpen,
-    link: '/projects',
-    color: 'text-blue-500',
-    bgColor: 'bg-blue-500/10',
+    title: 'Upload Concept',
+    description: 'Start with what you want to test — describe your concept, ad, or creative idea.',
+    icon: FileText,
+    link: '/tests/new',
+    color: 'text-amber-500',
+    bgColor: 'bg-amber-500/10',
   },
   {
     step: 2,
-    title: 'Build Personas',
-    description: 'Define your target audience profiles with demographics, psychographics, media habits, and cultural context.',
+    title: 'Discover Audiences',
+    description: 'GWI suggests real audiences, or pick from your existing personas. Build the right panel.',
     icon: Users,
-    link: '/personas',
-    color: 'text-purple-500',
-    bgColor: 'bg-purple-500/10',
+    link: '/tests/new',
+    color: 'text-emerald-500',
+    bgColor: 'bg-emerald-500/10',
   },
   {
     step: 3,
@@ -37,17 +39,17 @@ const WORKFLOW_STEPS = [
   },
   {
     step: 4,
-    title: 'Run Concept Tests',
-    description: 'Submit your creative concept and watch your synthetic panel react with authentic, in-character feedback.',
+    title: 'Run Test',
+    description: 'Your synthetic panel reacts with authentic, in-character feedback in under 60 seconds.',
     icon: TestTube,
     link: '/tests/new',
-    color: 'text-amber-500',
-    bgColor: 'bg-amber-500/10',
+    color: 'text-blue-500',
+    bgColor: 'bg-blue-500/10',
   },
   {
     step: 5,
     title: 'Analyze Results',
-    description: 'Review sentiment scores, engagement likelihood, key themes, and representative quotes from your audience.',
+    description: 'Review RalphScore, sentiment, key themes, and market insights from your audience.',
     icon: BarChart3,
     link: '/tests',
     color: 'text-green-500',
@@ -60,6 +62,7 @@ export function Dashboard() {
   const [recentTests, setRecentTests] = useState<Test[]>([]);
   const [recentPersonas, setRecentPersonas] = useState<Persona[]>([]);
   const [loading, setLoading] = useState(true);
+  const { enabled: gwiEnabled } = useGwi();
 
   useEffect(() => {
     async function loadData() {
@@ -98,7 +101,10 @@ export function Dashboard() {
       {/* Hero Section */}
       <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#D94D8F]/10 via-transparent to-transparent border border-[#D94D8F]/20 p-8">
         <div className="max-w-3xl">
-          <h1 className="text-3xl font-bold mb-3">Welcome to Voices</h1>
+          <div className="flex items-center gap-3 mb-3">
+            <h1 className="text-3xl font-bold">Welcome to Voices</h1>
+            {gwiEnabled && <GwiBadge />}
+          </div>
           <p className="text-lg text-foreground/80 mb-4">
             AI personas calibrated to your audience, stress-testing concepts before they reach the world.
           </p>
@@ -284,7 +290,25 @@ export function Dashboard() {
 
       {/* Quick Actions */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Link to="/personas">
+        <Link to="/tests/new">
+          <Card className="hover:border-[#D94D8F]/50 transition-colors cursor-pointer border-[#D94D8F]/20 bg-gradient-to-br from-[#D94D8F]/5 to-transparent">
+            <CardContent className="pt-6">
+              <div className="flex items-center gap-4">
+                <div className="p-3 rounded-full bg-[#D94D8F]/10">
+                  <TestTube className="h-6 w-6 text-[#D94D8F]" />
+                </div>
+                <div>
+                  <h3 className="font-semibold">Test a Concept</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Upload concept, discover audiences, test
+                  </p>
+                </div>
+                <ArrowRight className="h-5 w-5 ml-auto text-[#D94D8F]" />
+              </div>
+            </CardContent>
+          </Card>
+        </Link>
+        <Link to="/tests/new?mode=persona-first">
           <Card className="hover:border-primary/50 transition-colors cursor-pointer">
             <CardContent className="pt-6">
               <div className="flex items-center gap-4">
@@ -292,27 +316,9 @@ export function Dashboard() {
                   <Users className="h-6 w-6 text-primary" />
                 </div>
                 <div>
-                  <h3 className="font-semibold">Create Persona</h3>
+                  <h3 className="font-semibold">Persona-First Test</h3>
                   <p className="text-sm text-muted-foreground">
-                    Build a new synthetic persona
-                  </p>
-                </div>
-                <ArrowRight className="h-5 w-5 ml-auto text-muted-foreground" />
-              </div>
-            </CardContent>
-          </Card>
-        </Link>
-        <Link to="/tests/new">
-          <Card className="hover:border-primary/50 transition-colors cursor-pointer">
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-4">
-                <div className="p-3 rounded-full bg-primary/10">
-                  <TestTube className="h-6 w-6 text-primary" />
-                </div>
-                <div>
-                  <h3 className="font-semibold">Run Test</h3>
-                  <p className="text-sm text-muted-foreground">
-                    Test a concept with your panel
+                    Pick personas first, then add concept
                   </p>
                 </div>
                 <ArrowRight className="h-5 w-5 ml-auto text-muted-foreground" />

@@ -158,5 +158,6 @@ export interface TestResults {
   summary: TestResultsSummary;
   segments: TestResultsSegments;
   themes: TestResultsThemes;
+  gwi_enrichment?: any;
   created_at: string;
 }

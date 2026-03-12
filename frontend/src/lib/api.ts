@@ -126,4 +126,32 @@ export const uploads = {
   },
 };
 
+// GWI Spark
+import type { GwiAudience, GwiValidation, GwiEnrichment } from '@/types/gwi';
+
+export const gwi = {
+  status: () =>
+    request<{ enabled: boolean; features: string[] }>('/gwi/status', { method: 'POST' }),
+  suggestAudiences: (data: { concept_text: string }) =>
+    request<{ enabled: boolean; audiences: GwiAudience[] }>('/gwi/suggest-audiences', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  validatePersona: (data: { persona: any }) =>
+    request<{ enabled: boolean; validation: GwiValidation | null }>('/gwi/validate-persona', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  enrichResults: (testId: string) =>
+    request<{ enabled: boolean; enrichment: GwiEnrichment | null }>('/gwi/enrich-results', {
+      method: 'POST',
+      body: JSON.stringify({ test_id: testId }),
+    }),
+  saveApiKey: (apiKey: string) =>
+    request<{ success: boolean }>('/gwi/settings', {
+      method: 'POST',
+      body: JSON.stringify({ api_key: apiKey }),
+    }),
+};
+
 export { ApiError };

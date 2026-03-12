@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { personas as personasApi, projects as projectsApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,17 +18,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { useEffect } from 'react';
 import type { Project } from '@/types';
+import type { GwiAudience } from '@/types/gwi';
+import { GwiBadge } from './GwiBadge';
 
 interface PersonaBuilderProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: () => void;
   defaultProjectId?: string;
+  prefillFromGwi?: GwiAudience;
 }
 
-export function PersonaBuilder({ open, onOpenChange, onCreated, defaultProjectId }: PersonaBuilderProps) {
+export function PersonaBuilder({ open, onOpenChange, onCreated, defaultProjectId, prefillFromGwi }: PersonaBuilderProps) {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -69,6 +71,32 @@ export function PersonaBuilder({ open, onOpenChange, onCreated, defaultProjectId
       setProjectId(defaultProjectId);
     }
   }, [defaultProjectId]);
+
+  // Pre-fill from GWI audience data
+  useEffect(() => {
+    if (prefillFromGwi && open) {
+      setName(prefillFromGwi.name || '');
+      if (prefillFromGwi.demographics?.age_range) {
+        const match = prefillFromGwi.demographics.age_range.match(/(\d+)/);
+        if (match) setAgeBase(match[1]);
+      }
+      if (prefillFromGwi.demographics?.top_locations?.length) {
+        setLocation(prefillFromGwi.demographics.top_locations[0]);
+      }
+      if (prefillFromGwi.media_habits?.top_platforms?.length) {
+        setPlatforms(prefillFromGwi.media_habits.top_platforms.join(', '));
+      }
+      if (prefillFromGwi.media_habits?.content_affinities?.length) {
+        setContentPreferences(prefillFromGwi.media_habits.content_affinities.join(', '));
+      }
+      if (prefillFromGwi.psychographics?.values?.length) {
+        setValues(prefillFromGwi.psychographics.values.join(', '));
+      }
+      if (prefillFromGwi.psychographics?.interests?.length) {
+        setSubcultures(prefillFromGwi.psychographics.interests.join(', '));
+      }
+    }
+  }, [prefillFromGwi, open]);
 
   function resetForm() {
     setStep(1);
@@ -127,6 +155,7 @@ export function PersonaBuilder({ open, onOpenChange, onCreated, defaultProjectId
           humor_style: humorStyle || undefined,
           language_markers: parseList(languageMarkers),
         },
+        gwi_audience_data: prefillFromGwi || undefined,
         generate_voice: true,
       });
 
@@ -146,7 +175,10 @@ export function PersonaBuilder({ open, onOpenChange, onCreated, defaultProjectId
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Create Persona</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            Create Persona
+            {prefillFromGwi && <GwiBadge />}
+          </DialogTitle>
           <DialogDescription>
             Step {step} of {totalSteps}: {
               step === 1 ? 'Basic Identity' :

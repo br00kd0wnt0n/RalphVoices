@@ -48,6 +48,9 @@ CREATE TABLE IF NOT EXISTS personas (
   -- Voice Sample (AI-generated example of how they communicate)
   voice_sample TEXT,
 
+  -- GWI audience data (optional, from GWI Spark integration)
+  gwi_audience_data JSONB,
+
   -- Metadata
   source_type VARCHAR(50) DEFAULT 'builder',
   created_by UUID REFERENCES users(id),
@@ -103,6 +106,9 @@ CREATE TABLE IF NOT EXISTS tests (
 
   -- Variant generation settings
   variant_config JSONB,
+
+  -- GWI insights (optional, from GWI Spark integration)
+  gwi_insights JSONB,
 
   -- Status
   status VARCHAR(50) DEFAULT 'draft',
@@ -160,6 +166,9 @@ CREATE TABLE IF NOT EXISTS test_results (
   -- Extracted themes
   themes JSONB,
 
+  -- GWI enrichment data (optional)
+  gwi_enrichment JSONB,
+
   created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -171,3 +180,16 @@ CREATE INDEX IF NOT EXISTS idx_responses_test ON test_responses(test_id);
 CREATE INDEX IF NOT EXISTS idx_responses_variant ON test_responses(variant_id);
 CREATE INDEX IF NOT EXISTS idx_projects_created_by ON projects(created_by);
 CREATE INDEX IF NOT EXISTS idx_tests_status ON tests(status);
+
+-- Settings table for API keys and runtime config
+CREATE TABLE IF NOT EXISTS settings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id),
+  key VARCHAR(255) NOT NULL,
+  value TEXT,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(user_id, key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_settings_user_key ON settings(user_id, key);
