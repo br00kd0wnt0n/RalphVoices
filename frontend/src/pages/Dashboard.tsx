@@ -56,39 +56,95 @@ export function Dashboard() {
   }
 
   return (
-    <div className="space-y-8 max-w-5xl mx-auto">
-      {/* Hero CTA */}
+    <div className="space-y-12 max-w-5xl mx-auto">
+      {/* Hero — Apple-style provocative statement */}
       <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
-        className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#D94D8F]/10 via-[#D94D8F]/5 to-transparent border border-[#D94D8F]/20 p-8 md:p-12"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.8 }}
+        className="relative pt-8 md:pt-16 pb-4 text-center"
       >
-        <div className="relative z-10 max-w-2xl">
-          <div className="flex items-center gap-3 mb-4">
-            <h1 className="text-4xl font-bold tracking-tight">Test a concept</h1>
-            {gwiEnabled && <GwiBadge />}
-          </div>
-          <p className="text-lg text-muted-foreground mb-6 leading-relaxed">
-            Describe your idea, choose an audience, and get feedback from an AI panel in under 60 seconds.
+        {/* VOICES wordmark */}
+        <motion.div
+          initial={{ opacity: 0, y: 30 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.7, delay: 0.1 }}
+          className="mb-8"
+        >
+          <h1
+            className="text-[4.5rem] md:text-[7rem] lg:text-[9rem] font-bold leading-none tracking-[-0.04em]"
+            style={{ fontFamily: "'Space Grotesk', sans-serif" }}
+          >
+            <span className="bg-gradient-to-r from-white via-white to-white/40 bg-clip-text text-transparent">
+              V
+            </span>
+            <span className="bg-gradient-to-r from-[#D94D8F] to-[#D94D8F]/80 bg-clip-text text-transparent">
+              O
+            </span>
+            <span className="bg-gradient-to-r from-white/90 to-white/60 bg-clip-text text-transparent">
+              ICES
+            </span>
+          </h1>
+          <motion.div
+            initial={{ scaleX: 0 }}
+            animate={{ scaleX: 1 }}
+            transition={{ duration: 0.6, delay: 0.5 }}
+            className="mx-auto mt-2 h-[2px] w-24 bg-gradient-to-r from-transparent via-[#D94D8F] to-transparent"
+          />
+        </motion.div>
+
+        {/* Provocative statement */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, delay: 0.3 }}
+          className="max-w-3xl mx-auto mb-10"
+        >
+          <p className="text-2xl md:text-3xl lg:text-4xl font-light text-white/90 leading-snug tracking-tight mb-4">
+            You're spending millions on creative
+            <br />
+            <span className="text-white/40">your audience hasn't seen yet.</span>
           </p>
+          <p className="text-lg md:text-xl text-muted-foreground leading-relaxed max-w-2xl mx-auto">
+            Test any concept against AI-powered audience panels in 60 seconds.
+            Real reactions. Before the real spend.
+          </p>
+        </motion.div>
+
+        {/* CTA */}
+        <motion.div
+          initial={{ opacity: 0, y: 15 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.5 }}
+          className="flex items-center justify-center gap-4"
+        >
           <Link to="/tests/new">
-            <Button size="lg" className="bg-[#D94D8F] hover:bg-[#D94D8F]/90 text-white gap-2 text-base px-8 h-12 rounded-xl shadow-lg shadow-[#D94D8F]/20 transition-all hover:shadow-xl hover:shadow-[#D94D8F]/30 hover:scale-[1.02]">
+            <Button
+              size="lg"
+              className="bg-[#D94D8F] hover:bg-[#D94D8F]/90 text-white gap-2.5 text-base px-10 h-14 rounded-2xl shadow-lg shadow-[#D94D8F]/25 transition-all hover:shadow-xl hover:shadow-[#D94D8F]/35 hover:scale-[1.02] active:scale-[0.98]"
+            >
               <Sparkles className="h-5 w-5" />
-              Start New Test
+              Test a Concept
               <ArrowRight className="h-4 w-4" />
             </Button>
           </Link>
-        </div>
-        <div className="absolute -right-20 -top-20 w-80 h-80 bg-[#D94D8F]/5 rounded-full blur-3xl" />
-        <div className="absolute -right-10 -bottom-10 w-60 h-60 bg-[#D94D8F]/8 rounded-full blur-2xl" />
+          {gwiEnabled && (
+            <div className="hidden md:flex items-center gap-2 text-sm text-muted-foreground">
+              <GwiBadge />
+              <span>Market data enriched</span>
+            </div>
+          )}
+        </motion.div>
+
+        {/* Ambient glow */}
+        <div className="absolute left-1/2 top-1/3 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[400px] bg-[#D94D8F]/[0.06] rounded-full blur-[120px] pointer-events-none" />
       </motion.div>
 
       {/* Stats Row */}
       <motion.div
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4, delay: 0.15 }}
+        transition={{ duration: 0.4, delay: 0.6 }}
         className="grid grid-cols-2 md:grid-cols-4 gap-3"
       >
         {[
@@ -114,7 +170,7 @@ export function Dashboard() {
       <motion.div
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4, delay: 0.25 }}
+        transition={{ duration: 0.4, delay: 0.7 }}
       >
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">Recent Tests</h2>
@@ -147,7 +203,7 @@ export function Dashboard() {
                 key={test.id}
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.3, delay: 0.3 + i * 0.05 }}
+                transition={{ duration: 0.3, delay: 0.75 + i * 0.05 }}
               >
                 <Link
                   to={`/tests/${test.id}`}
