@@ -3,6 +3,7 @@ import { query } from '../db/index.js';
 // GWI Spark API types
 export interface GwiAudience {
   name: string;
+  description: string;
   size_percent: number;
   index_score: number;
   demographics: {
@@ -146,22 +147,42 @@ class GwiService {
     if (!this.isEnabled()) return [];
 
     try {
-      const prompt = `Based on this creative concept, suggest 3-5 target audience segments that would be most receptive to it. For each audience, provide:
-- A descriptive name
-- Approximate audience size as a percentage
-- An index score (100 = average, higher = more likely to engage)
-- Age range
-- Top social media platforms they use
-- Key values and interests
+      const prompt = `Based on this creative concept, suggest 3-5 distinctly different target audience segments that would be most relevant to test it against. Each segment should be meaningfully different from the others in terms of demographics, psychographics, and media behavior.
+
+For each audience, provide ALL of the following:
+- A specific, descriptive name (not generic like "Young Professionals" — be specific, e.g., "Urban Creative Freelancers" or "Suburban Family Decision-Makers")
+- A 1-2 sentence description explaining WHO this audience is and WHY they'd be relevant to test this concept against
+- Approximate audience size as a percentage of the general population
+- An index score (100 = average likelihood to engage, higher = more likely)
+- Age range (be specific, e.g., "22-30" not just "25-44")
+- Top 3-4 social media platforms they use most
+- 2-3 key content affinities (what type of content they consume)
+- 2-3 core values
+- 2-3 key interests
+- 1-2 top geographic locations/regions
 
 Concept: "${conceptText.substring(0, 500)}"
 
-Please structure your response clearly with each audience segment separated.`;
+IMPORTANT: Return your response as a valid JSON array. Each element should have this structure:
+{
+  "name": "Audience Name",
+  "description": "Who they are and why they matter for this concept",
+  "size_percent": 8,
+  "index_score": 130,
+  "age_range": "22-30",
+  "top_locations": ["New York", "Los Angeles"],
+  "top_platforms": ["Instagram", "TikTok", "YouTube"],
+  "content_affinities": ["design inspiration", "lifestyle content"],
+  "values": ["authenticity", "creativity"],
+  "interests": ["travel", "food culture"]
+}
+
+Return ONLY the JSON array, no other text.`;
 
       const { text, chatId } = await this.chat(prompt);
       this.chatSessions.set('suggest', chatId);
 
-      return this.parseAudiencesFromText(text);
+      return this.parseAudiencesResponse(text);
     } catch (error) {
       console.error('GWI suggestAudiences error:', error);
       return [];
@@ -286,6 +307,43 @@ Be specific, data-driven, and reference actual market trends where possible.`;
 
   // --- Parsing helpers ---
 
+  /** Parse audiences from JSON response (preferred) with fallback to text parsing */
+  private parseAudiencesResponse(text: string): GwiAudience[] {
+    // Try JSON parsing first
+    try {
+      // Extract JSON array from response (may have surrounding text)
+      const jsonMatch = text.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.slice(0, 5).map((item: any, i: number) => ({
+            name: item.name || `Audience ${i + 1}`,
+            description: item.description || '',
+            size_percent: item.size_percent || 5,
+            index_score: item.index_score || 110,
+            demographics: {
+              age_range: item.age_range || '25-44',
+              gender_split: item.gender_split || {},
+              top_locations: item.top_locations || [],
+            },
+            media_habits: {
+              top_platforms: item.top_platforms || [],
+              content_affinities: item.content_affinities || [],
+            },
+            psychographics: {
+              values: item.values || [],
+              interests: item.interests || [],
+            },
+          }));
+        }
+      }
+    } catch {
+      // JSON parsing failed, fall through to text parsing
+    }
+
+    return this.parseAudiencesFromText(text);
+  }
+
   private parseAudiencesFromText(text: string): GwiAudience[] {
     const audiences: GwiAudience[] = [];
 
@@ -298,6 +356,7 @@ Be specific, data-driven, and reference actual market trends where possible.`;
       try {
         const audience: GwiAudience = {
           name: this.extractField(section, /(?:name|segment|audience)[:\s]*([^\n]+)/i) || `Audience ${audiences.length + 1}`,
+          description: this.extractField(section, /(?:description|about|summary|rationale|why)[:\s]*([^\n]+)/i) || '',
           size_percent: this.extractNumber(section, /(?:size|percentage|%)[:\s]*(\d+\.?\d*)/i) || 5,
           index_score: this.extractNumber(section, /(?:index)[:\s]*(\d+)/i) || 110,
           demographics: {
@@ -328,6 +387,7 @@ Be specific, data-driven, and reference actual market trends where possible.`;
     if (audiences.length === 0 && text.length > 50) {
       audiences.push({
         name: 'Primary Target Audience',
+        description: 'A broad audience segment most likely to engage with this concept.',
         size_percent: 10,
         index_score: 120,
         demographics: { age_range: '18-44', gender_split: {}, top_locations: [] },

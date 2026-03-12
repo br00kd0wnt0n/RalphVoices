@@ -25,7 +25,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-import { ArrowLeft, RefreshCw, Users, TrendingUp, MessageSquare, AlertTriangle, Sparkles, Globe, Download, Lightbulb, ShieldAlert } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Users, TrendingUp, MessageSquare, AlertTriangle, Sparkles, Globe, Download, Lightbulb, ShieldAlert, FileText } from 'lucide-react';
 import type { Test, TestResponse } from '@/types';
 import { SENTIMENT_THRESHOLDS } from '@/lib/constants';
 import { GwiBadge } from '@/components/GwiBadge';
@@ -287,12 +287,31 @@ export function TestResultsPage() {
             </span>
           </div>
         </div>
-        {test.status === 'running' && (
-          <Button variant="outline" onClick={loadTest}>
-            <RefreshCw className="h-4 w-4 mr-2" />
-            Refresh
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {test.status === 'running' && (
+            <Button variant="outline" onClick={loadTest}>
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Refresh
+            </Button>
+          )}
+          {test.status === 'failed' && (
+            <Button
+              variant="outline"
+              className="border-destructive/50 text-destructive hover:bg-destructive/10"
+              onClick={async () => {
+                try {
+                  await testsApi.run(test.id);
+                  loadTest();
+                } catch (err: any) {
+                  console.error('Failed to retry test:', err);
+                }
+              }}
+            >
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Retry Test
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Concept Preview */}
@@ -302,8 +321,104 @@ export function TestResultsPage() {
         </CardHeader>
         <CardContent>
           <p className="whitespace-pre-wrap">{test.concept_text}</p>
+          {(() => {
+            const opts = typeof test.options === 'string' ? JSON.parse(test.options) : (test.options || {});
+            const testAssets = opts.assets || [];
+            const imageAssets = testAssets.filter((a: any) => a.isImage && a.base64);
+            const pdfAssets = testAssets.filter((a: any) => a.isPDF);
+            if (imageAssets.length === 0 && pdfAssets.length === 0) return null;
+            return (
+              <div className="mt-4 space-y-3">
+                {imageAssets.length > 0 && (
+                  <div className="flex flex-wrap gap-3">
+                    {imageAssets.map((asset: any, i: number) => (
+                      <div key={i} className="relative group">
+                        <img
+                          src={asset.base64}
+                          alt={asset.name || `Concept image ${i + 1}`}
+                          className="rounded-lg border border-border/50 max-h-48 object-contain"
+                        />
+                        <p className="text-[10px] text-muted-foreground mt-1 truncate max-w-[200px]">{asset.name}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {pdfAssets.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {pdfAssets.map((asset: any, i: number) => (
+                      <Badge key={i} variant="secondary" className="gap-1">
+                        <FileText className="h-3 w-3" />
+                        {asset.name}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+          {(() => {
+            const opts = typeof test.options === 'string' ? JSON.parse(test.options) : (test.options || {});
+            const ctx = opts.strategic_context;
+            if (!ctx || (!ctx.creative_ambition && !ctx.strategic_truth && !ctx.key_insight)) return null;
+            return (
+              <div className="mt-4 pt-3 border-t border-border/50 space-y-1">
+                <p className="text-xs font-medium text-muted-foreground mb-2">Strategic Context</p>
+                {ctx.creative_ambition && (
+                  <p className="text-xs"><span className="text-muted-foreground">Creative Ambition:</span> {ctx.creative_ambition}</p>
+                )}
+                {ctx.strategic_truth && (
+                  <p className="text-xs"><span className="text-muted-foreground">Strategic Truth:</span> {ctx.strategic_truth}</p>
+                )}
+                {ctx.key_insight && (
+                  <p className="text-xs"><span className="text-muted-foreground">Key Insight:</span> {ctx.key_insight}</p>
+                )}
+              </div>
+            );
+          })()}
         </CardContent>
       </Card>
+
+      {/* Failed State */}
+      {test.status === 'failed' && (
+        <Card className="border-destructive/50 bg-destructive/5">
+          <CardContent className="py-6">
+            <div className="flex items-start gap-4">
+              <AlertTriangle className="h-6 w-6 text-destructive shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <h3 className="font-semibold text-destructive mb-1">Test Failed</h3>
+                <p className="text-sm text-muted-foreground mb-3">
+                  Something went wrong while processing this test. This is typically caused by an API rate limit or temporary service issue.
+                </p>
+                <div className="text-xs text-muted-foreground mb-4 space-y-1">
+                  <p>
+                    <span className="font-medium">Responses completed:</span>{' '}
+                    {test.responses_completed || 0} / {test.responses_total || '?'}
+                  </p>
+                  <p>
+                    <span className="font-medium">Personas:</span>{' '}
+                    {test.persona_ids?.length || 0} selected
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  className="border-destructive/50 text-destructive hover:bg-destructive/10"
+                  onClick={async () => {
+                    try {
+                      await testsApi.run(test.id);
+                      loadTest();
+                    } catch (err: any) {
+                      console.error('Failed to retry test:', err);
+                    }
+                  }}
+                >
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Retry Test
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Running State with Live Dashboard */}
       {test.status === 'running' && (() => {

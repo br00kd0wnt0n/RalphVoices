@@ -69,7 +69,7 @@ export function ConceptFirst() {
   const [gwiLoading, setGwiLoading] = useState(false);
   const [selectedGwiAudiences, setSelectedGwiAudiences] = useState<number[]>([]);
   const [selectedPersonaIds, setSelectedPersonaIds] = useState<string[]>([]);
-  const [projectIdForPersonas, setProjectIdForPersonas] = useState('');
+  const [projectIdForPersonas, setProjectIdForPersonas] = useState('__all__');
   const [showPersonaBuilder, setShowPersonaBuilder] = useState(false);
   const [prefillAudience, setPrefillAudience] = useState<GwiAudience | null>(null);
 
@@ -87,7 +87,9 @@ export function ConceptFirst() {
   }, []);
 
   useEffect(() => {
-    if (projectIdForPersonas) {
+    if (projectIdForPersonas === '__all__') {
+      personasApi.list().then(setPersonas).catch(console.error);
+    } else if (projectIdForPersonas) {
       personasApi.list(projectIdForPersonas).then(setPersonas).catch(console.error);
     }
   }, [projectIdForPersonas]);
@@ -592,13 +594,16 @@ export function ConceptFirst() {
             <h3 className="font-semibold">Your Existing Personas</h3>
 
             <div className="flex items-center gap-3">
-              <Select value={projectIdForPersonas} onValueChange={setProjectIdForPersonas}>
-                <SelectTrigger className="w-[250px]">
-                  <SelectValue placeholder="Select a project to load personas" />
+              <Select value={projectIdForPersonas || '__all__'} onValueChange={(v) => setProjectIdForPersonas(v)}>
+                <SelectTrigger className="w-[280px]">
+                  <SelectValue placeholder="Filter by project" />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="__all__">All Personas</SelectItem>
                   {projects.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -631,8 +636,20 @@ export function ConceptFirst() {
                     <CardContent className="pt-4 pb-3">
                       <div className="flex items-start gap-3">
                         <Checkbox checked={selectedPersonaIds.includes(persona.id)} className="mt-1" />
-                        <div>
-                          <h4 className="font-medium text-sm">{persona.name}</h4>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-medium text-sm truncate">{persona.name}</h4>
+                            {persona.project_name && projectIdForPersonas === '__all__' && (
+                              <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0">
+                                {persona.project_name}
+                              </Badge>
+                            )}
+                            {!persona.project_id && projectIdForPersonas === '__all__' && (
+                              <Badge variant="outline" className="text-[10px] px-1.5 py-0 shrink-0">
+                                Standalone
+                              </Badge>
+                            )}
+                          </div>
                           <p className="text-xs text-muted-foreground">
                             {[persona.age_base && `${persona.age_base}yo`, persona.location, persona.occupation]
                               .filter(Boolean).join(' · ')}
@@ -653,7 +670,9 @@ export function ConceptFirst() {
                 ))}
               </div>
             ) : projectIdForPersonas ? (
-              <p className="text-sm text-muted-foreground">No personas in this project yet.</p>
+              <p className="text-sm text-muted-foreground">
+                {projectIdForPersonas === '__all__' ? 'No personas yet. Create one to get started.' : 'No personas in this project yet.'}
+              </p>
             ) : null}
           </div>
 
@@ -675,11 +694,13 @@ export function ConceptFirst() {
             open={showPersonaBuilder}
             onOpenChange={setShowPersonaBuilder}
             onCreated={() => {
-              if (projectIdForPersonas) {
+              if (projectIdForPersonas === '__all__') {
+                personasApi.list().then(setPersonas).catch(console.error);
+              } else if (projectIdForPersonas) {
                 personasApi.list(projectIdForPersonas).then(setPersonas).catch(console.error);
               }
             }}
-            defaultProjectId={projectIdForPersonas || undefined}
+            defaultProjectId={projectIdForPersonas === '__all__' ? undefined : projectIdForPersonas || undefined}
             prefillFromGwi={prefillAudience || undefined}
           />
         </motion.div>

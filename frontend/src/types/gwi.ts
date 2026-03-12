@@ -1,5 +1,6 @@
 export interface GwiAudience {
   name: string;
+  description?: string;
   size_percent: number;
   index_score: number;
   demographics: {

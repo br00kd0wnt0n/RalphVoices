@@ -3,7 +3,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { GwiBadge } from './GwiBadge';
-import { Users, UserPlus } from 'lucide-react';
+import { Users, UserPlus, MapPin } from 'lucide-react';
 import type { GwiAudience } from '@/types/gwi';
 
 interface GwiAudienceCardProps {
@@ -32,6 +32,12 @@ export function GwiAudienceCard({ audience, selected, onToggle, onCreatePersona 
               <GwiBadge />
             </div>
 
+            {audience.description && (
+              <p className="text-xs text-muted-foreground mb-2 line-clamp-2">
+                {audience.description}
+              </p>
+            )}
+
             <div className="flex items-center gap-3 text-xs text-muted-foreground mb-2">
               <span className="flex items-center gap-1">
                 <Users className="h-3 w-3" />
@@ -40,6 +46,13 @@ export function GwiAudienceCard({ audience, selected, onToggle, onCreatePersona 
               <span>Index: {audience.index_score}</span>
               <span>{audience.demographics.age_range}</span>
             </div>
+
+            {audience.demographics.top_locations?.length > 0 && (
+              <div className="flex items-center gap-1 text-xs text-muted-foreground mb-2">
+                <MapPin className="h-3 w-3 shrink-0" />
+                <span className="truncate">{audience.demographics.top_locations.slice(0, 3).join(', ')}</span>
+              </div>
+            )}
 
             {audience.media_habits.top_platforms.length > 0 && (
               <div className="flex flex-wrap gap-1 mb-2">
@@ -54,6 +67,12 @@ export function GwiAudienceCard({ audience, selected, onToggle, onCreatePersona 
             {audience.psychographics.values.length > 0 && (
               <p className="text-xs text-muted-foreground truncate">
                 Values: {audience.psychographics.values.slice(0, 3).join(', ')}
+              </p>
+            )}
+
+            {audience.media_habits.content_affinities?.length > 0 && (
+              <p className="text-xs text-muted-foreground truncate mt-0.5">
+                Interests: {audience.media_habits.content_affinities.slice(0, 3).join(', ')}
               </p>
             )}
 

@@ -61,14 +61,14 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // Verify personas exist and belong to project
+    // Verify personas exist (they can be from any project or standalone)
     const personaCheck = await query(
-      `SELECT id FROM personas WHERE id = ANY($1) AND project_id = $2`,
-      [data.persona_ids, data.project_id]
+      `SELECT id FROM personas WHERE id = ANY($1)`,
+      [data.persona_ids]
     );
 
     if (personaCheck.rows.length !== data.persona_ids.length) {
-      res.status(400).json({ error: 'One or more personas not found in project' });
+      res.status(400).json({ error: 'One or more personas not found' });
       return;
     }
 
@@ -342,6 +342,13 @@ router.post('/:id/run', authMiddleware, async (req: AuthRequest, res: Response) 
     if (!test.concept_text && test.test_type === 'concept') {
       res.status(400).json({ error: 'Concept text is required' });
       return;
+    }
+
+    // If retrying a failed test, clear previous responses and results
+    if (test.status === 'failed') {
+      await query('DELETE FROM test_responses WHERE test_id = $1', [testId]);
+      await query('DELETE FROM test_results WHERE test_id = $1', [testId]);
+      await query('UPDATE tests SET responses_completed = 0 WHERE id = $1', [testId]);
     }
 
     // Get all variants for the selected personas
