@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
 import { tests as testsApi, projects as projectsApi, personas as personasApi, uploads as uploadsApi, gwi as gwiApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -318,11 +319,14 @@ export function ConceptFirst() {
           { num: 3, label: 'Configure & Run' },
         ].map((s, i) => (
           <div key={s.num} className="flex items-center gap-2">
-            {i > 0 && <div className="w-8 h-0.5 bg-muted" />}
-            <div
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm ${
+            {i > 0 && (
+              <div className={`w-8 h-0.5 transition-colors duration-500 ${step > i ? 'bg-[#D94D8F]/40' : 'bg-muted'}`} />
+            )}
+            <motion.div
+              layout
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm transition-all duration-300 ${
                 step === s.num
-                  ? 'bg-[#D94D8F] text-white'
+                  ? 'bg-[#D94D8F] text-white shadow-md shadow-[#D94D8F]/20'
                   : step > s.num
                   ? 'bg-[#D94D8F]/10 text-[#D94D8F]'
                   : 'bg-muted text-muted-foreground'
@@ -334,14 +338,23 @@ export function ConceptFirst() {
                 <span className="w-4 text-center">{s.num}</span>
               )}
               {s.label}
-            </div>
+            </motion.div>
           </div>
         ))}
       </div>
 
+      {/* Step Content with animations */}
+      <AnimatePresence mode="wait">
       {/* Step 1: Concept Input */}
       {step === 1 && (
-        <div className="space-y-6">
+        <motion.div
+          key="step1"
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -20 }}
+          transition={{ duration: 0.3 }}
+          className="space-y-6"
+        >
           {/* Test Type */}
           <div className="grid grid-cols-2 gap-3">
             <Card
@@ -462,16 +475,23 @@ export function ConceptFirst() {
           )}
 
           <div className="flex justify-end">
-            <Button onClick={() => setStep(2)} disabled={!canProceedStep1}>
-              Next: Select Audience <ArrowRight className="h-4 w-4 ml-2" />
+            <Button onClick={() => setStep(2)} disabled={!canProceedStep1} className="gap-2 transition-all hover:scale-[1.02]">
+              Next: Select Audience <ArrowRight className="h-4 w-4" />
             </Button>
           </div>
-        </div>
+        </motion.div>
       )}
 
       {/* Step 2: Audience Selection */}
       {step === 2 && (
-        <div className="space-y-6">
+        <motion.div
+          key="step2"
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -20 }}
+          transition={{ duration: 0.3 }}
+          className="space-y-6"
+        >
           {/* GWI Suggestions */}
           {gwiEnabled && (
             <div className="space-y-3">
@@ -610,12 +630,19 @@ export function ConceptFirst() {
             defaultProjectId={projectIdForPersonas || undefined}
             prefillFromGwi={prefillAudience || undefined}
           />
-        </div>
+        </motion.div>
       )}
 
       {/* Step 3: Configure & Run */}
       {step === 3 && (
-        <div className="space-y-6">
+        <motion.div
+          key="step3"
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -20 }}
+          transition={{ duration: 0.3 }}
+          className="space-y-6"
+        >
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Test Name *</Label>
@@ -749,23 +776,24 @@ export function ConceptFirst() {
             <Button
               onClick={handleRun}
               disabled={!canRun || loading}
-              className="bg-[#D94D8F] hover:bg-[#D94D8F]/90"
+              className="bg-[#D94D8F] hover:bg-[#D94D8F]/90 gap-2 px-6 h-11 rounded-xl shadow-lg shadow-[#D94D8F]/20 transition-all hover:shadow-xl hover:shadow-[#D94D8F]/30 hover:scale-[1.02] disabled:shadow-none disabled:scale-100"
             >
               {loading ? (
                 <>
-                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  <Loader2 className="h-4 w-4 animate-spin" />
                   {selectedGwiAudiences.length > 0 ? 'Creating personas & running...' : 'Running test...'}
                 </>
               ) : (
                 <>
-                  <Sparkles className="h-4 w-4 mr-2" />
+                  <Sparkles className="h-4 w-4" />
                   Run Test
                 </>
               )}
             </Button>
           </div>
-        </div>
+        </motion.div>
       )}
+      </AnimatePresence>
     </div>
   );
 }

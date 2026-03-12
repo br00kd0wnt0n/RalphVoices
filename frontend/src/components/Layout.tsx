@@ -1,6 +1,7 @@
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { RalphLogo } from '@/components/RalphLogo';
-import { Users, TestTube, LayoutDashboard, FolderOpen, Settings } from 'lucide-react';
+import { Users, TestTube, LayoutDashboard, FolderOpen, Settings, Sparkles } from 'lucide-react';
+import { motion } from 'framer-motion';
 
 export function Layout() {
   const location = useLocation();
@@ -8,43 +9,54 @@ export function Layout() {
   const navItems = [
     { path: '/', label: 'Dashboard', icon: LayoutDashboard },
     { path: '/projects', label: 'Projects', icon: FolderOpen },
-    { path: '/personas', label: 'Persona Lab', icon: Users },
-    { path: '/tests', label: 'Test Studio', icon: TestTube },
+    { path: '/personas', label: 'Personas', icon: Users },
+    { path: '/tests', label: 'Tests', icon: TestTube },
     { path: '/settings', label: 'Settings', icon: Settings },
   ];
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b border-border/50 backdrop-blur-sm bg-background/80 sticky top-0 z-50">
+      <header className="border-b border-border/40 backdrop-blur-md bg-background/90 sticky top-0 z-50">
         <div className="container mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-8">
             <Link to="/" className="group overflow-visible">
               <RalphLogo size="md" />
             </Link>
-            <nav className="hidden md:flex items-center gap-1">
+            <nav className="hidden md:flex items-center gap-0.5">
               {navItems.map((item) => {
                 const Icon = item.icon;
-                const isActive = location.pathname === item.path;
+                const isActive = location.pathname === item.path ||
+                  (item.path !== '/' && location.pathname.startsWith(item.path));
                 return (
                   <Link
                     key={item.path}
                     to={item.path}
-                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                    className={`relative flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
                       isActive
-                        ? 'bg-[#D94D8F]/15 text-[#D94D8F] shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
+                        ? 'text-[#D94D8F]'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
                     }`}
                   >
                     <Icon className="h-4 w-4" />
                     {item.label}
+                    {isActive && (
+                      <motion.div
+                        layoutId="nav-indicator"
+                        className="absolute inset-0 bg-[#D94D8F]/10 rounded-lg -z-10"
+                        transition={{ type: 'spring', stiffness: 500, damping: 35 }}
+                      />
+                    )}
                   </Link>
                 );
               })}
             </nav>
           </div>
-          <div className="flex items-center gap-4">
-            <span className="text-sm text-muted-foreground">Demo Mode</span>
-          </div>
+          <Link to="/tests/new">
+            <button className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#D94D8F] text-white text-sm font-medium hover:bg-[#D94D8F]/90 transition-all hover:scale-[1.02] shadow-sm shadow-[#D94D8F]/20">
+              <Sparkles className="h-4 w-4" />
+              New Test
+            </button>
+          </Link>
         </div>
       </header>
       <main className="container mx-auto px-4 py-8">
