@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { tests as testsApi, projects as projectsApi, personas as personasApi, uploads as uploadsApi, gwi as gwiApi } from '@/lib/api';
+import { tests as testsApi, projects as projectsApi, personas as personasApi, uploads as uploadsApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -16,14 +16,10 @@ import {
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { CheckCircle, Users, AlertCircle, GitCompare, Focus, Upload, X, FileText, Loader2, Sparkles, Globe, ArrowLeft, ArrowRight, Plus, RefreshCw } from 'lucide-react';
-import { GwiAudienceCard } from '@/components/GwiAudienceCard';
-import { GwiBadge } from '@/components/GwiBadge';
+import { CheckCircle, Users, AlertCircle, GitCompare, Focus, Upload, X, FileText, Loader2, Sparkles, ArrowLeft, ArrowRight, Plus, RefreshCw } from 'lucide-react';
 import { PersonaBuilder } from '@/components/PersonaBuilder';
-import { useGwi } from '@/hooks/useGwi';
 import { TEST_FOCUS_PRESETS, type FocusPresetKey } from '@/lib/constants';
 import type { Project, Persona } from '@/types';
-import type { GwiAudience } from '@/types/gwi';
 
 interface UploadedAsset {
   name: string;
@@ -41,7 +37,6 @@ interface ConceptFirstProps {
 
 export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
   const navigate = useNavigate();
-  const { enabled: gwiEnabled } = useGwi();
   const [retryLoading, setRetryLoading] = useState(false);
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
@@ -70,13 +65,9 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
   const [insights, setInsights] = useState('');
 
   // Step 2: Audiences
-  const [gwiAudiences, setGwiAudiences] = useState<GwiAudience[]>([]);
-  const [gwiLoading, setGwiLoading] = useState(false);
-  const [selectedGwiAudiences, setSelectedGwiAudiences] = useState<number[]>([]);
   const [selectedPersonaIds, setSelectedPersonaIds] = useState<string[]>([]);
   const [projectIdForPersonas, setProjectIdForPersonas] = useState('__all__');
   const [showPersonaBuilder, setShowPersonaBuilder] = useState(false);
-  const [prefillAudience, setPrefillAudience] = useState<GwiAudience | null>(null);
 
   // Step 3: Config
   const [projectId, setProjectId] = useState('');
@@ -150,18 +141,6 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
     }
   }, [step, projects.length]);
 
-  // Fetch GWI suggestions when moving to step 2
-  useEffect(() => {
-    if (step === 2 && gwiEnabled && conceptText.length >= 20 && gwiAudiences.length === 0 && !gwiLoading) {
-      setGwiLoading(true);
-      gwiApi.suggestAudiences({ concept_text: conceptText })
-        .then((data) => {
-          if (data.audiences) setGwiAudiences(data.audiences);
-        })
-        .catch(console.error)
-        .finally(() => setGwiLoading(false));
-    }
-  }, [step, gwiEnabled, conceptText]);
 
   async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>, target: 'single' | 'A' | 'B' = 'single') {
     const files = e.target.files;
@@ -196,13 +175,7 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
     );
   }
 
-  function toggleGwiAudience(index: number) {
-    setSelectedGwiAudiences((prev) =>
-      prev.includes(index) ? prev.filter((i) => i !== index) : [...prev, index]
-    );
-  }
-
-  const totalSelected = selectedPersonaIds.length + selectedGwiAudiences.length;
+  const totalSelected = selectedPersonaIds.length;
 
   async function handleCreateProject() {
     if (!newProjectName.trim()) return;
@@ -231,58 +204,7 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
     setError('');
 
     try {
-      // If GWI audiences are selected but not yet created as personas, create them first
       const allPersonaIds = [...selectedPersonaIds];
-
-      for (const idx of selectedGwiAudiences) {
-        const audience = gwiAudiences[idx];
-        if (!audience) continue;
-
-        // Create persona from GWI audience
-        const persona = await personasApi.create({
-          project_id: projectId,
-          name: audience.name,
-          age_base: parseAgeRange(audience.demographics.age_range),
-          location: audience.demographics.top_locations[0] || undefined,
-          psychographics: {
-            values: audience.psychographics.values,
-            motivations: [],
-            aspirations: [],
-            pain_points: [],
-          },
-          media_habits: {
-            primary_platforms: audience.media_habits.top_platforms.map((name) => ({
-              name,
-              hours_per_day: 1,
-            })),
-            content_preferences: audience.media_habits.content_affinities,
-          },
-          cultural_context: {
-            subcultures: audience.psychographics.interests || [],
-            language_markers: [],
-          },
-          gwi_audience_data: {
-            source_audience: audience.name,
-            market_size_percent: audience.size_percent,
-            index_score: audience.index_score,
-            raw_data: audience,
-          },
-          generate_voice: true,
-        });
-
-        // Generate variants for the new persona
-        await personasApi.generateVariants(persona.id, {
-          count: variantsPerPersona,
-          age_spread: 5,
-          attitude_distribution: 'normal',
-          platforms_to_include: audience.media_habits.top_platforms.length > 0
-            ? audience.media_habits.top_platforms
-            : ['TikTok', 'Instagram', 'YouTube', 'Twitter/X'],
-        });
-
-        allPersonaIds.push(persona.id);
-      }
-
       const focusModifier = TEST_FOCUS_PRESETS[focusPreset]?.promptModifier || '';
       const currentAssets = testType === 'ab' ? assetsA : assets;
 
@@ -353,17 +275,6 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
     } finally {
       setLoading(false);
     }
-  }
-
-  function parseAgeRange(range: string): number {
-    const match = range.match(/(\d+)/);
-    if (!match) return 30;
-    const first = parseInt(match[1]);
-    const secondMatch = range.match(/(\d+)\s*[-–]\s*(\d+)/);
-    if (secondMatch) {
-      return Math.round((parseInt(secondMatch[1]) + parseInt(secondMatch[2])) / 2);
-    }
-    return first;
   }
 
   const canProceedStep1 = testType === 'ab'
@@ -608,50 +519,7 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
           transition={{ duration: 0.3 }}
           className="space-y-6"
         >
-          {/* GWI Suggestions */}
-          {gwiEnabled && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <Globe className="h-4 w-4 text-emerald-600" />
-                <h3 className="font-semibold">Suggested Audiences</h3>
-                <GwiBadge />
-              </div>
-
-              {gwiLoading ? (
-                <Card>
-                  <CardContent className="py-8 text-center">
-                    <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2 text-emerald-600" />
-                    <p className="text-sm text-muted-foreground">Analyzing your concept with GWI Spark...</p>
-                  </CardContent>
-                </Card>
-              ) : gwiAudiences.length > 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {gwiAudiences.map((audience, index) => (
-                    <GwiAudienceCard
-                      key={index}
-                      audience={audience}
-                      selected={selectedGwiAudiences.includes(index)}
-                      onToggle={() => toggleGwiAudience(index)}
-                      onCreatePersona={() => {
-                        setPrefillAudience(audience);
-                        setShowPersonaBuilder(true);
-                      }}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <Card>
-                  <CardContent className="py-4 text-center">
-                    <p className="text-sm text-muted-foreground">
-                      No audience suggestions available. Try adding more detail to your concept.
-                    </p>
-                  </CardContent>
-                </Card>
-              )}
-            </div>
-          )}
-
-          {/* Existing Personas */}
+          {/* Personas */}
           <div className="space-y-3">
             <h3 className="font-semibold">Your Existing Personas</h3>
 
@@ -674,7 +542,6 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  setPrefillAudience(null);
                   setShowPersonaBuilder(true);
                 }}
               >
@@ -763,7 +630,7 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
               }
             }}
             defaultProjectId={projectIdForPersonas === '__all__' ? undefined : projectIdForPersonas || undefined}
-            prefillFromGwi={prefillAudience || undefined}
+            prefillFromGwi={undefined}
           />
         </motion.div>
       )}
@@ -916,7 +783,7 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
               {loading ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  {selectedGwiAudiences.length > 0 ? 'Creating personas & running...' : 'Running test...'}
+                  Running test...
                 </>
               ) : (
                 <>

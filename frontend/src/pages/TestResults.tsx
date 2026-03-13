@@ -147,6 +147,7 @@ export function TestResultsPage() {
   // Filters
   const [sentimentFilter, setSentimentFilter] = useState('all');
   const [platformFilter, setPlatformFilter] = useState('all');
+  const [gwiRerunning, setGwiRerunning] = useState(false);
 
   useEffect(() => {
     loadTest();
@@ -1010,20 +1011,24 @@ export function TestResultsPage() {
                   <Button
                     variant="outline"
                     size="sm"
+                    disabled={gwiRerunning}
                     onClick={async () => {
+                      setGwiRerunning(true);
                       try {
                         const result = await gwiApi.enrichResults(test.id);
                         if (result.enrichment) {
-                          loadTest(); // Reload to show updated data
+                          loadTest();
                         }
                       } catch (err) {
                         console.error('Failed to refresh GWI analysis:', err);
+                      } finally {
+                        setGwiRerunning(false);
                       }
                     }}
                     className="gap-2"
                   >
-                    <RefreshCw className="h-4 w-4" />
-                    Re-run Analysis
+                    <RefreshCw className={`h-4 w-4 ${gwiRerunning ? 'animate-spin' : ''}`} />
+                    {gwiRerunning ? 'Analyzing...' : 'Re-run Analysis'}
                   </Button>
                   <Button
                     variant="outline"
