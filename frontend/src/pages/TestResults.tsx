@@ -25,7 +25,8 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-import { ArrowLeft, RefreshCw, Users, TrendingUp, MessageSquare, AlertTriangle, Sparkles, Globe, Download, Lightbulb, ShieldAlert, FileText, Pencil } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Users, TrendingUp, MessageSquare, AlertTriangle, Sparkles, Globe, Download, Lightbulb, ShieldAlert, FileText, Pencil, ChevronDown, ChevronUp } from 'lucide-react';
+import { AnimatePresence, motion } from 'framer-motion';
 import type { Test, TestResponse } from '@/types';
 import { SENTIMENT_THRESHOLDS } from '@/lib/constants';
 import { GwiBadge } from '@/components/GwiBadge';
@@ -148,6 +149,7 @@ export function TestResultsPage() {
   const [sentimentFilter, setSentimentFilter] = useState('all');
   const [platformFilter, setPlatformFilter] = useState('all');
   const [gwiRerunning, setGwiRerunning] = useState(false);
+  const [conceptExpanded, setConceptExpanded] = useState(false);
 
   useEffect(() => {
     loadTest();
@@ -258,7 +260,7 @@ export function TestResultsPage() {
   const platforms = [...new Set(responses.map((r) => r.primary_platform).filter(Boolean))];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -325,69 +327,104 @@ export function TestResultsPage() {
         </div>
       </div>
 
-      {/* Concept Preview */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm text-muted-foreground">Concept Tested</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="whitespace-pre-wrap">{test.concept_text}</p>
-          {(() => {
-            const opts = typeof test.options === 'string' ? JSON.parse(test.options) : (test.options || {});
-            const testAssets = opts.assets || [];
-            const imageAssets = testAssets.filter((a: any) => a.isImage && a.base64);
-            const pdfAssets = testAssets.filter((a: any) => a.isPDF);
-            if (imageAssets.length === 0 && pdfAssets.length === 0) return null;
-            return (
-              <div className="mt-4 space-y-3">
-                {imageAssets.length > 0 && (
-                  <div className="flex flex-wrap gap-3">
-                    {imageAssets.map((asset: any, i: number) => (
-                      <div key={i} className="relative group">
-                        <img
-                          src={asset.base64}
-                          alt={asset.name || `Concept image ${i + 1}`}
-                          className="rounded-lg border border-border/50 max-h-48 object-contain"
-                        />
-                        <p className="text-[10px] text-muted-foreground mt-1 truncate max-w-[200px]">{asset.name}</p>
+      {/* Collapsible Concept Strip */}
+      {(() => {
+        const opts = typeof test.options === 'string' ? JSON.parse(test.options) : (test.options || {});
+        const testAssets = opts.assets || [];
+        const imageAssets = testAssets.filter((a: any) => a.isImage && a.base64);
+        const pdfAssets = testAssets.filter((a: any) => a.isPDF);
+        const ctx = opts.strategic_context;
+        const hasStrategicContext = ctx && (ctx.creative_ambition || ctx.strategic_truth || ctx.key_insight);
+
+        return (
+          <div className="border rounded-lg bg-card overflow-hidden">
+            {/* Collapsed strip */}
+            <button
+              onClick={() => setConceptExpanded(!conceptExpanded)}
+              className="w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/50 transition-colors text-left"
+            >
+              {imageAssets.length > 0 && (
+                <img
+                  src={imageAssets[0].base64}
+                  alt=""
+                  className="h-8 w-8 rounded object-cover flex-shrink-0"
+                />
+              )}
+              <span className="text-sm text-muted-foreground flex-shrink-0">Concept:</span>
+              <span className="text-sm truncate flex-1">{test.concept_text}</span>
+              {hasStrategicContext && (
+                <span className="h-2 w-2 rounded-full bg-[#D94D8F] flex-shrink-0" title="Has strategic context" />
+              )}
+              {pdfAssets.length > 0 && (
+                <Badge variant="secondary" className="text-xs flex-shrink-0">
+                  <FileText className="h-3 w-3 mr-1" />
+                  {pdfAssets.length} PDF{pdfAssets.length > 1 ? 's' : ''}
+                </Badge>
+              )}
+              {conceptExpanded ? (
+                <ChevronUp className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+              ) : (
+                <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+              )}
+            </button>
+
+            {/* Expanded content */}
+            <AnimatePresence>
+              {conceptExpanded && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="overflow-hidden"
+                >
+                  <div className="px-4 pb-4 pt-1 border-t border-border/50 space-y-3">
+                    <p className="text-sm whitespace-pre-wrap">{test.concept_text}</p>
+                    {imageAssets.length > 0 && (
+                      <div className="flex flex-wrap gap-3">
+                        {imageAssets.map((asset: any, i: number) => (
+                          <div key={i}>
+                            <img
+                              src={asset.base64}
+                              alt={asset.name || `Concept image ${i + 1}`}
+                              className="rounded-lg border border-border/50 max-h-48 object-contain"
+                            />
+                            <p className="text-[10px] text-muted-foreground mt-1 truncate max-w-[200px]">{asset.name}</p>
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    )}
+                    {pdfAssets.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {pdfAssets.map((asset: any, i: number) => (
+                          <Badge key={i} variant="secondary" className="gap-1">
+                            <FileText className="h-3 w-3" />
+                            {asset.name}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                    {hasStrategicContext && (
+                      <div className="pt-2 border-t border-border/50 space-y-1">
+                        <p className="text-xs font-medium text-muted-foreground mb-2">Strategic Context</p>
+                        {ctx.creative_ambition && (
+                          <p className="text-xs"><span className="text-muted-foreground">Creative Ambition:</span> {ctx.creative_ambition}</p>
+                        )}
+                        {ctx.strategic_truth && (
+                          <p className="text-xs"><span className="text-muted-foreground">Strategic Truth:</span> {ctx.strategic_truth}</p>
+                        )}
+                        {ctx.key_insight && (
+                          <p className="text-xs"><span className="text-muted-foreground">Key Insight:</span> {ctx.key_insight}</p>
+                        )}
+                      </div>
+                    )}
                   </div>
-                )}
-                {pdfAssets.length > 0 && (
-                  <div className="flex flex-wrap gap-2">
-                    {pdfAssets.map((asset: any, i: number) => (
-                      <Badge key={i} variant="secondary" className="gap-1">
-                        <FileText className="h-3 w-3" />
-                        {asset.name}
-                      </Badge>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })()}
-          {(() => {
-            const opts = typeof test.options === 'string' ? JSON.parse(test.options) : (test.options || {});
-            const ctx = opts.strategic_context;
-            if (!ctx || (!ctx.creative_ambition && !ctx.strategic_truth && !ctx.key_insight)) return null;
-            return (
-              <div className="mt-4 pt-3 border-t border-border/50 space-y-1">
-                <p className="text-xs font-medium text-muted-foreground mb-2">Strategic Context</p>
-                {ctx.creative_ambition && (
-                  <p className="text-xs"><span className="text-muted-foreground">Creative Ambition:</span> {ctx.creative_ambition}</p>
-                )}
-                {ctx.strategic_truth && (
-                  <p className="text-xs"><span className="text-muted-foreground">Strategic Truth:</span> {ctx.strategic_truth}</p>
-                )}
-                {ctx.key_insight && (
-                  <p className="text-xs"><span className="text-muted-foreground">Key Insight:</span> {ctx.key_insight}</p>
-                )}
-              </div>
-            );
-          })()}
-        </CardContent>
-      </Card>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        );
+      })()}
 
       {/* Failed State */}
       {test.status === 'failed' && (
@@ -638,103 +675,64 @@ export function TestResultsPage() {
             )}
           </TabsList>
 
-          <TabsContent value="dashboard" className="space-y-6">
-            {/* RalphScore™ */}
+          <TabsContent value="dashboard" className="space-y-3">
+            {/* Row 1: RalphScore + Summary Stats */}
             {(() => {
               const ralphScore = calculateRalphScore(results.summary);
               const { label, color } = getRalphScoreLabel(ralphScore);
               return (
-                <Card className="bg-gradient-to-br from-[#D94D8F]/10 via-transparent to-transparent border-[#D94D8F]/30">
-                  <CardContent className="py-6">
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-1">
-                        <p className="text-sm font-medium text-muted-foreground">RalphScore™</p>
-                        <div className="flex items-baseline gap-3">
-                          <span className="text-5xl font-bold text-[#D94D8F]">{ralphScore}</span>
-                          <span className="text-lg text-muted-foreground">/100</span>
-                        </div>
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                  <Card className="bg-gradient-to-br from-[#D94D8F]/10 via-transparent to-transparent border-[#D94D8F]/30">
+                    <CardContent className="p-4 flex items-center gap-3">
+                      <div className="relative h-16 w-16 flex-shrink-0">
+                        <svg className="h-16 w-16 -rotate-90" viewBox="0 0 36 36">
+                          <path d="M18 2.0845a15.9155 15.9155 0 0 1 0 31.831a15.9155 15.9155 0 0 1 0-31.831" fill="none" stroke="currentColor" strokeWidth="2" className="text-muted/30" />
+                          <path d="M18 2.0845a15.9155 15.9155 0 0 1 0 31.831a15.9155 15.9155 0 0 1 0-31.831" fill="none" stroke="#D94D8F" strokeWidth="2.5" strokeDasharray={`${ralphScore}, 100`} strokeLinecap="round" />
+                        </svg>
+                        <span className="absolute inset-0 flex items-center justify-center text-lg font-bold text-[#D94D8F]">{ralphScore}</span>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">RalphScore™</p>
                         <p className={`text-sm font-semibold ${color}`}>{label}</p>
                       </div>
-                      <div className="text-right space-y-2">
-                        <p className="text-xs text-muted-foreground max-w-[200px]">
-                          Proprietary benchmark combining sentiment, engagement, shareability, and comprehension.
-                        </p>
-                        <div className="flex gap-1 justify-end">
-                          {[...Array(5)].map((_, i) => (
-                            <div
-                              key={i}
-                              className={`w-3 h-3 rounded-full ${
-                                i < Math.ceil(ralphScore / 20)
-                                  ? 'bg-[#D94D8F]'
-                                  : 'bg-muted'
-                              }`}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardContent className="p-4">
+                      <p className="text-xs text-muted-foreground flex items-center gap-1"><Users className="h-3 w-3" /> Responses</p>
+                      <p className="text-3xl font-bold mt-1">{results.summary.total_responses}</p>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardContent className="p-4">
+                      <p className="text-xs text-muted-foreground flex items-center gap-1"><TrendingUp className="h-3 w-3" /> Engagement</p>
+                      <p className="text-3xl font-bold mt-1">{results.summary.avg_engagement}<span className="text-sm text-muted-foreground font-normal">/10</span></p>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardContent className="p-4">
+                      <p className="text-xs text-muted-foreground flex items-center gap-1"><MessageSquare className="h-3 w-3" /> Shareability</p>
+                      <p className="text-3xl font-bold mt-1">{results.summary.avg_share_likelihood}<span className="text-sm text-muted-foreground font-normal">/10</span></p>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardContent className="p-4">
+                      <p className="text-xs text-muted-foreground flex items-center gap-1"><Sparkles className="h-3 w-3" /> Comprehension</p>
+                      <p className="text-3xl font-bold mt-1">{results.summary.avg_comprehension}<span className="text-sm text-muted-foreground font-normal">/10</span></p>
+                    </CardContent>
+                  </Card>
+                </div>
               );
             })()}
 
-            {/* Summary Stats */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            {/* Row 2: Sentiment + Platform + Attitude */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium flex items-center gap-2">
-                    <Users className="h-4 w-4" />
-                    Total Responses
-                  </CardTitle>
+                <CardHeader className="pb-2 p-4">
+                  <CardTitle className="text-sm">Sentiment</CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{results.summary.total_responses}</div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium flex items-center gap-2">
-                    <TrendingUp className="h-4 w-4" />
-                    Avg Engagement
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{results.summary.avg_engagement}/10</div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium flex items-center gap-2">
-                    <MessageSquare className="h-4 w-4" />
-                    Share Likelihood
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{results.summary.avg_share_likelihood}/10</div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium flex items-center gap-2">
-                    <Sparkles className="h-4 w-4" />
-                    Comprehension
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{results.summary.avg_comprehension}/10</div>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Charts */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Sentiment Pie Chart */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>Sentiment Distribution</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <ResponsiveContainer width="100%" height={250}>
+                <CardContent className="p-4 pt-0">
+                  <ResponsiveContainer width="100%" height={180}>
                     <PieChart>
                       <Pie
                         data={[
@@ -744,7 +742,8 @@ export function TestResultsPage() {
                         ]}
                         cx="50%"
                         cy="50%"
-                        outerRadius={80}
+                        innerRadius={35}
+                        outerRadius={65}
                         dataKey="value"
                         label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
                       >
@@ -758,76 +757,68 @@ export function TestResultsPage() {
                 </CardContent>
               </Card>
 
-              {/* Platform Breakdown */}
               <Card>
-                <CardHeader>
-                  <CardTitle>By Platform</CardTitle>
+                <CardHeader className="pb-2 p-4">
+                  <CardTitle className="text-sm">By Platform</CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <ResponsiveContainer width="100%" height={250}>
+                <CardContent className="p-4 pt-0">
+                  <ResponsiveContainer width="100%" height={180}>
                     <BarChart
                       data={Object.entries(results.segments.by_platform).map(([name, data]) => ({
                         name,
                         sentiment: data.avgSentiment,
                         engagement: data.avgEngagement,
-                        count: data.count,
                       }))}
                     >
-                      <XAxis dataKey="name" />
-                      <YAxis domain={[0, 10]} />
+                      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                      <YAxis domain={[0, 10]} tick={{ fontSize: 11 }} />
                       <Tooltip />
-                      <Legend />
-                      <Bar dataKey="sentiment" name="Avg Sentiment" fill="#8b5cf6" />
-                      <Bar dataKey="engagement" name="Avg Engagement" fill="#06b6d4" />
+                      <Bar dataKey="sentiment" name="Sentiment" fill="#8b5cf6" />
+                      <Bar dataKey="engagement" name="Engagement" fill="#06b6d4" />
                     </BarChart>
                   </ResponsiveContainer>
                 </CardContent>
               </Card>
-            </div>
 
-            {/* Attitude Segments */}
-            <Card>
-              <CardHeader>
-                <CardTitle>By Attitude</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {Object.entries(results.segments.by_attitude).map(([group, data]) => (
-                    <div key={group} className="p-4 rounded-lg bg-muted/50">
-                      <h4 className="font-medium capitalize">{group}</h4>
-                      <p className="text-sm text-muted-foreground">{data.count} responses</p>
-                      <div className="mt-2 space-y-1">
-                        <div className="flex justify-between text-sm">
-                          <span>Avg Sentiment</span>
-                          <span className="font-medium">{data.avgSentiment}/10</span>
+              <Card>
+                <CardHeader className="pb-2 p-4">
+                  <CardTitle className="text-sm">By Attitude</CardTitle>
+                </CardHeader>
+                <CardContent className="p-4 pt-0">
+                  <div className="space-y-2">
+                    {Object.entries(results.segments.by_attitude).map(([group, data]) => (
+                      <div key={group} className="p-2.5 rounded-lg bg-muted/50">
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-sm font-medium capitalize">{group}</h4>
+                          <span className="text-xs text-muted-foreground">{data.count} resp.</span>
                         </div>
-                        <div className="flex justify-between text-sm">
-                          <span>Avg Engagement</span>
-                          <span className="font-medium">{data.avgEngagement}/10</span>
+                        <div className="flex gap-3 mt-1 text-xs text-muted-foreground">
+                          <span>Sent: <span className="font-medium text-foreground">{data.avgSentiment}</span></span>
+                          <span>Eng: <span className="font-medium text-foreground">{data.avgEngagement}</span></span>
                         </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
 
-            {/* Brain Balance */}
-            <BrainBalance responses={responses} />
+            {/* Row 3: Brain Balance + Emotional Spectrum */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <BrainBalance responses={responses} />
+              <EmotionalSpectrum responses={responses} />
+            </div>
 
-            {/* Emotional Spectrum */}
-            <EmotionalSpectrum responses={responses} />
-
-            {/* Key Associations + Shareability side by side */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Row 4: Key Associations + Shareability */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <KeyAssociations themes={results.themes} />
               <ShareabilityAnalysis responses={responses} summary={results.summary} segments={results.segments} />
             </div>
 
-            {/* Recommendations */}
+            {/* Row 5: Recommendations (only if GWI connected) */}
             <GwiRecommendations testId={test.id} />
 
-            {/* Test Comparison */}
+            {/* Row 6: Test Comparison */}
             <TestComparison
               currentTest={test}
               currentSummary={results.summary}
@@ -1001,13 +992,21 @@ export function TestResultsPage() {
 
           {/* Market Insights Tab (GWI) */}
           {results.gwi_enrichment && (
-            <TabsContent value="market-insights" className="space-y-6">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <GwiBadge />
-                  <span className="text-sm text-muted-foreground">Powered by GWI Spark market data</span>
+            <TabsContent value="market-insights" className="space-y-3">
+              {/* Header with executive summary inline */}
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <GwiBadge />
+                    <span className="text-sm text-muted-foreground">Powered by GWI Spark</span>
+                  </div>
+                  {results.gwi_enrichment.executive_summary && (
+                    <p className="text-sm text-muted-foreground leading-relaxed mt-2">
+                      {results.gwi_enrichment.executive_summary}
+                    </p>
+                  )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-shrink-0">
                   <Button
                     variant="outline"
                     size="sm"
@@ -1037,259 +1036,228 @@ export function TestResultsPage() {
                     className="gap-2"
                   >
                     <Download className="h-4 w-4" />
-                    Export Full Report (JSON)
+                    Export
                   </Button>
                 </div>
               </div>
 
-              {/* Executive Summary */}
-              {results.gwi_enrichment.executive_summary && (
-                <Card className="border-emerald-200 bg-emerald-50/30">
-                  <CardContent className="pt-6">
-                    <p className="text-lg font-medium leading-relaxed">
-                      {results.gwi_enrichment.executive_summary}
-                    </p>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Market Context */}
-              {results.gwi_enrichment.market_context?.length > 0 && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-lg flex items-center gap-2">
-                      <TrendingUp className="h-5 w-5 text-emerald-600" />
-                      Market Alignment
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-4">
-                      {results.gwi_enrichment.market_context.map((item: any, i: number) => (
-                        <div key={i} className="p-4 rounded-lg border bg-emerald-50/20">
-                          <div className="flex items-start gap-3">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2 mb-1">
-                                <p className="font-medium">{item.metric}</p>
-                                {item.value && (
-                                  <Badge variant="outline" className="text-emerald-600 border-emerald-600">
-                                    {item.value}
-                                  </Badge>
-                                )}
-                              </div>
-                              <p className="text-sm text-muted-foreground leading-relaxed">{item.insight}</p>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Benchmark Comparison */}
-              {results.gwi_enrichment.benchmark_comparison?.length > 0 && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-lg">Ralph vs Market Benchmarks</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-5">
-                      {results.gwi_enrichment.benchmark_comparison.map((item: any, i: number) => (
-                        <div key={i}>
-                          <div className="flex items-center gap-4 mb-2">
-                            <span className="text-sm font-medium w-40 flex-shrink-0">{item.metric}</span>
-                            <div className="flex-1">
-                              <div className="flex justify-between text-xs text-muted-foreground mb-1">
-                                <span>Ralph: {item.ralph_value}/10</span>
-                                {item.gwi_benchmark > 0 && <span>GWI Benchmark: {item.gwi_benchmark}/10</span>}
-                              </div>
-                              <div className="relative h-2.5 bg-muted rounded-full">
-                                <div
-                                  className="absolute h-2.5 bg-[#D94D8F] rounded-full"
-                                  style={{ width: `${Math.min(100, (item.ralph_value / 10) * 100)}%` }}
-                                />
-                                {item.gwi_benchmark > 0 && (
-                                  <div
-                                    className="absolute h-2.5 w-1 bg-emerald-600 rounded"
-                                    style={{ left: `${Math.min(100, (item.gwi_benchmark / 10) * 100)}%` }}
-                                  />
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                          {item.interpretation && (
-                            <p className="text-xs text-muted-foreground ml-44 leading-relaxed">{item.interpretation}</p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Opportunities & Risks */}
-              {(results.gwi_enrichment.opportunities?.length > 0 || results.gwi_enrichment.risks?.length > 0) && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {results.gwi_enrichment.opportunities?.length > 0 && (
-                    <Card>
-                      <CardHeader>
-                        <CardTitle className="text-lg flex items-center gap-2">
-                          <Lightbulb className="h-5 w-5 text-emerald-600" />
-                          Opportunities
-                        </CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <ul className="space-y-3">
-                          {results.gwi_enrichment.opportunities.map((opp: string, i: number) => (
-                            <li key={i} className="flex gap-2 text-sm">
-                              <span className="text-emerald-600 font-bold mt-0.5">•</span>
-                              <span className="leading-relaxed">{opp}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </CardContent>
-                    </Card>
-                  )}
-                  {results.gwi_enrichment.risks?.length > 0 && (
-                    <Card>
-                      <CardHeader>
-                        <CardTitle className="text-lg flex items-center gap-2">
-                          <ShieldAlert className="h-5 w-5 text-amber-500" />
-                          Risks & Watchouts
-                        </CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <ul className="space-y-3">
-                          {results.gwi_enrichment.risks.map((risk: string, i: number) => (
-                            <li key={i} className="flex gap-2 text-sm">
-                              <span className="text-amber-500 font-bold mt-0.5">•</span>
-                              <span className="leading-relaxed">{risk}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </CardContent>
-                    </Card>
-                  )}
-                </div>
-              )}
-
-              {/* Full Analysis Narrative */}
-              {results.gwi_enrichment.analysis_narrative && (() => {
-                // Filter out GWI boilerplate/template content
-                const narrative = results.gwi_enrichment.analysis_narrative as string;
-                const cleanedLines = narrative.split('\n').filter((line: string) => {
-                  const trimmed = line.trim();
-                  if (!trimmed) return true; // keep blank lines
-                  // Skip boilerplate
-                  if (trimmed.includes('Processing Instructions')) return false;
-                  if (trimmed.includes('explore_insight_gwi')) return false;
-                  if (trimmed.includes('Data Analysis Result')) return false;
-                  if (trimmed.includes('structured information for you to process')) return false;
-                  if (trimmed.includes('The main response provides')) return false;
-                  if (trimmed.includes('Each insight has a unique ID')) return false;
-                  if (trimmed.includes('Source information shows')) return false;
-                  if (trimmed.includes('contains a "Chat ID"')) return false;
-                  if (trimmed.includes('Reference specific insights by their IDs')) return false;
-                  if (trimmed.includes('Consider the source information')) return false;
-                  if (trimmed.includes('Note the time periods')) return false;
-                  if (trimmed.includes('include both the name and code')) return false;
-                  if (/^Chat ID:\s*[a-f0-9-]+$/i.test(trimmed)) return false;
-                  if (trimmed === '## Main Response') return false;
-                  if (trimmed === '## Sources') return false;
-                  if (trimmed === '## Processing Instructions') return false;
-                  if (trimmed === 'The following metadata describes the origin of the insights:') return false;
-                  if (trimmed === 'When responding to users about this data:') return false;
-                  return true;
-                });
-
-                // Check if there's any meaningful content left
-                const hasContent = cleanedLines.some((l: string) => l.trim().length > 10);
-                if (!hasContent) return null;
-
-                return (
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="text-lg flex items-center gap-2">
-                        <Globe className="h-5 w-5 text-emerald-600" />
-                        Full GWI Analysis
+              {/* Row 1: Market Alignment (2/3) + Opportunities & Risks (1/3) */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                {/* Market Alignment - spans 2 cols */}
+                {results.gwi_enrichment.market_context?.length > 0 && (
+                  <Card className="lg:col-span-2">
+                    <CardHeader className="pb-2 p-4">
+                      <CardTitle className="text-sm flex items-center gap-2">
+                        <TrendingUp className="h-4 w-4 text-emerald-600" />
+                        Market Alignment
                       </CardTitle>
                     </CardHeader>
-                    <CardContent>
-                      <div className="prose prose-sm max-w-none text-muted-foreground">
-                        {cleanedLines.map((line: string, i: number) => {
-                          if (!line.trim()) return <br key={i} />;
-                          // Markdown headers
-                          if (/^#{1,3}\s/.test(line.trim())) {
-                            return <p key={i} className="font-semibold text-foreground mt-4 mb-1">{line.replace(/^#+\s*/, '')}</p>;
-                          }
-                          // Bold headers (lines that are all caps or start with numbers)
-                          if (/^\d+\.\s+[A-Z]/.test(line.trim()) || /^[A-Z\s&]{5,}:?$/.test(line.trim())) {
-                            return <p key={i} className="font-semibold text-foreground mt-4 mb-1">{line}</p>;
-                          }
-                          // Bold text markers (**text**)
-                          if (/\*\*/.test(line)) {
-                            return <p key={i} className="mb-1" dangerouslySetInnerHTML={{
-                              __html: line.replace(/\*\*(.+?)\*\*/g, '<strong class="text-foreground">$1</strong>')
-                            }} />;
-                          }
-                          // Bullet points
-                          if (/^\s*[-•*]/.test(line)) {
-                            return <p key={i} className="ml-4">{line.replace(/^\s*[-•*]\s*/, '• ')}</p>;
-                          }
-                          return <p key={i} className="mb-1">{line}</p>;
-                        })}
+                    <CardContent className="p-4 pt-0">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        {results.gwi_enrichment.market_context.map((item: any, i: number) => (
+                          <div key={i} className="p-3 rounded-lg border bg-emerald-50/20">
+                            <div className="flex items-center gap-2 mb-1">
+                              <p className="text-sm font-medium">{item.metric}</p>
+                              {item.value && (
+                                <Badge variant="outline" className="text-xs text-emerald-600 border-emerald-600">
+                                  {item.value}
+                                </Badge>
+                              )}
+                            </div>
+                            <p className="text-xs text-muted-foreground leading-relaxed">{item.insight}</p>
+                          </div>
+                        ))}
                       </div>
                     </CardContent>
                   </Card>
-                );
-              })()}
+                )}
 
-              {/* Audience Recommendations */}
-              {results.gwi_enrichment.audience_recommendations?.length > 0 && (
+                {/* Opportunities & Risks stacked */}
+                {(results.gwi_enrichment.opportunities?.length > 0 || results.gwi_enrichment.risks?.length > 0) && (
+                  <div className="space-y-3">
+                    {results.gwi_enrichment.opportunities?.length > 0 && (
+                      <Card>
+                        <CardHeader className="pb-2 p-4">
+                          <CardTitle className="text-sm flex items-center gap-2">
+                            <Lightbulb className="h-4 w-4 text-emerald-600" />
+                            Opportunities
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent className="p-4 pt-0">
+                          <ul className="space-y-2">
+                            {results.gwi_enrichment.opportunities.map((opp: string, i: number) => (
+                              <li key={i} className="flex gap-2 text-xs">
+                                <span className="text-emerald-600 font-bold mt-0.5">•</span>
+                                <span className="leading-relaxed">{opp}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </CardContent>
+                      </Card>
+                    )}
+                    {results.gwi_enrichment.risks?.length > 0 && (
+                      <Card>
+                        <CardHeader className="pb-2 p-4">
+                          <CardTitle className="text-sm flex items-center gap-2">
+                            <ShieldAlert className="h-4 w-4 text-amber-500" />
+                            Risks & Watchouts
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent className="p-4 pt-0">
+                          <ul className="space-y-2">
+                            {results.gwi_enrichment.risks.map((risk: string, i: number) => (
+                              <li key={i} className="flex gap-2 text-xs">
+                                <span className="text-amber-500 font-bold mt-0.5">•</span>
+                                <span className="leading-relaxed">{risk}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </CardContent>
+                      </Card>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Row 2: Benchmark Comparison */}
+              {results.gwi_enrichment.benchmark_comparison?.length > 0 && (
                 <Card>
-                  <CardHeader>
-                    <CardTitle className="text-lg flex items-center gap-2">
-                      <Users className="h-5 w-5 text-emerald-600" />
-                      GWI Suggests Also Testing With
-                    </CardTitle>
+                  <CardHeader className="pb-2 p-4">
+                    <CardTitle className="text-sm">Ralph vs Market Benchmarks</CardTitle>
                   </CardHeader>
-                  <CardContent>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {results.gwi_enrichment.audience_recommendations.map((audience: any, i: number) => (
-                        <div key={i} className="p-4 rounded-lg border">
-                          <div className="flex items-center justify-between mb-2">
-                            <h4 className="font-medium">{audience.name}</h4>
-                            {audience.size_percent > 0 && (
-                              <Badge variant="outline" className="text-emerald-600 border-emerald-600">
-                                {audience.size_percent}% of market
-                              </Badge>
-                            )}
+                  <CardContent className="p-4 pt-0">
+                    <div className="space-y-3">
+                      {results.gwi_enrichment.benchmark_comparison.map((item: any, i: number) => (
+                        <div key={i} className="flex items-center gap-3">
+                          <span className="text-xs font-medium w-28 flex-shrink-0 text-right">{item.metric}</span>
+                          <div className="flex-1">
+                            <div className="relative h-2 bg-muted rounded-full">
+                              <div
+                                className="absolute h-2 bg-[#D94D8F] rounded-full"
+                                style={{ width: `${Math.min(100, (item.ralph_value / 10) * 100)}%` }}
+                              />
+                              {item.gwi_benchmark > 0 && (
+                                <div
+                                  className="absolute h-4 w-0.5 bg-emerald-600 rounded -top-1"
+                                  style={{ left: `${Math.min(100, (item.gwi_benchmark / 10) * 100)}%` }}
+                                />
+                              )}
+                            </div>
                           </div>
-                          {audience.demographics?.age_range && (
-                            <p className="text-sm text-muted-foreground">
-                              Age: {audience.demographics.age_range}
-                            </p>
-                          )}
-                          {audience.media_habits?.top_platforms?.length > 0 && (
-                            <div className="flex flex-wrap gap-1 mt-2">
-                              {audience.media_habits.top_platforms.map((p: string) => (
-                                <Badge key={p} variant="secondary" className="text-xs">{p}</Badge>
-                              ))}
-                            </div>
-                          )}
-                          {audience.psychographics?.values?.length > 0 && (
-                            <div className="flex flex-wrap gap-1 mt-2">
-                              {audience.psychographics.values.map((v: string) => (
-                                <Badge key={v} variant="outline" className="text-xs">{v}</Badge>
-                              ))}
-                            </div>
-                          )}
+                          <span className="text-xs text-muted-foreground w-16 flex-shrink-0">
+                            {item.ralph_value}{item.gwi_benchmark > 0 ? ` / ${item.gwi_benchmark}` : ''}/10
+                          </span>
                         </div>
                       ))}
                     </div>
                   </CardContent>
                 </Card>
               )}
+
+              {/* Row 3: Audience Recommendations + Full Analysis side by side */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                {results.gwi_enrichment.audience_recommendations?.length > 0 && (
+                  <Card>
+                    <CardHeader className="pb-2 p-4">
+                      <CardTitle className="text-sm flex items-center gap-2">
+                        <Users className="h-4 w-4 text-emerald-600" />
+                        Also Consider Testing With
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-4 pt-0">
+                      <div className="space-y-2">
+                        {results.gwi_enrichment.audience_recommendations.map((audience: any, i: number) => (
+                          <div key={i} className="p-3 rounded-lg border">
+                            <div className="flex items-center justify-between mb-1">
+                              <h4 className="text-sm font-medium">{audience.name}</h4>
+                              {audience.size_percent > 0 && (
+                                <Badge variant="outline" className="text-xs text-emerald-600 border-emerald-600">
+                                  {audience.size_percent}%
+                                </Badge>
+                              )}
+                            </div>
+                            {audience.demographics?.age_range && (
+                              <p className="text-xs text-muted-foreground">Age: {audience.demographics.age_range}</p>
+                            )}
+                            <div className="flex flex-wrap gap-1 mt-1.5">
+                              {audience.media_habits?.top_platforms?.map((p: string) => (
+                                <Badge key={p} variant="secondary" className="text-[10px] px-1.5 py-0">{p}</Badge>
+                              ))}
+                              {audience.psychographics?.values?.map((v: string) => (
+                                <Badge key={v} variant="outline" className="text-[10px] px-1.5 py-0">{v}</Badge>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Full Analysis Narrative */}
+                {results.gwi_enrichment.analysis_narrative && (() => {
+                  const narrative = results.gwi_enrichment.analysis_narrative as string;
+                  const cleanedLines = narrative.split('\n').filter((line: string) => {
+                    const trimmed = line.trim();
+                    if (!trimmed) return true;
+                    if (trimmed.includes('Processing Instructions')) return false;
+                    if (trimmed.includes('explore_insight_gwi')) return false;
+                    if (trimmed.includes('Data Analysis Result')) return false;
+                    if (trimmed.includes('structured information for you to process')) return false;
+                    if (trimmed.includes('The main response provides')) return false;
+                    if (trimmed.includes('Each insight has a unique ID')) return false;
+                    if (trimmed.includes('Source information shows')) return false;
+                    if (trimmed.includes('contains a "Chat ID"')) return false;
+                    if (trimmed.includes('Reference specific insights by their IDs')) return false;
+                    if (trimmed.includes('Consider the source information')) return false;
+                    if (trimmed.includes('Note the time periods')) return false;
+                    if (trimmed.includes('include both the name and code')) return false;
+                    if (/^Chat ID:\s*[a-f0-9-]+$/i.test(trimmed)) return false;
+                    if (trimmed === '## Main Response') return false;
+                    if (trimmed === '## Sources') return false;
+                    if (trimmed === '## Processing Instructions') return false;
+                    if (trimmed === 'The following metadata describes the origin of the insights:') return false;
+                    if (trimmed === 'When responding to users about this data:') return false;
+                    return true;
+                  });
+
+                  const hasContent = cleanedLines.some((l: string) => l.trim().length > 10);
+                  if (!hasContent) return null;
+
+                  return (
+                    <Card>
+                      <CardHeader className="pb-2 p-4">
+                        <CardTitle className="text-sm flex items-center gap-2">
+                          <Globe className="h-4 w-4 text-emerald-600" />
+                          Full GWI Analysis
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="p-4 pt-0">
+                        <div className="prose prose-xs max-w-none text-muted-foreground text-xs max-h-[400px] overflow-y-auto">
+                          {cleanedLines.map((line: string, i: number) => {
+                            if (!line.trim()) return <br key={i} />;
+                            if (/^#{1,3}\s/.test(line.trim())) {
+                              return <p key={i} className="font-semibold text-foreground mt-3 mb-1 text-sm">{line.replace(/^#+\s*/, '')}</p>;
+                            }
+                            if (/^\d+\.\s+[A-Z]/.test(line.trim()) || /^[A-Z\s&]{5,}:?$/.test(line.trim())) {
+                              return <p key={i} className="font-semibold text-foreground mt-3 mb-1 text-sm">{line}</p>;
+                            }
+                            if (/\*\*/.test(line)) {
+                              return <p key={i} className="mb-0.5" dangerouslySetInnerHTML={{
+                                __html: line.replace(/\*\*(.+?)\*\*/g, '<strong class="text-foreground">$1</strong>')
+                              }} />;
+                            }
+                            if (/^\s*[-•*]/.test(line)) {
+                              return <p key={i} className="ml-3">{line.replace(/^\s*[-•*]\s*/, '• ')}</p>;
+                            }
+                            return <p key={i} className="mb-0.5">{line}</p>;
+                          })}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })()}
+              </div>
             </TabsContent>
           )}
         </Tabs>
