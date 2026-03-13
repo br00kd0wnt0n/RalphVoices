@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { personas as personasApi, projects as projectsApi } from '@/lib/api';
+import { personas as personasApi, projects as projectsApi, gwi as gwiApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
 import {
   Dialog,
   DialogContent,
@@ -18,9 +19,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Globe, CheckCircle, AlertCircle, Lightbulb, RefreshCw } from 'lucide-react';
 import type { Project } from '@/types';
-import type { GwiAudience } from '@/types/gwi';
+import type { GwiAudience, GwiValidation } from '@/types/gwi';
 import { GwiBadge } from './GwiBadge';
+import { useGwi } from '@/hooks/useGwi';
 
 interface PersonaBuilderProps {
   open: boolean;
@@ -34,6 +37,9 @@ export function PersonaBuilder({ open, onOpenChange, onCreated, defaultProjectId
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [validation, setValidation] = useState<GwiValidation | null>(null);
+  const [validating, setValidating] = useState(false);
+  const gwiStatus = useGwi();
 
   // Form state
   const [projectId, setProjectId] = useState(defaultProjectId || '');
@@ -116,6 +122,8 @@ export function PersonaBuilder({ open, onOpenChange, onCreated, defaultProjectId
     setSubcultures('');
     setHumorStyle('');
     setLanguageMarkers('');
+    setValidation(null);
+    setValidating(false);
   }
 
   async function handleSubmit() {
@@ -166,6 +174,43 @@ export function PersonaBuilder({ open, onOpenChange, onCreated, defaultProjectId
       console.error('Failed to create persona:', error);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleValidate() {
+    setValidating(true);
+    setValidation(null);
+    try {
+      const parseList = (str: string) =>
+        str.split(',').map((s) => s.trim()).filter(Boolean);
+
+      const result = await gwiApi.validatePersona({
+        persona: {
+          name,
+          age_base: ageBase ? parseInt(ageBase) : null,
+          location: location || null,
+          occupation: occupation || null,
+          psychographics: {
+            values: parseList(values),
+            motivations: parseList(motivations),
+            aspirations: parseList(aspirations),
+            pain_points: parseList(painPoints),
+            decision_style: decisionStyle || undefined,
+          },
+          media_habits: {
+            primary_platforms: platforms.split(',').map((p) => p.trim()).filter(Boolean).map((n) => ({ name: n, hours_per_day: 1 })),
+            content_preferences: parseList(contentPreferences),
+            influencer_affinities: parseList(influencerAffinities),
+          },
+        },
+      });
+      if (result.validation) {
+        setValidation(result.validation);
+      }
+    } catch (err) {
+      console.error('Failed to validate persona:', err);
+    } finally {
+      setValidating(false);
     }
   }
 
@@ -380,6 +425,103 @@ export function PersonaBuilder({ open, onOpenChange, onCreated, defaultProjectId
                   placeholder="e.g., uses 'lowkey', references niche memes, avoids corporate speak"
                 />
               </div>
+
+              {/* GWI Validation */}
+              {gwiStatus.enabled && (
+                <div className="mt-4 pt-4 border-t border-border/50">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <GwiBadge />
+                      <span className="text-sm font-medium">Market Validation</span>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleValidate}
+                      disabled={validating || !name}
+                      className="gap-2"
+                    >
+                      {validating ? (
+                        <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Globe className="h-3.5 w-3.5" />
+                      )}
+                      {validating ? 'Validating...' : validation ? 'Re-validate' : 'Validate against market data'}
+                    </Button>
+                  </div>
+
+                  {validation && (
+                    <div className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50/30 p-4">
+                      {/* Match Score + Market Size */}
+                      <div className="flex items-center gap-3">
+                        <div className={`text-2xl font-bold ${
+                          validation.match_score >= 70 ? 'text-green-600' :
+                          validation.match_score >= 40 ? 'text-yellow-600' : 'text-red-600'
+                        }`}>
+                          {validation.match_score}
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">Market Match Score</p>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <Badge variant={
+                              validation.match_score >= 70 ? 'success' :
+                              validation.match_score >= 40 ? 'secondary' : 'destructive'
+                            } className="text-xs">
+                              {validation.match_score >= 70 ? 'Strong Match' :
+                               validation.match_score >= 40 ? 'Moderate' : 'Weak Match'}
+                            </Badge>
+                            {validation.market_size_estimate && (
+                              <Badge variant="outline" className="text-xs text-emerald-600 border-emerald-600">
+                                {validation.market_size_estimate}
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Gaps */}
+                      {validation.gaps.length > 0 && (
+                        <div>
+                          <p className="text-xs font-medium text-amber-700 flex items-center gap-1 mb-1">
+                            <AlertCircle className="h-3 w-3" /> Gaps to Consider
+                          </p>
+                          <ul className="space-y-1">
+                            {validation.gaps.map((gap, i) => (
+                              <li key={i} className="text-xs text-muted-foreground flex gap-1.5">
+                                <span className="text-amber-500 mt-0.5">•</span>
+                                {gap}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* Suggestions */}
+                      {validation.suggestions.length > 0 && (
+                        <div>
+                          <p className="text-xs font-medium text-emerald-700 flex items-center gap-1 mb-1">
+                            <Lightbulb className="h-3 w-3" /> Suggestions
+                          </p>
+                          <ul className="space-y-1">
+                            {validation.suggestions.map((suggestion, i) => (
+                              <li key={i} className="text-xs text-muted-foreground flex gap-1.5">
+                                <span className="text-emerald-600 mt-0.5">•</span>
+                                {suggestion}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {validation.gaps.length === 0 && validation.suggestions.length === 0 && (
+                        <p className="text-xs text-emerald-700 flex items-center gap-1">
+                          <CheckCircle className="h-3 w-3" /> This persona aligns well with GWI market data
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </>
           )}
         </div>
@@ -388,7 +530,14 @@ export function PersonaBuilder({ open, onOpenChange, onCreated, defaultProjectId
         <div className="flex justify-between">
           <Button
             variant="outline"
-            onClick={() => step > 1 ? setStep(step - 1) : onOpenChange(false)}
+            onClick={() => {
+              if (step > 1) {
+                if (step === 4) { setValidation(null); setValidating(false); }
+                setStep(step - 1);
+              } else {
+                onOpenChange(false);
+              }
+            }}
           >
             {step > 1 ? 'Back' : 'Cancel'}
           </Button>
