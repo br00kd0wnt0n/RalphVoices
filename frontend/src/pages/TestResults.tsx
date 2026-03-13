@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { tests as testsApi } from '@/lib/api';
+import { tests as testsApi, gwi as gwiApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
@@ -1006,15 +1006,35 @@ export function TestResultsPage() {
                   <GwiBadge />
                   <span className="text-sm text-muted-foreground">Powered by GWI Spark market data</span>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => testsApi.exportReport(test.id)}
-                  className="gap-2"
-                >
-                  <Download className="h-4 w-4" />
-                  Export Full Report (JSON)
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={async () => {
+                      try {
+                        const result = await gwiApi.enrichResults(test.id);
+                        if (result.enrichment) {
+                          loadTest(); // Reload to show updated data
+                        }
+                      } catch (err) {
+                        console.error('Failed to refresh GWI analysis:', err);
+                      }
+                    }}
+                    className="gap-2"
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                    Re-run Analysis
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => testsApi.exportReport(test.id)}
+                    className="gap-2"
+                  >
+                    <Download className="h-4 w-4" />
+                    Export Full Report (JSON)
+                  </Button>
+                </div>
               </div>
 
               {/* Executive Summary */}
@@ -1149,32 +1169,75 @@ export function TestResultsPage() {
               )}
 
               {/* Full Analysis Narrative */}
-              {results.gwi_enrichment.analysis_narrative && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-lg flex items-center gap-2">
-                      <Globe className="h-5 w-5 text-emerald-600" />
-                      Full GWI Analysis
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="prose prose-sm max-w-none text-muted-foreground">
-                      {results.gwi_enrichment.analysis_narrative.split('\n').map((line: string, i: number) => {
-                        if (!line.trim()) return <br key={i} />;
-                        // Bold headers (lines that are all caps or start with numbers)
-                        if (/^\d+\.\s+[A-Z]/.test(line.trim()) || /^[A-Z\s&]{5,}:?$/.test(line.trim())) {
-                          return <p key={i} className="font-semibold text-foreground mt-4 mb-1">{line}</p>;
-                        }
-                        // Bullet points
-                        if (/^\s*[-•*]/.test(line)) {
-                          return <p key={i} className="ml-4">{line.replace(/^\s*[-•*]\s*/, '• ')}</p>;
-                        }
-                        return <p key={i} className="mb-1">{line}</p>;
-                      })}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
+              {results.gwi_enrichment.analysis_narrative && (() => {
+                // Filter out GWI boilerplate/template content
+                const narrative = results.gwi_enrichment.analysis_narrative as string;
+                const cleanedLines = narrative.split('\n').filter((line: string) => {
+                  const trimmed = line.trim();
+                  if (!trimmed) return true; // keep blank lines
+                  // Skip boilerplate
+                  if (trimmed.includes('Processing Instructions')) return false;
+                  if (trimmed.includes('explore_insight_gwi')) return false;
+                  if (trimmed.includes('Data Analysis Result')) return false;
+                  if (trimmed.includes('structured information for you to process')) return false;
+                  if (trimmed.includes('The main response provides')) return false;
+                  if (trimmed.includes('Each insight has a unique ID')) return false;
+                  if (trimmed.includes('Source information shows')) return false;
+                  if (trimmed.includes('contains a "Chat ID"')) return false;
+                  if (trimmed.includes('Reference specific insights by their IDs')) return false;
+                  if (trimmed.includes('Consider the source information')) return false;
+                  if (trimmed.includes('Note the time periods')) return false;
+                  if (trimmed.includes('include both the name and code')) return false;
+                  if (/^Chat ID:\s*[a-f0-9-]+$/i.test(trimmed)) return false;
+                  if (trimmed === '## Main Response') return false;
+                  if (trimmed === '## Sources') return false;
+                  if (trimmed === '## Processing Instructions') return false;
+                  if (trimmed === 'The following metadata describes the origin of the insights:') return false;
+                  if (trimmed === 'When responding to users about this data:') return false;
+                  return true;
+                });
+
+                // Check if there's any meaningful content left
+                const hasContent = cleanedLines.some((l: string) => l.trim().length > 10);
+                if (!hasContent) return null;
+
+                return (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-lg flex items-center gap-2">
+                        <Globe className="h-5 w-5 text-emerald-600" />
+                        Full GWI Analysis
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="prose prose-sm max-w-none text-muted-foreground">
+                        {cleanedLines.map((line: string, i: number) => {
+                          if (!line.trim()) return <br key={i} />;
+                          // Markdown headers
+                          if (/^#{1,3}\s/.test(line.trim())) {
+                            return <p key={i} className="font-semibold text-foreground mt-4 mb-1">{line.replace(/^#+\s*/, '')}</p>;
+                          }
+                          // Bold headers (lines that are all caps or start with numbers)
+                          if (/^\d+\.\s+[A-Z]/.test(line.trim()) || /^[A-Z\s&]{5,}:?$/.test(line.trim())) {
+                            return <p key={i} className="font-semibold text-foreground mt-4 mb-1">{line}</p>;
+                          }
+                          // Bold text markers (**text**)
+                          if (/\*\*/.test(line)) {
+                            return <p key={i} className="mb-1" dangerouslySetInnerHTML={{
+                              __html: line.replace(/\*\*(.+?)\*\*/g, '<strong class="text-foreground">$1</strong>')
+                            }} />;
+                          }
+                          // Bullet points
+                          if (/^\s*[-•*]/.test(line)) {
+                            return <p key={i} className="ml-4">{line.replace(/^\s*[-•*]\s*/, '• ')}</p>;
+                          }
+                          return <p key={i} className="mb-1">{line}</p>;
+                        })}
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })()}
 
               {/* Audience Recommendations */}
               {results.gwi_enrichment.audience_recommendations?.length > 0 && (

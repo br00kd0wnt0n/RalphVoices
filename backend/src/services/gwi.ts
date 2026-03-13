@@ -103,6 +103,8 @@ class GwiService {
       },
     };
 
+    console.log('[GWI] Sending request:', { prompt: prompt.substring(0, 100) + '...', chatId: chatId || '(new)' });
+
     const response = await fetch(this.config.baseUrl, {
       method: 'POST',
       headers: {
@@ -113,7 +115,8 @@ class GwiService {
     });
 
     if (!response.ok) {
-      throw new Error(`GWI API error: ${response.status} ${response.statusText}`);
+      const errorText = await response.text().catch(() => '');
+      throw new Error(`GWI API error: ${response.status} ${response.statusText} — ${errorText}`);
     }
 
     const data: any = await response.json();
@@ -134,12 +137,126 @@ class GwiService {
       text = data.result.text;
     }
 
-    // Try to extract chat_id for maintaining conversation context
+    // Try to extract chat_id from the JSON-RPC result metadata
     if (data.result?.chat_id) {
       newChatId = data.result.chat_id;
     }
 
+    // Also try to extract chat_id from the response text body (GWI embeds it)
+    if (!newChatId || newChatId === chatId) {
+      const chatIdMatch = text.match(/Chat ID:\s*([a-f0-9-]+)/i);
+      if (chatIdMatch) {
+        newChatId = chatIdMatch[1];
+      }
+    }
+
+    console.log('[GWI] Response received:', {
+      textLength: text.length,
+      chatId: newChatId,
+      isTemplate: this.isTemplateResponse(text),
+      preview: text.substring(0, 200).replace(/\n/g, ' '),
+    });
+
     return { text, chatId: newChatId };
+  }
+
+  /**
+   * Detect if GWI returned a template/boilerplate response with no actual data.
+   * The GWI Spark MCP API often returns a wrapper with Chat ID and "Processing Instructions"
+   * but no real analysis on the first call — requiring follow-up calls.
+   */
+  private isTemplateResponse(text: string): boolean {
+    const hasProcessingInstructions = text.includes('Processing Instructions');
+    const hasChatId = /Chat ID:/i.test(text);
+    const hasExploreInsight = text.includes('explore_insight_gwi');
+    const hasMainResponse = text.includes('## Main Response');
+
+    // Check if there's meaningful content between "Main Response" and "Sources"
+    const mainResponseMatch = text.match(/## Main Response\s*([\s\S]*?)(?:## Sources|## Processing|$)/);
+    const mainContent = mainResponseMatch?.[1]?.replace(/Chat ID:\s*[a-f0-9-]+/gi, '').trim() || '';
+
+    // Template response: has wrapper structure but the actual content is empty/minimal
+    if ((hasProcessingInstructions || hasExploreInsight) && mainContent.length < 50) {
+      return true;
+    }
+    if (hasMainResponse && hasChatId && mainContent.length < 50) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Extract the actual content from a GWI response, stripping boilerplate.
+   * GWI responses may include: headers, Chat IDs, Sources sections, Processing Instructions.
+   * We want just the analytical content.
+   */
+  private extractGwiContent(text: string): string {
+    // Try to extract content from "Main Response" section
+    const mainMatch = text.match(/## Main Response\s*([\s\S]*?)(?:## Sources|## Processing Instructions|$)/);
+    if (mainMatch) {
+      const content = mainMatch[1]
+        .replace(/Chat ID:\s*[a-f0-9-]+/gi, '')
+        .replace(/# Data Analysis Result[\s\S]*?(?=\n[^#\-\n])/i, '')
+        .trim();
+      if (content.length > 50) return content;
+    }
+
+    // Strip known boilerplate sections
+    let cleaned = text
+      .replace(/# Data Analysis Result[\s\S]*?(?=\n\n)/i, '')
+      .replace(/## Sources[\s\S]*?(?=##|$)/i, '')
+      .replace(/## Processing Instructions[\s\S]*$/i, '')
+      .replace(/Chat ID:\s*[a-f0-9-]+/gi, '')
+      .replace(/The following data contains structured information[\s\S]*?(?=\n\n)/i, '')
+      .replace(/- The main response provides[\s\S]*?(?=\n\n)/i, '')
+      .trim();
+
+    return cleaned || text;
+  }
+
+  /**
+   * Make a GWI call with automatic follow-up if the first response is a template.
+   * The GWI Spark API often needs a second turn to provide actual data.
+   */
+  private async chatWithFollowUp(
+    initialPrompt: string,
+    followUpPrompt: string,
+    contextKey: string
+  ): Promise<{ text: string; chatId: string }> {
+    // First call
+    const first = await this.chat(initialPrompt);
+
+    // If we got meaningful content, return it
+    if (!this.isTemplateResponse(first.text)) {
+      const content = this.extractGwiContent(first.text);
+      if (content.length > 100) {
+        return { text: content, chatId: first.chatId };
+      }
+    }
+
+    console.log(`[GWI] First response was template/empty for "${contextKey}", making follow-up call with chat_id: ${first.chatId}`);
+
+    // Follow-up call using the chat_id from the first response
+    if (first.chatId) {
+      const second = await this.chat(followUpPrompt, first.chatId);
+      const content = this.extractGwiContent(second.text);
+
+      // If second response is also template, try one more specific ask
+      if (this.isTemplateResponse(second.text) || content.length < 100) {
+        console.log(`[GWI] Second response also template for "${contextKey}", trying direct ask`);
+        const third = await this.chat(
+          'Please provide your analysis now. Give me the specific data, insights, and recommendations based on what I shared. Do not return metadata or processing instructions — I need the actual analysis content.',
+          second.chatId || first.chatId
+        );
+        return { text: this.extractGwiContent(third.text), chatId: third.chatId };
+      }
+
+      return { text: content, chatId: second.chatId };
+    }
+
+    // No chat_id available, return what we have
+    return { text: this.extractGwiContent(first.text), chatId: first.chatId };
   }
 
   /** Suggest target audiences based on a concept */
@@ -147,42 +264,35 @@ class GwiService {
     if (!this.isEnabled()) return [];
 
     try {
-      const prompt = `Based on this creative concept, suggest 3-5 distinctly different target audience segments that would be most relevant to test it against. Each segment should be meaningfully different from the others in terms of demographics, psychographics, and media behavior.
+      const initialPrompt = `I need to identify target audience segments for concept testing. Here is the creative concept:
 
-For each audience, provide ALL of the following:
-- A specific, descriptive name (not generic like "Young Professionals" — be specific, e.g., "Urban Creative Freelancers" or "Suburban Family Decision-Makers")
-- A 1-2 sentence description explaining WHO this audience is and WHY they'd be relevant to test this concept against
-- Approximate audience size as a percentage of the general population
-- An index score (100 = average likelihood to engage, higher = more likely)
-- Age range (be specific, e.g., "22-30" not just "25-44")
-- Top 3-4 social media platforms they use most
-- 2-3 key content affinities (what type of content they consume)
-- 2-3 core values
-- 2-3 key interests
-- 1-2 top geographic locations/regions
+"${conceptText.substring(0, 500)}"
 
-Concept: "${conceptText.substring(0, 500)}"
+What are the key audience segments that would be most relevant to test this concept against? I need demographic, psychographic, and media consumption data for each segment.`;
 
-IMPORTANT: Return your response as a valid JSON array. Each element should have this structure:
-{
-  "name": "Audience Name",
-  "description": "Who they are and why they matter for this concept",
-  "size_percent": 8,
-  "index_score": 130,
-  "age_range": "22-30",
-  "top_locations": ["New York", "Los Angeles"],
-  "top_platforms": ["Instagram", "TikTok", "YouTube"],
-  "content_affinities": ["design inspiration", "lifestyle content"],
-  "values": ["authenticity", "creativity"],
-  "interests": ["travel", "food culture"]
-}
+      const followUpPrompt = `Based on the concept I just shared, please give me 3-5 distinctly different target audience segments. For each one, provide:
+- A specific name (not generic — e.g., "Urban Pet-Owning Millennials" not "Young Adults")
+- A description of who they are and why they'd be relevant
+- Size as % of population
+- An engagement index score (100 = average)
+- Age range (e.g., "25-34")
+- Top locations/regions
+- Top social media platforms they use
+- Content types they consume
+- Core values
+- Key interests
 
-Return ONLY the JSON array, no other text.`;
+Please format as a JSON array with this structure:
+[{"name":"...", "description":"...", "size_percent":8, "index_score":130, "age_range":"25-34", "top_locations":["..."], "top_platforms":["..."], "content_affinities":["..."], "values":["..."], "interests":["..."]}]
 
-      const { text, chatId } = await this.chat(prompt);
+Return ONLY the JSON array.`;
+
+      const { text, chatId } = await this.chatWithFollowUp(initialPrompt, followUpPrompt, 'suggest-audiences');
       this.chatSessions.set('suggest', chatId);
 
-      return this.parseAudiencesResponse(text);
+      const audiences = this.parseAudiencesResponse(text);
+      console.log(`[GWI] Parsed ${audiences.length} audiences, names: ${audiences.map(a => a.name).join(', ')}`);
+      return audiences;
     } catch (error) {
       console.error('GWI suggestAudiences error:', error);
       return [];
@@ -201,7 +311,7 @@ Return ONLY the JSON array, no other text.`;
     if (!this.isEnabled()) return null;
 
     try {
-      const prompt = `I'm building a synthetic persona for audience testing. Please validate this persona against real market data and tell me how realistic it is:
+      const initialPrompt = `I'm validating a synthetic persona against real market data. The persona is:
 
 Name: ${persona.name}
 Age: ${persona.age_base || 'not specified'}
@@ -210,13 +320,17 @@ Occupation: ${persona.occupation || 'not specified'}
 Values: ${persona.psychographics?.values?.join(', ') || 'not specified'}
 Platforms: ${persona.media_habits?.primary_platforms?.map((p: any) => p.name).join(', ') || 'not specified'}
 
-Please assess:
-1. How well does this match a real audience segment? (score 0-100)
-2. What is the approximate market size for this type of person?
-3. Are there any gaps or inconsistencies in the profile?
-4. What suggestions would you make to improve it?`;
+How realistic is this persona compared to actual audience data?`;
 
-      const { text } = await this.chat(prompt);
+      const followUpPrompt = `For the persona I just described, please assess:
+1. Realism score (0-100) — how well does this match real audience segments?
+2. Approximate market size for this type of person
+3. Any gaps or inconsistencies in the profile
+4. Specific suggestions to make it more realistic
+
+Please be specific and reference actual data where possible.`;
+
+      const { text } = await this.chatWithFollowUp(initialPrompt, followUpPrompt, 'validate-persona');
       return this.parseValidationFromText(text);
     } catch (error) {
       console.error('GWI validatePersona error:', error);
@@ -256,49 +370,60 @@ Please assess:
             .join('\n  ')
         : 'no attitude data';
 
-      const prompt = `I ran a concept test using synthetic audience personas and need your deep market analysis. Please provide a comprehensive assessment.
+      // Step 1: Share the data with GWI
+      const dataPrompt = `I ran a creative concept test and need market analysis. Here are my results:
 
-CONCEPT TESTED:
-"${conceptText.substring(0, 800)}"
+CONCEPT: "${conceptText.substring(0, 600)}"
 
-TEST RESULTS:
-- Total responses: ${results.summary.total_responses}
+RESULTS:
+- ${results.summary.total_responses} total responses
 - Sentiment: ${results.summary.sentiment?.positive || 0} positive, ${results.summary.sentiment?.neutral || 0} neutral, ${results.summary.sentiment?.negative || 0} negative
-- Avg engagement score: ${results.summary.avg_engagement}/10
+- Avg engagement: ${results.summary.avg_engagement}/10
 - Avg share likelihood: ${results.summary.avg_share_likelihood}/10
 - Avg comprehension: ${results.summary.avg_comprehension}/10
 
-THEMES IDENTIFIED:
-- What's working: ${positiveThemes}
-- Concerns: ${concerns}
-- Unexpected reactions: ${unexpected}
+THEMES: Working: ${positiveThemes}. Concerns: ${concerns}. Unexpected: ${unexpected}.
 
-PLATFORM BREAKDOWN:
-  ${platformData}
+PLATFORMS: ${platformData}
 
-ATTITUDE SEGMENTS:
-  ${attitudeData}
+ATTITUDES: ${attitudeData}
 
-Please provide your analysis in these sections:
+What does this data tell us about market potential?`;
 
-1. EXECUTIVE SUMMARY: A 2-3 sentence headline assessment of this concept's market potential.
+      // Step 2: Ask for structured analysis
+      const analysisPrompt = `Based on the concept test data I just shared, please provide a structured market analysis:
 
-2. MARKET ALIGNMENT: How does this concept align with current consumer trends and market data? Provide 3-5 specific market metrics or trends with context. For each, state the metric, the current market value/trend, and what it means for this concept.
+1. EXECUTIVE SUMMARY: 2-3 sentence headline assessment of market potential.
 
-3. BENCHMARK COMPARISON: Compare the test scores against typical industry benchmarks. For engagement (${results.summary.avg_engagement}/10), share likelihood (${results.summary.avg_share_likelihood}/10), and comprehension (${results.summary.avg_comprehension}/10) — what are typical benchmarks and how does this concept compare? Explain what the gaps mean.
+2. MARKET ALIGNMENT: 3-5 specific market metrics or consumer trends that are relevant. For each: the metric name, its current value/trend, and what it means for this concept.
 
-4. OPPORTUNITIES: What 3-5 specific growth opportunities does the data suggest? Be specific about audience segments, channels, or messaging angles.
+3. BENCHMARK COMPARISON: How do these scores compare to industry benchmarks?
+   - Engagement: ${results.summary.avg_engagement}/10
+   - Share Likelihood: ${results.summary.avg_share_likelihood}/10
+   - Comprehension: ${results.summary.avg_comprehension}/10
+   What are typical benchmarks and how does this compare?
 
-5. RISKS & WATCHOUTS: What 2-4 market risks or watchouts should be considered based on the concerns and sentiment data?
+4. OPPORTUNITIES: 3-5 specific growth opportunities (audience segments, channels, messaging angles).
 
-6. AUDIENCE RECOMMENDATIONS: Suggest 2-3 additional audience segments that should be tested, based on market data. For each provide: name, approximate size %, age range, key platforms, and why they'd be relevant.
+5. RISKS: 2-4 market risks or watchouts based on the concern themes.
 
-Be specific, data-driven, and reference actual market trends where possible.`;
+6. AUDIENCE RECOMMENDATIONS: 2-3 additional audience segments to test. For each: name, size %, age range, platforms, and why relevant.
 
-      const { text, chatId } = await this.chat(prompt);
+Please provide detailed, data-driven analysis. Do not return metadata or processing instructions.`;
+
+      const { text, chatId } = await this.chatWithFollowUp(dataPrompt, analysisPrompt, 'enrich-results');
       this.chatSessions.set('enrich', chatId);
 
-      return this.parseDeepEnrichment(text, results.summary);
+      const enrichment = this.parseDeepEnrichment(text, results.summary);
+      console.log('[GWI] Enrichment parsed:', {
+        execSummaryLength: enrichment.executive_summary.length,
+        marketContextCount: enrichment.market_context.length,
+        opportunitiesCount: enrichment.opportunities.length,
+        risksCount: enrichment.risks.length,
+        audienceRecsCount: enrichment.audience_recommendations.length,
+      });
+
+      return enrichment;
     } catch (error) {
       console.error('GWI enrichResults error:', error);
       return null;
@@ -322,23 +447,24 @@ Be specific, data-driven, and reference actual market trends where possible.`;
             size_percent: item.size_percent || 5,
             index_score: item.index_score || 110,
             demographics: {
-              age_range: item.age_range || '25-44',
-              gender_split: item.gender_split || {},
-              top_locations: item.top_locations || [],
+              age_range: item.age_range || item.demographics?.age_range || '25-44',
+              gender_split: item.gender_split || item.demographics?.gender_split || {},
+              top_locations: item.top_locations || item.demographics?.top_locations || [],
             },
             media_habits: {
-              top_platforms: item.top_platforms || [],
-              content_affinities: item.content_affinities || [],
+              top_platforms: item.top_platforms || item.media_habits?.top_platforms || [],
+              content_affinities: item.content_affinities || item.media_habits?.content_affinities || [],
             },
             psychographics: {
-              values: item.values || [],
-              interests: item.interests || [],
+              values: item.values || item.psychographics?.values || [],
+              interests: item.interests || item.psychographics?.interests || [],
             },
           }));
         }
       }
     } catch {
       // JSON parsing failed, fall through to text parsing
+      console.log('[GWI] JSON parsing failed for audiences, falling back to text parsing');
     }
 
     return this.parseAudiencesFromText(text);
@@ -347,35 +473,55 @@ Be specific, data-driven, and reference actual market trends where possible.`;
   private parseAudiencesFromText(text: string): GwiAudience[] {
     const audiences: GwiAudience[] = [];
 
-    // Split by numbered sections or double newlines
-    const sections = text.split(/(?:\n\n|\n(?=\d+[\.\)]))/);
+    // Try splitting by numbered items (1. 2. 3.) or by ### headers or **bold names**
+    const sections = text.split(/(?:\n(?=\d+[\.\)])|(?:\n(?=###))|(?:\n(?=\*\*[A-Z])))/);
 
     for (const section of sections) {
-      if (section.trim().length < 20) continue;
+      if (section.trim().length < 30) continue;
 
       try {
+        // Try extracting name from bold text, headers, or numbered format
+        const namePatterns = [
+          /(?:###?\s*)(.+?)(?:\n|$)/,
+          /\*\*(.+?)\*\*/,
+          /(?:name|segment|audience)[:\s]*(.+?)(?:\n|$)/i,
+          /^\d+[\.\)]\s*(.+?)(?:\n|:)/,
+        ];
+
+        let name = '';
+        for (const pattern of namePatterns) {
+          const match = section.match(pattern);
+          if (match?.[1] && match[1].trim().length > 3 && match[1].trim().length < 80) {
+            name = match[1].replace(/\*+/g, '').trim();
+            break;
+          }
+        }
+
+        if (!name || name.length < 4) continue;
+
         const audience: GwiAudience = {
-          name: this.extractField(section, /(?:name|segment|audience)[:\s]*([^\n]+)/i) || `Audience ${audiences.length + 1}`,
-          description: this.extractField(section, /(?:description|about|summary|rationale|why)[:\s]*([^\n]+)/i) || '',
-          size_percent: this.extractNumber(section, /(?:size|percentage|%)[:\s]*(\d+\.?\d*)/i) || 5,
-          index_score: this.extractNumber(section, /(?:index)[:\s]*(\d+)/i) || 110,
+          name,
+          description: this.extractField(section, /(?:description|about|who|why|rationale)[:\s]*(.+?)(?:\n|$)/i)
+            || this.extractFirstSentenceAfterName(section, name),
+          size_percent: this.extractNumber(section, /(?:size|percentage|population)[:\s]*~?(\d+\.?\d*)%?/i) || 5,
+          index_score: this.extractNumber(section, /(?:index|engagement)[:\s]*(\d+)/i) || 110,
           demographics: {
-            age_range: this.extractField(section, /(?:age|age range)[:\s]*([^\n,]+)/i) || '25-44',
-            gender_split: {},
-            top_locations: this.extractList(section, /(?:location|region|market)[:\s]*([^\n]+)/i),
+            age_range: this.extractField(section, /(?:age(?:\s*range)?)[:\s]*([^\n,;]+)/i) || '25-44',
+            gender_split: this.extractGenderSplit(section),
+            top_locations: this.extractListFromSection(section, /(?:location|region|market|geograph)[:\s]*(.+)/i),
           },
           media_habits: {
-            top_platforms: this.extractList(section, /(?:platform|social media|social)[:\s]*([^\n]+)/i),
-            content_affinities: this.extractList(section, /(?:content|interests|affini)[:\s]*([^\n]+)/i),
+            top_platforms: this.extractListFromSection(section, /(?:platform|social media|social|channels)[:\s]*(.+)/i),
+            content_affinities: this.extractListFromSection(section, /(?:content|affini|consume|media type)[:\s]*(.+)/i),
           },
           psychographics: {
-            values: this.extractList(section, /(?:values|value)[:\s]*([^\n]+)/i),
-            interests: this.extractList(section, /(?:interests|interest|hobbies)[:\s]*([^\n]+)/i),
+            values: this.extractListFromSection(section, /(?:values?)[:\s]*(.+)/i),
+            interests: this.extractListFromSection(section, /(?:interests?|hobbies)[:\s]*(.+)/i),
           },
         };
 
-        // Only add if we got at least a meaningful name
-        if (audience.name.length > 3) {
+        // Only add if name is unique and meaningful
+        if (!audiences.some(a => a.name === audience.name)) {
           audiences.push(audience);
         }
       } catch {
@@ -383,8 +529,40 @@ Be specific, data-driven, and reference actual market trends where possible.`;
       }
     }
 
-    // If parsing failed, create a single generic audience from the full text
+    // If text parsing yielded nothing, try a simpler paragraph-based approach
+    if (audiences.length === 0) {
+      const paragraphs = text.split(/\n\n+/).filter(p => p.trim().length > 50);
+      for (let i = 0; i < Math.min(paragraphs.length, 5); i++) {
+        const p = paragraphs[i];
+        const boldMatch = p.match(/\*\*(.+?)\*\*/);
+        const name = boldMatch?.[1] || `Audience ${i + 1}`;
+        if (name.length > 3 && !audiences.some(a => a.name === name)) {
+          audiences.push({
+            name,
+            description: p.replace(/\*\*.*?\*\*/, '').substring(0, 200).trim(),
+            size_percent: this.extractNumber(p, /(\d+)%/i) || 5,
+            index_score: this.extractNumber(p, /index[:\s]*(\d+)/i) || 110,
+            demographics: {
+              age_range: this.extractField(p, /(\d{2}\s*-\s*\d{2})/) || '25-44',
+              gender_split: {},
+              top_locations: this.extractListFromSection(p, /(?:location|region)[:\s]*(.+)/i),
+            },
+            media_habits: {
+              top_platforms: this.extractListFromSection(p, /(?:platform|social|channel)[:\s]*(.+)/i),
+              content_affinities: [],
+            },
+            psychographics: {
+              values: [],
+              interests: this.extractListFromSection(p, /(?:interest|hobbies)[:\s]*(.+)/i),
+            },
+          });
+        }
+      }
+    }
+
+    // Last resort: create a single generic audience
     if (audiences.length === 0 && text.length > 50) {
+      console.log('[GWI] All audience parsing failed, creating generic fallback');
       audiences.push({
         name: 'Primary Target Audience',
         description: 'A broad audience segment most likely to engage with this concept.',
@@ -401,7 +579,7 @@ Be specific, data-driven, and reference actual market trends where possible.`;
 
   private parseValidationFromText(text: string): GwiValidation {
     return {
-      match_score: this.extractNumber(text, /(?:score|match|rating)[:\s]*(\d+)/i) || 50,
+      match_score: this.extractNumber(text, /(?:score|match|rating|realism)[:\s]*(\d+)/i) || 50,
       market_size_estimate: this.extractField(text, /(?:market size|size|population)[:\s]*([^\n]+)/i) || 'Data unavailable',
       gaps: this.extractBulletPoints(text, /(?:gap|inconsisten|missing)[:\s]*/i),
       suggestions: this.extractBulletPoints(text, /(?:suggest|recommend|improv)[:\s]*/i),
@@ -417,9 +595,25 @@ Be specific, data-driven, and reference actual market trends where possible.`;
     const risksSection = this.extractSection(text, /risks|watchouts/i, /(?:audience recommendations|6\.)/i);
     const audienceSection = this.extractSection(text, /audience recommendations/i, /$/i);
 
+    // Clean up the executive summary — strip markdown/numbering
+    let cleanExecSummary = execSummary
+      .replace(/^[\s\d\.\:\#\*]+/, '')
+      .replace(/\*\*/g, '')
+      .trim();
+
+    // If parsing didn't find structured sections, try to extract from the full text
+    if (!cleanExecSummary && text.length > 100) {
+      // Take the first meaningful paragraph as executive summary
+      const paragraphs = text.split(/\n\n+/).filter(p => {
+        const cleaned = p.replace(/[#*\-\d\.]/g, '').trim();
+        return cleaned.length > 30 && !cleaned.includes('Processing Instructions') && !cleaned.includes('Chat ID');
+      });
+      cleanExecSummary = paragraphs[0]?.replace(/^[\s\d\.\:\#\*]+/, '').replace(/\*\*/g, '').trim() || '';
+    }
+
     return {
       analysis_narrative: text,
-      executive_summary: execSummary.replace(/^[\s\d\.\:]+/, '').trim() || 'Analysis completed — see full narrative below.',
+      executive_summary: cleanExecSummary || 'GWI analysis data was not available for this concept. Try running the analysis again.',
       market_context: this.parseMarketContext(marketSection),
       benchmark_comparison: this.parseBenchmarkComparison(benchmarkSection, summary),
       audience_recommendations: this.parseAudiencesFromText(audienceSection),
@@ -445,6 +639,8 @@ Be specific, data-driven, and reference actual market trends where possible.`;
 
   private parseMarketContext(text: string): { metric: string; value: string; benchmark: string; insight: string }[] {
     const items: { metric: string; value: string; benchmark: string; insight: string }[] = [];
+    if (!text || text.length < 20) return items;
+
     // Split into items by bullet points, numbered items, or double newlines
     const chunks = text.split(/\n(?=[\-\*\d]|\n)/).filter(c => c.trim().length > 15);
 
@@ -463,10 +659,10 @@ Be specific, data-driven, and reference actual market trends where possible.`;
           metric,
           value: numMatch ? numMatch[1] : '',
           benchmark: '',
-          insight: rest,
+          insight: rest.replace(/\*+/g, ''),
         });
-      } else {
-        items.push({ metric: cleaned.substring(0, 50), value: '', benchmark: '', insight: cleaned });
+      } else if (cleaned.length > 20) {
+        items.push({ metric: cleaned.substring(0, 50).replace(/\*+/g, ''), value: '', benchmark: '', insight: cleaned.replace(/\*+/g, '') });
       }
     }
 
@@ -483,6 +679,19 @@ Be specific, data-driven, and reference actual market trends where possible.`;
       'Comprehension': summary.avg_comprehension || 0,
     };
 
+    if (!text || text.length < 20) {
+      // No benchmark section found — return defaults
+      for (const [metric, ralphValue] of Object.entries(ralphScores)) {
+        benchmarks.push({
+          metric,
+          ralph_value: ralphValue,
+          gwi_benchmark: 0,
+          interpretation: 'Benchmark data not available from GWI.',
+        });
+      }
+      return benchmarks;
+    }
+
     // Parse GWI benchmarks from text — look for numbers near our metric names
     const chunks = text.split(/\n(?=[\-\*\d]|\n)/).filter(c => c.trim().length > 10);
 
@@ -498,7 +707,7 @@ Be specific, data-driven, and reference actual market trends where possible.`;
             metric,
             ralph_value: ralphValue,
             gwi_benchmark: gwiBenchmark > 10 ? gwiBenchmark / 10 : gwiBenchmark, // Normalize to 0-10 scale
-            interpretation: cleaned,
+            interpretation: cleaned.replace(/\*+/g, ''),
           });
           delete ralphScores[metric]; // Don't duplicate
           break;
@@ -512,7 +721,7 @@ Be specific, data-driven, and reference actual market trends where possible.`;
         metric,
         ralph_value: ralphValue,
         gwi_benchmark: 0,
-        interpretation: 'No benchmark data available from GWI for this metric.',
+        interpretation: 'Benchmark data not available from GWI.',
       });
     }
 
@@ -520,9 +729,10 @@ Be specific, data-driven, and reference actual market trends where possible.`;
   }
 
   private extractBulletItems(text: string): string[] {
+    if (!text || text.length < 10) return [];
     return text
       .split('\n')
-      .map(line => line.replace(/^[\s\-\*\d\.]+/, '').trim())
+      .map(line => line.replace(/^[\s\-\*\d\.]+/, '').replace(/\*+/g, '').trim())
       .filter(line => line.length > 10)
       .slice(0, 6);
   }
@@ -541,6 +751,35 @@ Be specific, data-driven, and reference actual market trends where possible.`;
     const match = text.match(pattern);
     if (!match?.[1]) return [];
     return match[1].split(/[,;]/).map(s => s.trim()).filter(s => s.length > 1);
+  }
+
+  /** Extract a comma-separated list from a section of text */
+  private extractListFromSection(text: string, pattern: RegExp): string[] {
+    const match = text.match(pattern);
+    if (!match?.[1]) return [];
+    return match[1]
+      .split(/[,;]/)
+      .map(s => s.replace(/\*+/g, '').replace(/^[\s\-]+/, '').trim())
+      .filter(s => s.length > 1 && s.length < 60);
+  }
+
+  /** Extract gender split percentages from text */
+  private extractGenderSplit(text: string): Record<string, number> {
+    const split: Record<string, number> = {};
+    const maleMatch = text.match(/(?:male|men)[:\s]*(\d+)%?/i);
+    const femaleMatch = text.match(/(?:female|women)[:\s]*(\d+)%?/i);
+    if (maleMatch) split.male = parseInt(maleMatch[1]);
+    if (femaleMatch) split.female = parseInt(femaleMatch[1]);
+    return split;
+  }
+
+  /** Extract first descriptive sentence after a name in text */
+  private extractFirstSentenceAfterName(text: string, name: string): string {
+    const idx = text.indexOf(name);
+    if (idx === -1) return '';
+    const after = text.substring(idx + name.length).replace(/^[\s\*\-:]+/, '');
+    const sentence = after.match(/^([^.!?]+[.!?])/);
+    return sentence?.[1]?.trim() || after.substring(0, 150).trim();
   }
 
   private extractBulletPoints(text: string, sectionPattern: RegExp): string[] {
