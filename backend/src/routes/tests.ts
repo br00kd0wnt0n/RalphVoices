@@ -2,8 +2,9 @@ import { Router, Response } from 'express';
 import { query, getClient } from '../db/index.js';
 import { authMiddleware, AuthRequest } from '../middleware/auth.js';
 import { generateConceptResponse, streamChatResponse, generateRecommendations, TestAsset } from '../services/ai.js';
+import { embedConcept, saveConceptEmbedding, computeDisposition, seedAnchorsFromHistory } from '../services/embeddings.js';
 import { z } from 'zod';
-import type { Persona, PersonaVariant, Test } from '../utils/types.js';
+import type { Persona, PersonaVariant, Test, ScoreConstraints, DispositionScores } from '../utils/types.js';
 import { SENTIMENT_THRESHOLDS, ATTITUDE_THRESHOLDS } from '../utils/constants.js';
 import { gwiService } from '../services/gwi.js';
 
@@ -443,6 +444,17 @@ async function processTestResponses(test: Test, variants: any[]) {
 
   console.log(`Processing test with ${assets.length} assets (${assets.filter((a: any) => a.isImage).length} images, ${assets.filter((a: any) => a.isPDF).length} PDFs)`);
 
+  // Generate concept embedding for vector-based disposition scoring
+  let conceptEmbedding: number[] | null = null;
+  try {
+    const embResult = await embedConcept(conceptText, strategicContext);
+    conceptEmbedding = embResult.combined;
+    await saveConceptEmbedding(test.id, conceptEmbedding);
+    console.log(`Concept embedding generated for test ${test.id}`);
+  } catch (err) {
+    console.error(`[processTestResponses] Concept embedding failed, proceeding without constraints:`, err);
+  }
+
   const responses: any[] = [];
   const BATCH_SIZE = 3; // Process 3 at a time to respect rate limits
   const DELAY_MS = 1000; // 1 second delay between batches
@@ -485,17 +497,37 @@ async function processTestResponses(test: Test, variants: any[]) {
       };
 
       try {
+        // Compute vector-based disposition scores (deterministic constraints for GPT)
+        let scoreConstraints: ScoreConstraints | undefined;
+        let dispositionResult: DispositionScores | undefined;
+
+        if (conceptEmbedding) {
+          try {
+            dispositionResult = await computeDisposition(variantRow.persona_id, conceptEmbedding);
+            if (dispositionResult.constrained) {
+              scoreConstraints = {
+                sentiment_range: dispositionResult.sentiment_range,
+                engagement_range: dispositionResult.engagement_range,
+                share_range: dispositionResult.share_range,
+                comprehension_range: dispositionResult.comprehension_range,
+              };
+            }
+          } catch (err) {
+            console.error(`[processTestResponses] Disposition computation failed for variant ${variant.variant_name}:`, err);
+          }
+        }
+
         const startTime = Date.now();
-        const response = await generateConceptResponse(variant, basePersona, conceptText, focusModifier, assets, strategicContext);
+        const response = await generateConceptResponse(variant, basePersona, conceptText, focusModifier, assets, strategicContext, scoreConstraints);
         const processingTime = Date.now() - startTime;
 
-        // Save response to database
+        // Save response to database (including vector_scores)
         await query(
           `INSERT INTO test_responses (
             test_id, variant_id, response_text, sentiment_score,
             engagement_likelihood, share_likelihood, comprehension_score,
-            reaction_tags, processing_time_ms, model_used
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            reaction_tags, processing_time_ms, model_used, vector_scores
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
           [
             test.id,
             variant.id,
@@ -507,6 +539,7 @@ async function processTestResponses(test: Test, variants: any[]) {
             response.reaction_tags,
             processingTime,
             process.env.OPENAI_MODEL || 'gpt-4o',
+            dispositionResult ? JSON.stringify(dispositionResult) : null,
           ]
         );
 
@@ -613,6 +646,16 @@ async function processTestResponses(test: Test, variants: any[]) {
   );
 
   console.log(`Analysis complete for test ${test.id}`);
+
+  // Seed reference anchors from this test's results (self-improving vector scoring)
+  try {
+    if (conceptEmbedding) {
+      const seeded = await seedAnchorsFromHistory(test.id);
+      console.log(`Seeded ${seeded} reference anchors from test ${test.id}`);
+    }
+  } catch (err) {
+    console.error(`Anchor seeding failed for test ${test.id}:`, err);
+  }
 
   // GWI enrichment (non-blocking — failures don't affect test completion)
   try {

@@ -236,7 +236,8 @@ export async function generateConceptResponse(
   conceptText: string,
   focusModifier: string = '',
   assets: TestAsset[] = [],
-  strategicContext: StrategicContext = {}
+  strategicContext: StrategicContext = {},
+  scoreConstraints?: import('../utils/types.js').ScoreConstraints
 ): Promise<ConceptTestResponse> {
   const baseSystemPrompt = `You are embodying a specific persona to provide authentic feedback on a creative
 concept. Respond as this person would - with their vocabulary, concerns,
@@ -263,10 +264,24 @@ Format your final response as:
 ---SCORES---
 {"sentiment_score": X, "engagement_likelihood": X, "share_likelihood": X, "comprehension_score": X, "reaction_tags": ["tag1", "tag2"]}`;
 
+  // Append vector-based score constraints if available
+  let constraintBlock = '';
+  if (scoreConstraints?.sentiment_range) {
+    constraintBlock = `
+
+SCORING CALIBRATION (based on similar audience-concept pairings):
+Your scores should generally fall within these ranges, though you may deviate slightly if your character's reaction genuinely warrants it:
+- sentiment_score: ${scoreConstraints.sentiment_range[0]}-${scoreConstraints.sentiment_range[1]}
+- engagement_likelihood: ${scoreConstraints.engagement_range![0]}-${scoreConstraints.engagement_range![1]}
+- share_likelihood: ${scoreConstraints.share_range![0]}-${scoreConstraints.share_range![1]}
+- comprehension_score: ${scoreConstraints.comprehension_range![0]}-${scoreConstraints.comprehension_range![1]}
+These ranges reflect how similar personas have reacted to similar concepts. Stay in character but let these calibrate your scoring.`;
+  }
+
   // Append focus modifier if provided
   const systemPrompt = focusModifier
-    ? `${baseSystemPrompt}\n${focusModifier}`
-    : baseSystemPrompt;
+    ? `${baseSystemPrompt}${constraintBlock}\n${focusModifier}`
+    : `${baseSystemPrompt}${constraintBlock}`;
 
   const voiceModifier = variant.full_profile?.voice_modifier || '';
   const distinguishingTrait = variant.full_profile?.distinguishing_trait || '';
@@ -374,6 +389,21 @@ Respond in character, then provide your scores and tags.`;
       };
     } catch (e) {
       console.error('Failed to parse scores from response');
+    }
+  }
+
+  // Log constraint validation (comparison phase — log only, don't reject)
+  if (scoreConstraints?.sentiment_range) {
+    const checks = [
+      { field: 'sentiment_score', value: scores.sentiment_score!, range: scoreConstraints.sentiment_range },
+      { field: 'engagement_likelihood', value: scores.engagement_likelihood!, range: scoreConstraints.engagement_range! },
+      { field: 'share_likelihood', value: scores.share_likelihood!, range: scoreConstraints.share_range! },
+      { field: 'comprehension_score', value: scores.comprehension_score!, range: scoreConstraints.comprehension_range! },
+    ];
+    for (const { field, value, range } of checks) {
+      if (value < range[0] - 1 || value > range[1] + 1) {
+        console.warn(`[vectorValidation] ${field}=${value} outside range [${range[0]},${range[1]}] (±1 tolerance) for variant ${variant.variant_name}`);
+      }
     }
   }
 

@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { query } from '../db/index.js';
 import { authMiddleware, AuthRequest } from '../middleware/auth.js';
 import { generateVoiceSample, generateVariants, GeneratedVariant } from '../services/ai.js';
+import { embedPersona, savePersonaEmbeddings } from '../services/embeddings.js';
 import { z } from 'zod';
 import type { Persona, VariantConfig } from '../utils/types.js';
 
@@ -115,7 +116,15 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
       ]
     );
 
-    res.status(201).json(result.rows[0]);
+    const createdPersona = result.rows[0];
+
+    // Non-blocking: generate vector embeddings for disposition scoring
+    embedPersona(createdPersona as Partial<Persona>)
+      .then((embeddings) => savePersonaEmbeddings(createdPersona.id, embeddings))
+      .then(() => console.log(`Embeddings generated for persona ${createdPersona.id}`))
+      .catch((err) => console.error(`Embedding generation failed for persona ${createdPersona.id}:`, err));
+
+    res.status(201).json(createdPersona);
   } catch (error) {
     if (error instanceof z.ZodError) {
       res.status(400).json({ error: 'Invalid input', details: error.errors });
@@ -239,7 +248,14 @@ router.put('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
       ]
     );
 
-    res.json(result.rows[0]);
+    const updatedPersona = result.rows[0];
+
+    // Non-blocking: regenerate vector embeddings
+    embedPersona(updatedPersona as Partial<Persona>)
+      .then((embeddings) => savePersonaEmbeddings(updatedPersona.id, embeddings))
+      .catch((err) => console.error(`Embedding re-generation failed for persona ${updatedPersona.id}:`, err));
+
+    res.json(updatedPersona);
   } catch (error) {
     if (error instanceof z.ZodError) {
       res.status(400).json({ error: 'Invalid input', details: error.errors });

@@ -12,6 +12,7 @@ import personaRoutes from './routes/personas.js';
 import testRoutes, { testProgress } from './routes/tests.js';
 import uploadRoutes from './routes/uploads.js';
 import gwiRoutes from './routes/gwi.js';
+import anchorRoutes from './routes/anchors.js';
 
 dotenv.config();
 
@@ -138,6 +139,7 @@ app.use('/api/personas', personaRoutes);
 app.use('/api/tests', testRoutes);
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/gwi', gwiRoutes);
+app.use('/api/anchors', anchorRoutes);
 
 // WebSocket endpoint for test progress
 wsInstance.app.ws('/ws/tests/:id/progress', (ws, req) => {

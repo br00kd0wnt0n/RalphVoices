@@ -114,6 +114,7 @@ export interface TestResponse {
   preferred_option: string | null;
   processing_time_ms: number | null;
   model_used: string | null;
+  vector_scores: DispositionScores | null;
   created_at: Date;
 }
 
@@ -144,6 +145,36 @@ export interface TestResults {
   segments: TestResultsSegments;
   themes: TestResultsThemes;
   created_at: Date;
+}
+
+// pgvector scoring types
+
+export interface ScoreConstraints {
+  sentiment_range?: [number, number];
+  engagement_range?: [number, number];
+  share_range?: [number, number];
+  comprehension_range?: [number, number];
+}
+
+export interface DispositionScores {
+  sentiment_range: [number, number];
+  engagement_range: [number, number];
+  share_range: [number, number];
+  comprehension_range: [number, number];
+  anchor_count: number;
+  avg_similarity: number;
+  constrained: boolean;
+}
+
+export interface PersonaEmbeddings {
+  values: number[];
+  platform: number[];
+  cultural: number[];
+  demographic: number[];
+}
+
+export interface ConceptEmbeddings {
+  combined: number[];
 }
 
 export type ReactionTag =
