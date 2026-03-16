@@ -7,6 +7,7 @@ import { TestStudio } from '@/pages/TestStudio';
 import { NewTest } from '@/pages/NewTest';
 import { TestResultsPage } from '@/pages/TestResults';
 import { Settings } from '@/pages/Settings';
+import { HowItWorks } from '@/pages/HowItWorks';
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="tests/new" element={<NewTest />} />
           <Route path="tests/:id" element={<TestResultsPage />} />
           <Route path="settings" element={<Settings />} />
+          <Route path="how-it-works" element={<HowItWorks />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

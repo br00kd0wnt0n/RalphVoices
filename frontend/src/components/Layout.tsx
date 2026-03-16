@@ -1,6 +1,6 @@
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { RalphLogo } from '@/components/RalphLogo';
-import { Users, TestTube, LayoutDashboard, FolderOpen, Settings } from 'lucide-react';
+import { Users, TestTube, LayoutDashboard, FolderOpen, Settings, BookOpen } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 export function Layout() {
@@ -11,6 +11,7 @@ export function Layout() {
     { path: '/projects', label: 'Projects', icon: FolderOpen },
     { path: '/personas', label: 'Personas', icon: Users },
     { path: '/tests', label: 'Tests', icon: TestTube },
+    { path: '/how-it-works', label: 'How it Works', icon: BookOpen },
     { path: '/settings', label: 'Settings', icon: Settings },
   ];
 
