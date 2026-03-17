@@ -521,13 +521,13 @@ async function processTestResponses(test: Test, variants: any[]) {
         const response = await generateConceptResponse(variant, basePersona, conceptText, focusModifier, assets, strategicContext, scoreConstraints);
         const processingTime = Date.now() - startTime;
 
-        // Save response to database (including vector_scores)
+        // Save response to database
         await query(
           `INSERT INTO test_responses (
             test_id, variant_id, response_text, sentiment_score,
             engagement_likelihood, share_likelihood, comprehension_score,
-            reaction_tags, processing_time_ms, model_used, vector_scores
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+            reaction_tags, processing_time_ms, model_used
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
           [
             test.id,
             variant.id,
@@ -539,7 +539,6 @@ async function processTestResponses(test: Test, variants: any[]) {
             response.reaction_tags,
             processingTime,
             process.env.OPENAI_MODEL || 'gpt-4o',
-            dispositionResult ? JSON.stringify(dispositionResult) : null,
           ]
         );
 
