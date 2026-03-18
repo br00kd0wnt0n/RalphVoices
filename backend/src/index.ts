@@ -151,7 +151,7 @@ wsInstance.app.ws('/ws/tests/:id/progress', (ws, req) => {
     if (progress) {
       ws.send(JSON.stringify(progress));
 
-      if (progress.status === 'complete' || progress.status === 'failed') {
+      if (progress.status === 'complete' || progress.status === 'failed' || progress.status === 'cancelled') {
         clearInterval(intervalId);
         ws.close();
       }

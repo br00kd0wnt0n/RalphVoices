@@ -99,7 +99,7 @@ export interface Test {
   persona_ids: string[];
   variants_per_persona: number;
   variant_config: VariantConfig | null;
-  status: 'draft' | 'running' | 'complete' | 'failed';
+  status: 'draft' | 'running' | 'complete' | 'failed' | 'cancelled';
   responses_completed: number;
   responses_total: number;
   created_at: string;

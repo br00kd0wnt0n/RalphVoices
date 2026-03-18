@@ -25,7 +25,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-import { ArrowLeft, RefreshCw, Users, TrendingUp, MessageSquare, AlertTriangle, Sparkles, Globe, Download, Lightbulb, ShieldAlert, FileText, Pencil, ChevronDown, ChevronUp } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Users, TrendingUp, MessageSquare, AlertTriangle, Sparkles, Globe, Download, Lightbulb, ShieldAlert, FileText, Pencil, ChevronDown, ChevronUp, XCircle } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import type { Test, TestResponse } from '@/types';
 import { SENTIMENT_THRESHOLDS } from '@/lib/constants';
@@ -279,7 +279,7 @@ export function TestResultsPage() {
                   ? 'success'
                   : test.status === 'running'
                   ? 'warning'
-                  : test.status === 'failed'
+                  : test.status === 'failed' || test.status === 'cancelled'
                   ? 'destructive'
                   : 'secondary'
               }
@@ -293,12 +293,29 @@ export function TestResultsPage() {
         </div>
         <div className="flex items-center gap-2">
           {test.status === 'running' && (
-            <Button variant="outline" onClick={loadTest}>
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Refresh
-            </Button>
+            <>
+              <Button variant="outline" onClick={loadTest}>
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Refresh
+              </Button>
+              <Button
+                variant="outline"
+                className="border-destructive/50 text-destructive hover:bg-destructive/10"
+                onClick={async () => {
+                  try {
+                    await testsApi.cancel(test.id);
+                    loadTest();
+                  } catch (err: any) {
+                    console.error('Failed to cancel test:', err);
+                  }
+                }}
+              >
+                <XCircle className="h-4 w-4 mr-2" />
+                Cancel
+              </Button>
+            </>
           )}
-          {test.status === 'failed' && (
+          {(test.status === 'failed' || test.status === 'cancelled') && (
             <>
               <Button
                 variant="outline"
@@ -313,7 +330,7 @@ export function TestResultsPage() {
                 }}
               >
                 <RefreshCw className="h-4 w-4 mr-2" />
-                Quick Retry
+                {test.status === 'cancelled' ? 'Re-run' : 'Quick Retry'}
               </Button>
               <Button
                 variant="outline"

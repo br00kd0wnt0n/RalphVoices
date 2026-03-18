@@ -92,6 +92,11 @@ export const tests = {
       `/tests/${id}/run`,
       { method: 'POST' }
     ),
+  cancel: (id: string) =>
+    request<{ success: boolean; message: string }>(
+      `/tests/${id}/cancel`,
+      { method: 'POST' }
+    ),
   getResponses: (id: string, params?: { limit?: number; offset?: number; sentiment?: string; platform?: string; attitude?: string }) => {
     const searchParams = new URLSearchParams();
     if (params?.limit) searchParams.set('limit', params.limit.toString());
