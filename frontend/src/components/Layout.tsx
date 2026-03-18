@@ -1,6 +1,6 @@
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { RalphLogo } from '@/components/RalphLogo';
-import { Users, TestTube, LayoutDashboard, FolderOpen, Settings, BookOpen } from 'lucide-react';
+import { Users, TestTube, LayoutDashboard, FolderOpen, Settings, BookOpen, Shield } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 export function Layout() {
@@ -16,6 +16,7 @@ export function Layout() {
   const rightNavItems = [
     { path: '/how-it-works', label: 'How it Works', icon: BookOpen },
     { path: '/settings', label: 'Settings', icon: Settings },
+    { path: '/admin', label: 'Admin', icon: Shield },
   ];
 
   function renderNavLink(item: { path: string; label: string; icon: React.ElementType }) {

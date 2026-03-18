@@ -169,4 +169,49 @@ export const gwi = {
     }),
 };
 
+export const admin = {
+  stats: () =>
+    request<{
+      total_anchors: number;
+      by_source: Record<string, number>;
+      embedded_personas: number;
+      total_personas: number;
+    }>('/anchors/stats'),
+  personas: () =>
+    request<Array<{
+      id: string;
+      name: string;
+      age_base: number | null;
+      location: string | null;
+      has_values: boolean;
+      has_platform: boolean;
+      has_cultural: boolean;
+      has_demographic: boolean;
+      embeddings_updated_at: string | null;
+    }>>('/anchors/personas'),
+  recent: () =>
+    request<Array<{
+      id: string;
+      source: string;
+      confidence: number;
+      sentiment_score: number;
+      engagement_likelihood: number;
+      share_likelihood: number;
+      comprehension_score: number;
+      reaction_tags: string[];
+      primary_platform: string | null;
+      attitude_score: number | null;
+      persona_name: string | null;
+      test_name: string | null;
+      created_at: string;
+    }>>('/anchors/recent'),
+  seed: () =>
+    request<{ anchors_seeded: number; personas_embedded: number }>('/anchors/seed', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+  clear: () =>
+    request<{ deleted: number }>('/anchors/all', { method: 'DELETE' }),
+};
+
 export { ApiError };

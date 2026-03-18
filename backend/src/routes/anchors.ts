@@ -63,6 +63,49 @@ router.post('/seed', authMiddleware, async (req: AuthRequest, res: Response) => 
   }
 });
 
+// Per-persona embedding status
+router.get('/personas', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await query(
+      `SELECT id, name, age_base, location,
+        embedding_values IS NOT NULL as has_values,
+        embedding_platform IS NOT NULL as has_platform,
+        embedding_cultural IS NOT NULL as has_cultural,
+        embedding_demographic IS NOT NULL as has_demographic,
+        embeddings_updated_at
+      FROM personas
+      WHERE created_by = $1
+      ORDER BY name`,
+      [req.user!.id]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Persona embeddings error:', error);
+    res.status(500).json({ error: 'Failed to get persona embedding status' });
+  }
+});
+
+// Recent anchors with context
+router.get('/recent', authMiddleware, async (_req: AuthRequest, res: Response) => {
+  try {
+    const result = await query(
+      `SELECT ra.id, ra.source, ra.confidence,
+        ra.sentiment_score, ra.engagement_likelihood, ra.share_likelihood, ra.comprehension_score,
+        ra.reaction_tags, ra.primary_platform, ra.attitude_score,
+        p.name as persona_name, t.name as test_name, ra.created_at
+      FROM reference_anchors ra
+      LEFT JOIN personas p ON ra.persona_id = p.id
+      LEFT JOIN tests t ON ra.test_id = t.id
+      ORDER BY ra.created_at DESC
+      LIMIT 50`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Recent anchors error:', error);
+    res.status(500).json({ error: 'Failed to get recent anchors' });
+  }
+});
+
 // Clear all anchors (for recalibration)
 router.delete('/all', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
