@@ -129,7 +129,26 @@ export function Admin() {
     }
   }
 
-  const embeddedCount = personas.filter(
+  // Deduplicate personas by name — show one row per unique persona with copy count
+  const deduplicatedPersonas = Object.values(
+    personas.reduce((acc, p) => {
+      if (!acc[p.name]) {
+        acc[p.name] = { ...p, copies: 1 };
+      } else {
+        acc[p.name].copies++;
+        // Prefer the one with most complete embeddings / latest update
+        const existing = acc[p.name];
+        const existingEmbedded = [existing.has_values, existing.has_platform, existing.has_cultural, existing.has_demographic].filter(Boolean).length;
+        const currentEmbedded = [p.has_values, p.has_platform, p.has_cultural, p.has_demographic].filter(Boolean).length;
+        if (currentEmbedded > existingEmbedded) {
+          acc[p.name] = { ...p, copies: acc[p.name].copies };
+        }
+      }
+      return acc;
+    }, {} as Record<string, PersonaStatus & { copies: number }>)
+  );
+
+  const embeddedCount = deduplicatedPersonas.filter(
     (p) => p.has_values && p.has_platform && p.has_cultural && p.has_demographic
   ).length;
 
@@ -304,7 +323,10 @@ export function Admin() {
         <TabsContent value="personas" className="space-y-4 mt-4">
           <div className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">
-              {embeddedCount} of {personas.length} personas fully embedded
+              {embeddedCount} of {deduplicatedPersonas.length} unique personas fully embedded
+              {deduplicatedPersonas.length < personas.length && (
+                <span className="ml-1 text-xs">({personas.length} total incl. project copies)</span>
+              )}
             </p>
             <Button variant="outline" size="sm" onClick={handleSeed} disabled={seeding}>
               <RefreshCw className={`h-4 w-4 mr-2 ${seeding ? 'animate-spin' : ''}`} />
@@ -321,6 +343,7 @@ export function Admin() {
                       <th className="text-left p-3 font-medium">Persona</th>
                       <th className="text-left p-3 font-medium">Age</th>
                       <th className="text-left p-3 font-medium">Location</th>
+                      <th className="text-center p-3 font-medium">Copies</th>
                       <th className="text-center p-3 font-medium">
                         <span className="text-pink-600">Values</span>
                       </th>
@@ -337,11 +360,18 @@ export function Admin() {
                     </tr>
                   </thead>
                   <tbody>
-                    {personas.map((p) => (
+                    {deduplicatedPersonas.map((p) => (
                       <tr key={p.id} className="border-b border-border/30 hover:bg-muted/30">
                         <td className="p-3 font-medium">{p.name}</td>
                         <td className="p-3 text-muted-foreground">{p.age_base ?? '—'}</td>
                         <td className="p-3 text-muted-foreground">{p.location ?? '—'}</td>
+                        <td className="p-3 text-center">
+                          {p.copies > 1 ? (
+                            <Badge variant="secondary" className="text-xs">{p.copies}</Badge>
+                          ) : (
+                            <span className="text-muted-foreground">1</span>
+                          )}
+                        </td>
                         <td className="p-3 text-center">
                           {p.has_values ? (
                             <CheckCircle className="h-4 w-4 text-green-600 mx-auto" />
