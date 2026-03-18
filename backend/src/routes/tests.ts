@@ -13,6 +13,9 @@ const router = Router();
 // Store for WebSocket progress updates
 export const testProgress = new Map<string, { completed: number; total: number; status: string }>();
 
+// Store for cancellation signals — set test ID to true to abort processing
+export const testCancellations = new Set<string>();
+
 const assetSchema = z.object({
   name: z.string(),
   mimeType: z.string(),
@@ -345,8 +348,8 @@ router.post('/:id/run', authMiddleware, async (req: AuthRequest, res: Response) 
       return;
     }
 
-    // If retrying a failed test, clear previous responses and results
-    if (test.status === 'failed') {
+    // If retrying a failed/cancelled test, clear previous responses and results
+    if (test.status === 'failed' || test.status === 'cancelled') {
       await query('DELETE FROM test_responses WHERE test_id = $1', [testId]);
       await query('DELETE FROM test_results WHERE test_id = $1', [testId]);
       await query('UPDATE tests SET responses_completed = 0 WHERE id = $1', [testId]);
@@ -427,6 +430,38 @@ router.post('/:id/run', authMiddleware, async (req: AuthRequest, res: Response) 
   }
 });
 
+// Cancel a running test
+router.post('/:id/cancel', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { id: testId } = req.params;
+    const testResult = await query(`SELECT id, status FROM tests WHERE id = $1`, [testId]);
+    if (testResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Test not found' });
+    }
+    const test = testResult.rows[0];
+    if (test.status !== 'running') {
+      return res.status(400).json({ error: `Test is not running (status: ${test.status})` });
+    }
+
+    // Signal cancellation to the background processor
+    testCancellations.add(testId);
+
+    // Update status immediately
+    await query(`UPDATE tests SET status = 'cancelled' WHERE id = $1`, [testId]);
+    testProgress.set(testId, {
+      completed: testProgress.get(testId)?.completed || 0,
+      total: testProgress.get(testId)?.total || 0,
+      status: 'cancelled',
+    });
+
+    console.log(`[cancel] Test ${testId} cancelled by user`);
+    res.json({ success: true, message: 'Test cancelled' });
+  } catch (error) {
+    console.error('Cancel test error:', error);
+    res.status(500).json({ error: 'Failed to cancel test' });
+  }
+});
+
 // Process test responses (background)
 async function processTestResponses(test: Test, variants: any[]) {
   const conceptText = test.concept_text!;
@@ -460,6 +495,14 @@ async function processTestResponses(test: Test, variants: any[]) {
   const DELAY_MS = 1000; // 1 second delay between batches
 
   for (let i = 0; i < variants.length; i += BATCH_SIZE) {
+    // Check for cancellation before each batch
+    if (testCancellations.has(test.id)) {
+      console.log(`[processTestResponses] Test ${test.id} cancelled — stopping after ${responses.length} responses`);
+      testCancellations.delete(test.id);
+      testProgress.set(test.id, { completed: responses.length, total: variants.length, status: 'cancelled' });
+      return; // Exit early — status already set to 'cancelled' by the cancel endpoint
+    }
+
     const batch = variants.slice(i, i + BATCH_SIZE);
 
     const batchPromises = batch.map(async (variantRow) => {
