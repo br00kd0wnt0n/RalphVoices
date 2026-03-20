@@ -7,6 +7,12 @@ import { z } from 'zod';
 import type { Persona, PersonaVariant, Test, ScoreConstraints, DispositionScores } from '../utils/types.js';
 import { SENTIMENT_THRESHOLDS, ATTITUDE_THRESHOLDS } from '../utils/constants.js';
 import { gwiService } from '../services/gwi.js';
+import { RCBClient } from '../services/rcb-client.js';
+
+// RCB integration — mirror finalized sessions to shared context base
+const rcb = process.env.RCB_URL && process.env.RCB_API_KEY
+  ? new RCBClient(process.env.RCB_URL, process.env.RCB_API_KEY)
+  : null;
 
 const router = Router();
 
@@ -723,6 +729,28 @@ async function processTestResponses(test: Test, variants: any[]) {
     `UPDATE tests SET status = 'complete', completed_at = NOW() WHERE id = $1`,
     [test.id]
   );
+
+  // Mirror to RCB (fire-and-forget, async)
+  if (rcb) {
+    const projectResult = await query('SELECT name, client_name FROM projects WHERE id = $1', [test.project_id]);
+    const project = projectResult.rows[0];
+    rcb.ingest({
+      source_tool: 'voices',
+      run_type: 'test_result',
+      brand: project?.client_name || undefined,
+      client: project?.client_name || undefined,
+      data: {
+        test_name: test.name,
+        concept_text: test.concept_text,
+        summary,
+        segments,
+        themes: { ...themes, key_quotes: keyQuotes },
+      },
+      summary: `${test.name}: ${summary.total_responses} responses, ${summary.sentiment.positive} positive`,
+    }).then((res: any) => {
+      console.log(`[RCB] Mirrored test "${test.name}" — ${res.chunks_created} chunks`);
+    }).catch((err: any) => console.warn(`[RCB] Failed to mirror test:`, err.message));
+  }
 
   testProgress.set(test.id, { completed: responses.length, total: responses.length, status: 'complete' });
 }
