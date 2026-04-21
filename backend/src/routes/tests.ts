@@ -570,6 +570,14 @@ async function processTestResponses(test: Test, variants: any[]) {
         const response = await generateConceptResponse(variant, basePersona, conceptText, focusModifier, assets, strategicContext, scoreConstraints);
         const processingTime = Date.now() - startTime;
 
+        // Scores are INTEGER 1-10 in the DB — GPT sometimes returns decimals (e.g. 7.8),
+        // so coerce/round and clamp before insert.
+        const clampScore = (v: unknown): number => {
+          const n = Math.round(Number(v));
+          if (!Number.isFinite(n)) return 5;
+          return Math.min(10, Math.max(1, n));
+        };
+
         // Save response to database
         await query(
           `INSERT INTO test_responses (
@@ -581,10 +589,10 @@ async function processTestResponses(test: Test, variants: any[]) {
             test.id,
             variant.id,
             response.response_text,
-            response.sentiment_score,
-            response.engagement_likelihood,
-            response.share_likelihood,
-            response.comprehension_score,
+            clampScore(response.sentiment_score),
+            clampScore(response.engagement_likelihood),
+            clampScore(response.share_likelihood),
+            clampScore(response.comprehension_score),
             response.reaction_tags,
             processingTime,
             process.env.OPENAI_MODEL || 'gpt-4o',
