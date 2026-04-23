@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { tests as testsApi, projects as projectsApi, personas as personasApi, uploads as uploadsApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -37,10 +37,14 @@ interface ConceptFirstProps {
 
 export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [retryLoading, setRetryLoading] = useState(false);
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  // Shows a small banner in step 1 once a Narrativ handoff has been detected
+  // and pre-filled into the form.
+  const [narrativHandoff, setNarrativHandoff] = useState<{ concept: string } | null>(null);
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [personas, setPersonas] = useState<Persona[]>([]);
@@ -81,6 +85,51 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
   useEffect(() => {
     projectsApi.list().then(setProjects).catch(console.error);
   }, []);
+
+  // Narrativ (Brainstorm) concept handoff. When Narrativ navigates the user
+  // to /tests/new with source=narrativ and a concept payload, pre-fill the
+  // concept form so the user can review/edit in step 1 and continue to
+  // audience selection without retyping. URL is cleaned after extraction so
+  // refreshes don't stash stale params on the form.
+  useEffect(() => {
+    if (searchParams.get('source') !== 'narrativ') return;
+    const concept = searchParams.get('concept') || '';
+    const statement = searchParams.get('statement') || '';
+    const audience = searchParams.get('audience') || '';
+    const angle = searchParams.get('angle') || '';
+    const hypothesesRaw = searchParams.get('hypotheses') || '';
+
+    let hypotheses: string[] = [];
+    try {
+      const parsed = JSON.parse(hypothesesRaw);
+      if (Array.isArray(parsed)) hypotheses = parsed.filter((h) => typeof h === 'string' && h.trim());
+    } catch { /* ignore malformed */ }
+
+    // Concept text: title + statement form the main pitch the personas react to.
+    const conceptBody = [concept, statement].filter(Boolean).join('\n\n');
+    if (conceptBody) setConceptText(conceptBody);
+    if (concept) setName(concept);
+
+    // Strategic context fields map: angle -> Creative Ambition, audience -> Key Insight.
+    // Strategic Truth is left empty for the user to own (it's often the result of the test).
+    if (angle) setCreativeAmbition(angle);
+    if (audience || hypotheses.length) {
+      const insightsParts: string[] = [];
+      if (audience) insightsParts.push(`Target audience: ${audience}`);
+      if (hypotheses.length) {
+        insightsParts.push('Testing hypotheses:\n' + hypotheses.map((h) => `- ${h}`).join('\n'));
+      }
+      setInsights(insightsParts.join('\n\n'));
+    }
+
+    setNarrativHandoff({ concept: concept || 'Narrativ concept' });
+
+    // Clean the URL so params don't linger. Keep mode if it was set.
+    const cleaned = new URLSearchParams();
+    const mode = searchParams.get('mode');
+    if (mode) cleaned.set('mode', mode);
+    setSearchParams(cleaned, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   // Load test data when retrying a failed test
   useEffect(() => {
@@ -352,6 +401,25 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
           transition={{ duration: 0.3 }}
           className="space-y-6"
         >
+          {narrativHandoff && (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-[#D94D8F]/30 bg-[#D94D8F]/5 px-4 py-2.5">
+              <div className="flex items-center gap-2 text-sm">
+                <Sparkles className="h-4 w-4 text-[#D94D8F]" />
+                <span className="text-foreground">
+                  Pre-filled from Narrativ: <span className="font-medium">{narrativHandoff.concept}</span>
+                </span>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setNarrativHandoff(null)}
+                className="h-7 text-xs text-muted-foreground hover:text-foreground"
+              >
+                Dismiss
+              </Button>
+            </div>
+          )}
+
           {/* Test Type */}
           <div className="grid grid-cols-2 gap-3">
             <Card
