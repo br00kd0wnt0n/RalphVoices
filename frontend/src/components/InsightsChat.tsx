@@ -11,6 +11,58 @@ interface ChatMessage {
   content: string;
 }
 
+// Inline `**bold**` rendering. Splits on the bold pattern; mismatched/half-open
+// `**` during streaming pass through unchanged until the closing pair arrives.
+function renderInline(text: string): React.ReactNode[] {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((p, j) => {
+    if (p.startsWith('**') && p.endsWith('**') && p.length >= 4) {
+      return <strong key={j} className="font-semibold">{p.slice(2, -2)}</strong>;
+    }
+    return <span key={j}>{p}</span>;
+  });
+}
+
+// Lightweight markdown renderer for chat output. Handles the four shapes
+// OpenAI reliably emits: bold, headers (## / ###), bullets (with indent), and
+// plain paragraphs. Numbered lists render as paragraphs (still readable). No
+// new dependency — matches the inline pattern used in TestResults for GWI
+// narrative.
+function ChatMarkdown({ text }: { text: string }) {
+  const lines = text.split('\n');
+  return (
+    <div className="space-y-1">
+      {lines.map((rawLine, i) => {
+        if (!rawLine.trim()) return <div key={i} className="h-1.5" />;
+
+        const indent = (rawLine.match(/^[ \t]*/)?.[0].length) || 0;
+        const line = rawLine.trimStart();
+
+        if (/^#{1,3}\s/.test(line)) {
+          return (
+            <p key={i} className="font-semibold mt-2">
+              {renderInline(line.replace(/^#+\s*/, ''))}
+            </p>
+          );
+        }
+
+        const bullet = line.match(/^([-*•])\s+(.*)$/);
+        if (bullet) {
+          const indentPx = Math.min(indent, 8) * 6;
+          return (
+            <div key={i} className="flex gap-2 leading-relaxed" style={{ paddingLeft: `${indentPx}px` }}>
+              <span className="text-muted-foreground select-none">•</span>
+              <span className="flex-1">{renderInline(bullet[2])}</span>
+            </div>
+          );
+        }
+
+        return <p key={i} className="leading-relaxed">{renderInline(line)}</p>;
+      })}
+    </div>
+  );
+}
+
 interface InsightsChatProps {
   testId: string;
 }
@@ -178,8 +230,12 @@ export function InsightsChat({ testId }: InsightsChatProps) {
                     <span className="text-xs font-medium text-[#D94D8F]">Ralph Insights</span>
                   </div>
                 )}
-                <div className="text-sm whitespace-pre-wrap leading-relaxed">
-                  {msg.content || (
+                <div className="text-sm leading-relaxed">
+                  {msg.content ? (
+                    msg.role === 'assistant'
+                      ? <ChatMarkdown text={msg.content} />
+                      : <div className="whitespace-pre-wrap">{msg.content}</div>
+                  ) : (
                     streaming && i === messages.length - 1 ? (
                       <span className="inline-flex items-center gap-1">
                         <span className="animate-bounce" style={{ animationDelay: '0ms' }}>.</span>
