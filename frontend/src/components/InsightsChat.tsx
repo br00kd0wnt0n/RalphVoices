@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Send, Sparkles, Loader2, MessageSquare } from 'lucide-react';
+import { authHeaders } from '@/lib/api';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
@@ -50,7 +51,7 @@ export function InsightsChat({ testId }: InsightsChatProps) {
     try {
       const response = await fetch(`${API_BASE}/tests/${testId}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           message: content.trim(),
           history: messages,

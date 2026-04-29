@@ -7,12 +7,27 @@ class ApiError extends Error {
   }
 }
 
+/**
+ * Returns auth headers for a request. If a JWT is present in localStorage,
+ * adds `Authorization: Bearer <token>`. Otherwise returns an empty object so
+ * unauthenticated endpoints (login, register) still work.
+ *
+ * Exported because a few components (BootSequence, InsightsChat,
+ * GwiRecommendations, exportReport, uploads.upload) bypass `request()` and
+ * call `fetch` directly — they need the same auth treatment.
+ */
+export function authHeaders(): Record<string, string> {
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('token') : null;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 async function request<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
+    ...authHeaders(),
     ...options.headers,
   };
 
@@ -111,7 +126,7 @@ export const tests = {
   getResults: (id: string) => request<any>(`/tests/${id}/results`),
   exportReport: async (id: string) => {
     const response = await fetch(`${API_BASE}/tests/${id}/export`, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
     });
     if (!response.ok) throw new ApiError(response.status, 'Export failed');
     const blob = await response.blob();
@@ -134,6 +149,7 @@ export const uploads = {
 
     const response = await fetch(`${API_BASE}/uploads`, {
       method: 'POST',
+      headers: { ...authHeaders() }, // do NOT set Content-Type; browser sets multipart boundary
       body: formData,
     });
 

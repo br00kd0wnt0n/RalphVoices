@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import { motion } from 'framer-motion';
 import { Wand2, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { authHeaders } from '@/lib/api';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
@@ -44,7 +45,7 @@ export function GwiRecommendations({ testId }: GwiRecommendationsProps) {
     setError('');
     try {
       const response = await fetch(`${API_BASE}/tests/${testId}/recommendations`, {
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
       });
       if (!response.ok) throw new Error('Failed to load recommendations');
       const data = await response.json();
