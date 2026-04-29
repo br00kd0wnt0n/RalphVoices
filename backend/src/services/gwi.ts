@@ -1,8 +1,29 @@
 import OpenAI from 'openai';
 import { query } from '../db/index.js';
 
+// Relies on OpenAI workspace policy: API traffic from this account is not used for training. No zero-retention header is set; if zero-retention is required for a specific deployment, configure via OpenAI enterprise agreement.
 const openai = new OpenAI();
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
+
+// Hard gate for GWI Spark integration. The integration is dormant unless
+// ENABLE_GWI=true AND a valid GWI_API_KEY (env or per-user setting) is present.
+// While dormant, every public method short-circuits with a structured disabled
+// response so callers can render "GWI enrichment unavailable" instead of empty
+// fields or hallucinated data. Reactivation when a commercial deal closes is a
+// single env-var flip — no code change required.
+const GWI_INTEGRATION_ENABLED = process.env.ENABLE_GWI === 'true';
+
+export interface GwiDisabledResponse {
+  enabled: false;
+  reason: string;
+}
+
+const DISABLED_REASON =
+  'GWI integration is currently disabled. Set ENABLE_GWI=true and supply a valid GWI_API_KEY to enable.';
+
+function disabledResponse(): GwiDisabledResponse {
+  return { enabled: false, reason: DISABLED_REASON };
+}
 
 // GWI Spark API types
 export interface GwiAudience {
@@ -64,7 +85,13 @@ class GwiService {
   }
 
   isEnabled(): boolean {
-    return !!this.config.apiKey;
+    // Both the integration flag AND a usable key are required.
+    return GWI_INTEGRATION_ENABLED && !!this.config.apiKey;
+  }
+
+  /** True when the integration flag is on at all (regardless of key presence). */
+  isIntegrationEnabled(): boolean {
+    return GWI_INTEGRATION_ENABLED;
   }
 
   getFeatures(): string[] {
@@ -73,6 +100,8 @@ class GwiService {
   }
 
   async loadApiKeyForUser(userId: string): Promise<void> {
+    // No point reaching for a key when the integration itself is gated off.
+    if (!GWI_INTEGRATION_ENABLED) return;
     if (this.config.apiKey) return;
     try {
       const result = await query(
@@ -96,6 +125,7 @@ class GwiService {
    * It does NOT generate analysis.
    */
   private async queryGwi(prompt: string): Promise<{ insights: GwiInsight[]; sources: string; chatId: string }> {
+    if (!GWI_INTEGRATION_ENABLED) throw new Error(DISABLED_REASON);
     if (!this.config.apiKey) throw new Error('GWI API key not configured');
 
     const requestBody = {
@@ -175,6 +205,7 @@ class GwiService {
    * Use OpenAI to synthesize GWI insights into structured audience segments.
    */
   private async synthesizeAudiences(conceptText: string, gwiInsights: GwiInsight[]): Promise<GwiAudience[]> {
+    if (!GWI_INTEGRATION_ENABLED) return [];
     const insightsText = gwiInsights.length > 0
       ? gwiInsights.map(i => `- ${i.content}`).join('\n')
       : 'No specific GWI data was available for these topics.';
@@ -255,7 +286,8 @@ Return JSON with this structure:
     conceptText: string,
     results: { summary: any; segments: any; themes: any },
     gwiInsights: GwiInsight[]
-  ): Promise<GwiEnrichment> {
+  ): Promise<GwiEnrichment | null> {
+    if (!GWI_INTEGRATION_ENABLED) return null;
     const insightsText = gwiInsights.length > 0
       ? gwiInsights.map(i => `- ${i.content}`).join('\n')
       : 'No specific GWI data was available for these topics.';
@@ -397,6 +429,7 @@ Provide a comprehensive market analysis. Return JSON:
    * Uses OpenAI to identify the key consumer behavior topics.
    */
   private async extractTopics(conceptText: string): Promise<string[]> {
+    if (!GWI_INTEGRATION_ENABLED) return [];
     try {
       const response = await openai.chat.completions.create({
         model: MODEL,
@@ -434,6 +467,7 @@ Bad examples (too specific, won't match GWI data):
 
   /** Suggest target audiences based on a concept */
   async suggestAudiences(conceptText: string): Promise<GwiAudience[]> {
+    if (!GWI_INTEGRATION_ENABLED) return [];
     if (!this.isEnabled()) return [];
 
     try {
@@ -465,6 +499,7 @@ Bad examples (too specific, won't match GWI data):
     psychographics?: any;
     media_habits?: any;
   }): Promise<GwiValidation | null> {
+    if (!GWI_INTEGRATION_ENABLED) return null;
     if (!this.isEnabled()) return null;
 
     try {
@@ -525,6 +560,7 @@ Assess this persona. Return JSON:
     results: { summary: any; segments: any; themes: any },
     conceptText: string
   ): Promise<GwiEnrichment | null> {
+    if (!GWI_INTEGRATION_ENABLED) return null;
     if (!this.isEnabled()) return null;
 
     try {
@@ -538,6 +574,11 @@ Assess this persona. Return JSON:
 
       // Step 3: Use OpenAI to synthesize everything into structured analysis
       const enrichment = await this.synthesizeEnrichment(conceptText, results, gwiInsights);
+      if (!enrichment) {
+        // Integration was gated off between the entry-point check and synthesis;
+        // surface a clean null rather than logging on a missing object.
+        return null;
+      }
       console.log('[GWI] Enrichment generated:', {
         execSummaryLen: enrichment.executive_summary.length,
         marketContextCount: enrichment.market_context.length,

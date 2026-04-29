@@ -151,7 +151,7 @@ import type { GwiAudience, GwiValidation, GwiEnrichment } from '@/types/gwi';
 
 export const gwi = {
   status: () =>
-    request<{ enabled: boolean; features: string[] }>('/gwi/status', { method: 'POST' }),
+    request<{ enabled: boolean; features: string[]; integration_enabled?: boolean; reason?: string | null }>('/gwi/status', { method: 'POST' }),
   suggestAudiences: (data: { concept_text: string }) =>
     request<{ enabled: boolean; audiences: GwiAudience[] }>('/gwi/suggest-audiences', {
       method: 'POST',

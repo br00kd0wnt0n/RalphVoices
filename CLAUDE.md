@@ -188,7 +188,7 @@ Error resilience: Per-variant error handling — failed variants are skipped, te
 
 ### GWI Spark Service (`backend/src/services/gwi.ts`)
 
-Optional integration via JSON-RPC calls to GWI Spark API. Supports env var or per-user API keys. Features:
+Optional integration via JSON-RPC calls to GWI Spark API. **Dormant by default** — every public method short-circuits unless `ENABLE_GWI=true` AND a valid key (env or per-user setting) is present. Features (when active):
 - `suggestAudiences` — 3-5 distinct audience segments with descriptions (requests JSON, falls back to text parsing)
 - `validatePersona` — realism check against market data
 - `enrichResults` — executive summary, market context, benchmarks, opportunities/risks
@@ -249,7 +249,7 @@ Proprietary 0-100 benchmark: 30% sentiment + 30% engagement + 25% share likeliho
 - **Title font**: Space Grotesk (Google Fonts) for VOICES wordmark and headings
 - **UI components**: shadcn/ui in `frontend/src/components/ui/` — don't modify these directly
 - **API client**: All backend calls go through `frontend/src/lib/api.ts` (typed fetch wrapper)
-- **Auth**: JWT tokens or automatic demo mode (no auth header → demo user `demo@ralphvoices.com`)
+- **Auth**: JWT tokens. Demo mode (no auth header → demo user `demo@ralphvoices.com`) is opt-in via `ENABLE_DEMO_MODE=true`; otherwise missing auth returns 401.
 - **Shared constants**: `backend/src/utils/constants.ts` and `frontend/src/lib/constants.ts` — keep in sync
 - **Animations**: framer-motion for page transitions, entry animations, interactive elements
 - **Charts**: recharts (BarChart, RadarChart, PieChart) for data visualizations
@@ -260,8 +260,11 @@ Backend (`.env`):
 - `DATABASE_URL` — PostgreSQL connection string
 - `OPENAI_API_KEY` — Required for all AI features
 - `OPENAI_MODEL` — Model to use (default: `gpt-4o`). Vision requests always use `gpt-4o`
-- `JWT_SECRET` — For auth tokens (has development default)
-- `GWI_API_KEY` — Optional, for GWI Spark integration
+- `JWT_SECRET` — Required; server refuses to boot if unset or set to the literal `development-secret-change-me` (override only via `NODE_ENV=development` + `ALLOW_INSECURE_JWT=true`)
+- `ENABLE_DEMO_MODE` — `true` re-enables auto-login as the demo user; default `false`
+- `ENABLE_GWI`, `GWI_API_KEY` — flip ENABLE_GWI=true and supply a key to reactivate GWI Spark
+- `ENABLE_R2_STORAGE`, `R2_*` — route uploaded assets to Cloudflare R2 instead of base64-in-JSONB
+- `TEST_RETENTION_DAYS` — optional; archive completed tests older than N days
 - `PORT` — Backend port (default: 3001)
 - `FRONTEND_URL` — For CORS (default: `http://localhost:5173`)
 

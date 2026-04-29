@@ -4,6 +4,11 @@ import { query } from '../db/index.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'development-secret-change-me';
 
+// Demo mode is opt-in. When ENABLE_DEMO_MODE !== 'true', missing-auth requests
+// are rejected with 401 instead of being silently logged in as the demo user.
+// Must be FALSE in any client-facing or shared deployment — see README.
+const DEMO_MODE_ENABLED = process.env.ENABLE_DEMO_MODE === 'true';
+
 // Cache demo user to avoid DB query on every unauthenticated request
 let cachedDemoUser: { id: string; email: string; name: string | null } | null = null;
 
@@ -34,8 +39,14 @@ export async function authMiddleware(
 ): Promise<void> {
   const authHeader = req.headers.authorization;
 
-  // If no auth header, use demo user (public mode)
+  // If no auth header, fall through to demo user only when demo mode is enabled.
+  // Otherwise reject — silent demo-login was the source of audit finding #2.
   if (!authHeader?.startsWith('Bearer ')) {
+    if (!DEMO_MODE_ENABLED) {
+      res.status(401).json({ error: 'Authentication required' });
+      return;
+    }
+
     try {
       // Use cached demo user if available
       if (cachedDemoUser) {

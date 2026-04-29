@@ -12,13 +12,20 @@ router.post('/status', authMiddleware, async (req: AuthRequest, res: Response) =
     // Try loading user-specific API key from settings
     await gwiService.loadApiKeyForUser(req.user!.id);
 
+    const integrationEnabled = gwiService.isIntegrationEnabled();
+    const enabled = gwiService.isEnabled();
+
     res.json({
-      enabled: gwiService.isEnabled(),
+      enabled,
       features: gwiService.getFeatures(),
+      integration_enabled: integrationEnabled,
+      reason: integrationEnabled
+        ? (enabled ? null : 'GWI API key not configured for this user.')
+        : 'GWI integration is currently disabled (no active commercial agreement). Set ENABLE_GWI=true and supply a valid GWI_API_KEY to enable.',
     });
   } catch (error) {
     console.error('GWI status error:', error);
-    res.json({ enabled: false, features: [] });
+    res.json({ enabled: false, features: [], integration_enabled: false, reason: 'GWI status check failed.' });
   }
 });
 

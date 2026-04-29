@@ -16,11 +16,35 @@ const rcb = process.env.RCB_URL && process.env.RCB_API_KEY
 
 const router = Router();
 
-// Store for WebSocket progress updates
+// Store for WebSocket progress updates. The in-memory map gives the WebSocket
+// poll loop a sub-ms read; we mirror every write to the test_progress table so
+// progress survives a backend restart (audit finding #8).
 export const testProgress = new Map<string, { completed: number; total: number; status: string }>();
 
 // Store for cancellation signals — set test ID to true to abort processing
 export const testCancellations = new Set<string>();
+
+export async function persistProgress(
+  testId: string,
+  state: { completed: number; total: number; status: string }
+): Promise<void> {
+  testProgress.set(testId, state);
+  try {
+    await query(
+      `INSERT INTO test_progress (test_id, completed_count, total_count, status, last_updated)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (test_id) DO UPDATE SET
+         completed_count = EXCLUDED.completed_count,
+         total_count = EXCLUDED.total_count,
+         status = EXCLUDED.status,
+         last_updated = NOW()`,
+      [testId, state.completed, state.total, state.status]
+    );
+  } catch (err) {
+    // Persistence failure must not crash the test — log and keep going.
+    console.error(`[progress] Failed to persist progress for test ${testId}:`, err);
+  }
+}
 
 const assetSchema = z.object({
   name: z.string(),
@@ -412,7 +436,7 @@ router.post('/:id/run', authMiddleware, async (req: AuthRequest, res: Response) 
     );
 
     // Initialize progress
-    testProgress.set(testId, { completed: 0, total: totalResponses, status: 'running' });
+    await persistProgress(testId, { completed: 0, total: totalResponses, status: 'running' });
 
     // Send immediate response
     res.json({
@@ -427,7 +451,7 @@ router.post('/:id/run', authMiddleware, async (req: AuthRequest, res: Response) 
       console.error('[processTestResponses] Error message:', error?.message);
       console.error('[processTestResponses] Error stack:', error?.stack);
       query(`UPDATE tests SET status = 'failed' WHERE id = $1`, [testId]);
-      testProgress.set(testId, { completed: 0, total: totalResponses, status: 'failed' });
+      persistProgress(testId, { completed: 0, total: totalResponses, status: 'failed' });
     });
 
   } catch (error) {
@@ -454,7 +478,7 @@ router.post('/:id/cancel', authMiddleware, async (req: AuthRequest, res: Respons
 
     // Update status immediately
     await query(`UPDATE tests SET status = 'cancelled' WHERE id = $1`, [testId]);
-    testProgress.set(testId, {
+    await persistProgress(testId, {
       completed: testProgress.get(testId)?.completed || 0,
       total: testProgress.get(testId)?.total || 0,
       status: 'cancelled',
@@ -505,7 +529,7 @@ async function processTestResponses(test: Test, variants: any[]) {
     if (testCancellations.has(test.id)) {
       console.log(`[processTestResponses] Test ${test.id} cancelled — stopping after ${responses.length} responses`);
       testCancellations.delete(test.id);
-      testProgress.set(test.id, { completed: responses.length, total: variants.length, status: 'cancelled' });
+      await persistProgress(test.id, { completed: responses.length, total: variants.length, status: 'cancelled' });
       return; // Exit early — status already set to 'cancelled' by the cancel endpoint
     }
 
@@ -552,7 +576,7 @@ async function processTestResponses(test: Test, variants: any[]) {
 
         if (conceptEmbedding) {
           try {
-            dispositionResult = await computeDisposition(variantRow.persona_id, conceptEmbedding);
+            dispositionResult = await computeDisposition(variantRow.persona_id, conceptEmbedding, test.project_id);
             if (dispositionResult.constrained) {
               scoreConstraints = {
                 sentiment_range: dispositionResult.sentiment_range,
@@ -609,11 +633,14 @@ async function processTestResponses(test: Test, variants: any[]) {
     const batchResults = await Promise.all(batchPromises);
     responses.push(...batchResults.filter(Boolean));
 
-    // Update progress
+    // Update progress (mirror to test_progress table so a restart doesn't lose state)
     const progress = testProgress.get(test.id);
     if (progress) {
-      progress.completed = responses.length;
-      testProgress.set(test.id, progress);
+      await persistProgress(test.id, {
+        completed: responses.length,
+        total: progress.total,
+        status: progress.status,
+      });
     }
 
     await query(
@@ -631,7 +658,7 @@ async function processTestResponses(test: Test, variants: any[]) {
   if (responses.length === 0) {
     console.error(`[processTestResponses] All variants failed for test ${test.id}`);
     await query(`UPDATE tests SET status = 'failed' WHERE id = $1`, [test.id]);
-    testProgress.set(test.id, { completed: 0, total: variants.length, status: 'failed' });
+    await persistProgress(test.id, { completed: 0, total: variants.length, status: 'failed' });
     return;
   }
 
@@ -713,7 +740,9 @@ async function processTestResponses(test: Test, variants: any[]) {
     console.error(`Anchor seeding failed for test ${test.id}:`, err);
   }
 
-  // GWI enrichment (non-blocking — failures don't affect test completion)
+  // GWI enrichment (non-blocking — failures don't affect test completion).
+  // When the integration is gated off (ENABLE_GWI !== 'true' or no key), we skip
+  // silently rather than running half a pipeline against a dead endpoint.
   try {
     if (gwiService.isEnabled()) {
       const enrichment = await gwiService.enrichResults(
@@ -727,6 +756,8 @@ async function processTestResponses(test: Test, variants: any[]) {
         );
         console.log(`GWI enrichment saved for test ${test.id}`);
       }
+    } else {
+      console.log(`[gwi] Skipping enrichment for test ${test.id} — integration disabled.`);
     }
   } catch (gwiError) {
     console.error(`GWI enrichment failed for test ${test.id}:`, gwiError);
@@ -760,7 +791,7 @@ async function processTestResponses(test: Test, variants: any[]) {
     }).catch((err: any) => console.warn(`[RCB] Failed to mirror test:`, err.message));
   }
 
-  testProgress.set(test.id, { completed: responses.length, total: responses.length, status: 'complete' });
+  await persistProgress(test.id, { completed: responses.length, total: responses.length, status: 'complete' });
 }
 
 function calculateSegments(responses: any[]) {
@@ -1133,23 +1164,34 @@ router.get('/:id/recommendations', authMiddleware, async (req: AuthRequest, res:
   }
 });
 
-// Delete test
+// Delete test — gated by ownership via the test's project. Cascades to
+// test_responses, test_results (ON DELETE CASCADE) and reference_anchors
+// derived from the test (explicit DELETE because the FK is SET NULL to keep
+// anchors valuable when their source test is gone — but when the user is
+// actively asking us to delete the test, they want that calibration data
+// removed too).
 router.delete('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    const result = await query(
-      `DELETE FROM tests t
-       USING projects p
-       WHERE t.id = $1 AND t.project_id = p.id AND p.created_by = $2
-       RETURNING t.id`,
+    // Verify ownership before any deletes
+    const ownership = await query(
+      `SELECT t.id FROM tests t
+       JOIN projects p ON t.project_id = p.id
+       WHERE t.id = $1 AND p.created_by = $2`,
       [req.params.id, req.user!.id]
     );
 
-    if (result.rows.length === 0) {
+    if (ownership.rows.length === 0) {
       res.status(404).json({ error: 'Test not found' });
       return;
     }
 
+    // Drop derived calibration anchors first (FK is SET NULL, so cascade alone wouldn't remove them)
+    await query('DELETE FROM reference_anchors WHERE test_id = $1', [req.params.id]);
+
+    await query('DELETE FROM tests WHERE id = $1', [req.params.id]);
+
     testProgress.delete(req.params.id);
+    testCancellations.delete(req.params.id);
     res.json({ success: true });
   } catch (error) {
     console.error('Delete test error:', error);

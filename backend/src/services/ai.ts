@@ -8,6 +8,7 @@ if (!apiKey) {
   console.error('ERROR: OPENAI_API_KEY is not set. AI features will not work.');
 }
 
+// Relies on OpenAI workspace policy: API traffic from this account is not used for training. No zero-retention header is set; if zero-retention is required for a specific deployment, configure via OpenAI enterprise agreement.
 const openai = new OpenAI({
   apiKey: apiKey || 'missing-key',
 });
@@ -222,6 +223,7 @@ export interface TestAsset {
   isImage: boolean;
   isPDF: boolean;
   extractedText?: string;
+  url?: string; // R2 URL when ENABLE_R2_STORAGE=true; preferred over base64 for images
 }
 
 export interface StrategicContext {
@@ -331,16 +333,30 @@ Respond in character, then provide your scores and tags.`;
   let userContent: any;
 
   if (imageAssets.length > 0) {
-    // Use vision format with images
+    // Prefer the R2 URL when available (avoids inlining megabytes of base64 in
+    // every variant request); fall back to the base64 data URL when only that
+    // is present. If R2 was configured but the upload missed, the asset still
+    // has its base64 payload — log a warning and keep going.
     userContent = [
       { type: 'text', text: userPromptText },
-      ...imageAssets.map(img => ({
-        type: 'image_url',
-        image_url: {
-          url: img.base64, // Already in data:image/...;base64,... format
-          detail: 'low', // Use low detail to reduce tokens
-        },
-      })),
+      ...imageAssets.map(img => {
+        let url: string;
+        if (img.url) {
+          url = img.url;
+        } else if (img.base64) {
+          url = img.base64; // data:image/...;base64,...
+        } else {
+          console.warn(`[ai] Image asset "${img.name}" has neither url nor base64; skipping image content.`);
+          url = '';
+        }
+        return {
+          type: 'image_url',
+          image_url: {
+            url,
+            detail: 'low', // Use low detail to reduce tokens
+          },
+        };
+      }).filter(c => c.image_url.url),
     ];
   } else {
     userContent = userPromptText;

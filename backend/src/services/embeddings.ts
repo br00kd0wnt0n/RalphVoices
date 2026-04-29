@@ -8,6 +8,7 @@ import type {
   ScoreConstraints,
 } from '../utils/types.js';
 
+// Relies on OpenAI workspace policy: API traffic from this account is not used for training. No zero-retention header is set; if zero-retention is required for a specific deployment, configure via OpenAI enterprise agreement.
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || 'missing-key',
 });
@@ -19,6 +20,14 @@ const EMBEDDING_DIMS = 1536;
 const ANCHOR_K = 10; // Max nearest anchors to consider
 const ANCHOR_MIN_SIMILARITY = 0.5; // Minimum combined similarity to include
 const SCORE_RANGE_HALFWIDTH = 1.5; // ± from weighted mean
+
+// Anchor scoping (Task 1 — fix cross-client calibration leakage):
+// Scoring uses the test's own project anchors plus any anchors explicitly marked
+// is_global_calibration=TRUE (curated cross-tenant calibration set). Anchors from
+// *other* clients' projects are never used. This is option (b) from the audit:
+// project-scoped + opt-in global calibration. Chosen over option (a) (project-only)
+// because it lets Ralph seed a curated baseline so brand-new projects still get
+// constrained scoring on their first few tests, without ever leaking client data.
 
 // ---------------------------------------------------------------------------
 // Core embedding function
@@ -164,11 +173,12 @@ function makeUnconstrainedResult(): DispositionScores {
 
 export async function computeDisposition(
   personaId: string,
-  conceptEmbedding: number[]
+  conceptEmbedding: number[],
+  projectId?: string | null
 ): Promise<DispositionScores> {
-  // Check persona has embeddings
-  const personaResult = await query<{ embedding_values: string }>(
-    `SELECT embedding_values FROM personas WHERE id = $1 AND embedding_values IS NOT NULL`,
+  // Check persona has embeddings + look up project for anchor scoping
+  const personaResult = await query<{ embedding_values: string; project_id: string | null }>(
+    `SELECT embedding_values, project_id FROM personas WHERE id = $1 AND embedding_values IS NOT NULL`,
     [personaId]
   );
 
@@ -176,10 +186,16 @@ export async function computeDisposition(
     return makeUnconstrainedResult();
   }
 
+  // Prefer caller-supplied project_id (the test's project); fall back to the
+  // persona's project_id. Standalone personas (no project) score against global
+  // calibration anchors only.
+  const scopeProjectId = projectId ?? personaResult.rows[0].project_id;
+
   const conceptVec = `[${conceptEmbedding.join(',')}]`;
 
-  // Find nearest anchors by combined persona + concept similarity
-  // Persona similarity weighted 0.6, concept similarity weighted 0.4
+  // Find nearest anchors by combined persona + concept similarity, restricted to
+  // this project's anchors plus opt-in global calibration anchors. Anchors from
+  // other projects are never visible.
   const anchorsResult = await query<{
     sentiment_score: number;
     engagement_likelihood: number;
@@ -200,11 +216,12 @@ export async function computeDisposition(
        (1 - (concept_embedding <=> $2::vector)) * 0.4 AS combined_similarity
      FROM reference_anchors
      WHERE
-       (1 - (persona_embedding <=> (SELECT embedding_values FROM personas WHERE id = $1))) * 0.6 +
-       (1 - (concept_embedding <=> $2::vector)) * 0.4 > $3
+       (project_id = $5 OR is_global_calibration = TRUE)
+       AND (1 - (persona_embedding <=> (SELECT embedding_values FROM personas WHERE id = $1))) * 0.6 +
+           (1 - (concept_embedding <=> $2::vector)) * 0.4 > $3
      ORDER BY combined_similarity DESC
      LIMIT $4`,
-    [personaId, conceptVec, ANCHOR_MIN_SIMILARITY, ANCHOR_K]
+    [personaId, conceptVec, ANCHOR_MIN_SIMILARITY, ANCHOR_K, scopeProjectId]
   );
 
   const anchors = anchorsResult.rows;
@@ -252,7 +269,7 @@ export async function computeDisposition(
 export async function seedAnchorsFromHistory(testId?: string): Promise<number> {
   // Find completed tests with responses
   let testsQuery = `
-    SELECT t.id, t.concept_embedding, t.concept_text, t.options
+    SELECT t.id, t.project_id, t.concept_embedding, t.concept_text, t.options
     FROM tests t
     WHERE t.status = 'complete'
       AND t.concept_text IS NOT NULL
@@ -266,6 +283,7 @@ export async function seedAnchorsFromHistory(testId?: string): Promise<number> {
 
   const testsResult = await query<{
     id: string;
+    project_id: string | null;
     concept_embedding: string | null;
     concept_text: string;
     options: any;
@@ -318,15 +336,16 @@ export async function seedAnchorsFromHistory(testId?: string): Promise<number> {
     for (const resp of responsesResult.rows) {
       await query(
         `INSERT INTO reference_anchors (
-           persona_id, test_id, variant_id,
+           persona_id, test_id, variant_id, project_id,
            persona_embedding, concept_embedding,
            sentiment_score, engagement_likelihood, share_likelihood, comprehension_score,
            reaction_tags, attitude_score, primary_platform, source
-         ) VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9, $10, $11, $12, 'historical')`,
+         ) VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8, $9, $10, $11, $12, $13, 'historical')`,
         [
           resp.persona_id,
           test.id,
           resp.variant_id,
+          test.project_id,
           resp.embedding_values, // already vector type from persona
           conceptVec,
           resp.sentiment_score,

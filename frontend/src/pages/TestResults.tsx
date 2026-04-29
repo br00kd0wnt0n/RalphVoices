@@ -25,7 +25,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-import { ArrowLeft, RefreshCw, Users, TrendingUp, MessageSquare, AlertTriangle, Sparkles, Globe, Download, Lightbulb, ShieldAlert, FileText, Pencil, ChevronDown, ChevronUp, XCircle } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Users, TrendingUp, MessageSquare, AlertTriangle, Sparkles, Globe, Download, Lightbulb, ShieldAlert, FileText, Pencil, ChevronDown, ChevronUp, XCircle, Trash2 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import type { Test, TestResponse } from '@/types';
 import { SENTIMENT_THRESHOLDS } from '@/lib/constants';
@@ -37,6 +37,7 @@ import { ShareabilityAnalysis } from '@/components/ShareabilityAnalysis';
 import { TestComparison } from '@/components/TestComparison';
 import { GwiRecommendations } from '@/components/GwiRecommendations';
 import { InsightsChat } from '@/components/InsightsChat';
+import { RalphScoreInfo } from '@/components/RalphScoreInfo';
 
 const COLORS = {
   positive: '#22c55e',
@@ -341,6 +342,28 @@ export function TestResultsPage() {
               </Button>
             </>
           )}
+          {test.status !== 'running' && (
+            <Button
+              variant="outline"
+              className="border-destructive/50 text-destructive hover:bg-destructive/10"
+              onClick={async () => {
+                const confirmed = window.confirm(
+                  `Delete this test?\n\nThis will permanently remove:\n• "${test.name}"\n• All ${responses.length || test.responses_total || 0} persona responses\n• Aggregated results and themes\n• Uploaded assets (images, PDFs)\n• Calibration anchors derived from this test\n\nThis cannot be undone.`
+                );
+                if (!confirmed) return;
+                try {
+                  await testsApi.delete(test.id);
+                  navigate('/tests');
+                } catch (err: any) {
+                  console.error('Failed to delete test:', err);
+                  alert('Failed to delete test. See console for details.');
+                }
+              }}
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Delete
+            </Button>
+          )}
         </div>
       </div>
 
@@ -535,7 +558,10 @@ export function TestResultsPage() {
                       <CardContent className="py-4">
                         <div className="flex items-center justify-between">
                           <div className="space-y-1">
-                            <p className="text-xs font-medium text-muted-foreground">Live RalphScore™</p>
+                            <p className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                              Live RalphScore™
+                              <RalphScoreInfo />
+                            </p>
                             <div className="flex items-baseline gap-2">
                               <span className="text-3xl font-bold text-[#D94D8F]">{liveRalphScore}</span>
                               <span className="text-sm text-muted-foreground">/100</span>
@@ -709,7 +735,10 @@ export function TestResultsPage() {
                         <span className="absolute inset-0 flex items-center justify-center text-lg font-bold text-[#D94D8F]">{ralphScore}</span>
                       </div>
                       <div>
-                        <p className="text-xs text-muted-foreground">RalphScore™</p>
+                        <p className="text-xs text-muted-foreground flex items-center gap-1">
+                          RalphScore™
+                          <RalphScoreInfo />
+                        </p>
                         <p className={`text-sm font-semibold ${color}`}>{label}</p>
                       </div>
                     </CardContent>
