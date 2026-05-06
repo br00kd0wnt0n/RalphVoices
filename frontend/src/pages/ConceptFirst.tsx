@@ -43,8 +43,13 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   // Shows a small banner in step 1 once a Narrativ handoff has been detected
-  // and pre-filled into the form.
-  const [narrativHandoff, setNarrativHandoff] = useState<{ concept: string } | null>(null);
+  // and pre-filled into the form. session_id is plumbed through to test
+  // creation so the backend can fire the return-signal webhook back to
+  // Narrativ when this test completes (see notifyNarrativ in tests.ts).
+  const [narrativHandoff, setNarrativHandoff] = useState<{
+    concept: string;
+    session_id: string;
+  } | null>(null);
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [personas, setPersonas] = useState<Persona[]>([]);
@@ -122,7 +127,10 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
       setInsights(insightsParts.join('\n\n'));
     }
 
-    setNarrativHandoff({ concept: concept || 'Narrativ concept' });
+    setNarrativHandoff({
+      concept: concept || 'Narrativ concept',
+      session_id: searchParams.get('session_id') || '',
+    });
 
     // Clean the URL so params don't linger. Keep mode if it was set.
     const cleaned = new URLSearchParams();
@@ -257,6 +265,13 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
       const focusModifier = TEST_FOCUS_PRESETS[focusPreset]?.promptModifier || '';
       const currentAssets = testType === 'ab' ? assetsA : assets;
 
+      // Narrativ origin is forwarded on test create so the backend can fire
+      // the return-signal webhook on completion. Single source of truth for
+      // all three create call sites below (A, B, single).
+      const narrativOrigin = narrativHandoff?.session_id
+        ? { source: 'narrativ' as const, narrativ_session_id: narrativHandoff.session_id }
+        : undefined;
+
       if (testType === 'ab') {
         // Build strategic context
         const strategicContext = {
@@ -278,6 +293,7 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
             focus_preset: focusPreset,
             focus_modifier: focusModifier,
             strategic_context: Object.keys(strategicContext).length > 0 ? strategicContext : undefined,
+            origin: narrativOrigin,
           }),
           testsApi.create({
             project_id: projectId,
@@ -290,6 +306,7 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
             focus_preset: focusPreset,
             focus_modifier: focusModifier,
             strategic_context: Object.keys(strategicContext).length > 0 ? strategicContext : undefined,
+            origin: narrativOrigin,
           }),
         ]);
 
@@ -314,6 +331,7 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
           focus_preset: focusPreset,
           focus_modifier: focusModifier,
           strategic_context: Object.keys(strategicContext).length > 0 ? strategicContext : undefined,
+          origin: narrativOrigin,
         });
 
         await testsApi.run(test.id);

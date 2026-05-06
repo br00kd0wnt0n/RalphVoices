@@ -1,4 +1,5 @@
 import { Router, Response } from 'express';
+import crypto from 'crypto';
 import { query, getClient } from '../db/index.js';
 import { authMiddleware, AuthRequest } from '../middleware/auth.js';
 import { generateConceptResponse, streamChatResponse, generateRecommendations, TestAsset } from '../services/ai.js';
@@ -77,6 +78,15 @@ const createTestSchema = z.object({
     attitude_distribution: z.enum(['normal', 'skew_positive', 'skew_negative']).default('normal'),
     platforms_to_include: z.array(z.string()).default(['TikTok', 'Instagram', 'YouTube', 'Twitter/X']),
   }).optional(),
+
+  // Narrativ (Brainstorm) handoff origin. When present, the test
+  // completion hook fires a webhook back to Narrativ so the originating
+  // Brainstorm session sees the result. Stored inside options JSONB so no
+  // schema migration is needed.
+  origin: z.object({
+    source: z.literal('narrativ'),
+    narrativ_session_id: z.string().uuid(),
+  }).optional(),
 });
 
 // Create test
@@ -113,11 +123,14 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
       focus_modifier: data.focus_modifier || '',
     };
 
-    // Store assets and strategic context in options JSONB
+    // Store assets, strategic context, and (if present) Narrativ origin
+    // inside options JSONB. Origin lets the completion hook fire the
+    // return-signal webhook back to Narrativ.
     const optionsWithAssets = {
       ...(data.options ? { options: data.options } : {}),
       assets: data.assets || [],
       ...(data.strategic_context ? { strategic_context: data.strategic_context } : {}),
+      ...(data.origin ? { origin: data.origin } : {}),
     };
 
     const result = await query(
@@ -791,7 +804,95 @@ async function processTestResponses(test: Test, variants: any[]) {
     }).catch((err: any) => console.warn(`[RCB] Failed to mirror test:`, err.message));
   }
 
+  // Fire-and-forget callback to Narrativ if this test originated from a
+  // Brainstorm handoff. Never blocks test completion — if Narrativ is down
+  // or slow, the user still sees their test marked complete.
+  try {
+    const opts = typeof test.options === 'string' ? JSON.parse(test.options) : (test.options || {});
+    const narrativSessionId = opts?.origin?.source === 'narrativ' ? opts.origin.narrativ_session_id : null;
+    if (narrativSessionId) {
+      void notifyNarrativ({
+        narrativ_session_id: narrativSessionId,
+        test,
+        summary,
+        themes: { ...themes, key_quotes: keyQuotes },
+      });
+    }
+  } catch (err: any) {
+    console.warn(`[narrativ-callback] payload build failed for test ${test.id}:`, err?.message ?? err);
+  }
+
   await persistProgress(test.id, { completed: responses.length, total: responses.length, status: 'complete' });
+}
+
+// Webhook signature scheme mirrors server/services/webhookSignature.ts on
+// the Narrativ side: HMAC-SHA256 over `<unix_timestamp>.<rawBody>` → hex.
+// Same scheme can be reused for tool SSO if/when we add more callbacks.
+async function notifyNarrativ(params: {
+  narrativ_session_id: string;
+  test: any;
+  summary: any;
+  themes: any;
+}): Promise<void> {
+  try {
+    const secret = process.env.NARRATIV_VOICES_WEBHOOK_SECRET;
+    const base = process.env.NARRATIV_BASE_URL;
+    if (!secret || !base) {
+      console.warn('[narrativ-callback] secret or base URL not set, skipping');
+      return;
+    }
+
+    const payload = {
+      event: 'test_completed',
+      session_id: params.narrativ_session_id,
+      external_id: params.test.id,
+      scorer: null, // Voices runs synthetic personas, not human scorers
+      scores: {
+        avg_engagement: params.summary.avg_engagement,
+        avg_share_likelihood: params.summary.avg_share_likelihood,
+        avg_comprehension: params.summary.avg_comprehension,
+      },
+      summary: {
+        total_responses: params.summary.total_responses,
+        sentiment: params.summary.sentiment,
+        positive_themes: params.themes.positive_themes,
+        concerns: params.themes.concerns,
+        key_quotes: params.themes.key_quotes,
+      },
+      note: null,
+      voices_url: `${process.env.FRONTEND_URL || 'https://ralphvoices.up.railway.app'}/tests/${params.test.id}`,
+    };
+
+    const rawBody = JSON.stringify(payload);
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const signature = crypto
+      .createHmac('sha256', secret)
+      .update(`${timestamp}.${rawBody}`)
+      .digest('hex');
+
+    const response = await fetch(`${base}/api/voices/callback`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Narrativ-Voices-Timestamp': timestamp,
+        'X-Narrativ-Voices-Signature': signature,
+      },
+      body: rawBody,
+    });
+
+    if (!response.ok) {
+      console.warn(
+        `[narrativ-callback] non-2xx ${response.status} for narrativ session ${params.narrativ_session_id}`
+      );
+    } else {
+      console.log(`[narrativ-callback] delivered for test ${params.test.id} → narrativ session ${params.narrativ_session_id}`);
+    }
+  } catch (err: any) {
+    // Never let the callback break test completion. Failure here means the
+    // user finishes their Voices test fine; Narrativ just doesn't see the
+    // result. They can still navigate to Voices to view it directly.
+    console.warn('[narrativ-callback] failed:', err?.message ?? err);
+  }
 }
 
 function calculateSegments(responses: any[]) {
