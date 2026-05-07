@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { query } from '../db/index.js';
 import { generateToken, authMiddleware, AuthRequest } from '../middleware/auth.js';
+import { verifyNarrativSso } from '../services/narrativSso.js';
 import { z } from 'zod';
 
 const router = Router();
@@ -92,6 +93,64 @@ router.post('/login', async (req: Request, res: Response) => {
 // Get current user
 router.get('/me', authMiddleware, async (req: AuthRequest, res: Response) => {
   res.json({ user: req.user });
+});
+
+// Narrativ SSO exchange. The Narrativ shell appends `?narrativ_sso=<jwt>`
+// to the iframe src; the frontend reads that param on first load and POSTs
+// it here. We verify the signature with NARRATIV_SSO_SECRET, find-or-create
+// a Voices user keyed by the email claim, and return a Voices JWT so the
+// rest of the auth path (localStorage 'token' + authMiddleware) works
+// unchanged. SSO-minted users get a non-bcrypt sentinel password so the
+// password-login path can't authenticate them.
+const ssoExchangeSchema = z.object({ token: z.string().min(1) });
+
+router.post('/sso/exchange', async (req: Request, res: Response) => {
+  let body: { token: string };
+  try {
+    body = ssoExchangeSchema.parse(req.body);
+  } catch {
+    res.status(400).json({ error: 'missing_token' });
+    return;
+  }
+
+  const verified = verifyNarrativSso(body.token);
+  if (!verified.ok || !verified.claims) {
+    // 401 with a structured reason so the frontend can decide whether to
+    // surface a useful message or silently fall back to the login page.
+    res.status(401).json({ error: 'sso_rejected', reason: verified.reason || 'invalid' });
+    return;
+  }
+
+  const { email, name } = verified.claims;
+
+  try {
+    const existing = await query(
+      'SELECT id, email, name FROM users WHERE email = $1',
+      [email],
+    );
+
+    let user: { id: string; email: string; name: string | null };
+    if (existing.rows.length > 0) {
+      user = existing.rows[0];
+      // Backfill name on first SSO sign-in if Voices side doesn't have one.
+      if (!user.name && name) {
+        await query('UPDATE users SET name = $1 WHERE id = $2', [name, user.id]);
+        user = { ...user, name };
+      }
+    } else {
+      const result = await query(
+        "INSERT INTO users (email, password_hash, name) VALUES ($1, 'sso-narrativ', $2) RETURNING id, email, name",
+        [email, name],
+      );
+      user = result.rows[0];
+    }
+
+    const voicesToken = generateToken(user.id);
+    res.json({ user, token: voicesToken });
+  } catch (err) {
+    console.error('[narrativ-sso] exchange persistence failed:', err);
+    res.status(500).json({ error: 'exchange_failed' });
+  }
 });
 
 export default router;

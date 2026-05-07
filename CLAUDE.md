@@ -96,6 +96,7 @@ GWI API key configuration. Test focus preset descriptions.
 | POST | `/register` | Register (email, password, name) → token |
 | POST | `/login` | Login → token |
 | GET | `/me` | Current user info |
+| POST | `/sso/exchange` | Exchange a Narrativ-shell-minted SSO JWT for a Voices JWT. See "Narrativ SSO" below. |
 
 #### Projects (`/projects`)
 | Method | Path | Description |
@@ -267,9 +268,40 @@ Backend (`.env`):
 - `TEST_RETENTION_DAYS` — optional; archive completed tests older than N days
 - `PORT` — Backend port (default: 3001)
 - `FRONTEND_URL` — For CORS (default: `http://localhost:5173`)
+- `NARRATIV_SSO_SECRET` — HS256 signing secret shared with Narrativ for shell→tool SSO. Must be byte-identical to `TOOL_SSO_SECRET_VOICES` on Narrativ. Empty/unset = SSO disabled (password login still works).
+- `NARRATIV_VOICES_WEBHOOK_SECRET`, `NARRATIV_BASE_URL` — outbound HMAC webhook for the Voices→Narrativ return signal (existing).
 
 Frontend (`.env`):
 - `VITE_API_URL` — Backend API URL (default: `/api`)
+
+## Narrativ SSO
+
+As of 2026-05-07, Voices accepts a Narrativ-shell-minted SSO token so users
+who are signed into Narrativ are not prompted to log into Voices again when
+the iframe loads.
+
+- The shell appends `?narrativ_sso=<jwt>` to the iframe src on first mount.
+- The frontend `AuthProvider` (`frontend/src/hooks/useAuth.tsx`) detects the
+  param on mount, POSTs to `/api/auth/sso/exchange`, stores the returned
+  Voices JWT in localStorage, and strips the SSO param from the URL via
+  `history.replaceState`. Subsequent navigations (handoff to `/tests/new` with
+  Brainstorm concept params) reuse the now-minted Voices session cookie.
+- The backend route `POST /api/auth/sso/exchange` (`backend/src/routes/auth.ts`)
+  verifies the JWT via `services/narrativSso.ts` (HS256, 5-min `exp`,
+  `aud === 'voices'`, `iss === 'narrativ'`, jti one-time-use), then
+  finds-or-creates the Voices user by email and returns a Voices JWT.
+- SSO-minted users get a sentinel `password_hash = 'sso-narrativ'` so the
+  password login path can never authenticate them. They sign in via Narrativ
+  going forward, never via the local /login form.
+- Replay protection: jtis are tracked in-memory with TTL pruning. A process
+  restart can at worst re-allow a fresh-but-uncached token; tokens are 5-min
+  so the residual exposure window is tiny.
+- Domain allowlist enforcement is single-source-of-truth at sign-in time on
+  Narrativ (`GOOGLE_ALLOWED_DOMAINS`). Voices trusts the email claim once the
+  signature checks out — it does not re-check the domain.
+- Backwards-compatible: when `NARRATIV_SSO_SECRET` is unset, the exchange
+  endpoint returns 401 with `reason: 'missing_secret'` and the frontend falls
+  back to the existing /login flow.
 
 ## Type Checking
 

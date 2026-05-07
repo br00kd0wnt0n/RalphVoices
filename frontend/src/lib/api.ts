@@ -58,6 +58,13 @@ export const auth = {
     ),
   me: () =>
     request<{ user: { id: string; email: string; name: string | null } }>('/auth/me'),
+  // Exchanges a Narrativ shell-minted SSO token for a Voices JWT. Called by
+  // AuthProvider when a `?narrativ_sso=` param is present on first page load.
+  exchangeNarrativSso: (token: string) =>
+    request<{ user: { id: string; email: string; name: string | null }; token: string }>(
+      '/auth/sso/exchange',
+      { method: 'POST', body: JSON.stringify({ token }) },
+    ),
 };
 
 // Projects

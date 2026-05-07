@@ -20,18 +20,71 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [booting, setBooting] = useState(false);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      auth.me()
-        .then((data) => {
+    let cancelled = false;
+    (async () => {
+      // Narrativ SSO: when this app loads inside the Narrativ shell iframe,
+      // the shell appends `?narrativ_sso=<jwt>` to the src. The first time
+      // we see one we exchange for a Voices JWT and store it. On subsequent
+      // remounts (Voices handoff URLs change the iframe key, which remounts
+      // this React app inside the iframe) we already have a localStorage
+      // token — prefer it and just strip the SSO param. Replaying the same
+      // jti would otherwise produce a useless 401 from /sso/exchange.
+      let url: URL | null = null;
+      let ssoToken: string | null = null;
+      try {
+        url = new URL(window.location.href);
+        ssoToken = url.searchParams.get('narrativ_sso');
+      } catch (err) {
+        console.warn('[narrativ-sso] URL parse skipped:', err);
+      }
+
+      const stripSsoParam = () => {
+        if (!url || !ssoToken) return;
+        url.searchParams.delete('narrativ_sso');
+        const cleanUrl = url.pathname + (url.search ? url.search : '') + url.hash;
+        window.history.replaceState({}, '', cleanUrl);
+      };
+
+      const existingToken = localStorage.getItem('token');
+
+      if (!existingToken && ssoToken) {
+        try {
+          const data = await auth.exchangeNarrativSso(ssoToken);
+          if (cancelled) return;
+          localStorage.setItem('token', data.token);
+          stripSsoParam();
           setUser(data.user);
-          setBooting(true); // Show boot sequence for returning users
-        })
-        .catch(() => localStorage.removeItem('token'))
-        .finally(() => setLoading(false));
-    } else {
-      setLoading(false);
-    }
+          setBooting(true);
+          setLoading(false);
+          return;
+        } catch (err) {
+          // Strip anyway so a stale token doesn't keep retrying on reloads,
+          // then fall through to the (empty) localStorage path → /login.
+          console.warn('[narrativ-sso] exchange failed, falling back:', err);
+          stripSsoParam();
+        }
+      } else if (existingToken && ssoToken) {
+        // Already authenticated locally — drop the redundant SSO param so
+        // it doesn't leak into history or downstream router state.
+        stripSsoParam();
+      }
+
+      const token = localStorage.getItem('token');
+      if (token) {
+        try {
+          const data = await auth.me();
+          if (cancelled) return;
+          setUser(data.user);
+          setBooting(true);
+        } catch {
+          if (!cancelled) localStorage.removeItem('token');
+        }
+      }
+      if (!cancelled) setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const login = async (email: string, password: string) => {
