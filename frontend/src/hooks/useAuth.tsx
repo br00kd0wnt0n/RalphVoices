@@ -45,9 +45,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         window.history.replaceState({}, '', cleanUrl);
       };
 
-      const existingToken = localStorage.getItem('token');
-
-      if (!existingToken && ssoToken) {
+      // A fresh SSO param in the URL is the most reliable signal — the
+      // shell just minted it, and it carries the current claims (clients,
+      // active_client_id). Always prefer exchange over a stored token,
+      // because the stored token might be expired or from a stale deploy.
+      // If exchange fails (e.g. replayed jti on an iframe remount), fall
+      // back to validating the stored token. Worst case both fail and we
+      // redirect to /login — which is correct, because we have no
+      // legitimate way to authenticate the user otherwise.
+      if (ssoToken) {
         try {
           const data = await auth.exchangeNarrativSso(ssoToken);
           if (cancelled) return;
@@ -58,15 +64,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setLoading(false);
           return;
         } catch (err) {
-          // Strip anyway so a stale token doesn't keep retrying on reloads,
-          // then fall through to the (empty) localStorage path → /login.
-          console.warn('[narrativ-sso] exchange failed, falling back:', err);
+          // Common failure: 'replayed' — the iframe is remounting with a
+          // jti we've already consumed (e.g. Voices handoff URL change
+          // produced a new key={src} on the iframe element, remounting
+          // this React app inside it). Strip the param so we don't keep
+          // retrying on every render, then fall through to the stored
+          // token. Other failures (network, server) get the same fallback.
+          console.warn('[narrativ-sso] exchange failed, falling back to stored token:', err);
           stripSsoParam();
         }
-      } else if (existingToken && ssoToken) {
-        // Already authenticated locally — drop the redundant SSO param so
-        // it doesn't leak into history or downstream router state.
-        stripSsoParam();
       }
 
       const token = localStorage.getItem('token');
