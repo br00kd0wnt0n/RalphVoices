@@ -1,35 +1,47 @@
+// Shared Voices wordmark + Ralph World planet logo.
+//
+// Brought into alignment with the Narrativ shell + Brainstorm +
+// Brand Signals + RCB treatment (Brook 2026-05-19): ralph-world.png
+// planet with a pink drop-shadow glow, mixed-case wordmark in Space
+// Grotesk light with a pink terminal period. The previous uppercase-
+// gradient "VOICES" diverged from the rest of the Ralph tool suite —
+// this version reads as one consistent brand at every scale.
+//
+// Same canonical sizing as the Narrativ-side RalphLogo so the visual
+// hierarchy matches across tools. If a new size is needed, add it
+// here rather than overriding inline.
+
 interface RalphLogoProps {
-  size?: 'sm' | 'md' | 'lg';
+  size?: 'xs' | 'sm' | 'md' | 'lg';
   showVoices?: boolean;
 }
 
+const sizes = {
+  xs: { planet: 'h-4 w-4',   text: 'text-[13px]', glow: 'drop-shadow-[0_0_6px_rgba(217,77,143,0.35)]' },
+  sm: { planet: 'h-6 w-6',   text: 'text-[15px]', glow: 'drop-shadow-[0_0_8px_rgba(217,77,143,0.4)]' },
+  md: { planet: 'h-8 w-8',   text: 'text-[20px]', glow: 'drop-shadow-[0_0_12px_rgba(217,77,143,0.4)]' },
+  lg: { planet: 'h-16 w-16', text: 'text-[44px]', glow: 'drop-shadow-[0_0_24px_rgba(217,77,143,0.45)]' },
+};
+
 export function RalphLogo({ size = 'md', showVoices = true }: RalphLogoProps) {
-  const sizes = {
-    sm: { height: 'h-6', voicesText: 'text-sm', letterSpacing: '0.12em' },
-    md: { height: 'h-8', voicesText: 'text-lg', letterSpacing: '0.14em' },
-    lg: { height: 'h-14', voicesText: 'text-2xl', letterSpacing: '0.16em' },
-  };
+  const s = sizes[size];
 
   return (
-    <div className="flex items-center gap-2.5">
+    <div className="flex items-center gap-3">
       <img
-        src="/logo.png"
+        src="/ralph-world.png"
         alt="Ralph"
-        className={`${sizes[size].height} w-auto object-contain mix-blend-screen`}
+        className={`${s.planet} object-contain ${s.glow}`}
       />
       {showVoices && (
         <span
-          className={`${sizes[size].voicesText} font-semibold uppercase`}
+          className={`${s.text} leading-none font-light text-white`}
           style={{
             fontFamily: "'Space Grotesk', sans-serif",
-            letterSpacing: sizes[size].letterSpacing,
-            background: 'linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(217,77,143,0.9) 50%, rgba(255,255,255,0.5) 100%)',
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
-            backgroundClip: 'text',
+            letterSpacing: '-0.02em',
           }}
         >
-          Voices
+          Voices<span style={{ color: '#D94D8F' }}>.</span>
         </span>
       )}
     </div>
