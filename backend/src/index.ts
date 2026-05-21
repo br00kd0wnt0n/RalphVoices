@@ -320,6 +320,74 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Ralph Voices API running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+
+  // One-shot data diagnostic (Brook 2026-05-20: Voices showing
+  // empty after the pgVector service move; can't reach a shell on
+  // Railway). Logs user count + ownership counts to the deploy log
+  // so it can be read from the Railway dashboard without DB
+  // access. Set DIAGNOSE_VOICES_DATA=0 in env to silence once the
+  // answer is in hand.
+  if (process.env.DIAGNOSE_VOICES_DATA !== '0') {
+    void logVoicesDataDiagnostic();
+  }
 });
+
+async function logVoicesDataDiagnostic(): Promise<void> {
+  try {
+    const { pool } = await import('./db/index.js');
+    console.log('\n========== VOICES DATA DIAGNOSTIC ==========');
+
+    const users = await pool.query(
+      `SELECT id, email, name, created_at
+         FROM users
+        ORDER BY created_at ASC`,
+    );
+    console.log(`USERS (${users.rows.length} total):`);
+    for (const u of users.rows) {
+      console.log(`  - ${u.id}  email=${u.email}  name=${u.name ?? '-'}`);
+    }
+    if (users.rows.length === 0) {
+      console.log('  (no users — SSO has never minted a Voices user on this DB)');
+    }
+
+    const userById = new Map<string, { email: string }>(users.rows.map((u: { id: string; email: string }) => [u.id, { email: u.email }]));
+    const fmt = (id: string | null): string => {
+      if (!id) return '(null)';
+      const u = userById.get(id);
+      return u ? `${u.email} <${id}>` : `<ORPHAN ${id}>`;
+    };
+
+    for (const table of ['projects', 'personas', 'tests']) {
+      const result = await pool.query(
+        `SELECT created_by::text, COUNT(*)::text AS n
+           FROM ${table}
+          GROUP BY created_by
+          ORDER BY n DESC`,
+      );
+      console.log(`\n${table.toUpperCase()} (${result.rows.length} distinct owner${result.rows.length === 1 ? '' : 's'}):`);
+      if (result.rows.length === 0) {
+        console.log('  (empty table)');
+      } else {
+        for (const row of result.rows as Array<{ created_by: string | null; n: string }>) {
+          console.log(`  - ${row.n} owned by ${fmt(row.created_by)}`);
+        }
+      }
+    }
+
+    console.log('\nORPHAN CHECK (rows whose created_by points at a deleted users row):');
+    for (const table of ['projects', 'personas', 'tests']) {
+      const orphans = await pool.query(
+        `SELECT COUNT(*)::text AS n
+           FROM ${table}
+          WHERE created_by IS NOT NULL
+            AND created_by NOT IN (SELECT id FROM users)`,
+      );
+      console.log(`  ${table}: ${orphans.rows[0]?.n ?? '0'}`);
+    }
+    console.log('========== END DIAGNOSTIC ==========\n');
+  } catch (err) {
+    console.error('[diagnose] failed:', err instanceof Error ? err.message : err);
+  }
+}
 
 export default app;
