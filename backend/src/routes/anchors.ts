@@ -18,30 +18,27 @@ import {
 
 const router = Router();
 
-// Statistics for the caller's own anchors + their persona embedding
-// coverage. Global-calibration rows are NOT counted toward `total_anchors`
-// here — they're shared infrastructure, not the user's calibration set.
-router.get('/stats', authMiddleware, async (req: AuthRequest, res: Response) => {
+// Statistics across all anchors + persona embedding coverage.
+// Universal visibility (2026-05-21) — every signed-in user sees
+// every project's anchors. Global-calibration rows are NOT counted
+// toward `total_anchors`; they're shared infrastructure, not the
+// team's calibration set.
+router.get('/stats', authMiddleware, async (_req: AuthRequest, res: Response) => {
   try {
-    const userId = req.user!.id;
     const countResult = await query<{ count: string }>(
       `SELECT COUNT(*)::text AS count FROM reference_anchors ra
-        WHERE ra.project_id IN (SELECT id FROM projects WHERE created_by = $1)`,
-      [userId],
+        WHERE ra.is_global_calibration = FALSE`,
     );
     const sourceResult = await query<{ source: string; count: string }>(
       `SELECT source, COUNT(*)::text AS count FROM reference_anchors ra
-        WHERE ra.project_id IN (SELECT id FROM projects WHERE created_by = $1)
+        WHERE ra.is_global_calibration = FALSE
         GROUP BY source`,
-      [userId],
     );
     const embeddedPersonas = await query<{ count: string }>(
-      'SELECT COUNT(*) FROM personas WHERE embedding_values IS NOT NULL AND created_by = $1',
-      [userId]
+      'SELECT COUNT(*) FROM personas WHERE embedding_values IS NOT NULL',
     );
     const totalPersonas = await query<{ count: string }>(
-      'SELECT COUNT(*) FROM personas WHERE created_by = $1',
-      [userId]
+      'SELECT COUNT(*) FROM personas',
     );
 
     res.json({
@@ -58,29 +55,22 @@ router.get('/stats', authMiddleware, async (req: AuthRequest, res: Response) => 
   }
 });
 
-// Seed anchors from one of the caller's own historical tests. test_id
-// is now validated as a UUID owned by the caller before the seed
-// function runs; previously any authed user could pass any test_id.
+// Seed anchors from a historical test. Universal visibility: any
+// signed-in user can seed from any test. test_id still validated as
+// a UUID + must exist.
 router.post('/seed', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    const userId = req.user!.id;
     const { test_id } = req.body ?? {};
 
-    // test_id is optional in the seed signature ("seed all my eligible
-    // tests" when omitted) but if supplied it MUST be a UUID belonging
-    // to the caller. Don't trust the body alone.
     if (test_id !== undefined && test_id !== null) {
       if (typeof test_id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(test_id)) {
         return res.status(400).json({ error: 'test_id must be a UUID' });
       }
-      const ownership = await query<{ id: string }>(
-        `SELECT t.id FROM tests t
-           JOIN projects p ON p.id = t.project_id
-          WHERE t.id = $1 AND p.created_by = $2
-          LIMIT 1`,
-        [test_id, userId],
+      const exists = await query<{ id: string }>(
+        `SELECT id FROM tests WHERE id = $1 LIMIT 1`,
+        [test_id],
       );
-      if (ownership.rows.length === 0) {
+      if (exists.rows.length === 0) {
         return res.status(404).json({ error: 'Test not found' });
       }
     }
@@ -102,8 +92,8 @@ router.post('/seed', authMiddleware, async (req: AuthRequest, res: Response) => 
   }
 });
 
-// Per-persona embedding status — already user-scoped pre-sweep.
-router.get('/personas', authMiddleware, async (req: AuthRequest, res: Response) => {
+// Per-persona embedding status — universal visibility.
+router.get('/personas', authMiddleware, async (_req: AuthRequest, res: Response) => {
   try {
     const result = await query(
       `SELECT id, name, age_base, location,
@@ -113,9 +103,7 @@ router.get('/personas', authMiddleware, async (req: AuthRequest, res: Response) 
         embedding_demographic IS NOT NULL as has_demographic,
         embeddings_updated_at
       FROM personas
-      WHERE created_by = $1
       ORDER BY name`,
-      [req.user!.id]
     );
     res.json(result.rows);
   } catch (error) {
@@ -124,12 +112,10 @@ router.get('/personas', authMiddleware, async (req: AuthRequest, res: Response) 
   }
 });
 
-// Recent anchors visible to the caller. Includes their own + global-
-// calibration set (so they see the shared reference points). Was
-// previously cross-tenant.
-router.get('/recent', authMiddleware, async (req: AuthRequest, res: Response) => {
+// Recent anchors across all projects (universal visibility) +
+// global-calibration set.
+router.get('/recent', authMiddleware, async (_req: AuthRequest, res: Response) => {
   try {
-    const userId = req.user!.id;
     const result = await query(
       `SELECT ra.id, ra.source, ra.confidence,
         ra.sentiment_score, ra.engagement_likelihood, ra.share_likelihood, ra.comprehension_score,
@@ -139,11 +125,8 @@ router.get('/recent', authMiddleware, async (req: AuthRequest, res: Response) =>
       FROM reference_anchors ra
       LEFT JOIN personas p ON ra.persona_id = p.id
       LEFT JOIN tests t ON ra.test_id = t.id
-      WHERE ra.is_global_calibration = TRUE
-         OR ra.project_id IN (SELECT id FROM projects WHERE created_by = $1)
       ORDER BY ra.created_at DESC
       LIMIT 50`,
-      [userId],
     );
     res.json(result.rows);
   } catch (error) {
@@ -152,21 +135,17 @@ router.get('/recent', authMiddleware, async (req: AuthRequest, res: Response) =>
   }
 });
 
-// Clear the caller's own anchors. Was globally destructive pre-sweep —
-// any authed user could wipe every team-member's calibration data. Now:
-// - Only anchors in projects the caller owns are deleted.
-// - is_global_calibration = TRUE rows are NEVER touched on this path;
-//   those are admin-managed reference points and a regular user
-//   shouldn't be able to nuke them.
-router.delete('/all', authMiddleware, async (req: AuthRequest, res: Response) => {
+// Clear team anchors. Universal visibility means any signed-in user
+// can wipe — accept that posture for now (mirrors Narrativ's
+// universal-access; tighten when access policy becomes a need).
+// is_global_calibration = TRUE rows still NEVER touched on this
+// path; those are admin-managed reference points.
+router.delete('/all', authMiddleware, async (_req: AuthRequest, res: Response) => {
   try {
-    const userId = req.user!.id;
     const result = await query(
       `DELETE FROM reference_anchors
         WHERE is_global_calibration = FALSE
-          AND project_id IN (SELECT id FROM projects WHERE created_by = $1)
         RETURNING id`,
-      [userId],
     );
     res.json({ deleted: result.rowCount });
   } catch (error) {

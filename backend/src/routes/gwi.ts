@@ -108,14 +108,14 @@ router.post('/enrich-results', authMiddleware, async (req: AuthRequest, res: Res
 
     const { test_id } = schema.parse(req.body);
 
-    // Fetch test and results
+    // Fetch test and results. Universal visibility (2026-05-21) —
+    // ownership no longer gates access.
     const testResult = await query(
       `SELECT t.concept_text, tr.summary, tr.segments, tr.themes
        FROM tests t
        JOIN test_results tr ON tr.test_id = t.id
-       JOIN projects p ON t.project_id = p.id
-       WHERE t.id = $1 AND p.created_by = $2`,
-      [test_id, req.user!.id]
+       WHERE t.id = $1`,
+      [test_id]
     );
 
     if (testResult.rows.length === 0) {

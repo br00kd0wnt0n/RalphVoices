@@ -67,11 +67,14 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const data = createPersonaSchema.parse(req.body);
 
-    // Verify project ownership if project_id provided
+    // Verify project exists. Universal-visibility posture as of
+    // 2026-05-21 — any signed-in user can attach a persona to any
+    // project (small team, trust-based). Lookup retained so we
+    // still 404 on a bogus project id.
     if (data.project_id) {
       const projectCheck = await query(
-        'SELECT id FROM projects WHERE id = $1 AND created_by = $2',
-        [data.project_id, req.user!.id]
+        'SELECT id FROM projects WHERE id = $1',
+        [data.project_id]
       );
 
       if (projectCheck.rows.length === 0) {
@@ -135,7 +138,7 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
   }
 });
 
-// List personas
+// List personas. Universal visibility (2026-05-21).
 router.get('/', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const { project_id } = req.query;
@@ -146,12 +149,11 @@ router.get('/', authMiddleware, async (req: AuthRequest, res: Response) => {
         pr.name as project_name
       FROM personas p
       LEFT JOIN projects pr ON p.project_id = pr.id
-      WHERE p.created_by = $1
     `;
-    const params: any[] = [req.user!.id];
+    const params: any[] = [];
 
     if (project_id) {
-      queryText += ' AND p.project_id = $2';
+      queryText += ' WHERE p.project_id = $1';
       params.push(project_id);
     }
 
@@ -170,8 +172,8 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const personaResult = await query(
       `SELECT p.* FROM personas p
-       WHERE p.id = $1 AND p.created_by = $2`,
-      [req.params.id, req.user!.id]
+       WHERE p.id = $1`,
+      [req.params.id]
     );
 
     if (personaResult.rows.length === 0) {
@@ -204,11 +206,12 @@ router.put('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
     });
     const data = updateSchema.parse(req.body);
 
-    // Verify ownership
+    // Verify persona exists (universal visibility 2026-05-21 —
+    // ownership no longer gates access).
     const personaCheck = await query(
       `SELECT p.* FROM personas p
-       WHERE p.id = $1 AND p.created_by = $2`,
-      [req.params.id, req.user!.id]
+       WHERE p.id = $1`,
+      [req.params.id]
     );
 
     if (personaCheck.rows.length === 0) {
@@ -271,9 +274,9 @@ router.delete('/:id', authMiddleware, async (req: AuthRequest, res: Response) =>
   try {
     const result = await query(
       `DELETE FROM personas
-       WHERE id = $1 AND created_by = $2
+       WHERE id = $1
        RETURNING id`,
-      [req.params.id, req.user!.id]
+      [req.params.id]
     );
 
     if (result.rows.length === 0) {
@@ -296,8 +299,8 @@ router.post('/:id/variants', authMiddleware, async (req: AuthRequest, res: Respo
     // Get persona
     const personaResult = await query(
       `SELECT p.* FROM personas p
-       WHERE p.id = $1 AND p.created_by = $2`,
-      [req.params.id, req.user!.id]
+       WHERE p.id = $1`,
+      [req.params.id]
     );
 
     if (personaResult.rows.length === 0) {
@@ -398,11 +401,11 @@ router.post('/:id/variants', authMiddleware, async (req: AuthRequest, res: Respo
 // List variants for persona
 router.get('/:id/variants', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    // Verify persona ownership
+    // Verify persona exists (universal visibility 2026-05-21).
     const personaCheck = await query(
       `SELECT p.id FROM personas p
-       WHERE p.id = $1 AND p.created_by = $2`,
-      [req.params.id, req.user!.id]
+       WHERE p.id = $1`,
+      [req.params.id]
     );
 
     if (personaCheck.rows.length === 0) {
@@ -427,8 +430,8 @@ router.post('/:id/voice', authMiddleware, async (req: AuthRequest, res: Response
   try {
     const personaResult = await query(
       `SELECT p.* FROM personas p
-       WHERE p.id = $1 AND p.created_by = $2`,
-      [req.params.id, req.user!.id]
+       WHERE p.id = $1`,
+      [req.params.id]
     );
 
     if (personaResult.rows.length === 0) {

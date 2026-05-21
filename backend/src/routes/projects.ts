@@ -117,17 +117,19 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
   }
 });
 
-// List projects
-router.get('/', authMiddleware, async (req: AuthRequest, res: Response) => {
+// List projects. Brook 2026-05-21: universal-visibility posture —
+// every signed-in user sees every project. created_by stays for
+// audit/authorship but is no longer a visibility gate. Same pattern
+// as the Narrativ universal-access change. Apply consistently
+// across projects / personas / tests / anchors / gwi.
+router.get('/', authMiddleware, async (_req: AuthRequest, res: Response) => {
   try {
     const result = await query(
       `SELECT p.*,
         (SELECT COUNT(*) FROM personas WHERE project_id = p.id) as persona_count,
         (SELECT COUNT(*) FROM tests WHERE project_id = p.id) as test_count
        FROM projects p
-       WHERE p.created_by = $1
-       ORDER BY p.created_at DESC`,
-      [req.user!.id]
+       ORDER BY p.created_at DESC`
     );
 
     res.json(result.rows);
@@ -141,8 +143,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res: Response) => {
 router.get('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const projectResult = await query(
-      `SELECT * FROM projects WHERE id = $1 AND created_by = $2`,
-      [req.params.id, req.user!.id]
+      `SELECT * FROM projects WHERE id = $1`,
+      [req.params.id]
     );
 
     if (projectResult.rows.length === 0) {
@@ -176,7 +178,9 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
   }
 });
 
-// Update project
+// Update project. Universal-write: any signed-in user can edit any
+// project (Brook 2026-05-21). Small-team trust posture; tighten
+// when access policy becomes a real need.
 router.put('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const data = createProjectSchema.parse(req.body);
@@ -184,9 +188,9 @@ router.put('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
     const result = await query(
       `UPDATE projects
        SET name = $1, client_name = $2
-       WHERE id = $3 AND created_by = $4
+       WHERE id = $3
        RETURNING *`,
-      [data.name, data.client_name || null, req.params.id, req.user!.id]
+      [data.name, data.client_name || null, req.params.id]
     );
 
     if (result.rows.length === 0) {
@@ -209,8 +213,8 @@ router.put('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
 router.delete('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const result = await query(
-      `DELETE FROM projects WHERE id = $1 AND created_by = $2 RETURNING id`,
-      [req.params.id, req.user!.id]
+      `DELETE FROM projects WHERE id = $1 RETURNING id`,
+      [req.params.id]
     );
 
     if (result.rows.length === 0) {

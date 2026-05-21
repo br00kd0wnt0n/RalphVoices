@@ -94,10 +94,11 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const data = createTestSchema.parse(req.body);
 
-    // Verify project ownership
+    // Verify project exists (universal visibility 2026-05-21 —
+    // ownership no longer gates access).
     const projectCheck = await query(
-      'SELECT id FROM projects WHERE id = $1 AND created_by = $2',
-      [data.project_id, req.user!.id]
+      'SELECT id FROM projects WHERE id = $1',
+      [data.project_id]
     );
 
     if (projectCheck.rows.length === 0) {
@@ -169,17 +170,18 @@ router.get('/', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const { project_id } = req.query;
 
+    // Universal visibility (2026-05-21) — list all tests
+    // regardless of project ownership.
     let queryText = `
       SELECT t.*,
         (SELECT COUNT(*) FROM test_responses WHERE test_id = t.id) as response_count
       FROM tests t
       JOIN projects p ON t.project_id = p.id
-      WHERE p.created_by = $1
     `;
-    const params: any[] = [req.user!.id];
+    const params: any[] = [];
 
     if (project_id) {
-      queryText += ' AND t.project_id = $2';
+      queryText += ' WHERE t.project_id = $1';
       params.push(project_id);
     }
 
@@ -199,8 +201,8 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
     const testResult = await query(
       `SELECT t.* FROM tests t
        JOIN projects p ON t.project_id = p.id
-       WHERE t.id = $1 AND p.created_by = $2`,
-      [req.params.id, req.user!.id]
+       WHERE t.id = $1`,
+      [req.params.id]
     );
 
     if (testResult.rows.length === 0) {
@@ -252,8 +254,8 @@ router.get('/:id/responses', authMiddleware, async (req: AuthRequest, res: Respo
     const testCheck = await query(
       `SELECT t.id FROM tests t
        JOIN projects p ON t.project_id = p.id
-       WHERE t.id = $1 AND p.created_by = $2`,
-      [req.params.id, req.user!.id]
+       WHERE t.id = $1`,
+      [req.params.id]
     );
 
     if (testCheck.rows.length === 0) {
@@ -325,8 +327,8 @@ router.get('/:id/results', authMiddleware, async (req: AuthRequest, res: Respons
     const testCheck = await query(
       `SELECT t.id, t.status FROM tests t
        JOIN projects p ON t.project_id = p.id
-       WHERE t.id = $1 AND p.created_by = $2`,
-      [req.params.id, req.user!.id]
+       WHERE t.id = $1`,
+      [req.params.id]
     );
 
     if (testCheck.rows.length === 0) {
@@ -365,8 +367,8 @@ router.post('/:id/run', authMiddleware, async (req: AuthRequest, res: Response) 
     const testResult = await query(
       `SELECT t.* FROM tests t
        JOIN projects p ON t.project_id = p.id
-       WHERE t.id = $1 AND p.created_by = $2`,
-      [testId, req.user!.id]
+       WHERE t.id = $1`,
+      [testId]
     );
 
     if (testResult.rows.length === 0) {
@@ -955,8 +957,8 @@ router.get('/:id/export', authMiddleware, async (req: AuthRequest, res: Response
     const testResult = await query(
       `SELECT t.* FROM tests t
        JOIN projects p ON t.project_id = p.id
-       WHERE t.id = $1 AND p.created_by = $2`,
-      [req.params.id, req.user!.id]
+       WHERE t.id = $1`,
+      [req.params.id]
     );
 
     if (testResult.rows.length === 0) {
@@ -1087,8 +1089,8 @@ router.post('/:id/chat', authMiddleware, async (req: AuthRequest, res: Response)
     const testResult = await query(
       `SELECT t.* FROM tests t
        JOIN projects p ON t.project_id = p.id
-       WHERE t.id = $1 AND p.created_by = $2`,
-      [req.params.id, req.user!.id]
+       WHERE t.id = $1`,
+      [req.params.id]
     );
 
     if (testResult.rows.length === 0) {
@@ -1209,8 +1211,8 @@ router.get('/:id/recommendations', authMiddleware, async (req: AuthRequest, res:
     const testResult = await query(
       `SELECT t.* FROM tests t
        JOIN projects p ON t.project_id = p.id
-       WHERE t.id = $1 AND p.created_by = $2`,
-      [req.params.id, req.user!.id]
+       WHERE t.id = $1`,
+      [req.params.id]
     );
 
     if (testResult.rows.length === 0) {
@@ -1277,8 +1279,8 @@ router.delete('/:id', authMiddleware, async (req: AuthRequest, res: Response) =>
     const ownership = await query(
       `SELECT t.id FROM tests t
        JOIN projects p ON t.project_id = p.id
-       WHERE t.id = $1 AND p.created_by = $2`,
-      [req.params.id, req.user!.id]
+       WHERE t.id = $1`,
+      [req.params.id]
     );
 
     if (ownership.rows.length === 0) {
