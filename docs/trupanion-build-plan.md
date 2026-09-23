@@ -417,7 +417,7 @@ A well-delivered, cleanly targeted live anchor therefore weighs 6× a synthetic 
 ## 9. Decisions needed from Brook
 
 1. Agree the terminology in §1 (UI "panel members", client-facing "messages").
-2. **RCB mirroring for Trupanion:** keep it (confirm RCB scopes by client) or opt the project out.
+2. ~~RCB mirroring for Trupanion~~ **Decided 23 Sep: off for Trupanion** (per-project opt-out built in S2).
 3. Add3 naming convention: the exact `ad_code` format, needed before Tier 1 pre-tests so the Month-1 PvA join works.
 4. Whether `projects.restricted` is in scope for December, or deferred until a licensed instance.
 5. The first compliance rule set: confirm the naming rule and the banned-claims list with Add3 before the Phase 2 compliance check is switched on.
