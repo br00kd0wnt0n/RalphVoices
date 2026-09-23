@@ -4,6 +4,11 @@ All notable changes to Ralph Voices are documented here.
 
 ## Unreleased
 
+- **Panel freeze (migration 007).** Regenerating a persona's variants no longer deletes test history. Before, `POST /personas/:id/variants` deleted every variant and `test_responses` cascaded with them. Now the new panel is generated first; variants never used in a test are deleted; used ones are soft-retired (`retired_at`) and their responses kept. Each regeneration bumps `panel_version` (returned in the response). The panel swap runs in one transaction, and a failed generation leaves the existing panel untouched. Test runs, persona lists, variant lists and project persona-copy only see active variants.
+- Per-test `variant_config.vector_constraints` (default on). `false` skips vector disposition constraints and anchor seeding for that test, so pre-test sweeps of closely related concepts don't pull each other's scores together. Exposed as a "Calibration constraints" checkbox on the concept-first configure step.
+- Per-variant OpenAI calls retry twice with backoff on 429/5xx/network errors before the panel member is dropped.
+- `DELETE /api/anchors/all` is restricted to `ADMIN_EMAILS` and fails closed when that's unset.
+- Trupanion engagement build plan and architect brief added under `docs/`.
 - Scope `reference_anchors` to `project_id` (migration 005) so calibration data no longer leaks across clients; opt-in `is_global_calibration` flag for curated cross-tenant baselines.
 - `computeDisposition` now filters anchors by the test's project plus global-calibration rows; legacy unscoped anchors are excluded from client scoring by default.
 - `seedAnchorsFromHistory` records `project_id` on every new anchor so future calibration is always tenant-scoped.

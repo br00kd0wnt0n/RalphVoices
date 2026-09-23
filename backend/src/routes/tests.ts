@@ -77,6 +77,10 @@ const createTestSchema = z.object({
     age_spread: z.number().int().min(0).max(20).default(5),
     attitude_distribution: z.enum(['normal', 'skew_positive', 'skew_negative']).default('normal'),
     platforms_to_include: z.array(z.string()).default(['TikTok', 'Instagram', 'YouTube', 'Twitter/X']),
+    // false = skip vector disposition constraints AND anchor seeding for this
+    // test. Required for copy-set style sweeps, where near-identical messages
+    // would otherwise constrain each other's scores (see docs/trupanion-build-plan.md §0 B).
+    vector_constraints: z.boolean().optional(),
   }).optional(),
 
   // Narrativ (Brainstorm) handoff origin. When present, the test
@@ -432,6 +436,7 @@ router.post('/:id/run', authMiddleware, async (req: AuthRequest, res: Response) 
        FROM persona_variants pv
        JOIN personas p ON pv.persona_id = p.id
        WHERE pv.persona_id = ANY($1)
+         AND pv.retired_at IS NULL
        ORDER BY pv.persona_id, pv.variant_index`,
       [test.persona_ids]
     );
@@ -508,6 +513,24 @@ router.post('/:id/cancel', authMiddleware, async (req: AuthRequest, res: Respons
 });
 
 // Process test responses (background)
+// Retry transient OpenAI failures (rate limits, 5xx, timeouts) before a panel
+// member is dropped. Uneven dropout skews comparisons between tests that share
+// a panel, so a couple of backed-off retries are worth the wait.
+async function withRetry<T>(fn: () => Promise<T>, label: string, retries = 2): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      const status = error?.status;
+      const transient = status === 429 || (typeof status === 'number' && status >= 500) || !status;
+      if (!transient || attempt >= retries) throw error;
+      const delay = 2000 * 2 ** attempt;
+      console.warn(`[withRetry] ${label} failed (${status ?? error?.message}); retry ${attempt + 1}/${retries} in ${delay}ms`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+
 async function processTestResponses(test: Test, variants: any[]) {
   const conceptText = test.concept_text!;
   const variantConfig = typeof test.variant_config === 'string'
@@ -524,15 +547,21 @@ async function processTestResponses(test: Test, variants: any[]) {
 
   console.log(`Processing test with ${assets.length} assets (${assets.filter((a: any) => a.isImage).length} images, ${assets.filter((a: any) => a.isPDF).length} PDFs)`);
 
-  // Generate concept embedding for vector-based disposition scoring
+  // Generate concept embedding for vector-based disposition scoring.
+  // Opt-out per test: no embedding means no constraints and no anchor seeding.
+  const useVectorConstraints = variantConfig.vector_constraints !== false;
   let conceptEmbedding: number[] | null = null;
-  try {
-    const embResult = await embedConcept(conceptText, strategicContext);
-    conceptEmbedding = embResult.combined;
-    await saveConceptEmbedding(test.id, conceptEmbedding);
-    console.log(`Concept embedding generated for test ${test.id}`);
-  } catch (err) {
-    console.error(`[processTestResponses] Concept embedding failed, proceeding without constraints:`, err);
+  if (!useVectorConstraints) {
+    console.log(`[processTestResponses] Vector constraints disabled for test ${test.id}`);
+  } else {
+    try {
+      const embResult = await embedConcept(conceptText, strategicContext);
+      conceptEmbedding = embResult.combined;
+      await saveConceptEmbedding(test.id, conceptEmbedding);
+      console.log(`Concept embedding generated for test ${test.id}`);
+    } catch (err) {
+      console.error(`[processTestResponses] Concept embedding failed, proceeding without constraints:`, err);
+    }
   }
 
   const responses: any[] = [];
@@ -606,7 +635,10 @@ async function processTestResponses(test: Test, variants: any[]) {
         }
 
         const startTime = Date.now();
-        const response = await generateConceptResponse(variant, basePersona, conceptText, focusModifier, assets, strategicContext, scoreConstraints);
+        const response = await withRetry(
+          () => generateConceptResponse(variant, basePersona, conceptText, focusModifier, assets, strategicContext, scoreConstraints),
+          `variant ${variant.variant_name}`
+        );
         const processingTime = Date.now() - startTime;
 
         // Scores are INTEGER 1-10 in the DB — GPT sometimes returns decimals (e.g. 7.8),

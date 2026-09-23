@@ -75,7 +75,7 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
 
           // Copy variants if any exist
           const variantsResult = await query(
-            `SELECT * FROM persona_variants WHERE persona_id = $1`,
+            `SELECT * FROM persona_variants WHERE persona_id = $1 AND retired_at IS NULL`,
             [personaId]
           );
 

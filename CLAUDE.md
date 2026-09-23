@@ -170,6 +170,8 @@ Key JSONB columns on `test_results`:
 - `themes` — positive_themes, concerns, unexpected
 - `recommendations` — cached AI-generated improvement suggestions
 
+Panels are frozen, not overwritten: regenerating variants soft-retires used ones (`persona_variants.retired_at`, `panel_version`, migration 007) so `test_responses` history survives. Any new query over `persona_variants` must filter `retired_at IS NULL` unless it deliberately wants history.
+
 Migrations in `backend/src/db/migrations/`. Auto-applied on server startup.
 
 ### AI Service (`backend/src/services/ai.ts`)
@@ -266,6 +268,7 @@ Backend (`.env`):
 - `ENABLE_GWI`, `GWI_API_KEY` — flip ENABLE_GWI=true and supply a key to reactivate GWI Spark
 - `ENABLE_R2_STORAGE`, `R2_*` — route uploaded assets to Cloudflare R2 instead of base64-in-JSONB
 - `TEST_RETENTION_DAYS` — optional; archive completed tests older than N days
+- `ADMIN_EMAILS` — comma-separated admin allowlist; required for `DELETE /api/anchors/all` (fails closed when unset)
 - `PORT` — Backend port (default: 3001)
 - `FRONTEND_URL` — For CORS (default: `http://localhost:5173`)
 - `NARRATIV_SSO_SECRET` — HS256 signing secret shared with Narrativ for shell→tool SSO. Must be byte-identical to `TOOL_SSO_SECRET_VOICES` on Narrativ. Empty/unset = SSO disabled (password login still works).
@@ -302,6 +305,10 @@ the iframe loads.
 - Backwards-compatible: when `NARRATIV_SSO_SECRET` is unset, the exchange
   endpoint returns 401 with `reason: 'missing_secret'` and the frontend falls
   back to the existing /login flow.
+
+## Roadmap
+
+The Trupanion engagement build plan (evidence layer, copy-set tests, format dimension, reports, live-performance anchors, governance) is in `docs/trupanion-build-plan.md`. Phase 0 safeguards have shipped on `voices/trupanion-phase0`.
 
 ## Type Checking
 

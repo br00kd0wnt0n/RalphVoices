@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { query } from '../db/index.js';
+import { query, getClient } from '../db/index.js';
 import { authMiddleware, AuthRequest } from '../middleware/auth.js';
 import { generateVoiceSample, generateVariants, GeneratedVariant } from '../services/ai.js';
 import { embedPersona, savePersonaEmbeddings } from '../services/embeddings.js';
@@ -145,7 +145,7 @@ router.get('/', authMiddleware, async (req: AuthRequest, res: Response) => {
 
     let queryText = `
       SELECT p.*,
-        (SELECT COUNT(*) FROM persona_variants WHERE persona_id = p.id) as variant_count,
+        (SELECT COUNT(*) FROM persona_variants WHERE persona_id = p.id AND retired_at IS NULL) as variant_count,
         pr.name as project_name
       FROM personas p
       LEFT JOIN projects pr ON p.project_id = pr.id
@@ -184,7 +184,7 @@ router.get('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
     const persona = personaResult.rows[0];
 
     const variantsResult = await query(
-      `SELECT * FROM persona_variants WHERE persona_id = $1 ORDER BY variant_index`,
+      `SELECT * FROM persona_variants WHERE persona_id = $1 AND retired_at IS NULL ORDER BY variant_index`,
       [persona.id]
     );
 
@@ -310,10 +310,9 @@ router.post('/:id/variants', authMiddleware, async (req: AuthRequest, res: Respo
 
     const persona = personaResult.rows[0] as Persona;
 
-    // Delete existing variants
-    await query('DELETE FROM persona_variants WHERE persona_id = $1', [persona.id]);
-
-    // Generate variants using AI
+    // Generate variants using AI. Existing panel is only replaced after a
+    // successful generation (see retirePanel below) so a failed call can't
+    // leave the persona with no panel.
     const variantConfig: VariantConfig = {
       age_spread: config.age_spread,
       attitude_distribution: config.attitude_distribution,
@@ -322,7 +321,7 @@ router.post('/:id/variants', authMiddleware, async (req: AuthRequest, res: Respo
 
     console.log(`Calling generateVariants for persona ${persona.name} with count ${config.count}`);
 
-    let generatedVariants;
+    let generatedVariants: GeneratedVariant[];
     let generationError = null;
 
     try {
@@ -354,37 +353,72 @@ router.post('/:id/variants', authMiddleware, async (req: AuthRequest, res: Respo
       return;
     }
 
-    // Insert variants
+    // Swap panels atomically: retire the old panel (keeping any variant that
+    // has test responses, so history survives), then insert the new one.
+    const client = await getClient();
     const insertedVariants = [];
-    for (let i = 0; i < generatedVariants.length; i++) {
-      const v = generatedVariants[i];
-      const result = await query(
-        `INSERT INTO persona_variants (
-          persona_id, variant_index, age_actual, location_variant,
-          attitude_score, primary_platform, engagement_level,
-          full_profile, variant_name
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        RETURNING *`,
-        [
-          persona.id,
-          i + 1,
-          v.age_actual,
-          v.location_variant,
-          v.attitude_score,
-          v.primary_platform,
-          v.engagement_level,
-          JSON.stringify({
-            distinguishing_trait: v.distinguishing_trait,
-            voice_modifier: v.voice_modifier,
-          }),
-          v.variant_name,
-        ]
+    let panelVersion: number;
+    try {
+      await client.query('BEGIN');
+
+      const versionResult = await client.query(
+        `SELECT COALESCE(MAX(panel_version), 0) + 1 AS next FROM persona_variants WHERE persona_id = $1`,
+        [persona.id]
       );
-      insertedVariants.push(result.rows[0]);
+      panelVersion = versionResult.rows[0].next;
+
+      // Variants never used in a test carry no history — delete them outright.
+      await client.query(
+        `DELETE FROM persona_variants pv
+          WHERE pv.persona_id = $1 AND pv.retired_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM test_responses tr WHERE tr.variant_id = pv.id)`,
+        [persona.id]
+      );
+      await client.query(
+        `UPDATE persona_variants SET retired_at = NOW()
+          WHERE persona_id = $1 AND retired_at IS NULL`,
+        [persona.id]
+      );
+
+      for (let i = 0; i < generatedVariants.length; i++) {
+        const v = generatedVariants[i];
+        const result = await client.query(
+          `INSERT INTO persona_variants (
+            persona_id, variant_index, age_actual, location_variant,
+            attitude_score, primary_platform, engagement_level,
+            full_profile, variant_name, panel_version
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          RETURNING *`,
+          [
+            persona.id,
+            i + 1,
+            v.age_actual,
+            v.location_variant,
+            v.attitude_score,
+            v.primary_platform,
+            v.engagement_level,
+            JSON.stringify({
+              distinguishing_trait: v.distinguishing_trait,
+              voice_modifier: v.voice_modifier,
+            }),
+            v.variant_name,
+            panelVersion,
+          ]
+        );
+        insertedVariants.push(result.rows[0]);
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
     }
 
     res.status(201).json({
       persona_id: persona.id,
+      panel_version: panelVersion,
       variants_generated: insertedVariants.length,
       variants: insertedVariants,
     });
@@ -414,7 +448,7 @@ router.get('/:id/variants', authMiddleware, async (req: AuthRequest, res: Respon
     }
 
     const result = await query(
-      `SELECT * FROM persona_variants WHERE persona_id = $1 ORDER BY variant_index`,
+      `SELECT * FROM persona_variants WHERE persona_id = $1 AND retired_at IS NULL ORDER BY variant_index`,
       [req.params.id]
     );
 

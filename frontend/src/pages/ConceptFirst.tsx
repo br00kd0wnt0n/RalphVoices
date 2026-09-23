@@ -83,6 +83,9 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
   const [name, setName] = useState('');
   const [focusPreset, setFocusPreset] = useState<FocusPresetKey>('baseline');
   const [variantsPerPersona, setVariantsPerPersona] = useState(20);
+  // Calibration constraints pull scores toward earlier similar tests in the
+  // project. Turn off for pre-test sweeps of closely related concepts.
+  const [vectorConstraints, setVectorConstraints] = useState(true);
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [creatingProject, setCreatingProject] = useState(false);
@@ -294,6 +297,7 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
             focus_modifier: focusModifier,
             strategic_context: Object.keys(strategicContext).length > 0 ? strategicContext : undefined,
             origin: narrativOrigin,
+            ...(vectorConstraints ? {} : { variant_config: { vector_constraints: false } }),
           }),
           testsApi.create({
             project_id: projectId,
@@ -307,6 +311,7 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
             focus_modifier: focusModifier,
             strategic_context: Object.keys(strategicContext).length > 0 ? strategicContext : undefined,
             origin: narrativOrigin,
+            ...(vectorConstraints ? {} : { variant_config: { vector_constraints: false } }),
           }),
         ]);
 
@@ -332,6 +337,7 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
           focus_modifier: focusModifier,
           strategic_context: Object.keys(strategicContext).length > 0 ? strategicContext : undefined,
           origin: narrativOrigin,
+          ...(vectorConstraints ? {} : { variant_config: { vector_constraints: false } }),
         });
 
         await testsApi.run(test.id);
@@ -819,6 +825,20 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
               </Select>
             </div>
           </div>
+
+          <label className="flex items-start gap-3 cursor-pointer">
+            <Checkbox
+              checked={vectorConstraints}
+              onCheckedChange={(v) => setVectorConstraints(v === true)}
+              className="mt-0.5"
+            />
+            <span className="text-sm">
+              <span className="font-medium">Calibration constraints</span>
+              <span className="block text-xs text-muted-foreground">
+                Anchor scores to earlier similar tests in this project. Turn off when pre-testing a set of closely related concepts, so they don't pull each other's scores together.
+              </span>
+            </span>
+          </label>
 
           {/* Summary */}
           <Card className="bg-muted/50">
