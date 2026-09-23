@@ -16,7 +16,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { CheckCircle, Circle, Users, AlertCircle, GitCompare, Focus, Upload, X, FileText, Loader2, Plus } from 'lucide-react';
 import type { Project, Persona } from '@/types';
-import { TEST_FOCUS_PRESETS } from '@/lib/constants';
+import { TEST_FOCUS_PRESETS, DEFAULT_PLATFORMS } from '@/lib/constants';
 
 interface UploadedAsset {
   name: string;
@@ -147,7 +147,7 @@ export function PersonaFirst() {
           variant_config: {
             age_spread: 5,
             attitude_distribution: 'normal',
-            platforms_to_include: ['TikTok', 'Instagram', 'YouTube', 'Twitter/X'],
+            platforms_to_include: [...DEFAULT_PLATFORMS],
           },
         });
 
@@ -164,7 +164,7 @@ export function PersonaFirst() {
           variant_config: {
             age_spread: 5,
             attitude_distribution: 'normal',
-            platforms_to_include: ['TikTok', 'Instagram', 'YouTube', 'Twitter/X'],
+            platforms_to_include: [...DEFAULT_PLATFORMS],
           },
         });
 
@@ -190,7 +190,7 @@ export function PersonaFirst() {
           variant_config: {
             age_spread: 5,
             attitude_distribution: 'normal',
-            platforms_to_include: ['TikTok', 'Instagram', 'YouTube', 'Twitter/X'],
+            platforms_to_include: [...DEFAULT_PLATFORMS],
           },
         });
 

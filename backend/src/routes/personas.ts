@@ -5,6 +5,7 @@ import { generateVoiceSample, generateVariants, GeneratedVariant } from '../serv
 import { embedPersona, savePersonaEmbeddings } from '../services/embeddings.js';
 import { z } from 'zod';
 import type { Persona, VariantConfig } from '../utils/types.js';
+import { DEFAULT_PLATFORMS } from '../utils/constants.js';
 
 const router = Router();
 
@@ -59,7 +60,7 @@ const variantConfigSchema = z.object({
   count: z.number().int().min(1).max(100).default(20),
   age_spread: z.number().int().min(0).max(20).default(5),
   attitude_distribution: z.enum(['normal', 'skew_positive', 'skew_negative']).default('normal'),
-  platforms_to_include: z.array(z.string()).default(['TikTok', 'Instagram', 'YouTube', 'Twitter/X']),
+  platforms_to_include: z.array(z.string()).default([...DEFAULT_PLATFORMS]),
 });
 
 // Create persona

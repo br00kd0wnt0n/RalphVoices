@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { personas as personasApi } from '@/lib/api';
+import { DEFAULT_PLATFORMS } from '@/lib/constants';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -51,7 +52,7 @@ export function PersonaCard({ persona, usedInProjects, onDelete, onUpdate }: Per
         count: 20,
         age_spread: 5,
         attitude_distribution: 'normal',
-        platforms_to_include: ['TikTok', 'Instagram', 'YouTube', 'Twitter/X'],
+        platforms_to_include: [...DEFAULT_PLATFORMS],
       }) as any; // Cast to any to access potential error fields
 
       // Check if API returned an error in the response body

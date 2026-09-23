@@ -239,7 +239,8 @@ export async function generateConceptResponse(
   focusModifier: string = '',
   assets: TestAsset[] = [],
   strategicContext: StrategicContext = {},
-  scoreConstraints?: import('../utils/types.js').ScoreConstraints
+  scoreConstraints?: import('../utils/types.js').ScoreConstraints,
+  imageDetail: 'low' | 'high' | 'auto' = 'low'
 ): Promise<ConceptTestResponse> {
   const baseSystemPrompt = `You are embodying a specific persona to provide authentic feedback on a creative
 concept. Respond as this person would - with their vocabulary, concerns,
@@ -353,7 +354,9 @@ Respond in character, then provide your scores and tags.`;
           type: 'image_url',
           image_url: {
             url,
-            detail: 'low', // Use low detail to reduce tokens
+            // Per-test options.image_detail; 'low' default keeps token cost down,
+            // 'high' is needed to read small body copy and CTAs on statics.
+            detail: imageDetail,
           },
         };
       }).filter(c => c.image_url.url),

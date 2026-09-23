@@ -5,6 +5,7 @@ import { RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Responsi
 import { motion } from 'framer-motion';
 import { GitCompareArrows } from 'lucide-react';
 import { tests as testsApi } from '@/lib/api';
+import { calculateRalphScore } from '@/lib/ralphScore';
 import type { Test, TestResultsSummary } from '@/types';
 
 interface TestComparisonProps {
@@ -81,13 +82,9 @@ export function TestComparison({ currentTest, currentSummary, currentRalphScore 
     radarData[2].compare = compareSummary.avg_share_likelihood;
     radarData[3].compare = compareSummary.avg_comprehension;
 
-    // Rough RalphScore calc
-    const baseScore = (cSentiment * 0.30) + (compareSummary.avg_engagement * 0.30) +
-      (compareSummary.avg_share_likelihood * 0.25) + (compareSummary.avg_comprehension * 0.15);
-    const positiveRatio = cTotal > 0 ? compareSummary.sentiment.positive / cTotal : 0;
-    const negativeRatio = cTotal > 0 ? compareSummary.sentiment.negative / cTotal : 0;
-    const modifier = 1 + (positiveRatio * 0.1) - (negativeRatio * 0.15);
-    compareRalphScore = Math.max(0, Math.min(100, Math.round(baseScore * 10 * modifier)));
+    // Stored score when present; otherwise the same formula the results page
+    // uses (this used to be a rougher inline calc that could disagree by a point).
+    compareRalphScore = compareSummary.ralph_score ?? calculateRalphScore(compareSummary);
   }
 
   if (otherTests.length === 0) return null;

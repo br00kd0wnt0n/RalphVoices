@@ -1,0 +1,11 @@
+[
+  {"name":"typical mixed 20-member panel","summary":{"total_responses":20,"sentiment":{"positive":9,"neutral":7,"negative":4},"avg_engagement":5.8,"avg_share_likelihood":4.1,"avg_comprehension":7.6},"expected_ralph_score":59},
+  {"name":"two personas x 20, strong concept","summary":{"total_responses":40,"sentiment":{"positive":29,"neutral":9,"negative":2},"avg_engagement":7.4,"avg_share_likelihood":6.2,"avg_comprehension":8.3},"expected_ralph_score":80},
+  {"name":"skeptical panel, weak concept","summary":{"total_responses":30,"sentiment":{"positive":3,"neutral":10,"negative":17},"avg_engagement":3.2,"avg_share_likelihood":2.1,"avg_comprehension":6.4},"expected_ralph_score":32},
+  {"name":"partial run with dropouts (47 of 50)","summary":{"total_responses":47,"sentiment":{"positive":21,"neutral":19,"negative":7},"avg_engagement":6.1,"avg_share_likelihood":4.9,"avg_comprehension":7.2},"expected_ralph_score":63},
+  {"name":"all positive, max scores (clamps at 100)","summary":{"total_responses":10,"sentiment":{"positive":10,"neutral":0,"negative":0},"avg_engagement":10,"avg_share_likelihood":10,"avg_comprehension":10},"expected_ralph_score":100},
+  {"name":"all negative, floor scores","summary":{"total_responses":10,"sentiment":{"positive":0,"neutral":0,"negative":10},"avg_engagement":1,"avg_share_likelihood":1,"avg_comprehension":1},"expected_ralph_score":9},
+  {"name":"empty summary (total 0)","summary":{"total_responses":0,"sentiment":{"positive":0,"neutral":0,"negative":0},"avg_engagement":0,"avg_share_likelihood":0,"avg_comprehension":0},"expected_ralph_score":0},
+  {"name":"small panel, rounding near .5","summary":{"total_responses":6,"sentiment":{"positive":2,"neutral":3,"negative":1},"avg_engagement":5.5,"avg_share_likelihood":4.5,"avg_comprehension":6.5},"expected_ralph_score":56},
+  {"name":"A/B style 3-persona panel, neutral-heavy","summary":{"total_responses":60,"sentiment":{"positive":14,"neutral":38,"negative":8},"avg_engagement":5,"avg_share_likelihood":3.7,"avg_comprehension":7.9},"expected_ralph_score":53}
+]
