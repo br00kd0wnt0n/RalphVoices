@@ -57,7 +57,7 @@ Everything here is additive or default-off. Existing tests behave exactly as the
 | `options.image_detail` (`low` default \| `high`); fix "will be generated" (generate on run, or block with a clear message); per-test platform list | 0.25 |
 | `DELETE /anchors/all` restricted to an admin allowlist (`ADMIN_EMAILS` env) | ~0 (15 min) |
 
-### Phase 1 (October): Gap 1 evidence layer and the Month-1 predicted-vs-actual minimum (5.0 days)
+### Phase 1 (October): Gap 1 evidence layer, noise floor and the Month-1 predicted-vs-actual minimum (5.5 days)
 
 | Item | Days |
 |---|---|
@@ -67,12 +67,13 @@ Everything here is additive or default-off. Existing tests behave exactly as the
 | Evidence panel on persona detail (a new panel, not a builder redesign); evidence badge on persona cards | 1.0 |
 | Citations in the JSON export; rule that personas with evidence can only be used in their own project's tests; project persona-copy gets `include_evidence` (default false) (Finding F) | 0.25 |
 | **Drift check:** a golden set of 6 concepts (2 per persona) run before and after evidence injection, comparing distributions and ranks (§6, risk 1) | 0.5 |
+| **Noise floor:** run the same golden set twice at the same evidence and panel version, and measure how far scores move when nothing has changed. That gap becomes the project's `min_detectable_diff`; leaderboards show anything inside it as a tie. | 0.5 |
 | **Month-1 PvA minimum** (§3, Q5): `ad_code` on tests (in `options`, no migration) and `GET /projects/:id/predictions.csv` | 0.5 |
 | Build the three twins from the pack. Content work in Brook's time; no build days. ~1.5 h per persona. | — |
 
 Milestone: twins seeded by about 9 Oct. The 13 Tier 1 concepts get pre-tested as ordinary concept tests with `vector_constraints=false`, `image_detail=high`, and an `ad_code` each.
 
-### Phase 2 (late Oct → first week of Nov): Gap 2 copy-set (5.5 days)
+### Phase 2 (late Oct → mid Nov): Gap 2 copy-set, performance questions and compliance check (8.0 days)
 
 | Item | Days |
 |---|---|
@@ -82,20 +83,23 @@ Milestone: twins seeded by about 9 Oct. The 13 Tier 1 concepts get pre-tested as
 | Leaderboard endpoint: per persona, mean RalphScore and dimensions, bootstrap 95% CI, **paired** differences (same panel), "tied with" groups, top tags, best and worst quote | 0.5 |
 | UI: copy-set create (paste lines or upload CSV: text, territory, tone, format), leaderboard page with kill / finalist / "re-run finalists on full panel" | 2.0 |
 | Test list hides children by default | 0.25 |
+| **Stop-or-scroll and feed framing** (brought forward from Phase 3): the response prompt opens with the feed context ("You're scrolling Reels; most ads you skip…") and asks for a yes/no stop-or-scroll decision *before* any reasoning. Default on for copy-sets, opt-in for plain concept tests. Stored in `extra_scores.stop`. | 0.5 |
+| **Performance questions** (standard for Trupanion, previously optional in Phase 3): quote intent, trust up/down, unprompted brand recall, and a one-line takeaway. A second model call checks the takeaway against the test's `intended_takeaway` field. All stored in `test_responses.extra_scores`. The leaderboard ranks by a versioned **Performance Index**; RalphScore is unchanged. | 1.0 |
+| **Compliance check** on messages (§2a): instant phrase rules plus a model review against project and persona rules, with results stored as `messages.compliance_flags`. Flags only, never blocks. | 1.0 |
 | Contingency | 0.25 |
 
-**October load:** Phases 0, 1 and 2 total 12.5 days across about 5.5 weeks. That's workable at around 2.3 days a week. If the engagement squeezes it, the copy-set UI moves into the first week of November. That still meets the brief's "Month 2" need, and the fallback in §5 covers the gap. The brief puts gap 2 in October; that's achievable but it's the first thing to slip.
+**October load:** Phases 0 and 1 (7.5 days) fit comfortably in October. Phase 2 grows to 8.0 days with the gap-review additions, so it starts in the last week of October and runs to mid-November. The copy-set backend and the performance questions go first (they're what the Month 2 pre-test needs); the leaderboard UI and compliance screens follow. Until then, the manual fallback in §8 covers the gap. The brief puts gap 2 in October: the backend can make it, the full UI can't.
 
-### Phase 3 (November): Gap 4 format dimension (3.25 days), then Gap 5 report (4.0 days)
+### Phase 3 (November): Gap 4 format dimension (2.25 days), head-to-head (1.5 days), then Gap 5 report (4.0 days)
 
 | Item | Days |
 |---|---|
 | Format fields live on `messages` (already in migration 009) and in `tests.options.format` for plain concept tests | 0.25 |
-| Placement framing in the response prompt, e.g. "seen in your Instagram Reels feed, 9:16, sound on, you've been scrolling". Default off. | 0.5 |
-| Carousels as ordered slides (asset order plus slide labels in the prompt); video as script plus up to 6 uploaded keyframes | 1.0 |
+| Placement detail added to the Phase 2 feed framing (platform, aspect ratio, sound on/off) | 0.25 |
+| **Carousels as a swipe sequence:** slides shown one at a time, with "would you swipe on?" asked at each, producing a drop-off curve per carousel. **Video** as script plus up to 6 time-stamped keyframes, with the first-2-seconds frame weighted as the hook. | 1.0 |
 | Extended tag vocabulary: `thumb_stopping`, `scroll_past`, `clear_offer`, `feels_like_an_ad`, `trust_raised`, `trust_lowered`. Kept in sync across both constants files. | 0.25 |
-| Optional `performance` focus preset writing `test_responses.extra_scores` (hook strength, quote intent, product-truth takeaway: "did you understand the vet is paid directly?"). Migration 010. | 0.75 |
 | Leaderboard and segments grouped by format | 0.5 |
+| **Head-to-head** (§2a): finalists shown 2–4 at a time in random order; each panel member picks the one that would stop them and the one they'd tap; ranked by win rate. Uses `test_responses.preferred_option`. Sequence: sweep → top 5 → head-to-head → recommendation. | 1.5 |
 | Report model: `GET /rounds/:id/report?persona_id=` → ranked messages, real quotes, evidence citations (from evidence embeddings, see Q1), format breakdown, PvA section (empty until Phase 4), next-round brief draft | 1.5 |
 | Print-styled report route in the frontend → browser "Save as PDF" (no headless Chrome on Railway) | 1.5 |
 | Branding and QA against a real Round 1 dataset | 1.0 |
@@ -115,7 +119,33 @@ Milestone: the round-close report for Round 1/2 is produced from the tool at the
 | Governance: anchor endpoints require `project_id`; `/anchors/seed` checks the test's project; global calibration and delete limited to admins; `users.role` | 1.0 |
 | Optional `projects.restricted` + `project_members` so client-confidential projects drop out of universal visibility | 0.5 |
 
-**Total:** about 27 build days plus 20% contingency, so about 32 days over 13 weeks. Dependency order: 0 → 1 → 2 → (4 ∥ 5) → 3 → 6. Phase 0's panel freeze blocks everything else. Gap 3 depends on gap 2's `messages` table for the ad→message join. Gap 5's PvA section depends on gap 3. The cheap parts of gap 6 have been pulled into Phase 0 and Phase 1.
+**Total:** about 30.5 build days plus 20% contingency, so about 37 days over 13 weeks. Dependency order: 0 → 1 → 2 → (4 ∥ 5) → 3 → 6. Phase 0's panel freeze blocks everything else. Gap 3 depends on gap 2's `messages` table for the ad→message join. Gap 5's PvA section depends on gap 3. The cheap parts of gap 6 have been pulled into Phase 0 and Phase 1.
+
+### 2a. Gap-review additions: design notes
+
+**What the tool can and can't judge.** Say this plainly to the client. Voices judges the idea, the hook line, a static's headline and copy, a script, and key frames. It can't judge edit pacing, sound or on-camera delivery; video craft stays with creative review.
+
+**Performance questions.** Asked in a fixed order so the decision comes before any rationalising:
+
+| Field (`extra_scores`) | Question | Scale |
+|---|---|---|
+| `stop` | Scrolling past, do you stop on this? Answered before anything else. | yes/no |
+| `quote_intent` | Would you tap "Get a quote"? | 1–10 |
+| `trust_shift` | Does this make you trust the brand more or less? | −2 … +2 |
+| `brand_recall` | Who was this ad for? (unprompted; the checker marks correct / wrong / don't know) | enum |
+| `takeaway` + `takeaway_match` | The one thing this ad told you, then a separate model call scores it against `intended_takeaway` | text + 0–1 |
+
+**Performance Index v1** (0–100): 30% stop rate + 30% quote intent + 20% takeaway match + 20% trust shift (rescaled). The weights are a starting guess, versioned as `pi_version`, and re-weighted in December against predicted-vs-actual. RalphScore is untouched so every past number stays the same.
+
+**Compliance rules** (migration 010 `project_rules`), each with a `scope` (project or persona), a `kind` and a message:
+- `required_phrase`: e.g. "medical insurance for pets" (pending Add3 confirmation).
+- `banned_phrase`: e.g. "lock in", "low puppy rates", "pays for itself", "affordable" as a lead claim.
+- `requires_qualifier`: e.g. "paid directly" / "at checkout" must be accompanied by "participating hospitals".
+- `persona_watch_out`: seeded from the evidence pack's watch-outs, e.g. Empty Nesters: no "fur baby" or "pet parent"; DINKs: no "it pays for itself"; Busy Families: no shaming the uninsured.
+
+The instant phrase checks run on every save; the model review runs on demand and before a copy-set runs. Each flag cites the rule it breaks. This is a pre-screen, not legal review: Trupanion's compliance process is still undefined.
+
+**Head-to-head.** Matchups are balanced so every finalist appears equally often in each position (this cancels position bias). There's one response row per panel member per matchup, with `preferred_option` = the message id and `matchup` = the ids in the order shown. Results show a win rate per finalist with a confidence range. It's used for finalists only; running it on 20 messages would need too many calls.
 
 ---
 
@@ -224,8 +254,26 @@ ALTER TABLE tests ADD COLUMN IF NOT EXISTS round_id UUID REFERENCES rounds(id) O
 CREATE INDEX IF NOT EXISTS idx_tests_parent ON tests(parent_test_id);
 -- Backfill: none. Existing tests keep NULL parent/message/round and render exactly as today.
 
--- 010_extra_scores.sql  (Phase 3, optional performance preset)
-ALTER TABLE test_responses ADD COLUMN IF NOT EXISTS extra_scores JSONB;
+-- 010_performance_and_rules.sql  (Phase 2)
+ALTER TABLE test_responses ADD COLUMN IF NOT EXISTS extra_scores JSONB;   -- stop, quote_intent, trust_shift, brand_recall, takeaway(_match)
+ALTER TABLE test_responses ADD COLUMN IF NOT EXISTS matchup JSONB;        -- head-to-head: message ids in the order shown
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS compliance_flags JSONB;     -- [{rule_id, severity, excerpt, note}]
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS compliance_checked_at TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS project_rules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  persona_id UUID REFERENCES personas(id) ON DELETE CASCADE,         -- NULL = applies to the whole project
+  kind VARCHAR(20) NOT NULL CHECK (kind IN ('required_phrase','banned_phrase','requires_qualifier','persona_watch_out','guidance')),
+  pattern TEXT,                    -- phrase or regex for the instant checks
+  qualifier TEXT,                  -- for requires_qualifier
+  message TEXT NOT NULL,           -- shown on the flag
+  severity VARCHAR(10) NOT NULL DEFAULT 'warn' CHECK (severity IN ('info','warn','block')),
+  source VARCHAR(120),             -- 'Add3 naming rule', 'evidence pack §3.2 watch-outs'
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_rules_project ON project_rules(project_id) WHERE active;
+-- intended_takeaway and min_detectable_diff live in tests.options / project settings JSON: no columns needed.
 
 -- 011_ad_performance.sql  (Phase 4)
 CREATE TABLE IF NOT EXISTS ad_performance_imports (
@@ -278,8 +326,8 @@ CREATE TABLE IF NOT EXISTS project_members (                                    
 |---|---|---|
 | 0 | `POST /personas/:id/variants` soft-retires instead of deleting; response adds `panel_version`. `POST /tests` accepts `variant_config.vector_constraints`, `options.image_detail`, `options.ad_code`. `GET /tests/:id/results` adds `summary.ralph_score`, `ralph_score_version`, `segments.by_persona`. `DELETE /anchors/all` requires admin. | Results page reads the stored RalphScore; by-persona card; "Calibration constraints" and "High-detail images" toggles on the configure step |
 | 1 | `GET/POST /personas/:id/evidence`, `PUT/DELETE /personas/:id/evidence/:eid`, `POST /personas/:id/evidence/import {text, pack_ref}` → `{drafts[]}`, `POST /personas/:id/evidence/commit {ids[]}` → `{evidence_version}`. `GET /personas/:id` adds `evidence_summary`. `POST /projects` `include_evidence`. `POST /tests` rejects evidence-bearing personas from other projects. `GET /projects/:id/predictions.csv` | Evidence panel with import review; evidence badge; `ad_code` field on test configure |
-| 2 | `POST/GET /rounds`; `POST /messages` (bulk), `GET /messages?round_id&persona_id`, `PATCH /messages/:id`. `POST /tests {test_type:'copy_set', message_ids[], persona_ids[], panel_limit}` → `{parent, children[]}`. `POST /tests/:id/run` on a parent runs the orchestrator. `GET /tests/:id/leaderboard`. `GET /tests` hides children unless `?include_children=true`. | Rounds list on project; copy-set create; leaderboard page; message status actions |
-| 3 | `messages` format fields in use; `options.format {format, aspect, placement, slides[]}`; `GET /tests/:id/leaderboard?group=format`; `focus_preset:'performance'` → `extra_scores`. `GET /rounds/:id/report?persona_id=`, `POST /rounds/:id/brief` | Format inputs; carousel slide ordering; keyframe upload; `/reports/rounds/:id` print route |
+| 2 | `POST /tests` accepts `options.intended_takeaway` and `options.performance_questions` (default on for copy-sets). `GET/POST/PUT/DELETE /projects/:id/rules`; `POST /messages/:id/compliance` → `{flags[]}` (the instant checks also run on message save). Leaderboard rows add `performance_index`, `pi_version`, `stop_rate`, `takeaway_match`, `compliance_flags`. `POST/GET /rounds`; `POST /messages` (bulk), `GET /messages?round_id&persona_id`, `PATCH /messages/:id`. `POST /tests {test_type:'copy_set', message_ids[], persona_ids[], panel_limit}` → `{parent, children[]}`. `POST /tests/:id/run` on a parent runs the orchestrator. `GET /tests/:id/leaderboard`. `GET /tests` hides children unless `?include_children=true`. | Rounds list on project; copy-set create; leaderboard page; message status actions |
+| 3 | `POST /tests {test_type:'head_to_head', message_ids[] (2–6), persona_ids[], per_panel_matchups}` → `GET /tests/:id/head-to-head` (win rate ± CI per message). `messages` format fields in use; `options.format {format, aspect, placement, slides[]}`; `GET /tests/:id/leaderboard?group=format`; `focus_preset:'performance'` → `extra_scores`. `GET /rounds/:id/report?persona_id=`, `POST /rounds/:id/brief` | Format inputs; carousel slide ordering; keyframe upload; `/reports/rounds/:id` print route |
 | 4 | `POST /performance/imports` (multipart CSV + `column_map`) → `{import_id, matched, unmatched[]}`; `PATCH /performance/:id` (manual match); `POST /projects/:id/anchors/rebuild-live`; `GET /rounds/:id/predicted-vs-actual`. `/anchors/*` require `?project_id`; `/anchors/seed` checks the test's project. | Import wizard with column mapping and an unmatched queue; PvA view; Admin page scoped by project |
 
 ---
@@ -297,7 +345,9 @@ CREATE TABLE IF NOT EXISTS project_members (                                    
 4. **Throughput and cost at copy-set scale.** 20 messages × 20 panel members × 3 personas = 1,200 calls. The current runner (3 concurrent, 1 s gap, about 6–10 s per call) does roughly 20 calls a minute, so about 60 minutes per full sweep. The two-stage approach (sweep at `panel_limit=8` → 480 calls; finalists 5 × 20 × 3 → 300 calls) cuts that to about 40 minutes at current concurrency, or about 10 minutes at `BATCH_SIZE=8` if the OpenAI rate limit allows. Cost at gpt-4o list prices is in the low tens of dollars per full sweep including evidence tokens (check against current pricing); it's not a constraint. The real risks: a Railway redeploy mid-sweep kills the in-process run (don't deploy during sweeps; parent/child means only unfinished children need re-running), and 429s dropping panel members unevenly (Phase 0 retry).
 5. **Touching the current runner.** Only two opt-in flags (`vector_constraints`, `image_detail`) and the retry wrapper. Regression check: run the same known concept test before and after Phase 0 with default settings and compare scores within normal run-to-run noise. The server-side RalphScore must match the client formula exactly (fixture unit test).
 6. **Twin erasure** (Finding A). Covered by Phase 0. Without it, every other safeguard is moot.
-7. **Overclaiming statistically.** The CIs describe the synthetic panel, not the real audience; panel members aren't independent people; Tier 1 is n ≈ 4–5 per persona. The report should say "ranks and explains", not "predicts CPE", until PvA has earned it.
+7. **The model is kinder than real scrollers.** Panel members read every ad closely and rationalise towards liking it. **Mitigation:** feed framing plus stop-or-scroll asked *before* any reasoning (Phase 2); head-to-head for finalists; the noise floor so ties are shown as ties. The Performance Index weights are a guess until the December predicted-vs-actual read.
+7a. **Compliance false comfort.** A clean check can be mistaken for legal sign-off. **Mitigation:** the UI labels it a pre-screen, and flags cite the source of each rule.
+7b. **Overclaiming statistically.** The CIs describe the synthetic panel, not the real audience; panel members aren't independent people; Tier 1 is n ≈ 4–5 per persona. The report should say "ranks and explains", not "predicts CPE", until PvA has earned it.
 8. **Confidential data flows** (Finding F). RCB mirroring and Narrativ webhooks carry Trupanion content. Confirm RCB scopes by client, or add a per-project `mirror_to_rcb` opt-out (0.25 days, can go in Phase 1).
 
 ---
@@ -356,6 +406,9 @@ A well-delivered, cleanly targeted live anchor therefore weighs 6× a synthetic 
 | 2 Copy-set | Run each message as its own concept test with `vector_constraints=false` (Phase 0 flag; **without it, manual sweeps compress each other**), export, tabulate in a Sheet. | ~2 h/persona/round, so ~6 h/month at one round a month |
 | 4 Format | Write format and placement into the concept text ("FORMAT: 9:16 Reels, sound on, first 2 s: …"), put the format code in the test name, pivot by format in the Sheet. | ~0.25 h/persona/month |
 | 5 Report | JSON export + insights chat → Brook writes the report in a Slides template. | ~3 h/persona/round, so ~9 h/month. The most expensive fallback, and the $2,600 line. |
+| Compliance check | Brook reads each copy set against a one-page rules checklist (naming rule, banned claims, qualifiers, persona watch-outs). | ~0.5 h/persona/round |
+| Head-to-head | Skip it: choose finalists on Performance Index plus confidence ranges, and call anything inside the noise floor a tie. | 0 h; weaker finalist calls |
+| Performance questions | Paste the five questions into each concept's strategic-context box. Answers land in the free text, not as scores, so they're tallied by hand. | ~1 h/persona/round |
 | 3 Ingestion | `predictions.csv` + SuperAds CSV joined in a Sheet; pairwise accuracy by formula. The loop still "learns", through Brook's brief rather than through anchors. | ~0.5 h/persona/month (~1.5 h/month total) |
 | 6 Governance | Voices stays Ralph-internal: no client logins, no global anchors, admin-only delete (Phase 0). | 0 h; blocks licensing only |
 
@@ -367,3 +420,5 @@ A well-delivered, cleanly targeted live anchor therefore weighs 6× a synthetic 
 2. **RCB mirroring for Trupanion:** keep it (confirm RCB scopes by client) or opt the project out.
 3. Add3 naming convention: the exact `ad_code` format, needed before Tier 1 pre-tests so the Month-1 PvA join works.
 4. Whether `projects.restricted` is in scope for December, or deferred until a licensed instance.
+5. The first compliance rule set: confirm the naming rule and the banned-claims list with Add3 before the Phase 2 compliance check is switched on.
+6. `intended_takeaway` for each Tier 1 concept. Most are the direct-pay product truth, but it should be written down per concept.
