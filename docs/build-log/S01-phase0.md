@@ -53,7 +53,7 @@ None new. No migration number was used (S1 had none reserved). No new env vars. 
 All against the local DB below. There's no OpenAI key in this environment, so the backend ran against `backend/scripts/mock-openai.mjs` via `OPENAI_BASE_URL` (deterministic scores, forced failures for names starting "Drop"). Prompt content and score distributions were not exercised; plumbing and persistence were.
 
 - **Type checks:** frontend clean. Backend clean apart from the known `uploads.ts` (pdf-parse) and `rcb-client.ts` errors.
-- **Unit:** `cd backend && npm test`, 24/24 pass (12 RalphScore, 12 score parsing).
+- **Unit:** `cd backend && npm test`, 29/29 pass (12 RalphScore, 12 score parsing, 5 retry).
 - **Migrations:** `npm run db:migrate` run twice on a fresh DB. 002–007 apply cleanly both times.
 - **API end to end** (four personas: "DINKs with pets" in two projects, "Busy Families" with 2 of 5 members renamed `Drop*`, and "Empty Nesters" with no panel):
   - New panel from default settings: platforms = `Facebook, Instagram, TikTok`.
@@ -126,7 +126,10 @@ Register a user through `/login` (or `POST /api/auth/register`); demo mode is of
 
 ## Open questions and findings for the coordination session
 
-1. **Retries stack to 9 attempts.** `withRetry` (2 retries, 2s/4s backoff) wraps an OpenAI SDK call that has its own default `maxRetries: 2`. A persistently failing panel member was attempted **9 times** in the mock log. That's slow, but harmless for correctness. A clean fix is `maxRetries: 0` on the concept-response call so `withRetry` owns retries. That changes runner timing, so it's not done here.
+1. **Retry stacking: fixed in this PR at Brook's request.** `withRetry` (2 retries) wrapped an SDK call with its own default `maxRetries: 2`, so a persistently failing panel member got **9 attempts**. Now the concept-response call passes `maxRetries: 0` and `withRetry` (moved to `backend/src/utils/retry.ts`) is the only layer: 3 attempts, 2s then 4s.
+   - To lose nothing the SDK did, `withRetry` now also retries 408 and 409 (as well as 429, 5xx and status-less errors) and honours `Retry-After` / `Retry-After-Ms` when longer than the backoff and under 60s.
+   - This changes runner timing on failures only; successful calls are unaffected. It's not flagged, for the same reason as item 2.
+   - Tests: `backend/tests/retry.test.ts` (5 cases). End to end with 2 of 5 panel members forced to 500: each was attempted exactly 3 times (the log shows retry 1/2 at 2000ms and 2/2 at 4000ms), both were recorded as dropouts, and 3 of 5 responded.
 2. **Parse failures: fixed in this PR at Brook's request (after review of this note).** `generateConceptResponse` used to return 5/5/5/5 with `needs_more_info` whenever the `---SCORES---` JSON was missing or malformed. Those responses counted as real, pulled means towards 5, and never appeared in `dropouts`. Now `backend/src/utils/parseConceptResponse.ts` throws `ScoreParseError`: `withRetry` retries it (3 attempts in total; the SDK doesn't add retries because it isn't an HTTP error), and a persistent failure becomes a dropout.
    - The parser is also more tolerant than before. A ```json fence, prose after the object, numeric strings, and a missing separator with the object still at the end all parse now. Previously the first three silently became 5s.
    - Two small value changes: a score of `0` now clamps to 1 (it used to become 5 via `|| 5`), and a fractional score such as 7.5 is kept until the existing DB rounding.

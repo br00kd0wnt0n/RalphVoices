@@ -8,6 +8,7 @@ import { z } from 'zod';
 import type { Persona, PersonaVariant, Test, ScoreConstraints, DispositionScores } from '../utils/types.js';
 import { SENTIMENT_THRESHOLDS, ATTITUDE_THRESHOLDS, DEFAULT_PLATFORMS } from '../utils/constants.js';
 import { calculateRalphScore, RALPH_SCORE_VERSION } from '../utils/ralphScore.js';
+import { withRetry } from '../utils/retry.js';
 import { gwiService } from '../services/gwi.js';
 import { RCBClient } from '../services/rcb-client.js';
 
@@ -533,24 +534,9 @@ router.post('/:id/cancel', authMiddleware, async (req: AuthRequest, res: Respons
 });
 
 // Process test responses (background)
-// Retry transient OpenAI failures (rate limits, 5xx, timeouts) before a panel
-// member is dropped. Uneven dropout skews comparisons between tests that share
-// a panel, so a couple of backed-off retries are worth the wait.
-async function withRetry<T>(fn: () => Promise<T>, label: string, retries = 2): Promise<T> {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await fn();
-    } catch (error: any) {
-      const status = error?.status;
-      const transient = status === 429 || (typeof status === 'number' && status >= 500) || !status;
-      if (!transient || attempt >= retries) throw error;
-      const delay = 2000 * 2 ** attempt;
-      console.warn(`[withRetry] ${label} failed (${status ?? error?.message}); retry ${attempt + 1}/${retries} in ${delay}ms`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-}
-
+// Per-panel-member calls go through withRetry (utils/retry.ts), the only retry
+// layer for them. Uneven dropout skews comparisons between tests that share a
+// panel, so a couple of backed-off retries are worth the wait.
 async function processTestResponses(test: Test, variants: any[]) {
   const conceptText = test.concept_text!;
   const variantConfig = typeof test.variant_config === 'string'

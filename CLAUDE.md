@@ -188,7 +188,7 @@ Migrations in `backend/src/db/migrations/`. Auto-applied on server startup.
 
 Vision: Images passed as `image_url` content blocks. Forces `gpt-4o` for vision regardless of `OPENAI_MODEL` setting.
 
-Error resilience: Per-variant error handling — each call is retried (`withRetry`, 2 retries with backoff, on top of the OpenAI SDK's own 2 retries for HTTP errors). Unreadable scores throw `ScoreParseError` (`utils/parseConceptResponse.ts`) and are retried the same way; there is no 5/5/5/5 fallback. A panel member that still fails is skipped and recorded in `tests.options.dropouts`. The test completes with partial results and is only marked failed if ALL panel members fail.
+Error resilience: Per-variant error handling — each call is retried by `withRetry` (`utils/retry.ts`: 2 retries, 2s/4s backoff, honours `Retry-After`; retries 408/409/429/5xx and status-less errors). It is the only retry layer: the concept-response call passes `maxRetries: 0` to the SDK, so a failing panel member gets 3 attempts in total. Unreadable scores throw `ScoreParseError` (`utils/parseConceptResponse.ts`) and are retried the same way; there is no 5/5/5/5 fallback. A panel member that still fails is skipped and recorded in `tests.options.dropouts`. The test completes with partial results and is only marked failed if ALL panel members fail.
 
 ### GWI Spark Service (`backend/src/services/gwi.ts`)
 
@@ -327,7 +327,7 @@ DATABASE_URL=postgresql://postgres@127.0.0.1:54329/voices_dev JWT_SECRET=local-d
 ## Tests
 
 ```bash
-cd backend && npm test   # node:test via tsx; RalphScore parity fixtures, concept-response score parsing
+cd backend && npm test   # node:test via tsx; RalphScore parity fixtures, concept-response score parsing, retry
 ```
 
 ## Type Checking

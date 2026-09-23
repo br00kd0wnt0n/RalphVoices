@@ -379,6 +379,10 @@ Respond in character, then provide your scores and tags.`;
     ],
     temperature: 0.85,
     max_tokens: 800,
+  }, {
+    // The caller's withRetry (utils/retry.ts) owns retries for this call.
+    // Leaving the SDK's default 2 retries on stacked to 9 attempts per panel member.
+    maxRetries: 0,
   });
 
   const content = response.choices[0]?.message?.content || '';
