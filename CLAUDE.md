@@ -202,7 +202,7 @@ Optional integration via JSON-RPC calls to GWI Spark API. **Dormant by default**
 1. Concept-first only: for any selected persona with no active panel, the frontend builds one first (`POST /personas/:id/variants`, `variants_per_persona` members, default platforms) with visible progress. If a build fails, the run is blocked and no test is created.
 2. Frontend creates test record (concept + assets + persona_ids + config)
 3. Frontend calls `POST /tests/:id/run` (response includes `personas_without_panel`, the selected personas the runner will skip)
-3. Backend responds immediately, processes in background:
+4. Backend responds immediately, processes in background:
    - Fetches all variants for selected personas
    - Batches: 3 concurrent, 1s delay between batches
    - Each variant: OpenAI call → extract scores/tags → save to DB
