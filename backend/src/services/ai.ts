@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import type { Persona, PersonaVariant, VariantConfig } from '../utils/types.js';
+import { parseConceptResponse } from '../utils/parseConceptResponse.js';
 
 const apiKey = process.env.OPENAI_API_KEY;
 console.log(`OpenAI API Key configured: ${apiKey ? 'Yes (' + apiKey.substring(0, 10) + '...)' : 'NO - AI FEATURES DISABLED'}`);
@@ -382,42 +383,17 @@ Respond in character, then provide your scores and tags.`;
 
   const content = response.choices[0]?.message?.content || '';
 
-  // Parse the response
-  const scoresSeparator = '---SCORES---';
-  const parts = content.split(scoresSeparator);
-
-  const responseText = parts[0]?.trim() || '';
-  let scores: Partial<ConceptTestResponse> = {
-    sentiment_score: 5,
-    engagement_likelihood: 5,
-    share_likelihood: 5,
-    comprehension_score: 5,
-    reaction_tags: ['needs_more_info'],
-  };
-
-  if (parts[1]) {
-    try {
-      const scoresJson = parts[1].trim();
-      const parsed = JSON.parse(scoresJson);
-      scores = {
-        sentiment_score: Math.min(10, Math.max(1, parsed.sentiment_score || 5)),
-        engagement_likelihood: Math.min(10, Math.max(1, parsed.engagement_likelihood || 5)),
-        share_likelihood: Math.min(10, Math.max(1, parsed.share_likelihood || 5)),
-        comprehension_score: Math.min(10, Math.max(1, parsed.comprehension_score || 5)),
-        reaction_tags: Array.isArray(parsed.reaction_tags) ? parsed.reaction_tags : ['needs_more_info'],
-      };
-    } catch (e) {
-      console.error('Failed to parse scores from response');
-    }
-  }
+  // Throws ScoreParseError on unreadable scores; withRetry retries it and a
+  // persistent failure becomes a recorded dropout (no silent 5/5/5/5).
+  const scores = parseConceptResponse(content);
 
   // Log constraint validation (comparison phase — log only, don't reject)
   if (scoreConstraints?.sentiment_range) {
     const checks = [
-      { field: 'sentiment_score', value: scores.sentiment_score!, range: scoreConstraints.sentiment_range },
-      { field: 'engagement_likelihood', value: scores.engagement_likelihood!, range: scoreConstraints.engagement_range! },
-      { field: 'share_likelihood', value: scores.share_likelihood!, range: scoreConstraints.share_range! },
-      { field: 'comprehension_score', value: scores.comprehension_score!, range: scoreConstraints.comprehension_range! },
+      { field: 'sentiment_score', value: scores.sentiment_score, range: scoreConstraints.sentiment_range },
+      { field: 'engagement_likelihood', value: scores.engagement_likelihood, range: scoreConstraints.engagement_range! },
+      { field: 'share_likelihood', value: scores.share_likelihood, range: scoreConstraints.share_range! },
+      { field: 'comprehension_score', value: scores.comprehension_score, range: scoreConstraints.comprehension_range! },
     ];
     for (const { field, value, range } of checks) {
       if (value < range[0] - 1 || value > range[1] + 1) {
@@ -426,14 +402,7 @@ Respond in character, then provide your scores and tags.`;
     }
   }
 
-  return {
-    response_text: responseText,
-    sentiment_score: scores.sentiment_score!,
-    engagement_likelihood: scores.engagement_likelihood!,
-    share_likelihood: scores.share_likelihood!,
-    comprehension_score: scores.comprehension_score!,
-    reaction_tags: scores.reaction_tags!,
-  };
+  return scores;
 }
 
 export interface ThemeAnalysis {

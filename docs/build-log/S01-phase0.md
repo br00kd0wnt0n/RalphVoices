@@ -53,7 +53,7 @@ None new. No migration number was used (S1 had none reserved). No new env vars. 
 All against the local DB below. There's no OpenAI key in this environment, so the backend ran against `backend/scripts/mock-openai.mjs` via `OPENAI_BASE_URL` (deterministic scores, forced failures for names starting "Drop"). Prompt content and score distributions were not exercised; plumbing and persistence were.
 
 - **Type checks:** frontend clean. Backend clean apart from the known `uploads.ts` (pdf-parse) and `rcb-client.ts` errors.
-- **Unit:** `cd backend && npm test`, 12/12 pass.
+- **Unit:** `cd backend && npm test`, 24/24 pass (12 RalphScore, 12 score parsing).
 - **Migrations:** `npm run db:migrate` run twice on a fresh DB. 002–007 apply cleanly both times.
 - **API end to end** (four personas: "DINKs with pets" in two projects, "Busy Families" with 2 of 5 members renamed `Drop*`, and "Empty Nesters" with no panel):
   - New panel from default settings: platforms = `Facebook, Instagram, TikTok`.
@@ -101,6 +101,14 @@ cd backend && DATABASE_URL=postgresql://postgres@127.0.0.1:54329/voices_dev npm 
 
 (Homebrew also works, but check that `brew info pgvector` lists support for the Postgres version you install before relying on it.)
 
+### Restarting it after a container restart
+
+The data dir survives but the server doesn't. `pg_ctl` may warn "another server might be running" because of a stale pid file; it starts anyway.
+
+```bash
+su postgres -c "/usr/lib/postgresql/16/bin/pg_ctl -D /var/lib/postgresql/voices-dev -o '-p 54329 -k /tmp' -l /var/lib/postgresql/voices-dev/server.log start"
+```
+
 ### Running the app locally against it (no OpenAI key needed)
 
 ```bash
@@ -119,7 +127,11 @@ Register a user through `/login` (or `POST /api/auth/register`); demo mode is of
 ## Open questions and findings for the coordination session
 
 1. **Retries stack to 9 attempts.** `withRetry` (2 retries, 2s/4s backoff) wraps an OpenAI SDK call that has its own default `maxRetries: 2`. A persistently failing panel member was attempted **9 times** in the mock log. That's slow, but harmless for correctness. A clean fix is `maxRetries: 0` on the concept-response call so `withRetry` owns retries. That changes runner timing, so it's not done here.
-2. **Parse failures aren't retried or counted (Finding E is only half closed).** The plan says "retry on 429 or parse failure". But `generateConceptResponse` doesn't throw when the `---SCORES---` JSON is missing or malformed: it logs and returns 5/5/5/5 with `needs_more_info`. Those responses count as real, pull means towards 5, and never appear in `dropouts`. For copy-set ranking this matters more than a 429 does. Suggested fix: throw on parse failure so `withRetry` retries and a persistent failure becomes a dropout. That changes how an existing test runs, so it needs a sign-off or a flag. **This is the one I'd prioritise before S4.**
+2. **Parse failures: fixed in this PR at Brook's request (after review of this note).** `generateConceptResponse` used to return 5/5/5/5 with `needs_more_info` whenever the `---SCORES---` JSON was missing or malformed. Those responses counted as real, pulled means towards 5, and never appeared in `dropouts`. Now `backend/src/utils/parseConceptResponse.ts` throws `ScoreParseError`: `withRetry` retries it (3 attempts in total; the SDK doesn't add retries because it isn't an HTTP error), and a persistent failure becomes a dropout.
+   - The parser is also more tolerant than before. A ```json fence, prose after the object, numeric strings, and a missing separator with the object still at the end all parse now. Previously the first three silently became 5s.
+   - Two small value changes: a score of `0` now clamps to 1 (it used to become 5 via `|| 5`), and a fractional score such as 7.5 is kept until the existing DB rounding.
+   - **Deviation from ground rule 3:** this changes how an existing concept test runs and is **not behind a flag**. Brook asked for the fix directly, and a default-off flag would have left the bug live.
+   - Tests: `backend/tests/parseConceptResponse.test.ts`, 12 cases. End to end against the mock (names starting "Garble" get truncated JSON): 5-member panel, 1 garbled → `GarbleAva` attempted 3 times, `options.dropouts.count = 1`, 4 of 5 responded, 0 rows scored 5/5/5/5.
 3. **Production backfill.** After deploy, run `npm run backfill:ralph-score -- --dry-run --allow-remote` against production with Brook's say-so, review the list, then run it without `--dry-run`. The scores written equal what the results page already showed, so nothing visible changes.
 4. **The plan's risk-5 regression check** still needs a real-key run (see "Not done" above).
 

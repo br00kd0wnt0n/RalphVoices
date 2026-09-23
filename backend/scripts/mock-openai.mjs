@@ -4,7 +4,8 @@
 // Handles: chat completions for voice samples, panel generation and concept
 // responses (deterministic scores per panel member name), and embeddings
 // (deterministic 1536-d vectors). Panel members whose name starts with "Drop"
-// always get a 500, which exercises withRetry and options.dropouts.
+// always get a 500, and "Garble" always gets truncated scores JSON; both
+// exercise withRetry and options.dropouts.
 //
 // Usage:
 //   MOCK_PORT=4011 MOCK_LOG=/tmp/mock.log node backend/scripts/mock-openai.mjs
@@ -73,6 +74,7 @@ http.createServer((req, res) => {
       const imageDetails = Array.isArray(user) ? user.filter((p) => p.type === 'image_url').map((p) => p.image_url.detail) : [];
       if (LOG) fs.appendFileSync(LOG, JSON.stringify({ name, model: j.model, image_details: imageDetails }) + '\n');
       if (name.startsWith('Drop')) return send(500, { error: { message: 'mock server error', type: 'server_error' } });
+      if (name.startsWith('Garble')) return reply(`As ${name}: I forgot the format.\n---SCORES---\n{"sentiment_score": 7, "engagement_like`);
       const h = hash(name + userText.slice(0, 200));
       const score = (shift) => 1 + ((h >>> shift) % 10);
       return reply(`As ${name}: a mock reaction.\n---SCORES---\n${JSON.stringify({
