@@ -4,7 +4,7 @@ Coordination and oversight happen in one standing session. Building happens in t
 
 ## Ground rules (every build session)
 
-1. **Never touch the Railway databases.** Both `.env` and `backend/.env` point at Railway; **`yamabiko` is production** (confirmed by Brook, 23 Sep). Run everything against a local database by setting the variable explicitly, e.g. `DATABASE_URL=postgresql://postgres@127.0.0.1:54329/voices_dev npm run dev:backend`. dotenv doesn't override a variable that's already set. Migration 004 needs **pgvector** locally (`brew install pgvector`, or the `pgvector/pgvector:pg16` Docker image); ask Brook before installing anything.
+1. **Never touch the Railway databases.** Both `.env` and `backend/.env` point at Railway. **`yamanote` (the pgvector database) is production**; `yamabiko` is legacy (corrected by Brook, 23 Sep; an earlier note had these the wrong way round). Touch neither. Run everything against a local database by setting the variable explicitly, e.g. `DATABASE_URL=postgresql://postgres@127.0.0.1:54329/voices_dev npm run dev:backend`. dotenv doesn't override a variable that's already set. Migration 004 needs **pgvector** locally (`brew install pgvector`, or the `pgvector/pgvector:pg16` Docker image); ask Brook before installing anything.
 2. **Migrations are additive and idempotent** (`IF NOT EXISTS`), using only the number reserved for your session (table below). Run every new migration twice against the local database to prove it's idempotent.
 3. **Don't change how an existing concept test runs** unless your session's scope says so, and then only behind a flag that defaults to off.
 4. **Terminology:** "panel member" (synthetic person, `persona_variants`), "message" (copy line), "copy set", "round". Never use "variant" for copy.
