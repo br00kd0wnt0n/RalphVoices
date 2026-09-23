@@ -317,7 +317,7 @@ The Trupanion engagement build plan (evidence layer, copy-set tests, format dime
 
 ## Local development database
 
-Never point a dev server or script at Railway (`yamabiko` is production). Use a local Postgres 16 + pgvector on port 54329 and set `DATABASE_URL` explicitly (it wins over `.env`). Setup commands: `docs/build-log/S01-phase0.md`.
+Never point a dev server or script at either Railway database: `yamanote` (pgvector) is production, `yamabiko` is legacy. Use a local Postgres 16 + pgvector on port 54329 and set `DATABASE_URL` explicitly (it wins over `.env`). Setup commands: `docs/build-log/S01-phase0.md`.
 
 ```bash
 DATABASE_URL=postgresql://postgres@127.0.0.1:54329/voices_dev npm run db:migrate

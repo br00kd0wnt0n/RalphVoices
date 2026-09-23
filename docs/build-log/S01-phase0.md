@@ -70,7 +70,7 @@ All against the local DB below. There's no OpenAI key in this environment, so th
 
 ## Local dev database (reuse this in every session)
 
-Ground rule 1: never point anything at Railway. Target: Postgres 16 + pgvector on `127.0.0.1:54329`, database `voices_dev`, user `postgres`, trust auth, so `DATABASE_URL=postgresql://postgres@127.0.0.1:54329/voices_dev`.
+Ground rule 1: never point anything at Railway (`yamanote` is production, `yamabiko` legacy; touch neither). Target: Postgres 16 + pgvector on `127.0.0.1:54329`, database `voices_dev`, user `postgres`, trust auth, so `DATABASE_URL=postgresql://postgres@127.0.0.1:54329/voices_dev`.
 
 ### Cloud Code container (Ubuntu 24.04, run as root): what this session ran
 
@@ -135,7 +135,7 @@ Register a user through `/login` (or `POST /api/auth/register`); demo mode is of
    - Two small value changes: a score of `0` now clamps to 1 (it used to become 5 via `|| 5`), and a fractional score such as 7.5 is kept until the existing DB rounding.
    - **Deviation from ground rule 3:** this changes how an existing concept test runs and is **not behind a flag**. Brook asked for the fix directly, and a default-off flag would have left the bug live.
    - Tests: `backend/tests/parseConceptResponse.test.ts`, 12 cases. End to end against the mock (names starting "Garble" get truncated JSON): 5-member panel, 1 garbled → `GarbleAva` attempted 3 times, `options.dropouts.count = 1`, 4 of 5 responded, 0 rows scored 5/5/5/5.
-3. **Production backfill.** After deploy, run `npm run backfill:ralph-score -- --dry-run --allow-remote` against production with Brook's say-so, review the list, then run it without `--dry-run`. The scores written equal what the results page already showed, so nothing visible changes.
+3. **Production backfill: done 23 Sep.** Brook ran it from a local checkout against `yamanote` (dry run first, then the real run) after PR #1 merged. This cloud environment can't reach the Railway proxy: outbound TCP to the database port is blocked by its network policy. Future production scripts have to run from a local machine.
 4. **The plan's risk-5 regression check** still needs a real-key run (see "Not done" above).
 
 ## What the next session needs to know
