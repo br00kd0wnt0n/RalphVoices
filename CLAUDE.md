@@ -70,8 +70,7 @@ Organization layer. Each project has personas and tests. Create project with opt
 
 ### Test Results (`/tests/:id`)
 Comprehensive results page with tabs:
-- **Dashboard**: RalphScore gauge, sentiment pie chart, brain balance (rational vs emotional), emotional spectrum (reaction tag bars), key associations, shareability analysis, GWI recommendations, cross-test comparison radar chart
-- **Segments**: Breakdowns by platform, attitude (enthusiast/neutral/skeptic), age
+- **Dashboard**: RalphScore gauge, sentiment pie chart, segment cards (by platform, by attitude, by persona), brain balance (rational vs emotional), emotional spectrum (reaction tag bars), key associations, shareability analysis, GWI recommendations, cross-test comparison radar chart. There is no separate Segments tab; segment breakdowns live on the Dashboard tab.
 - **Responses**: Individual persona responses with filtering (sentiment, platform, attitude), paginated
 - **Chat**: Streaming insights chat (SSE) — ask questions about test findings
 - **Market Insights**: GWI enrichment data (when connected)
@@ -80,6 +79,8 @@ Comprehensive results page with tabs:
 Concept preview card shows: text, uploaded images (thumbnails), PDF badges, strategic context fields.
 
 Failed test state: Error banner with diagnostics + retry button.
+
+Partial panel: when fewer panel members responded than were run (`summary.total_responses < tests.responses_total`), an amber banner says "n of N panel members responded".
 
 ### Settings (`/settings`)
 GWI API key configuration. Test focus preset descriptions.
@@ -161,14 +162,16 @@ Key JSONB columns on `personas`:
 - `gwi_audience_data` — optional GWI source data
 
 Key JSONB columns on `tests`:
-- `options` — stores uploaded assets (base64 images, extracted PDF text) and `strategic_context`
+- `options` — stores uploaded assets (base64 images, extracted PDF text), `strategic_context`, `image_detail` (`low` default \| `high` \| `auto`, passed to the vision `image_url.detail`), and `dropouts` (`{count, variant_ids}` of panel members that failed after retries; written on every run)
 - `variant_config` — age_spread, attitude_distribution, platforms, focus_preset, focus_modifier
 
 Key JSONB columns on `test_results`:
-- `summary` — total_responses, sentiment counts, score averages
-- `segments` — by_age, by_platform, by_attitude breakdowns
+- `summary` — total_responses, sentiment counts, score averages, `ralph_score` + `ralph_score_version` (stored since v1)
+- `segments` — by_age, by_platform, by_attitude, by_persona breakdowns (`by_persona` is keyed by persona name, carries `persona_id`; a duplicate name gets a ` (2)` suffix)
 - `themes` — positive_themes, concerns, unexpected
 - `recommendations` — cached AI-generated improvement suggestions
+
+Panels are frozen, not overwritten: regenerating variants soft-retires used ones (`persona_variants.retired_at`, `panel_version`, migration 007) so `test_responses` history survives. Any new query over `persona_variants` must filter `retired_at IS NULL` unless it deliberately wants history.
 
 Migrations in `backend/src/db/migrations/`. Auto-applied on server startup.
 
@@ -185,7 +188,7 @@ Migrations in `backend/src/db/migrations/`. Auto-applied on server startup.
 
 Vision: Images passed as `image_url` content blocks. Forces `gpt-4o` for vision regardless of `OPENAI_MODEL` setting.
 
-Error resilience: Per-variant error handling — failed variants are skipped, test completes with partial results. Only marks as failed if ALL variants fail.
+Error resilience: Per-variant error handling — each call is retried by `withRetry` (`utils/retry.ts`: 2 retries, 2s/4s backoff, honours `Retry-After`; retries 408/409/429/5xx and status-less errors). It is the only retry layer: the concept-response call passes `maxRetries: 0` to the SDK, so a failing panel member gets 3 attempts in total. Unreadable scores throw `ScoreParseError` (`utils/parseConceptResponse.ts`) and are retried the same way; there is no 5/5/5/5 fallback. A panel member that still fails is skipped and recorded in `tests.options.dropouts`. The test completes with partial results and is only marked failed if ALL panel members fail.
 
 ### GWI Spark Service (`backend/src/services/gwi.ts`)
 
@@ -196,17 +199,18 @@ Optional integration via JSON-RPC calls to GWI Spark API. **Dormant by default**
 
 ### Test Execution Flow
 
-1. Frontend creates test record (concept + assets + persona_ids + config)
-2. Frontend calls `POST /tests/:id/run`
-3. Backend responds immediately, processes in background:
+1. Concept-first only: for any selected persona with no active panel, the frontend builds one first (`POST /personas/:id/variants`, `variants_per_persona` members, default platforms) with visible progress. If a build fails, the run is blocked and no test is created.
+2. Frontend creates test record (concept + assets + persona_ids + config)
+3. Frontend calls `POST /tests/:id/run` (response includes `personas_without_panel`, the selected personas the runner will skip)
+4. Backend responds immediately, processes in background:
    - Fetches all variants for selected personas
    - Batches: 3 concurrent, 1s delay between batches
    - Each variant: OpenAI call → extract scores/tags → save to DB
-   - Per-variant error handling (skip failures, continue)
-   - After all: analyze themes, calculate segments, save results
+   - Per-variant error handling (retry, then skip and record in `options.dropouts`)
+   - After all: analyze themes, calculate segments, compute RalphScore, save results
    - Optional: GWI enrichment (non-blocking)
    - Mark test as `complete`
-4. Frontend polls via WebSocket for real-time progress
+5. Frontend polls via WebSocket for real-time progress
 
 ### Response Scoring
 
@@ -219,7 +223,9 @@ Each variant response produces:
 
 ### RalphScore™
 
-Proprietary 0-100 benchmark: 30% sentiment + 30% engagement + 25% share likelihood + 15% comprehension, with sentiment distribution modifier. Calculated in `frontend/src/pages/TestResults.tsx`.
+Proprietary 0-100 benchmark: 30% sentiment + 30% engagement + 25% share likelihood + 15% comprehension, with sentiment distribution modifier.
+
+Computed server-side in `backend/src/utils/ralphScore.ts` when results are written and stored in `test_results.summary.ralph_score` with `ralph_score_version` (currently 1), so delivered numbers never shift. `frontend/src/lib/ralphScore.ts` is an identical mirror used only as a fallback (tests completed before v1, live progress). `backend/tests/ralphScore.test.ts` proves the two agree (`cd backend && npm test`). Any change to the maths must bump the version in both files; recompute old tests deliberately with `backend/scripts/backfill-ralph-score.ts` (`--dry-run`, `--recompute`, `--allow-remote`).
 
 ### Test Focus Presets
 
@@ -240,6 +246,7 @@ Proprietary 0-100 benchmark: 30% sentiment + 30% engagement + 25% share likeliho
 | `SENTIMENT_THRESHOLDS.NEUTRAL_MIN` | 4 | 4-6 is neutral, < 4 is negative |
 | `ATTITUDE_THRESHOLDS.ENTHUSIAST_MIN` | 7 | >= 7 is enthusiast |
 | `ATTITUDE_THRESHOLDS.SKEPTIC_MAX` | 3 | <= 3 is skeptic |
+| `DEFAULT_PLATFORMS` | Facebook, Instagram, TikTok | Platforms new panels are spread across (Meta + TikTok). Existing panels keep theirs. |
 
 ---
 
@@ -266,6 +273,7 @@ Backend (`.env`):
 - `ENABLE_GWI`, `GWI_API_KEY` — flip ENABLE_GWI=true and supply a key to reactivate GWI Spark
 - `ENABLE_R2_STORAGE`, `R2_*` — route uploaded assets to Cloudflare R2 instead of base64-in-JSONB
 - `TEST_RETENTION_DAYS` — optional; archive completed tests older than N days
+- `ADMIN_EMAILS` — comma-separated admin allowlist; required for `DELETE /api/anchors/all` (fails closed when unset)
 - `PORT` — Backend port (default: 3001)
 - `FRONTEND_URL` — For CORS (default: `http://localhost:5173`)
 - `NARRATIV_SSO_SECRET` — HS256 signing secret shared with Narrativ for shell→tool SSO. Must be byte-identical to `TOOL_SSO_SECRET_VOICES` on Narrativ. Empty/unset = SSO disabled (password login still works).
@@ -302,6 +310,25 @@ the iframe loads.
 - Backwards-compatible: when `NARRATIV_SSO_SECRET` is unset, the exchange
   endpoint returns 401 with `reason: 'missing_secret'` and the frontend falls
   back to the existing /login flow.
+
+## Roadmap
+
+The Trupanion engagement build plan (evidence layer, copy-set tests, format dimension, reports, live-performance anchors, governance) is in `docs/trupanion-build-plan.md`. Phase 0 safeguards have shipped on `voices/trupanion-phase0`.
+
+## Local development database
+
+Never point a dev server or script at Railway (`yamabiko` is production). Use a local Postgres 16 + pgvector on port 54329 and set `DATABASE_URL` explicitly (it wins over `.env`). Setup commands: `docs/build-log/S01-phase0.md`.
+
+```bash
+DATABASE_URL=postgresql://postgres@127.0.0.1:54329/voices_dev npm run db:migrate
+DATABASE_URL=postgresql://postgres@127.0.0.1:54329/voices_dev JWT_SECRET=local-dev-secret npm run dev:backend
+```
+
+## Tests
+
+```bash
+cd backend && npm test   # node:test via tsx; RalphScore parity fixtures, concept-response score parsing, retry
+```
 
 ## Type Checking
 

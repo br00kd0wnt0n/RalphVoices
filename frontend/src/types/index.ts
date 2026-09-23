@@ -138,12 +138,18 @@ export interface TestResultsSummary {
   avg_engagement: number;
   avg_share_likelihood: number;
   avg_comprehension: number;
+  // Stored server-side since RalphScore v1. Absent on older tests until the
+  // backfill runs; the frontend computes it locally then.
+  ralph_score?: number;
+  ralph_score_version?: number;
 }
 
 export interface TestResultsSegments {
   by_age: Record<string, { count: number; avgSentiment: number; avgEngagement: number }>;
   by_platform: Record<string, { count: number; avgSentiment: number; avgEngagement: number }>;
   by_attitude: Record<string, { count: number; avgSentiment: number; avgEngagement: number }>;
+  // Keyed by persona name. Absent on tests completed before it was added.
+  by_persona?: Record<string, { persona_id: string; count: number; avgSentiment: number; avgEngagement: number }>;
 }
 
 export interface TestResultsThemes {

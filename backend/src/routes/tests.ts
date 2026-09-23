@@ -6,7 +6,9 @@ import { generateConceptResponse, streamChatResponse, generateRecommendations, T
 import { embedConcept, saveConceptEmbedding, computeDisposition, seedAnchorsFromHistory } from '../services/embeddings.js';
 import { z } from 'zod';
 import type { Persona, PersonaVariant, Test, ScoreConstraints, DispositionScores } from '../utils/types.js';
-import { SENTIMENT_THRESHOLDS, ATTITUDE_THRESHOLDS } from '../utils/constants.js';
+import { SENTIMENT_THRESHOLDS, ATTITUDE_THRESHOLDS, DEFAULT_PLATFORMS } from '../utils/constants.js';
+import { calculateRalphScore, RALPH_SCORE_VERSION } from '../utils/ralphScore.js';
+import { withRetry } from '../utils/retry.js';
 import { gwiService } from '../services/gwi.js';
 import { RCBClient } from '../services/rcb-client.js';
 
@@ -76,8 +78,17 @@ const createTestSchema = z.object({
   variant_config: z.object({
     age_spread: z.number().int().min(0).max(20).default(5),
     attitude_distribution: z.enum(['normal', 'skew_positive', 'skew_negative']).default('normal'),
-    platforms_to_include: z.array(z.string()).default(['TikTok', 'Instagram', 'YouTube', 'Twitter/X']),
+    platforms_to_include: z.array(z.string()).default([...DEFAULT_PLATFORMS]),
+    // false = skip vector disposition constraints AND anchor seeding for this
+    // test. Required for copy-set style sweeps, where near-identical messages
+    // would otherwise constrain each other's scores (see docs/trupanion-build-plan.md §0 B).
+    vector_constraints: z.boolean().optional(),
   }).optional(),
+
+  // Vision detail for image assets, passed straight to the OpenAI image_url
+  // block. 'low' (default, ~85 tokens/image) can't read small body copy or
+  // CTAs on statics; 'high' can, at several times the token cost.
+  image_detail: z.enum(['low', 'high', 'auto']).optional(),
 
   // Narrativ (Brainstorm) handoff origin. When present, the test
   // completion hook fires a webhook back to Narrativ so the originating
@@ -132,6 +143,7 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
       assets: data.assets || [],
       ...(data.strategic_context ? { strategic_context: data.strategic_context } : {}),
       ...(data.origin ? { origin: data.origin } : {}),
+      ...(data.image_detail ? { image_detail: data.image_detail } : {}),
     };
 
     const result = await query(
@@ -397,7 +409,10 @@ router.post('/:id/run', authMiddleware, async (req: AuthRequest, res: Response) 
     if (test.status === 'failed' || test.status === 'cancelled') {
       await query('DELETE FROM test_responses WHERE test_id = $1', [testId]);
       await query('DELETE FROM test_results WHERE test_id = $1', [testId]);
-      await query('UPDATE tests SET responses_completed = 0 WHERE id = $1', [testId]);
+      await query(
+        `UPDATE tests SET responses_completed = 0, options = COALESCE(options, '{}'::jsonb) - 'dropouts' WHERE id = $1`,
+        [testId]
+      );
     }
 
     // Get all variants for the selected personas
@@ -432,6 +447,7 @@ router.post('/:id/run', authMiddleware, async (req: AuthRequest, res: Response) 
        FROM persona_variants pv
        JOIN personas p ON pv.persona_id = p.id
        WHERE pv.persona_id = ANY($1)
+         AND pv.retired_at IS NULL
        ORDER BY pv.persona_id, pv.variant_index`,
       [test.persona_ids]
     );
@@ -443,6 +459,15 @@ router.post('/:id/run', authMiddleware, async (req: AuthRequest, res: Response) 
 
     const variants = variantsResult.rows;
     const totalResponses = variants.length;
+
+    // Selected personas with no active panel are skipped by the runner. The
+    // concept-first UI builds their panels before calling run; this surfaces
+    // any that slip through (e.g. direct API callers) instead of hiding them.
+    const personasWithPanel = new Set(variants.map((v: any) => v.persona_id));
+    const personasWithoutPanel = (test.persona_ids as string[]).filter(id => !personasWithPanel.has(id));
+    if (personasWithoutPanel.length > 0) {
+      console.warn(`[run] Test ${testId}: ${personasWithoutPanel.length} selected persona(s) have no active panel and will be skipped: ${personasWithoutPanel.join(', ')}`);
+    }
 
     // Update test status
     await query(
@@ -458,6 +483,7 @@ router.post('/:id/run', authMiddleware, async (req: AuthRequest, res: Response) 
       message: 'Test started',
       test_id: testId,
       total_variants: totalResponses,
+      personas_without_panel: personasWithoutPanel,
     });
 
     // Process variants in background (with rate limiting)
@@ -508,6 +534,9 @@ router.post('/:id/cancel', authMiddleware, async (req: AuthRequest, res: Respons
 });
 
 // Process test responses (background)
+// Per-panel-member calls go through withRetry (utils/retry.ts), the only retry
+// layer for them. Uneven dropout skews comparisons between tests that share a
+// panel, so a couple of backed-off retries are worth the wait.
 async function processTestResponses(test: Test, variants: any[]) {
   const conceptText = test.concept_text!;
   const variantConfig = typeof test.variant_config === 'string'
@@ -521,21 +550,31 @@ async function processTestResponses(test: Test, variants: any[]) {
     : (test.options || {});
   const assets = testOptions.assets || [];
   const strategicContext = testOptions.strategic_context || {};
+  const imageDetail: 'low' | 'high' | 'auto' = testOptions.image_detail || 'low';
 
   console.log(`Processing test with ${assets.length} assets (${assets.filter((a: any) => a.isImage).length} images, ${assets.filter((a: any) => a.isPDF).length} PDFs)`);
 
-  // Generate concept embedding for vector-based disposition scoring
+  // Generate concept embedding for vector-based disposition scoring.
+  // Opt-out per test: no embedding means no constraints and no anchor seeding.
+  const useVectorConstraints = variantConfig.vector_constraints !== false;
   let conceptEmbedding: number[] | null = null;
-  try {
-    const embResult = await embedConcept(conceptText, strategicContext);
-    conceptEmbedding = embResult.combined;
-    await saveConceptEmbedding(test.id, conceptEmbedding);
-    console.log(`Concept embedding generated for test ${test.id}`);
-  } catch (err) {
-    console.error(`[processTestResponses] Concept embedding failed, proceeding without constraints:`, err);
+  if (!useVectorConstraints) {
+    console.log(`[processTestResponses] Vector constraints disabled for test ${test.id}`);
+  } else {
+    try {
+      const embResult = await embedConcept(conceptText, strategicContext);
+      conceptEmbedding = embResult.combined;
+      await saveConceptEmbedding(test.id, conceptEmbedding);
+      console.log(`Concept embedding generated for test ${test.id}`);
+    } catch (err) {
+      console.error(`[processTestResponses] Concept embedding failed, proceeding without constraints:`, err);
+    }
   }
 
   const responses: any[] = [];
+  // Panel members that still failed after withRetry. Recorded on the test so a
+  // partial panel is visible, not silent (build plan §0 Finding E).
+  const droppedVariantIds: string[] = [];
   const BATCH_SIZE = 3; // Process 3 at a time to respect rate limits
   const DELAY_MS = 1000; // 1 second delay between batches
 
@@ -606,7 +645,10 @@ async function processTestResponses(test: Test, variants: any[]) {
         }
 
         const startTime = Date.now();
-        const response = await generateConceptResponse(variant, basePersona, conceptText, focusModifier, assets, strategicContext, scoreConstraints);
+        const response = await withRetry(
+          () => generateConceptResponse(variant, basePersona, conceptText, focusModifier, assets, strategicContext, scoreConstraints, imageDetail),
+          `variant ${variant.variant_name}`
+        );
         const processingTime = Date.now() - startTime;
 
         // Scores are INTEGER 1-10 in the DB — GPT sometimes returns decimals (e.g. 7.8),
@@ -638,9 +680,10 @@ async function processTestResponses(test: Test, variants: any[]) {
           ]
         );
 
-        return { variant, response };
+        return { variant, response, persona: { id: basePersona.id, name: basePersona.name } };
       } catch (error: any) {
         console.error(`[processTestResponses] Variant ${variant.variant_name} failed:`, error?.message);
+        droppedVariantIds.push(variant.id);
         return null; // Skip failed variants instead of crashing entire test
       }
     });
@@ -669,6 +712,15 @@ async function processTestResponses(test: Test, variants: any[]) {
     }
   }
 
+  // Record dropouts on the test (always written, so a clean run stores count 0).
+  await query(
+    `UPDATE tests SET options = COALESCE(options, '{}'::jsonb) || jsonb_build_object('dropouts', $1::jsonb) WHERE id = $2`,
+    [JSON.stringify({ count: droppedVariantIds.length, variant_ids: droppedVariantIds }), test.id]
+  );
+  if (droppedVariantIds.length > 0) {
+    console.warn(`[processTestResponses] ${droppedVariantIds.length} of ${variants.length} panel members dropped for test ${test.id}`);
+  }
+
   // Check if we got any responses at all
   if (responses.length === 0) {
     console.error(`[processTestResponses] All variants failed for test ${test.id}`);
@@ -684,7 +736,7 @@ async function processTestResponses(test: Test, variants: any[]) {
   const segments = calculateSegments(responses);
 
   // Build summary from DB-stored structured data
-  const summary = {
+  const baseSummary = {
     total_responses: responses.length,
     sentiment: {
       positive: responses.filter(r => (r.response.sentiment_score || 5) >= SENTIMENT_THRESHOLDS.POSITIVE_MIN).length,
@@ -694,6 +746,13 @@ async function processTestResponses(test: Test, variants: any[]) {
     avg_engagement: Math.round((responses.reduce((sum, r) => sum + (r.response.engagement_likelihood || 0), 0) / responses.length) * 10) / 10,
     avg_share_likelihood: Math.round((responses.reduce((sum, r) => sum + (r.response.share_likelihood || 0), 0) / responses.length) * 10) / 10,
     avg_comprehension: Math.round((responses.reduce((sum, r) => sum + (r.response.comprehension_score || 0), 0) / responses.length) * 10) / 10,
+  };
+  // RalphScore is computed once here and stored, so numbers already delivered
+  // to a client never shift if the formula changes (bump RALPH_SCORE_VERSION).
+  const summary = {
+    ...baseSummary,
+    ralph_score: calculateRalphScore(baseSummary),
+    ralph_score_version: RALPH_SCORE_VERSION,
   };
 
   // Aggregate reaction_tags from all responses (already extracted by AI per-response)
@@ -901,8 +960,13 @@ function calculateSegments(responses: any[]) {
   const byAge: Record<string, { count: number; avgSentiment: number; avgEngagement: number }> = {};
   const byPlatform: Record<string, { count: number; avgSentiment: number; avgEngagement: number }> = {};
   const byAttitude: Record<string, { count: number; avgSentiment: number; avgEngagement: number }> = {};
+  // Keyed by persona name (like the other segments' human-readable keys), with
+  // persona_id alongside. Two selected personas can share a name (copies across
+  // projects), so a clash gets a numeric suffix rather than merging them.
+  const byPersona: Record<string, { persona_id: string; count: number; avgSentiment: number; avgEngagement: number }> = {};
+  const personaKeys = new Map<string, string>();
 
-  for (const { variant, response } of responses) {
+  for (const { variant, response, persona } of responses) {
     // Age segments
     const age = variant.age_actual;
     let ageGroup = '35+';
@@ -931,6 +995,21 @@ function calculateSegments(responses: any[]) {
     byAttitude[attitudeGroup].count++;
     byAttitude[attitudeGroup].avgSentiment += response.sentiment_score;
     byAttitude[attitudeGroup].avgEngagement += response.engagement_likelihood;
+
+    // Persona segments
+    const personaId: string = persona?.id || variant.persona_id;
+    let personaKey = personaKeys.get(personaId);
+    if (personaKey === undefined) {
+      const baseName: string = persona?.name || 'Unknown persona';
+      let key = baseName;
+      for (let n = 2; byPersona[key]; n++) key = `${baseName} (${n})`;
+      personaKeys.set(personaId, key);
+      byPersona[key] = { persona_id: personaId, count: 0, avgSentiment: 0, avgEngagement: 0 };
+      personaKey = key;
+    }
+    byPersona[personaKey].count++;
+    byPersona[personaKey].avgSentiment += response.sentiment_score;
+    byPersona[personaKey].avgEngagement += response.engagement_likelihood;
   }
 
   // Calculate averages
@@ -946,8 +1025,12 @@ function calculateSegments(responses: any[]) {
     group.avgSentiment = Math.round((group.avgSentiment / group.count) * 10) / 10;
     group.avgEngagement = Math.round((group.avgEngagement / group.count) * 10) / 10;
   }
+  for (const group of Object.values(byPersona)) {
+    group.avgSentiment = Math.round((group.avgSentiment / group.count) * 10) / 10;
+    group.avgEngagement = Math.round((group.avgEngagement / group.count) * 10) / 10;
+  }
 
-  return { by_age: byAge, by_platform: byPlatform, by_attitude: byAttitude };
+  return { by_age: byAge, by_platform: byPlatform, by_attitude: byAttitude, by_persona: byPersona };
 }
 
 // Export full test report as JSON

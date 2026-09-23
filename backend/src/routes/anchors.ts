@@ -140,7 +140,23 @@ router.get('/recent', authMiddleware, async (_req: AuthRequest, res: Response) =
 // universal-access; tighten when access policy becomes a need).
 // is_global_calibration = TRUE rows still NEVER touched on this
 // path; those are admin-managed reference points.
-router.delete('/all', authMiddleware, async (_req: AuthRequest, res: Response) => {
+//
+// 2026-09-23: restricted to ADMIN_EMAILS (comma-separated). Fails closed —
+// with the env var unset nobody can wipe, because this one call would erase
+// every project's calibration, including client performance anchors.
+function isAdmin(req: AuthRequest): boolean {
+  const admins = (process.env.ADMIN_EMAILS || '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  return !!req.user && admins.includes(req.user.email.toLowerCase());
+}
+
+router.delete('/all', authMiddleware, async (req: AuthRequest, res: Response) => {
+  if (!isAdmin(req)) {
+    res.status(403).json({ error: 'Admin only. Set ADMIN_EMAILS to enable.' });
+    return;
+  }
   try {
     const result = await query(
       `DELETE FROM reference_anchors

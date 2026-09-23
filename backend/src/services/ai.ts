@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import type { Persona, PersonaVariant, VariantConfig } from '../utils/types.js';
+import { parseConceptResponse } from '../utils/parseConceptResponse.js';
 
 const apiKey = process.env.OPENAI_API_KEY;
 console.log(`OpenAI API Key configured: ${apiKey ? 'Yes (' + apiKey.substring(0, 10) + '...)' : 'NO - AI FEATURES DISABLED'}`);
@@ -239,7 +240,8 @@ export async function generateConceptResponse(
   focusModifier: string = '',
   assets: TestAsset[] = [],
   strategicContext: StrategicContext = {},
-  scoreConstraints?: import('../utils/types.js').ScoreConstraints
+  scoreConstraints?: import('../utils/types.js').ScoreConstraints,
+  imageDetail: 'low' | 'high' | 'auto' = 'low'
 ): Promise<ConceptTestResponse> {
   const baseSystemPrompt = `You are embodying a specific persona to provide authentic feedback on a creative
 concept. Respond as this person would - with their vocabulary, concerns,
@@ -353,7 +355,9 @@ Respond in character, then provide your scores and tags.`;
           type: 'image_url',
           image_url: {
             url,
-            detail: 'low', // Use low detail to reduce tokens
+            // Per-test options.image_detail; 'low' default keeps token cost down,
+            // 'high' is needed to read small body copy and CTAs on statics.
+            detail: imageDetail,
           },
         };
       }).filter(c => c.image_url.url),
@@ -375,46 +379,25 @@ Respond in character, then provide your scores and tags.`;
     ],
     temperature: 0.85,
     max_tokens: 800,
+  }, {
+    // The caller's withRetry (utils/retry.ts) owns retries for this call.
+    // Leaving the SDK's default 2 retries on stacked to 9 attempts per panel member.
+    maxRetries: 0,
   });
 
   const content = response.choices[0]?.message?.content || '';
 
-  // Parse the response
-  const scoresSeparator = '---SCORES---';
-  const parts = content.split(scoresSeparator);
-
-  const responseText = parts[0]?.trim() || '';
-  let scores: Partial<ConceptTestResponse> = {
-    sentiment_score: 5,
-    engagement_likelihood: 5,
-    share_likelihood: 5,
-    comprehension_score: 5,
-    reaction_tags: ['needs_more_info'],
-  };
-
-  if (parts[1]) {
-    try {
-      const scoresJson = parts[1].trim();
-      const parsed = JSON.parse(scoresJson);
-      scores = {
-        sentiment_score: Math.min(10, Math.max(1, parsed.sentiment_score || 5)),
-        engagement_likelihood: Math.min(10, Math.max(1, parsed.engagement_likelihood || 5)),
-        share_likelihood: Math.min(10, Math.max(1, parsed.share_likelihood || 5)),
-        comprehension_score: Math.min(10, Math.max(1, parsed.comprehension_score || 5)),
-        reaction_tags: Array.isArray(parsed.reaction_tags) ? parsed.reaction_tags : ['needs_more_info'],
-      };
-    } catch (e) {
-      console.error('Failed to parse scores from response');
-    }
-  }
+  // Throws ScoreParseError on unreadable scores; withRetry retries it and a
+  // persistent failure becomes a recorded dropout (no silent 5/5/5/5).
+  const scores = parseConceptResponse(content);
 
   // Log constraint validation (comparison phase — log only, don't reject)
   if (scoreConstraints?.sentiment_range) {
     const checks = [
-      { field: 'sentiment_score', value: scores.sentiment_score!, range: scoreConstraints.sentiment_range },
-      { field: 'engagement_likelihood', value: scores.engagement_likelihood!, range: scoreConstraints.engagement_range! },
-      { field: 'share_likelihood', value: scores.share_likelihood!, range: scoreConstraints.share_range! },
-      { field: 'comprehension_score', value: scores.comprehension_score!, range: scoreConstraints.comprehension_range! },
+      { field: 'sentiment_score', value: scores.sentiment_score, range: scoreConstraints.sentiment_range },
+      { field: 'engagement_likelihood', value: scores.engagement_likelihood, range: scoreConstraints.engagement_range! },
+      { field: 'share_likelihood', value: scores.share_likelihood, range: scoreConstraints.share_range! },
+      { field: 'comprehension_score', value: scores.comprehension_score, range: scoreConstraints.comprehension_range! },
     ];
     for (const { field, value, range } of checks) {
       if (value < range[0] - 1 || value > range[1] + 1) {
@@ -423,14 +406,7 @@ Respond in character, then provide your scores and tags.`;
     }
   }
 
-  return {
-    response_text: responseText,
-    sentiment_score: scores.sentiment_score!,
-    engagement_likelihood: scores.engagement_likelihood!,
-    share_likelihood: scores.share_likelihood!,
-    comprehension_score: scores.comprehension_score!,
-    reaction_tags: scores.reaction_tags!,
-  };
+  return scores;
 }
 
 export interface ThemeAnalysis {

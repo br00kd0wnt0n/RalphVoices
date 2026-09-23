@@ -27,8 +27,9 @@ import {
 } from 'recharts';
 import { ArrowLeft, RefreshCw, Users, TrendingUp, MessageSquare, AlertTriangle, Sparkles, Globe, Download, Lightbulb, ShieldAlert, FileText, Pencil, ChevronDown, ChevronUp, XCircle, Trash2 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
-import type { Test, TestResponse } from '@/types';
+import type { Test, TestResponse, TestResultsSummary } from '@/types';
 import { SENTIMENT_THRESHOLDS } from '@/lib/constants';
+import { calculateRalphScore } from '@/lib/ralphScore';
 import { GwiBadge } from '@/components/GwiBadge';
 import { EmotionalSpectrum } from '@/components/EmotionalSpectrum';
 import { BrainBalance } from '@/components/BrainBalance';
@@ -45,42 +46,11 @@ const COLORS = {
   negative: '#ef4444',
 };
 
-// Calculate RalphScore™ - proprietary benchmark score (0-100)
-function calculateRalphScore(summary: {
-  sentiment: { positive: number; neutral: number; negative: number };
-  avg_engagement: number;
-  avg_share_likelihood: number;
-  avg_comprehension: number;
-  total_responses: number;
-}): number {
-  const total = summary.sentiment.positive + summary.sentiment.neutral + summary.sentiment.negative;
-  if (total === 0) return 0;
-
-  // Calculate sentiment score (weighted average: positive=10, neutral=5, negative=1)
-  const sentimentScore = (
-    (summary.sentiment.positive * 10) +
-    (summary.sentiment.neutral * 5) +
-    (summary.sentiment.negative * 1)
-  ) / total;
-
-  // Base score from metrics (all out of 10, weighted)
-  const baseScore = (
-    (sentimentScore * 0.30) +           // 30% sentiment
-    (summary.avg_engagement * 0.30) +    // 30% engagement
-    (summary.avg_share_likelihood * 0.25) + // 25% share likelihood
-    (summary.avg_comprehension * 0.15)   // 15% comprehension
-  );
-
-  // Sentiment distribution modifier
-  const positiveRatio = summary.sentiment.positive / total;
-  const negativeRatio = summary.sentiment.negative / total;
-  const distributionModifier = 1 + (positiveRatio * 0.1) - (negativeRatio * 0.15);
-
-  // Calculate final score (0-100)
-  const ralphScore = Math.round(baseScore * 10 * distributionModifier);
-
-  // Clamp between 0-100
-  return Math.max(0, Math.min(100, ralphScore));
+// RalphScore™: prefer the value stored server-side when results were written
+// (keeps delivered numbers fixed); fall back to the shared formula for tests
+// completed before it was stored.
+function ralphScoreFor(summary: TestResultsSummary): number {
+  return summary.ralph_score ?? calculateRalphScore(summary);
 }
 
 // Get RalphScore rating label
@@ -699,6 +669,24 @@ export function TestResultsPage() {
         );
       })()}
 
+      {/* Dropouts: panel members that still failed after retries */}
+      {test.status === 'complete' && results && (() => {
+        const panelSize = test.responses_total || 0;
+        const responded = results.summary.total_responses;
+        if (!panelSize || responded >= panelSize) return null;
+        return (
+          <div className="flex items-center gap-2 p-3 rounded-lg border border-amber-500/40 bg-amber-500/5 text-sm">
+            <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+            <span>
+              <span className="font-medium">{responded} of {panelSize} panel members responded.</span>{' '}
+              <span className="text-muted-foreground">
+                {panelSize - responded} failed after retries and {panelSize - responded === 1 ? 'is' : 'are'} not included in these results.
+              </span>
+            </span>
+          </div>
+        );
+      })()}
+
       {/* Results */}
       {test.status === 'complete' && results && (
         <Tabs defaultValue="dashboard">
@@ -721,7 +709,7 @@ export function TestResultsPage() {
           <TabsContent value="dashboard" className="space-y-3">
             {/* Row 1: RalphScore + Summary Stats */}
             {(() => {
-              const ralphScore = calculateRalphScore(results.summary);
+              const ralphScore = ralphScoreFor(results.summary);
               const { label, color } = getRalphScoreLabel(ralphScore);
               return (
                 <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
@@ -849,6 +837,33 @@ export function TestResultsPage() {
               </Card>
             </div>
 
+            {/* By Persona (segments.by_persona; absent on older tests) */}
+            {results.segments.by_persona && Object.keys(results.segments.by_persona).length > 0 && (
+              <Card>
+                <CardHeader className="pb-2 p-4">
+                  <CardTitle className="text-sm">By Persona</CardTitle>
+                </CardHeader>
+                <CardContent className="p-4 pt-0">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {Object.entries(results.segments.by_persona)
+                      .sort(([, a], [, b]) => b.avgSentiment - a.avgSentiment)
+                      .map(([personaName, data]) => (
+                        <div key={data.persona_id} className="p-2.5 rounded-lg bg-muted/50">
+                          <div className="flex items-center justify-between gap-2">
+                            <h4 className="text-sm font-medium truncate" title={personaName}>{personaName}</h4>
+                            <span className="text-xs text-muted-foreground shrink-0">{data.count} panel members</span>
+                          </div>
+                          <div className="flex gap-3 mt-1 text-xs text-muted-foreground">
+                            <span>Sent: <span className="font-medium text-foreground">{data.avgSentiment}</span></span>
+                            <span>Eng: <span className="font-medium text-foreground">{data.avgEngagement}</span></span>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
             {/* Row 3: Brain Balance + Emotional Spectrum */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <BrainBalance responses={responses} />
@@ -868,7 +883,7 @@ export function TestResultsPage() {
             <TestComparison
               currentTest={test}
               currentSummary={results.summary}
-              currentRalphScore={calculateRalphScore(results.summary)}
+              currentRalphScore={ralphScoreFor(results.summary)}
             />
           </TabsContent>
 

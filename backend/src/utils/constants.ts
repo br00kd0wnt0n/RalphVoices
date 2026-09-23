@@ -11,6 +11,10 @@ export const ATTITUDE_THRESHOLDS = {
   SKEPTIC_MAX: 3,     // <= 3 is skeptic
 } as const;
 
+// Platforms new panels are spread across: Meta (Facebook, Instagram) and TikTok.
+// Existing panels keep whatever platforms they were generated with.
+export const DEFAULT_PLATFORMS = ['Facebook', 'Instagram', 'TikTok'] as const;
+
 export const TEST_FOCUS_PRESETS = {
   baseline: {
     name: 'Baseline',

@@ -18,7 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { CheckCircle, Users, AlertCircle, GitCompare, Focus, Upload, X, FileText, Loader2, Sparkles, ArrowLeft, ArrowRight, Plus, RefreshCw } from 'lucide-react';
 import { PersonaBuilder } from '@/components/PersonaBuilder';
-import { TEST_FOCUS_PRESETS, type FocusPresetKey } from '@/lib/constants';
+import { TEST_FOCUS_PRESETS, DEFAULT_PLATFORMS, type FocusPresetKey } from '@/lib/constants';
 import type { Project, Persona } from '@/types';
 
 interface UploadedAsset {
@@ -29,6 +29,13 @@ interface UploadedAsset {
   isPDF: boolean;
   extractedText?: string;
   size: number;
+}
+
+interface PanelBuildItem {
+  id: string;
+  name: string;
+  status: 'pending' | 'generating' | 'done' | 'failed';
+  generated?: number;
 }
 
 interface ConceptFirstProps {
@@ -83,6 +90,14 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
   const [name, setName] = useState('');
   const [focusPreset, setFocusPreset] = useState<FocusPresetKey>('baseline');
   const [variantsPerPersona, setVariantsPerPersona] = useState(20);
+  // Calibration constraints pull scores toward earlier similar tests in the
+  // project. Turn off for pre-test sweeps of closely related concepts.
+  const [vectorConstraints, setVectorConstraints] = useState(true);
+  // Vision detail for uploaded images. 'low' is cheap but can't read small
+  // body copy or CTAs on statics; 'high' can. ('auto' is API-only.)
+  const [imageDetail, setImageDetail] = useState<'low' | 'high' | 'auto'>('low');
+  // Panels built on run for selected personas that have none yet.
+  const [panelBuild, setPanelBuild] = useState<PanelBuildItem[]>([]);
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [creatingProject, setCreatingProject] = useState(false);
@@ -165,6 +180,8 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
       if (test.project_id) setProjectId(test.project_id);
       const vc = typeof test.variant_config === 'string' ? JSON.parse(test.variant_config) : (test.variant_config || {});
       if (vc.focus_preset) setFocusPreset(vc.focus_preset as FocusPresetKey);
+      if (vc.vector_constraints === false) setVectorConstraints(false);
+      if (opts.image_detail) setImageDetail(opts.image_detail);
       if (test.variants_per_persona) setVariantsPerPersona(test.variants_per_persona);
     }).catch((err) => {
       console.error('Failed to load test for retry:', err);
@@ -250,6 +267,51 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
     }
   }
 
+  // Selected personas with no active panel members would be skipped silently by
+  // the runner. Build their panels first (same endpoint the Personas page uses),
+  // one at a time, with visible progress. If any build fails the run is blocked
+  // and no test is created.
+  async function ensurePanels(personaIds: string[]): Promise<boolean> {
+    const panels = await Promise.all(personaIds.map((id) => personasApi.getVariants(id)));
+    const missing = personaIds.filter((_, i) => panels[i].length === 0);
+    if (missing.length === 0) return true;
+
+    const nameFor = (id: string) => personas.find((p) => p.id === id)?.name || 'Persona';
+    const build: PanelBuildItem[] = missing.map((id) => ({ id, name: nameFor(id), status: 'pending' }));
+    setPanelBuild(build);
+    const update = (id: string, patch: Partial<PanelBuildItem>) =>
+      setPanelBuild((prev) => prev.map((b) => (b.id === id ? { ...b, ...patch } : b)));
+
+    for (const { id, name } of build) {
+      update(id, { status: 'generating' });
+      let failure = '';
+      try {
+        const result = await personasApi.generateVariants(id, {
+          count: variantsPerPersona,
+          age_spread: 5,
+          attitude_distribution: 'normal',
+          platforms_to_include: [...DEFAULT_PLATFORMS],
+        }) as any;
+        if (result.error || !result.variants_generated) {
+          failure = result.error || 'no panel members were generated';
+        } else {
+          update(id, { status: 'done', generated: result.variants_generated });
+        }
+      } catch (err: any) {
+        failure = err.message || 'request failed';
+      }
+      if (failure) {
+        update(id, { status: 'failed' });
+        setError(`Couldn't build a panel for "${name}" (${failure}). The test hasn't been run. Try again, or generate the panel from the Personas page first.`);
+        return false;
+      }
+    }
+
+    // Refresh counts so step 2 reflects the new panels if the user goes back.
+    setPersonas((prev) => prev.map((p) => (missing.includes(p.id) ? { ...p, variant_count: variantsPerPersona } : p)));
+    return true;
+  }
+
   async function handleRun() {
     if (!projectId || !name || totalSelected === 0) {
       if (!projectId) setError('Please select or create a project');
@@ -259,9 +321,12 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
     }
     setLoading(true);
     setError('');
+    setPanelBuild([]);
 
     try {
       const allPersonaIds = [...selectedPersonaIds];
+      if (!(await ensurePanels(allPersonaIds))) return;
+
       const focusModifier = TEST_FOCUS_PRESETS[focusPreset]?.promptModifier || '';
       const currentAssets = testType === 'ab' ? assetsA : assets;
 
@@ -294,6 +359,8 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
             focus_modifier: focusModifier,
             strategic_context: Object.keys(strategicContext).length > 0 ? strategicContext : undefined,
             origin: narrativOrigin,
+            ...(vectorConstraints ? {} : { variant_config: { vector_constraints: false } }),
+            image_detail: imageDetail,
           }),
           testsApi.create({
             project_id: projectId,
@@ -307,6 +374,8 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
             focus_modifier: focusModifier,
             strategic_context: Object.keys(strategicContext).length > 0 ? strategicContext : undefined,
             origin: narrativOrigin,
+            ...(vectorConstraints ? {} : { variant_config: { vector_constraints: false } }),
+            image_detail: imageDetail,
           }),
         ]);
 
@@ -332,6 +401,8 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
           focus_modifier: focusModifier,
           strategic_context: Object.keys(strategicContext).length > 0 ? strategicContext : undefined,
           origin: narrativOrigin,
+          ...(vectorConstraints ? {} : { variant_config: { vector_constraints: false } }),
+          image_detail: imageDetail,
         });
 
         await testsApi.run(test.id);
@@ -675,7 +746,7 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
                           {Number(persona.variant_count) === 0 && (
                             <div className="flex items-center gap-1 text-xs text-amber-600 mt-1">
                               <AlertCircle className="h-3 w-3" />
-                              No variants — will be generated
+                              No panel yet. {variantsPerPersona} panel members will be generated when you run the test.
                             </div>
                           )}
                         </div>
@@ -820,6 +891,34 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
             </div>
           </div>
 
+          <label className="flex items-start gap-3 cursor-pointer">
+            <Checkbox
+              checked={vectorConstraints}
+              onCheckedChange={(v) => setVectorConstraints(v === true)}
+              className="mt-0.5"
+            />
+            <span className="text-sm">
+              <span className="font-medium">Calibration constraints</span>
+              <span className="block text-xs text-muted-foreground">
+                Anchor scores to earlier similar tests in this project. Turn off when pre-testing a set of closely related concepts, so they don't pull each other's scores together.
+              </span>
+            </span>
+          </label>
+
+          <label className="flex items-start gap-3 cursor-pointer">
+            <Checkbox
+              checked={imageDetail === 'high'}
+              onCheckedChange={(v) => setImageDetail(v === true ? 'high' : 'low')}
+              className="mt-0.5"
+            />
+            <span className="text-sm">
+              <span className="font-medium">High-detail images</span>
+              <span className="block text-xs text-muted-foreground">
+                Lets panel members read small body copy and CTAs on statics. Uses several times more tokens per image, so leave off for simple visuals.
+              </span>
+            </span>
+          </label>
+
           {/* Summary */}
           <Card className="bg-muted/50">
             <CardContent className="pt-4 pb-3">
@@ -850,6 +949,29 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
             </CardContent>
           </Card>
 
+          {panelBuild.length > 0 && (
+            <Card>
+              <CardContent className="pt-4 pb-3 space-y-2">
+                <h4 className="font-medium text-sm">Building panels</h4>
+                {panelBuild.map((b) => (
+                  <div key={b.id} className="flex items-center gap-2 text-sm">
+                    {b.status === 'generating' && <Loader2 className="h-4 w-4 animate-spin text-[#D94D8F]" />}
+                    {b.status === 'done' && <CheckCircle className="h-4 w-4 text-green-600" />}
+                    {b.status === 'failed' && <AlertCircle className="h-4 w-4 text-destructive" />}
+                    {b.status === 'pending' && <span className="h-4 w-4 rounded-full border border-muted-foreground/40" />}
+                    <span className="flex-1 truncate">{b.name}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {b.status === 'pending' && 'Waiting'}
+                      {b.status === 'generating' && `Generating ${variantsPerPersona} panel members…`}
+                      {b.status === 'done' && `${b.generated} panel members${b.generated! < variantsPerPersona ? ` (of ${variantsPerPersona} requested)` : ''}`}
+                      {b.status === 'failed' && 'Failed'}
+                    </span>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+
           {error && (
             <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm flex items-center gap-2">
               <AlertCircle className="h-4 w-4" />
@@ -869,7 +991,7 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
               {loading ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Running test...
+                  {panelBuild.some((b) => b.status === 'generating' || b.status === 'pending') ? 'Building panels...' : 'Running test...'}
                 </>
               ) : (
                 <>

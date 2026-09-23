@@ -110,7 +110,7 @@ export const tests = {
   delete: (id: string) =>
     request<{ success: boolean }>(`/tests/${id}`, { method: 'DELETE' }),
   run: (id: string) =>
-    request<{ message: string; test_id: string; total_variants: number }>(
+    request<{ message: string; test_id: string; total_variants: number; personas_without_panel?: string[] }>(
       `/tests/${id}/run`,
       { method: 'POST' }
     ),
