@@ -8,6 +8,7 @@ import { z } from 'zod';
 import type { Persona, PersonaVariant, Test, ScoreConstraints, DispositionScores } from '../utils/types.js';
 import { SENTIMENT_THRESHOLDS, ATTITUDE_THRESHOLDS, DEFAULT_PLATFORMS } from '../utils/constants.js';
 import { calculateRalphScore, RALPH_SCORE_VERSION } from '../utils/ralphScore.js';
+import { averageProbes } from '../utils/probes.js';
 import { withRetry } from '../utils/retry.js';
 import { gwiService } from '../services/gwi.js';
 import { RCBClient } from '../services/rcb-client.js';
@@ -83,6 +84,12 @@ const createTestSchema = z.object({
     // test. Required for copy-set style sweeps, where near-identical messages
     // would otherwise constrain each other's scores (see docs/trupanion-build-plan.md §0 B).
     vector_constraints: z.boolean().optional(),
+    // Opt-in feed realism: anchored scale, category baseline, attitude as
+    // behaviour (utils/realism.ts). Default off.
+    realism: z.boolean().optional(),
+    // Opt-in intent probes: P(stop), P(tap), P(quote) read from yes/no token
+    // logprobs after the in-character response (utils/probes.ts). Default off.
+    probes: z.boolean().optional(),
   }).optional(),
 
   // Vision detail for image assets, passed straight to the OpenAI image_url
@@ -276,7 +283,7 @@ router.get('/:id/responses', authMiddleware, async (req: AuthRequest, res: Respo
     }
 
     let queryText = `
-      SELECT tr.*, pv.variant_name, pv.age_actual, pv.primary_platform,
+      SELECT tr.*, pv.persona_id, pv.variant_name, pv.age_actual, pv.primary_platform,
              pv.attitude_score, pv.engagement_level, pv.location_variant
       FROM test_responses tr
       JOIN persona_variants pv ON tr.variant_id = pv.id
@@ -646,7 +653,7 @@ async function processTestResponses(test: Test, variants: any[]) {
 
         const startTime = Date.now();
         const response = await withRetry(
-          () => generateConceptResponse(variant, basePersona, conceptText, focusModifier, assets, strategicContext, scoreConstraints, imageDetail),
+          () => generateConceptResponse(variant, basePersona, conceptText, focusModifier, assets, strategicContext, scoreConstraints, imageDetail, { realism: variantConfig.realism === true, probes: variantConfig.probes === true }),
           `variant ${variant.variant_name}`
         );
         const processingTime = Date.now() - startTime;
@@ -664,8 +671,8 @@ async function processTestResponses(test: Test, variants: any[]) {
           `INSERT INTO test_responses (
             test_id, variant_id, response_text, sentiment_score,
             engagement_likelihood, share_likelihood, comprehension_score,
-            reaction_tags, processing_time_ms, model_used
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            reaction_tags, processing_time_ms, model_used, probes
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
           [
             test.id,
             variant.id,
@@ -677,6 +684,7 @@ async function processTestResponses(test: Test, variants: any[]) {
             response.reaction_tags,
             processingTime,
             process.env.OPENAI_MODEL || 'gpt-4o',
+            response.probes ? JSON.stringify(response.probes) : null,
           ]
         );
 
@@ -749,10 +757,12 @@ async function processTestResponses(test: Test, variants: any[]) {
   };
   // RalphScore is computed once here and stored, so numbers already delivered
   // to a client never shift if the formula changes (bump RALPH_SCORE_VERSION).
+  const probeSummary = averageProbes(responses.map(r => r.response.probes));
   const summary = {
     ...baseSummary,
     ralph_score: calculateRalphScore(baseSummary),
     ralph_score_version: RALPH_SCORE_VERSION,
+    ...(probeSummary ? { probes: probeSummary } : {}),
   };
 
   // Aggregate reaction_tags from all responses (already extracted by AI per-response)
@@ -963,7 +973,7 @@ function calculateSegments(responses: any[]) {
   // Keyed by persona name (like the other segments' human-readable keys), with
   // persona_id alongside. Two selected personas can share a name (copies across
   // projects), so a clash gets a numeric suffix rather than merging them.
-  const byPersona: Record<string, { persona_id: string; count: number; avgSentiment: number; avgEngagement: number }> = {};
+  const byPersona: Record<string, { persona_id: string; count: number; avgSentiment: number; avgEngagement: number; ralph_score?: number; probes?: unknown }> = {};
   const personaKeys = new Map<string, string>();
 
   for (const { variant, response, persona } of responses) {
@@ -1029,6 +1039,28 @@ function calculateSegments(responses: any[]) {
     group.avgSentiment = Math.round((group.avgSentiment / group.count) * 10) / 10;
     group.avgEngagement = Math.round((group.avgEngagement / group.count) * 10) / 10;
   }
+
+  // Per-persona RalphScore and probe averages, so a concept can be ranked
+  // within each persona straight from the stored results.
+  const personaExtras: Record<string, any> = {};
+  for (const [key, group] of Object.entries(byPersona)) {
+    const rs = responses.filter(r => (r.persona?.id || r.variant.persona_id) === group.persona_id).map(r => r.response);
+    const n = rs.length;
+    const sub = {
+      total_responses: n,
+      sentiment: {
+        positive: rs.filter(x => (x.sentiment_score || 5) >= SENTIMENT_THRESHOLDS.POSITIVE_MIN).length,
+        neutral: rs.filter(x => (x.sentiment_score || 5) >= SENTIMENT_THRESHOLDS.NEUTRAL_MIN && (x.sentiment_score || 5) < SENTIMENT_THRESHOLDS.POSITIVE_MIN).length,
+        negative: rs.filter(x => (x.sentiment_score || 5) < SENTIMENT_THRESHOLDS.NEUTRAL_MIN).length,
+      },
+      avg_engagement: n ? Math.round((rs.reduce((a, x) => a + (x.engagement_likelihood || 0), 0) / n) * 10) / 10 : 0,
+      avg_share_likelihood: n ? Math.round((rs.reduce((a, x) => a + (x.share_likelihood || 0), 0) / n) * 10) / 10 : 0,
+      avg_comprehension: n ? Math.round((rs.reduce((a, x) => a + (x.comprehension_score || 0), 0) / n) * 10) / 10 : 0,
+    };
+    const probes = averageProbes(rs.map(x => x.probes));
+    personaExtras[key] = { ralph_score: calculateRalphScore(sub), ...(probes ? { probes } : {}) };
+  }
+  for (const [key, extra] of Object.entries(personaExtras)) Object.assign(byPersona[key], extra);
 
   return { by_age: byAge, by_platform: byPlatform, by_attitude: byAttitude, by_persona: byPersona };
 }

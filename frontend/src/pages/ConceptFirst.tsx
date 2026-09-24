@@ -93,6 +93,18 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
   // Calibration constraints pull scores toward earlier similar tests in the
   // project. Turn off for pre-test sweeps of closely related concepts.
   const [vectorConstraints, setVectorConstraints] = useState(true);
+  // Feed realism: anchors the scale to a typical scroll-past ad and gives each
+  // panel member their category baseline. Intent probes: P(stop/tap/quote)
+  // from yes/no logprobs. Both opt-in (backend utils/realism.ts, utils/probes.ts).
+  const [realism, setRealism] = useState(false);
+  const [probes, setProbes] = useState(false);
+  const variantConfigFlags = () => {
+    const vc: Record<string, boolean> = {};
+    if (!vectorConstraints) vc.vector_constraints = false;
+    if (realism) vc.realism = true;
+    if (probes) vc.probes = true;
+    return Object.keys(vc).length ? { variant_config: vc } : {};
+  };
   // Vision detail for uploaded images. 'low' is cheap but can't read small
   // body copy or CTAs on statics; 'high' can. ('auto' is API-only.)
   const [imageDetail, setImageDetail] = useState<'low' | 'high' | 'auto'>('low');
@@ -181,6 +193,8 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
       const vc = typeof test.variant_config === 'string' ? JSON.parse(test.variant_config) : (test.variant_config || {});
       if (vc.focus_preset) setFocusPreset(vc.focus_preset as FocusPresetKey);
       if (vc.vector_constraints === false) setVectorConstraints(false);
+      if (vc.realism === true) setRealism(true);
+      if (vc.probes === true) setProbes(true);
       if (opts.image_detail) setImageDetail(opts.image_detail);
       if (test.variants_per_persona) setVariantsPerPersona(test.variants_per_persona);
     }).catch((err) => {
@@ -359,7 +373,7 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
             focus_modifier: focusModifier,
             strategic_context: Object.keys(strategicContext).length > 0 ? strategicContext : undefined,
             origin: narrativOrigin,
-            ...(vectorConstraints ? {} : { variant_config: { vector_constraints: false } }),
+            ...variantConfigFlags(),
             image_detail: imageDetail,
           }),
           testsApi.create({
@@ -374,7 +388,7 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
             focus_modifier: focusModifier,
             strategic_context: Object.keys(strategicContext).length > 0 ? strategicContext : undefined,
             origin: narrativOrigin,
-            ...(vectorConstraints ? {} : { variant_config: { vector_constraints: false } }),
+            ...variantConfigFlags(),
             image_detail: imageDetail,
           }),
         ]);
@@ -401,7 +415,7 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
           focus_modifier: focusModifier,
           strategic_context: Object.keys(strategicContext).length > 0 ? strategicContext : undefined,
           origin: narrativOrigin,
-          ...(vectorConstraints ? {} : { variant_config: { vector_constraints: false } }),
+          ...variantConfigFlags(),
           image_detail: imageDetail,
         });
 
@@ -901,6 +915,34 @@ export function ConceptFirst({ retryTestId }: ConceptFirstProps = {}) {
               <span className="font-medium">Calibration constraints</span>
               <span className="block text-xs text-muted-foreground">
                 Anchor scores to earlier similar tests in this project. Turn off when pre-testing a set of closely related concepts, so they don't pull each other's scores together.
+              </span>
+            </span>
+          </label>
+
+          <label className="flex items-start gap-3 cursor-pointer">
+            <Checkbox
+              checked={realism}
+              onCheckedChange={(v) => setRealism(v === true)}
+              className="mt-0.5"
+            />
+            <span className="text-sm">
+              <span className="font-medium">Feed realism</span>
+              <span className="block text-xs text-muted-foreground">
+                Panel members judge the concept as an ad in their feed: 5 is a typical ad they'd scroll past, and they know their own baseline for the category. Use when scores bunch up near the top.
+              </span>
+            </span>
+          </label>
+
+          <label className="flex items-start gap-3 cursor-pointer">
+            <Checkbox
+              checked={probes}
+              onCheckedChange={(v) => setProbes(v === true)}
+              className="mt-0.5"
+            />
+            <span className="text-sm">
+              <span className="font-medium">Intent probes</span>
+              <span className="block text-xs text-muted-foreground">
+                Also measures the probability each panel member would stop, tap and take the next step. Steadier than the 1-10 scores for ranking; about four times the OpenAI calls.
               </span>
             </span>
           </label>
