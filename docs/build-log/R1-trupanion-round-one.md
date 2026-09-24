@@ -86,7 +86,7 @@ frame picker set to the Voices iframe, `runner.js` pasted in), or with an
 allowlisted service account (`PASSWORD_LOGIN_EMAILS`). Cloud sessions can't
 reach Railway at all.
 
-## Sequencing (proposal, not yet decided)
+## Sequencing (decided 25 Sep: measurement session next, then evidence)
 
 - Monday 29 Sep prediction of record runs on the tool as it stands (operating
   plan rule): probes + realism at best. Record only what clears the bar.

@@ -23,7 +23,8 @@ Coordination and oversight happen in one standing session. Building happens in t
 | # | Session | Plan section | Branch | Migration | Start | Depends on | Can run in parallel with |
 |---|---|---|---|---|---|---|---|
 | S1 | Finish Phase 0 | Phase 0 | `voices/trupanion-phase0` (existing) | none new (007 done) | now | — | — |
-| S2 | Evidence layer + Month-1 predicted-vs-actual | Phase 1, §4 008 (now 014) | `voices/evidence-layer` | 014 | ~29 Sep, after S1 merged | S1 | — |
+| SM | Measurement: pairwise comparison, blind controls, sweep statistics | R1 note, ranked list #1, #6, #7 | `voices/measurement` | 015 | ~30 Sep, after Monday's prediction of record | S1, twin fixes | — |
+| S2 | Evidence layer + Month-1 predicted-vs-actual | Phase 1, §4 008 (now 014) | `voices/evidence-layer` | 014 | after SM merged | SM | — |
 | S3 | Twin seeding, drift check, noise floor | Phase 1 (content and calibration) | `voices/twin-calibration` | none | ~7 Oct | S2 deployed | S4 (backend only) |
 | S4 | Copy-set backend + performance questions + feed framing | Phase 2, §2a, §4 009/010 | `voices/copy-set-backend` | 009, 010 | ~19 Oct | S2 merged | S3 |
 | S5 | Copy-set UI + compliance check | Phase 2, §2a | `voices/copy-set-ui` | none (uses 010) | ~28 Oct | S4 merged | — |
@@ -34,7 +35,11 @@ Coordination and oversight happen in one standing session. Building happens in t
 
 Migration numbers are reserved as above so parallel sessions never collide. **008 was taken by the twin fixes (`008_response_probes`, 24 Sep), so the evidence layer moves to 014.** Nothing in 009–013 references `persona_evidence`, so running it last on a fresh install is safe.
 
-**Order under review (25 Sep).** Round one pass 1 showed the bottleneck is measurement (1–10 scoring bunches at 7–9), not persona seeds. Pairwise comparison, built-in statistics and a blind-control harness may move ahead of S2. See `docs/build-log/R1-trupanion-round-one.md`. Don't start S2 until that's decided.
+**Order decided (25 Sep, Brook): measurement session (SM) next, then evidence (S2).** Round one pass 1 showed the bottleneck is measurement (1–10 scoring bunches at 7–9), not persona seeds. See `docs/build-log/R1-trupanion-round-one.md`. Knock-on effects for later sessions:
+- S3's noise-floor work is largely done by pass 2 plus SM's sweep statistics; S3 keeps the drift check (evidence off vs on).
+- S4's leaderboard statistics (confidence ranges, ties, min_detectable_diff) reuse SM's statistics module rather than building their own, and a copy-set's ranking can use SM's sparse pairwise design.
+- S6's head-to-head is superseded by SM's pairwise test type; S6 keeps the format dimension. Migration 013 stays reserved for S6 if needed.
+- Dates after S2 shift by roughly a week; re-plan them when SM merges.
 
 ## Prompt starters
 
@@ -66,10 +71,36 @@ Handoff: docs/build-log/S01-phase0.md. When done, tell me it's ready for review;
 
 ---
 
+### SM: Measurement (pairwise comparison, blind controls, sweep statistics)
+
+```
+Build session SM of the VOICES × Trupanion build. Create branch voices/measurement from an up-to-date main.
+
+Read first: CLAUDE.md, docs/build-sessions.md (ground rules), docs/build-log/S01-phase0.md (local DB and mock), docs/build-log/R1-trupanion-round-one.md (why this session exists), and the probes and realism code (backend/src/utils/probes.ts, utils/realism.ts, services/ai.ts). Ask me for the latest pass-2 ledger CSV before designing the statistics; it's the real data this must handle.
+
+Why: each panel member scores one ad alone on 1-10 and GPT-4o bunches those at 7-9, so twins can't rank (Families 88-97 on everything). Models are far more consistent at "A or B" than at "rate this", and the predictions ledger only needs a ranking.
+
+Scope (migration 015 only; everything opt-in, existing concept tests unchanged):
+1. Pairwise test type (test_type 'pairwise'). A test holds 2-12 concepts (options.concepts: [{code, concept_text, is_control?, expected?}]). Each panel member sees two concepts in the same feed framing as the realism block and is asked which one they'd stop scrolling for, answered as one token (A or B). Read P(A) from logprobs, the same technique as utils/probes.ts, and ask again with the order swapped; the preference for a pair is the mean of the two orders, which cancels position bias. Also ask which one they'd tap and which one they'd get a quote from, so the ranking can be read on hook, CTR and intent separately. Store every judgment (migration 015: pairwise_judgments with test_id, variant_id, question, concept codes in the order shown, p_first). Report the first-position win rate across all judgments as a position-bias check.
+2. Design: all pairs for up to 9 concepts; above that, a balanced sparse design where each panel member sees k pairs (default 12) and every pair is covered equally across the panel. Log the call count before a run starts and refuse a run over a configurable cap (env PAIRWISE_MAX_CALLS).
+3. Ranking: Bradley-Terry per persona per question from the soft preferences, with a 95% range per concept from a seeded bootstrap over panel members (1,000 resamples). Two concepts whose ranges overlap are reported as tied. Store the result in test_results (summary.pairwise and per-persona in segments.by_persona[...].pairwise).
+4. Blind controls: concepts flagged is_control with expected 'win' or 'lose' (and the metric they won or lost on). Every pairwise result reports "n of m control pairs in the right order" per persona and question, and a controls_passed flag. A persona whose controls fail is marked "not for the ledger" in the results.
+5. Sweep and ledger export: POST /tests/:id/sweep {runs} re-runs the same test N times against the same panel; GET /projects/:id/ledger.csv exports one row per persona x concept x run x question with rank, strength, range, tie group, controls result, panel_version and seed or evidence version. Also report run-to-run Spearman and noise versus spread per persona, the same numbers the pass-2 runner computes, so the browser runner can retire.
+6. UI: create a pairwise test from the concept-first flow (a "Compare concepts" mode with 2-12 concept cards and a control flag on each), and a results view: ranking per persona and question, ranges, tie groups, controls banner, position-bias number. Use "panel members" and "concepts" in all copy.
+
+Out of scope: evidence (S2), copy-sets (S4/S5), format metadata (S6). Keep the statistics in a pure module with unit tests so S4 can reuse it.
+
+Verify locally with the mock (extend backend/scripts/mock-openai.mjs so A/B answers carry a known preference per concept, and prove the ranking recovers it and the controls check fires when they're reversed). Then give me the call count and cost estimate for the Trupanion nine plus four controls, three personas at 30, and a runner-free way to do pass 3.
+
+Handoff: docs/build-log/SM-measurement.md.
+```
+
+---
+
 ### S2: Evidence layer + Month-1 predicted-vs-actual
 
 ```
-Build session S2 of the VOICES × Trupanion build. Create branch voices/evidence-layer from an up-to-date main (S1 must already be merged; stop and tell me if docs/build-log/S01-phase0.md isn't on main).
+Build session S2 of the VOICES × Trupanion build. Create branch voices/evidence-layer from an up-to-date main (SM must already be merged; stop and tell me if docs/build-log/SM-measurement.md isn't on main). Also read docs/build-log/R1-trupanion-round-one.md: evidence prompt injection has to coexist with the realism block and lived voice samples, and buyer verbatims from the quote bank must be analyst-only, never persona-visible.
 
 Read first: CLAUDE.md, docs/build-sessions.md (ground rules), docs/build-log/S01-phase0.md (local DB setup), docs/trupanion-build-plan.md §0 (Finding F), §2 Phase 1, §3 Q1 and Q5, §4 migration 008, §5 Phase 1 row, §6 risk 1. Then read "Claude outputs/trupanion-evidence-pack-v1.md" and "Claude outputs/trupanion-trigger-maps-v1.md" if they exist in the main checkout (/Users/BD/ralph-voices/Claude outputs/). They're untracked, so they aren't in your worktree; read them by absolute path. They're the real input this layer must handle.
 
