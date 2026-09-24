@@ -61,8 +61,16 @@ http.createServer((req, res) => {
     if (sys.includes('generating variant personas')) {
       const n = Number((/create (\d+) unique/.exec(sys) || [])[1]) || 5;
       const platforms = ((/Platforms to include: (.*)/.exec(userText) || [])[1] || 'TikTok').split(', ');
+      // Panels are built in chunks (utils/variantChunks.ts) and later chunks list
+      // names already used; honour that so chunked panels don't come up short.
+      const used = new Set((((/Do not reuse these first names: (.*)/.exec(userText) || [])[1]) || '').split(', ').filter(Boolean));
+      const fresh = [];
+      for (let k = 0; fresh.length < n; k++) {
+        const candidate = NAMES[k % NAMES.length] + (k >= NAMES.length ? Math.floor(k / NAMES.length) : '');
+        if (!used.has(candidate)) fresh.push(candidate);
+      }
       const variants = Array.from({ length: n }, (_, i) => ({
-        variant_name: NAMES[i % NAMES.length] + (i >= NAMES.length ? i : ''),
+        variant_name: fresh[i],
         age_actual: 30 + (i % 9) - 4, location_variant: 'Denver, CO', attitude_score: 1 + ((i * 3) % 10),
         primary_platform: platforms[i % platforms.length], engagement_level: 'moderate',
         distinguishing_trait: 'mock trait', voice_modifier: 'mock voice',
