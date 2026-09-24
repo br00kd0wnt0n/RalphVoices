@@ -114,11 +114,11 @@ GWI API key configuration. Test focus preset descriptions.
 | POST | `/` | Create persona + auto-generate voice sample |
 | GET | `/` | List personas (optional `?project_id=` filter) |
 | GET | `/:id` | Persona with variants |
-| PUT | `/:id` | Update persona (optional `regenerate_voice`) |
+| PUT | `/:id` | Update persona (optional `regenerate_voice`, `voice_style: 'default' \| 'lived'`, or a hand-written `voice_sample`) |
 | DELETE | `/:id` | Delete persona |
-| POST | `/:id/variants` | Generate N variants via AI |
+| POST | `/:id/variants` | Generate N variants via AI, in chunks of 10; 502 and no panel swap if it still comes up short |
 | GET | `/:id/variants` | List variants |
-| POST | `/:id/voice` | Regenerate voice sample |
+| POST | `/:id/voice` | Regenerate voice sample (`{style: 'lived'}` keeps it off the product category) |
 
 #### Tests (`/tests`)
 | Method | Path | Description |
@@ -163,7 +163,7 @@ Key JSONB columns on `personas`:
 
 Key JSONB columns on `tests`:
 - `options` — stores uploaded assets (base64 images, extracted PDF text), `strategic_context`, `image_detail` (`low` default \| `high` \| `auto`, passed to the vision `image_url.detail`), and `dropouts` (`{count, variant_ids}` of panel members that failed after retries; written on every run)
-- `variant_config` — age_spread, attitude_distribution, platforms, focus_preset, focus_modifier
+- `variant_config` — age_spread, attitude_distribution, platforms, focus_preset, focus_modifier, and opt-in flags `vector_constraints` (default on), `realism` and `probes` (both default off; see "Feed realism and intent probes")
 
 Key JSONB columns on `test_results`:
 - `summary` — total_responses, sentiment counts, score averages, `ralph_score` + `ralph_score_version` (stored since v1)
@@ -180,7 +180,7 @@ Migrations in `backend/src/db/migrations/`. Auto-applied on server startup.
 | Function | Purpose | Model | Temp |
 |----------|---------|-------|------|
 | `generateVoiceSample` | 2-3 paragraph voice calibration | MODEL | 0.8 |
-| `generateVariants` | N unique variants with controlled diversity | MODEL | 0.9 |
+| `generateVariants` | N unique variants with controlled diversity, generated in chunks of 10 (`utils/variantChunks.ts`) | MODEL | 0.9 |
 | `generateConceptResponse` | Persona reaction to concept + scores/tags | gpt-4o (if images) or MODEL | 0.85 |
 | `analyzeTestResults` | Theme extraction from all responses | MODEL | 0.7 |
 | `streamChatResponse` | SSE streaming insights chat | MODEL | 0.7 |
@@ -220,6 +220,12 @@ Each variant response produces:
 - `share_likelihood` (1-10)
 - `comprehension_score` (1-10)
 - `reaction_tags` — 2-4 from: excited, intrigued, confused, skeptical, amused, bored, annoyed, inspired, would_share, would_ignore, needs_more_info, feels_authentic, feels_forced, seen_before, fresh_take
+
+### Feed realism and intent probes (opt-in per test)
+
+- `variant_config.realism: true` adds `REALISM_SYSTEM_BLOCK` (5 = a typical scroll-past ad; use the whole scale) and a per-member baseline from `brand_context` plus `attitude_score` as behaviour (`utils/realism.ts`). Added because twins bunched every concept at 7-9 (Trupanion round one).
+- `variant_config.probes: true` asks three one-word follow-ups after the in-character answer and stores P(Yes) from logprobs as `test_responses.probes` `{p_stop, p_tap, p_quote}` (`utils/probes.ts`). Aggregates: `summary.probes` and `segments.by_persona[name].probes`. These map to hook rate, CTR and conversion intent; use them, not RalphScore, for concept ranking when they're present.
+- `segments.by_persona[name].ralph_score` is the per-persona RalphScore (v1 maths).
 
 ### RalphScore™
 

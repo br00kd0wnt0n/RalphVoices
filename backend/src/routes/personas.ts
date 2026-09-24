@@ -3,6 +3,7 @@ import { query, getClient } from '../db/index.js';
 import { authMiddleware, AuthRequest } from '../middleware/auth.js';
 import { generateVoiceSample, generateVariants, GeneratedVariant } from '../services/ai.js';
 import { embedPersona, savePersonaEmbeddings } from '../services/embeddings.js';
+import { PanelShortError } from '../utils/variantChunks.js';
 import { z } from 'zod';
 import type { Persona, VariantConfig } from '../utils/types.js';
 import { DEFAULT_PLATFORMS } from '../utils/constants.js';
@@ -204,6 +205,12 @@ router.put('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const updateSchema = createPersonaSchema.omit({ project_id: true, generate_voice: true }).extend({
       regenerate_voice: z.boolean().optional(),
+      // 'lived' = voice sample about the pet/household/money, never the product
+      // category (see utils/realism.ts). Default keeps the original prompt.
+      voice_style: z.enum(['default', 'lived']).optional(),
+      // Hand-written voice sample (e.g. stitched from real verbatims). Wins over
+      // regenerate_voice.
+      voice_sample: z.string().min(1).max(4000).optional(),
     });
     const data = updateSchema.parse(req.body);
 
@@ -222,9 +229,11 @@ router.put('/:id', authMiddleware, async (req: AuthRequest, res: Response) => {
 
     // Regenerate voice if requested
     let voiceSample = personaCheck.rows[0].voice_sample;
-    if (data.regenerate_voice) {
+    if (data.voice_sample) {
+      voiceSample = data.voice_sample;
+    } else if (data.regenerate_voice) {
       try {
-        voiceSample = await generateVoiceSample({ ...personaCheck.rows[0], ...data } as Partial<Persona>);
+        voiceSample = await generateVoiceSample({ ...personaCheck.rows[0], ...data } as Partial<Persona>, data.voice_style || 'default');
       } catch (error) {
         console.error('Failed to regenerate voice sample:', error);
       }
@@ -330,6 +339,15 @@ router.post('/:id/variants', authMiddleware, async (req: AuthRequest, res: Respo
       console.log(`generateVariants returned ${generatedVariants.length} variants`);
     } catch (err: any) {
       console.error(`generateVariants threw error:`, err);
+      if (err instanceof PanelShortError) {
+        // Fail loudly: a short panel would silently shrink every later test.
+        res.status(502).json({
+          error: err.message,
+          requested_count: err.requested,
+          generated_count: err.generated,
+        });
+        return;
+      }
       generationError = err.message || 'Unknown error during generation';
       generatedVariants = [];
     }
@@ -475,7 +493,8 @@ router.post('/:id/voice', authMiddleware, async (req: AuthRequest, res: Response
     }
 
     const persona = personaResult.rows[0];
-    const voiceSample = await generateVoiceSample(persona);
+    const style = req.body?.style === 'lived' ? 'lived' : 'default';
+    const voiceSample = await generateVoiceSample(persona, style);
 
     await query(
       'UPDATE personas SET voice_sample = $1, updated_at = NOW() WHERE id = $2',

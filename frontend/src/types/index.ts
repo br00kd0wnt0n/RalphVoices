@@ -86,6 +86,9 @@ export interface VariantConfig {
   age_spread: number;
   attitude_distribution: 'normal' | 'skew_positive' | 'skew_negative';
   platforms_to_include: string[];
+  vector_constraints?: boolean;
+  realism?: boolean;
+  probes?: boolean;
 }
 
 export interface Test {
@@ -142,6 +145,15 @@ export interface TestResultsSummary {
   // backfill runs; the frontend computes it locally then.
   ralph_score?: number;
   ralph_score_version?: number;
+  // Only on tests run with variant_config.probes. P(Yes) averages, 0-1.
+  probes?: IntentProbes;
+}
+
+export interface IntentProbes {
+  p_stop: number | null;
+  p_tap: number | null;
+  p_quote: number | null;
+  n: number;
 }
 
 export interface TestResultsSegments {
@@ -149,7 +161,7 @@ export interface TestResultsSegments {
   by_platform: Record<string, { count: number; avgSentiment: number; avgEngagement: number }>;
   by_attitude: Record<string, { count: number; avgSentiment: number; avgEngagement: number }>;
   // Keyed by persona name. Absent on tests completed before it was added.
-  by_persona?: Record<string, { persona_id: string; count: number; avgSentiment: number; avgEngagement: number }>;
+  by_persona?: Record<string, { persona_id: string; count: number; avgSentiment: number; avgEngagement: number; ralph_score?: number; probes?: IntentProbes }>;
 }
 
 export interface TestResultsThemes {

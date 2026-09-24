@@ -108,6 +108,10 @@ function calculateLiveStats(responses: TestResponse[]) {
   };
 }
 
+
+// Probe probability (0-1) as a whole percentage; dash when missing.
+const pct = (p: number | null | undefined) => (typeof p === 'number' ? `${Math.round(p * 100)}%` : '-');
+
 export function TestResultsPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -854,9 +858,19 @@ export function TestResultsPage() {
                             <span className="text-xs text-muted-foreground shrink-0">{data.count} panel members</span>
                           </div>
                           <div className="flex gap-3 mt-1 text-xs text-muted-foreground">
+                            {data.ralph_score !== undefined && (
+                              <span>RalphScore: <span className="font-medium text-foreground">{data.ralph_score}</span></span>
+                            )}
                             <span>Sent: <span className="font-medium text-foreground">{data.avgSentiment}</span></span>
                             <span>Eng: <span className="font-medium text-foreground">{data.avgEngagement}</span></span>
                           </div>
+                          {data.probes && (
+                            <div className="flex gap-3 mt-1 text-xs text-muted-foreground">
+                              <span>Stop: <span className="font-medium text-foreground">{pct(data.probes.p_stop)}</span></span>
+                              <span>Tap: <span className="font-medium text-foreground">{pct(data.probes.p_tap)}</span></span>
+                              <span>Quote: <span className="font-medium text-foreground">{pct(data.probes.p_quote)}</span></span>
+                            </div>
+                          )}
                         </div>
                       ))}
                   </div>

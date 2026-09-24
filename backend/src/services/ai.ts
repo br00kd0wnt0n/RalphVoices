@@ -1,6 +1,10 @@
 import OpenAI from 'openai';
 import type { Persona, PersonaVariant, VariantConfig } from '../utils/types.js';
 import { parseConceptResponse } from '../utils/parseConceptResponse.js';
+import { planVariantChunks, mergeVariantBatch, PanelShortError, VARIANT_CHUNK_SIZE } from '../utils/variantChunks.js';
+import { withRetry } from '../utils/retry.js';
+import { REALISM_SYSTEM_BLOCK, buildRealismContext, livedVoicePrompt } from '../utils/realism.js';
+import { PROBE_QUESTIONS, PROBE_SUFFIX, probabilityYes, type Probes, type ProbeKey } from '../utils/probes.js';
 
 const apiKey = process.env.OPENAI_API_KEY;
 console.log(`OpenAI API Key configured: ${apiKey ? 'Yes (' + apiKey.substring(0, 10) + '...)' : 'NO - AI FEATURES DISABLED'}`);
@@ -16,7 +20,9 @@ const openai = new OpenAI({
 
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
 
-export async function generateVoiceSample(persona: Partial<Persona>): Promise<string> {
+export type VoiceStyle = 'default' | 'lived';
+
+export async function generateVoiceSample(persona: Partial<Persona>, style: VoiceStyle = 'default'): Promise<string> {
   const systemPrompt = `You are generating a voice sample for a synthetic persona. Write 2-3 paragraphs
 showing how this person would naturally communicate - their vocabulary, sentence
 structure, tone, and cultural references. This will be used to calibrate AI
@@ -45,7 +51,7 @@ they care about. Show their authentic voice.`;
     model: MODEL,
     messages: [
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
+      { role: 'user', content: style === 'lived' ? livedVoicePrompt(persona) : userPrompt },
     ],
     temperature: 0.8,
     max_tokens: 500,
@@ -65,10 +71,14 @@ export interface GeneratedVariant {
   voice_modifier: string;
 }
 
-export async function generateVariants(
+// One OpenAI call. Asking for more than ~10-15 members in one call is unreliable:
+// the model under-delivers (a request for 30 returned 11 on 24 Sept 2026), so
+// generateVariants below calls this in chunks.
+async function generateVariantBatch(
   persona: Persona,
   count: number,
-  config: VariantConfig
+  config: VariantConfig,
+  avoidNames: string[] = []
 ): Promise<GeneratedVariant[]> {
   console.log(`[generateVariants] Starting for persona: ${persona.name}`);
   console.log(`[generateVariants] Using model: ${MODEL}`);
@@ -113,6 +123,7 @@ Generate exactly ${count} variants with this distribution:
 - Age spread: ±${config.age_spread} years from base age of ${persona.age_base || 30}
 - Platforms to include: ${config.platforms_to_include.join(', ')}
 
+${avoidNames.length ? `- Other members of this panel already exist. Do not reuse these first names: ${avoidNames.join(', ')}\n` : ''}
 Return a JSON object with a "variants" array containing ${count} variant objects.`;
 
   console.log(`[generateVariants] Sending request to OpenAI...`);
@@ -208,6 +219,31 @@ Return a JSON object with a "variants" array containing ${count} variant objects
   }
 }
 
+/**
+ * Generate a panel of `count` members in chunks of VARIANT_CHUNK_SIZE, asking
+ * again for any shortfall. Throws PanelShortError if the panel still comes up
+ * short, so the caller never swaps in a smaller panel than was asked for.
+ */
+export async function generateVariants(
+  persona: Persona,
+  count: number,
+  config: VariantConfig
+): Promise<GeneratedVariant[]> {
+  let panel: GeneratedVariant[] = [];
+  const maxCalls = planVariantChunks(count).length + 3;
+  for (let call = 0; call < maxCalls && panel.length < count; call++) {
+    const need = Math.min(VARIANT_CHUNK_SIZE, count - panel.length);
+    const batch = await withRetry(
+      () => generateVariantBatch(persona, need, config, panel.map(v => v.variant_name)),
+      `variant batch ${call + 1} for ${persona.name}`
+    );
+    panel = mergeVariantBatch(panel, batch, count);
+    console.log(`[generateVariants] ${persona.name}: batch ${call + 1} returned ${batch.length}, panel now ${panel.length}/${count}`);
+  }
+  if (panel.length < count) throw new PanelShortError(count, panel.length);
+  return panel;
+}
+
 export interface ConceptTestResponse {
   response_text: string;
   sentiment_score: number;
@@ -215,6 +251,7 @@ export interface ConceptTestResponse {
   share_likelihood: number;
   comprehension_score: number;
   reaction_tags: string[];
+  probes?: Probes;
 }
 
 export interface TestAsset {
@@ -241,7 +278,8 @@ export async function generateConceptResponse(
   assets: TestAsset[] = [],
   strategicContext: StrategicContext = {},
   scoreConstraints?: import('../utils/types.js').ScoreConstraints,
-  imageDetail: 'low' | 'high' | 'auto' = 'low'
+  imageDetail: 'low' | 'high' | 'auto' = 'low',
+  opts: { realism?: boolean; probes?: boolean } = {}
 ): Promise<ConceptTestResponse> {
   const baseSystemPrompt = `You are embodying a specific persona to provide authentic feedback on a creative
 concept. Respond as this person would - with their vocabulary, concerns,
@@ -283,9 +321,10 @@ These ranges reflect how similar personas have reacted to similar concepts. Stay
   }
 
   // Append focus modifier if provided
+  const realismBlock = opts.realism ? REALISM_SYSTEM_BLOCK : '';
   const systemPrompt = focusModifier
-    ? `${baseSystemPrompt}${constraintBlock}\n${focusModifier}`
-    : `${baseSystemPrompt}${constraintBlock}`;
+    ? `${baseSystemPrompt}${realismBlock}${constraintBlock}\n${focusModifier}`
+    : `${baseSystemPrompt}${realismBlock}${constraintBlock}`;
 
   const voiceModifier = variant.full_profile?.voice_modifier || '';
   const distinguishingTrait = variant.full_profile?.distinguishing_trait || '';
@@ -314,6 +353,7 @@ Base Profile:
 - Humor Style: ${basePersona.cultural_context?.humor_style}
 - Language Markers: ${basePersona.cultural_context?.language_markers?.join(', ')}
 
+${opts.realism ? buildRealismContext(basePersona, variant.attitude_score) : ''}
 VOICE STYLE:
 ${basePersona.voice_sample}
 ${voiceModifier ? `\nVoice Modifier: ${voiceModifier}` : ''}
@@ -406,7 +446,38 @@ Respond in character, then provide your scores and tags.`;
     }
   }
 
+  if (opts.probes) {
+    return { ...scores, probes: await runIntentProbes(modelToUse, systemPrompt, userContent, scores.response_text) };
+  }
   return scores;
+}
+
+// One-word follow-ups after the in-character answer; P(Yes) from logprobs.
+// A failed probe is recorded as null and never drops the panel member.
+async function runIntentProbes(model: string, systemPrompt: string, userContent: any, responseText: string): Promise<Probes> {
+  const keys = Object.keys(PROBE_QUESTIONS) as ProbeKey[];
+  const values = await Promise.all(keys.map(async (key) => {
+    try {
+      const r = await withRetry(() => openai.chat.completions.create({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent },
+          { role: 'assistant', content: responseText },
+          { role: 'user', content: `${PROBE_QUESTIONS[key]} ${PROBE_SUFFIX}` },
+        ],
+        temperature: 0,
+        max_tokens: 1,
+        logprobs: true,
+        top_logprobs: 10,
+      }, { maxRetries: 0 }), `probe ${key}`);
+      return probabilityYes(r.choices[0]?.logprobs?.content?.[0]?.top_logprobs as any);
+    } catch (err: any) {
+      console.warn(`[probes] ${key} failed: ${err?.message}`);
+      return null;
+    }
+  }));
+  return Object.fromEntries(keys.map((k, i) => [k, values[i]])) as Probes;
 }
 
 export interface ThemeAnalysis {
