@@ -5,7 +5,8 @@
 // responses (deterministic scores per panel member name), and embeddings
 // (deterministic 1536-d vectors). Panel members whose name starts with "Drop"
 // always get a 500, and "Garble" always gets truncated scores JSON; both
-// exercise withRetry and options.dropouts.
+// exercise withRetry and options.dropouts. Intent-probe calls (logprobs,
+// max_tokens 1) get a deterministic Yes/No distribution.
 //
 // Usage:
 //   MOCK_PORT=4011 MOCK_LOG=/tmp/mock.log node backend/scripts/mock-openai.mjs
@@ -67,6 +68,25 @@ http.createServer((req, res) => {
         distinguishing_trait: 'mock trait', voice_modifier: 'mock voice',
       }));
       return reply(JSON.stringify({ variants }));
+    }
+
+    // Intent probes: one-token Yes/No with top_logprobs (see utils/probes.ts).
+    // P(Yes) is deterministic per panel member and question.
+    if (j.logprobs && j.max_tokens === 1) {
+      const all = (j.messages || []).map((m) => typeof m.content === 'string' ? m.content : (m.content || []).map((p) => p.text || '').join('\n')).join('\n');
+      const name = (/Name: (.*)/.exec(all) || [])[1] || '?';
+      const question = String(j.messages[j.messages.length - 1]?.content || '');
+      const pYes = 0.05 + (hash(name + question) % 900) / 1000;
+      if (LOG) fs.appendFileSync(LOG, JSON.stringify({ name, probe: question.slice(0, 40), p_yes: pYes }) + '\n');
+      const top_logprobs = [
+        { token: 'Yes', logprob: Math.log(pYes) },
+        { token: 'No', logprob: Math.log(1 - pYes) },
+      ];
+      return send(200, {
+        id: 'mock', object: 'chat.completion', created: 0, model: j.model,
+        choices: [{ index: 0, message: { role: 'assistant', content: pYes >= 0.5 ? 'Yes' : 'No' }, logprobs: { content: [{ token: pYes >= 0.5 ? 'Yes' : 'No', logprob: Math.log(Math.max(pYes, 1 - pYes)), top_logprobs }] }, finish_reason: 'length' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
     }
 
     if (sys.includes('embodying a specific persona')) {

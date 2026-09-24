@@ -15,7 +15,10 @@ export const PROBE_QUESTIONS: Record<ProbeKey, string> = {
   p_quote: 'After seeing this ad, would you go on to take the action it asks for (for example, getting a quote or signing up)?',
 };
 
-export const PROBE_SUFFIX = 'Answer as yourself, honestly, with exactly one word: Yes or No.';
+// The probe reuses the concept-response system prompt, which tells the model to
+// end with a ---SCORES--- JSON block. Without an explicit override the first
+// token can be "---" or "{" instead of Yes/No, and probabilityYes returns null.
+export const PROBE_SUFFIX = 'Answer as yourself, honestly, with exactly one word: Yes or No. This is a quick follow-up, not a new review: do not add scores, JSON or any other text.';
 
 export type Probes = Record<ProbeKey, number | null>;
 

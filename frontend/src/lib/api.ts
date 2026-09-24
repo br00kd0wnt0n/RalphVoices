@@ -38,7 +38,8 @@ async function request<T>(
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Request failed' }));
-    throw new ApiError(response.status, error.error || 'Request failed');
+    // Prefer a human-readable `message` when the backend sends one alongside a code.
+    throw new ApiError(response.status, error.message || error.error || 'Request failed');
   }
 
   return response.json();
@@ -58,6 +59,10 @@ export const auth = {
     ),
   me: () =>
     request<{ user: { id: string; email: string; name: string | null } }>('/auth/me'),
+  // Which sign-in options this deployment offers (password auth is closed in
+  // production; people sign in through tools.ralph.world).
+  config: () =>
+    request<{ password_auth: 'open' | 'closed'; sign_in_url: string }>('/auth/config'),
   // Exchanges a Narrativ shell-minted SSO token for a Voices JWT. Called by
   // AuthProvider when a `?narrativ_sso=` param is present on first page load.
   exchangeNarrativSso: (token: string) =>

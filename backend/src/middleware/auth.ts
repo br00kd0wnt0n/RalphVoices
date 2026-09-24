@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { query } from '../db/index.js';
+import { tokenAllowed, type TokenVia } from '../utils/authPolicy.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'development-secret-change-me';
 
@@ -20,13 +21,14 @@ export interface AuthRequest extends Request {
   };
 }
 
-export function generateToken(userId: string): string {
-  return jwt.sign({ userId }, JWT_SECRET, { expiresIn: '7d' });
+// `via` records how the token was issued; see utils/authPolicy.ts.
+export function generateToken(userId: string, via: TokenVia): string {
+  return jwt.sign({ userId, via }, JWT_SECRET, { expiresIn: '7d' });
 }
 
-export function verifyToken(token: string): { userId: string } | null {
+export function verifyToken(token: string): { userId: string; via?: TokenVia } | null {
   try {
-    return jwt.verify(token, JWT_SECRET) as { userId: string };
+    return jwt.verify(token, JWT_SECRET) as { userId: string; via?: TokenVia };
   } catch {
     return null;
   }
@@ -96,6 +98,11 @@ export async function authMiddleware(
       return;
     }
 
+    if (!tokenAllowed(decoded.via, result.rows[0].email)) {
+      res.status(401).json({ error: 'sign_in_via_tools', message: 'Sign in through tools.ralph.world.' });
+      return;
+    }
+
     req.user = result.rows[0];
     next();
   } catch (error) {
@@ -124,7 +131,7 @@ export async function optionalAuthMiddleware(
         'SELECT id, email, name FROM users WHERE id = $1',
         [decoded.userId]
       );
-      if (result.rows.length > 0) {
+      if (result.rows.length > 0 && tokenAllowed(decoded.via, result.rows[0].email)) {
         req.user = result.rows[0];
       }
     } catch (error) {
