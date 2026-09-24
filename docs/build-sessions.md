@@ -23,7 +23,7 @@ Coordination and oversight happen in one standing session. Building happens in t
 | # | Session | Plan section | Branch | Migration | Start | Depends on | Can run in parallel with |
 |---|---|---|---|---|---|---|---|
 | S1 | Finish Phase 0 | Phase 0 | `voices/trupanion-phase0` (existing) | none new (007 done) | now | — | — |
-| S2 | Evidence layer + Month-1 predicted-vs-actual | Phase 1, §4 008 | `voices/evidence-layer` | 008 | ~29 Sep, after S1 merged | S1 | — |
+| S2 | Evidence layer + Month-1 predicted-vs-actual | Phase 1, §4 008 (now 014) | `voices/evidence-layer` | 014 | ~29 Sep, after S1 merged | S1 | — |
 | S3 | Twin seeding, drift check, noise floor | Phase 1 (content and calibration) | `voices/twin-calibration` | none | ~7 Oct | S2 deployed | S4 (backend only) |
 | S4 | Copy-set backend + performance questions + feed framing | Phase 2, §2a, §4 009/010 | `voices/copy-set-backend` | 009, 010 | ~19 Oct | S2 merged | S3 |
 | S5 | Copy-set UI + compliance check | Phase 2, §2a | `voices/copy-set-ui` | none (uses 010) | ~28 Oct | S4 merged | — |
@@ -32,7 +32,9 @@ Coordination and oversight happen in one standing session. Building happens in t
 | S8 | Performance ingestion + live anchors + predicted-vs-actual | Phase 4, §7, §4 011 | `voices/performance-ingest` | 011 | ~1 Dec | S4 merged; S7 for the PvA report section | S9 |
 | S9 | Governance | Phase 4, §4 012 | `voices/governance` | 012 | ~8 Dec | S1 | S8 |
 
-Migration numbers are reserved as above so parallel sessions never collide.
+Migration numbers are reserved as above so parallel sessions never collide. **008 was taken by the twin fixes (`008_response_probes`, 24 Sep), so the evidence layer moves to 014.** Nothing in 009–013 references `persona_evidence`, so running it last on a fresh install is safe.
+
+**Order under review (25 Sep).** Round one pass 1 showed the bottleneck is measurement (1–10 scoring bunches at 7–9), not persona seeds. Pairwise comparison, built-in statistics and a blind-control harness may move ahead of S2. See `docs/build-log/R1-trupanion-round-one.md`. Don't start S2 until that's decided.
 
 ## Prompt starters
 
@@ -71,7 +73,7 @@ Build session S2 of the VOICES × Trupanion build. Create branch voices/evidence
 
 Read first: CLAUDE.md, docs/build-sessions.md (ground rules), docs/build-log/S01-phase0.md (local DB setup), docs/trupanion-build-plan.md §0 (Finding F), §2 Phase 1, §3 Q1 and Q5, §4 migration 008, §5 Phase 1 row, §6 risk 1. Then read "Claude outputs/trupanion-evidence-pack-v1.md" and "Claude outputs/trupanion-trigger-maps-v1.md" if they exist in the main checkout (/Users/BD/ralph-voices/Claude outputs/). They're untracked, so they aren't in your worktree; read them by absolute path. They're the real input this layer must handle.
 
-Scope (migration 008 only):
+Scope (migration 014 only; the build plan's §4 sketch calls it 008, which the twin fixes took):
 1. persona_evidence table + personas.evidence_version / evidence_digest, exactly as sketched in §4 unless you find a reason to change it (explain in the handoff).
 2. Evidence CRUD routes, plus import: POST /personas/:id/evidence/import {text, pack_ref} → the LLM extracts draft items (kind, facet, visibility, claim, quote, stat, source_name, source_url, source_date, sample_size, geography, confidence, trigger_rank). Drafts are saved with status 'draft'. POST .../commit {ids[]} activates them, bumps evidence_version and rebuilds evidence_digest. Verbatims must be quoted exactly; the extractor must never invent a URL or source. Test the import on the DINKs section of the evidence pack and include the output in the handoff.
 3. Prompt injection. Voice sample, panel generation and the concept response prompt get the digest. Only visibility='persona' items reach the response prompt; 'analyst' items (market stats, Trupanion's own facts, competitor intel) never do. Give each panel member a stable random ~60% subset of the verbatims (seeded by variant id) to avoid homogenisation. Instruct panel members that evidence shapes who they are and isn't quoted. Record the persona evidence_version and panel_version used on each test in tests.options.persona_snapshot.
