@@ -30,8 +30,10 @@ No blind controls have run, so nothing is on record yet.
    card was written to one trigger, so the twin saw the ad's rationale in its
    own profile. Several `language_markers` were verbatims from people who had
    already bought Trupanion (the readout's quote bank is mostly customers), so
-   an uninsured twin spoke like a converted one. Curators (3 of 6 markers
-   from buyers) and Families (2 of 6) are the twins at or near the ceiling.
+   an uninsured twin spoke like a converted one. Families (2 of 6 markers
+   from buyers) is at the ceiling; Curators (3 of 6) scores high, mostly
+   84–92, but still ranks. DINK, whose markers are mostly skeptical, scores
+   lowest. Three twins can't prove the link.
 3. **Panels over about 20 came back short** (a request for 30 returned 11).
 
 ## What has shipped
