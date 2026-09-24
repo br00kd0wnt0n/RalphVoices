@@ -122,7 +122,7 @@ cd backend && DATABASE_URL=postgresql://postgres@127.0.0.1:54329/voices_dev \
 cd frontend && npx vite --port 5173
 ```
 
-Register a user through `/login` (or `POST /api/auth/register`); demo mode is off by default. Explicitly set variables win over any `.env` (dotenv doesn't override). Remember that both `.env` files point at Railway.
+Add `PASSWORD_AUTH=open` to the backend command (password auth is closed by default since 25 Sep), then register a user through `/login` (or `POST /api/auth/register`); demo mode is off by default. Explicitly set variables win over any `.env` (dotenv doesn't override). Remember that both `.env` files point at Railway.
 
 ## Open questions and findings for the coordination session
 

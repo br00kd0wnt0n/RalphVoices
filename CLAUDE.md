@@ -263,7 +263,7 @@ Computed server-side in `backend/src/utils/ralphScore.ts` when results are writt
 - **Title font**: Space Grotesk (Google Fonts) for VOICES wordmark and headings
 - **UI components**: shadcn/ui in `frontend/src/components/ui/` — don't modify these directly
 - **API client**: All backend calls go through `frontend/src/lib/api.ts` (typed fetch wrapper)
-- **Auth**: JWT tokens. Demo mode (no auth header → demo user `demo@ralphvoices.com`) is opt-in via `ENABLE_DEMO_MODE=true`; otherwise missing auth returns 401.
+- **Auth**: JWT tokens. People reach Voices through tools.ralph.world (Google sign-in on Narrativ, then SSO exchange). Password auth (`/register`, password `/login`) is closed unless `PASSWORD_AUTH=open`; `PASSWORD_LOGIN_EMAILS` allowlists service accounts. Tokens carry `via: 'sso' | 'password'`, and while closed only SSO tokens and allowlisted password tokens are accepted (`utils/authPolicy.ts`). The Railway URL serves the same app and data as tools.ralph.world, so never reopen password auth in production. Demo mode (no auth header → demo user `demo@ralphvoices.com`) is opt-in via `ENABLE_DEMO_MODE=true`; otherwise missing auth returns 401.
 - **Shared constants**: `backend/src/utils/constants.ts` and `frontend/src/lib/constants.ts` — keep in sync
 - **Animations**: framer-motion for page transitions, entry animations, interactive elements
 - **Charts**: recharts (BarChart, RadarChart, PieChart) for data visualizations
@@ -280,6 +280,8 @@ Backend (`.env`):
 - `ENABLE_R2_STORAGE`, `R2_*` — route uploaded assets to Cloudflare R2 instead of base64-in-JSONB
 - `TEST_RETENTION_DAYS` — optional; archive completed tests older than N days
 - `ADMIN_EMAILS` — comma-separated admin allowlist; required for `DELETE /api/anchors/all` (fails closed when unset)
+- `PASSWORD_AUTH` — `open` re-enables self-registration and password login for everyone (local dev only). Unset/anything else = closed.
+- `PASSWORD_LOGIN_EMAILS` — comma-separated emails that may register and use password login while closed (service accounts for scripted runs)
 - `PORT` — Backend port (default: 3001)
 - `FRONTEND_URL` — For CORS (default: `http://localhost:5173`)
 - `NARRATIV_SSO_SECRET` — HS256 signing secret shared with Narrativ for shell→tool SSO. Must be byte-identical to `TOOL_SSO_SECRET_VOICES` on Narrativ. Empty/unset = SSO disabled (password login still works).
@@ -315,7 +317,9 @@ the iframe loads.
   signature checks out — it does not re-check the domain.
 - Backwards-compatible: when `NARRATIV_SSO_SECRET` is unset, the exchange
   endpoint returns 401 with `reason: 'missing_secret'` and the frontend falls
-  back to the existing /login flow.
+  back to the /login page. Since password auth is closed by default, that page
+  points people to tools.ralph.world (`GET /api/auth/config` tells it which mode
+  is on).
 
 ## Roadmap
 
@@ -327,7 +331,7 @@ Never point a dev server or script at either Railway database: `yamanote` (pgvec
 
 ```bash
 DATABASE_URL=postgresql://postgres@127.0.0.1:54329/voices_dev npm run db:migrate
-DATABASE_URL=postgresql://postgres@127.0.0.1:54329/voices_dev JWT_SECRET=local-dev-secret npm run dev:backend
+DATABASE_URL=postgresql://postgres@127.0.0.1:54329/voices_dev JWT_SECRET=local-dev-secret PASSWORD_AUTH=open npm run dev:backend
 ```
 
 ## Tests

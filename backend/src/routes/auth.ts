@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import { query } from '../db/index.js';
 import { generateToken, authMiddleware, AuthRequest } from '../middleware/auth.js';
 import { verifyNarrativSso } from '../services/narrativSso.js';
+import { registrationAllowed, passwordLoginAllowed, passwordAuthOpen } from '../utils/authPolicy.js';
 import { z } from 'zod';
 
 const router = Router();
@@ -23,6 +24,11 @@ router.post('/register', async (req: Request, res: Response) => {
   try {
     const data = registerSchema.parse(req.body);
 
+    if (!registrationAllowed(data.email)) {
+      res.status(403).json({ error: 'registration_disabled', message: 'Sign in through tools.ralph.world.' });
+      return;
+    }
+
     // Check if user exists
     const existing = await query('SELECT id FROM users WHERE email = $1', [data.email]);
     if (existing.rows.length > 0) {
@@ -38,7 +44,7 @@ router.post('/register', async (req: Request, res: Response) => {
     );
 
     const user = result.rows[0];
-    const token = generateToken(user.id);
+    const token = generateToken(user.id, 'password');
 
     res.status(201).json({ user, token });
   } catch (error) {
@@ -55,6 +61,13 @@ router.post('/register', async (req: Request, res: Response) => {
 router.post('/login', async (req: Request, res: Response) => {
   try {
     const data = loginSchema.parse(req.body);
+
+    // Checked before the user lookup, so the response reveals nothing about
+    // whether an account exists for this email.
+    if (!passwordLoginAllowed(data.email)) {
+      res.status(403).json({ error: 'password_login_disabled', message: 'Sign in through tools.ralph.world.' });
+      return;
+    }
 
     const result = await query(
       'SELECT id, email, name, password_hash FROM users WHERE email = $1',
@@ -74,7 +87,7 @@ router.post('/login', async (req: Request, res: Response) => {
       return;
     }
 
-    const token = generateToken(user.id);
+    const token = generateToken(user.id, 'password');
 
     res.json({
       user: { id: user.id, email: user.email, name: user.name },
@@ -88,6 +101,11 @@ router.post('/login', async (req: Request, res: Response) => {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Login failed' });
   }
+});
+
+// Which sign-in options the login page should offer.
+router.get('/config', (_req: Request, res: Response) => {
+  res.json({ password_auth: passwordAuthOpen() ? 'open' : 'closed', sign_in_url: 'https://tools.ralph.world/voices' });
 });
 
 // Get current user
@@ -145,7 +163,7 @@ router.post('/sso/exchange', async (req: Request, res: Response) => {
       user = result.rows[0];
     }
 
-    const voicesToken = generateToken(user.id);
+    const voicesToken = generateToken(user.id, 'sso');
     res.json({ user, token: voicesToken });
   } catch (err) {
     console.error('[narrativ-sso] exchange persistence failed:', err);

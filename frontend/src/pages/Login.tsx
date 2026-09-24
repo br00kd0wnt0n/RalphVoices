@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
 import { RalphLogo } from '@/components/RalphLogo';
+import { auth } from '@/lib/api';
 
 export function Login() {
   const { login, register, user } = useAuth();
@@ -17,6 +18,16 @@ export function Login() {
   const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // Production closes password auth: people sign in through tools.ralph.world
+  // (Google), and only allowlisted service accounts use the form below.
+  const [authConfig, setAuthConfig] = useState<{ password_auth: 'open' | 'closed'; sign_in_url: string } | null>(null);
+  const [showServiceSignIn, setShowServiceSignIn] = useState(false);
+
+  useEffect(() => {
+    auth.config().then(setAuthConfig).catch(() => setAuthConfig({ password_auth: 'closed', sign_in_url: 'https://tools.ralph.world/voices' }));
+  }, []);
+  const passwordOpen = authConfig?.password_auth === 'open';
+  const showForm = passwordOpen || showServiceSignIn;
 
   // After login/register succeeds, the AuthProvider sets `user`; redirect to
   // the page the route guard captured (or "/" if the user came directly).
@@ -68,7 +79,27 @@ export function Login() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
+            {!passwordOpen && authConfig && (
+              <div className="space-y-4 text-center">
+                <p className="text-sm text-muted-foreground">
+                  Voices is part of Ralph Tools. Sign in there with your Ralph Google account.
+                </p>
+                <Button asChild className="w-full bg-[#D94D8F] hover:bg-[#C43D7F] glow-sm">
+                  <a href={authConfig.sign_in_url} target="_top">Open Ralph Tools</a>
+                </Button>
+                {!showServiceSignIn && (
+                  <button
+                    type="button"
+                    onClick={() => setShowServiceSignIn(true)}
+                    className="text-xs text-muted-foreground hover:text-[#D94D8F] transition-colors"
+                  >
+                    Service account sign-in
+                  </button>
+                )}
+              </div>
+            )}
+            {showForm && (
+            <form onSubmit={handleSubmit} className={`space-y-4 ${passwordOpen ? '' : 'mt-6'}`}>
               {isRegister && (
                 <div className="space-y-2">
                   <Label htmlFor="name">Name</Label>
@@ -114,20 +145,18 @@ export function Login() {
                 {loading ? 'Loading...' : isRegister ? 'Create Account' : 'Sign In'}
               </Button>
             </form>
-            <div className="mt-6 text-center">
-              <button
-                type="button"
-                onClick={() => setIsRegister(!isRegister)}
-                className="text-sm text-muted-foreground hover:text-[#D94D8F] transition-colors"
-              >
-                {isRegister ? 'Already have an account? Sign in' : "Don't have an account? Register"}
-              </button>
-            </div>
-            <div className="mt-6 p-3 bg-muted/50 rounded-lg border border-border/50">
-              <p className="text-xs text-muted-foreground text-center">
-                Demo: <span className="text-foreground/80">demo@ralph.world</span> / <span className="text-foreground/80">demo123</span>
-              </p>
-            </div>
+            )}
+            {passwordOpen && (
+              <div className="mt-6 text-center">
+                <button
+                  type="button"
+                  onClick={() => setIsRegister(!isRegister)}
+                  className="text-sm text-muted-foreground hover:text-[#D94D8F] transition-colors"
+                >
+                  {isRegister ? 'Already have an account? Sign in' : "Don't have an account? Register"}
+                </button>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

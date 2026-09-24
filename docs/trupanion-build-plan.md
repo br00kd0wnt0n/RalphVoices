@@ -61,7 +61,7 @@ Everything here is additive or default-off. Existing tests behave exactly as the
 
 | Item | Days |
 |---|---|
-| Migration 008 `persona_evidence` (§4) | 0.25 |
+| Migration 014 (was 008) `persona_evidence` (§4) | 0.25 |
 | Evidence CRUD, plus **import**: paste a pack section → LLM extracts draft items (claim, quote/stat, source, date, facet, visibility, confidence, pack_ref) → review table → commit. Commit bumps `evidence_version` and rebuilds `evidence_digest`. | 1.0 |
 | Inject evidence into the voice-sample, panel-generation and response prompts. Only `visibility='persona'` items reach the response prompt (§6, risk 1). Record the `evidence_version` and `panel_version` used on each test. | 0.75 |
 | Evidence panel on persona detail (a new panel, not a builder redesign); evidence badge on persona cards | 1.0 |
@@ -186,7 +186,7 @@ ALTER TABLE persona_variants ADD COLUMN IF NOT EXISTS panel_version INTEGER NOT 
 CREATE INDEX IF NOT EXISTS idx_variants_active ON persona_variants(persona_id) WHERE retired_at IS NULL;
 -- Backfill: none. Every existing variant is active at panel_version 1.
 
--- 008_persona_evidence.sql  (Phase 1)
+-- 014_persona_evidence.sql  (Phase 1; originally 008, renumbered because 008_response_probes shipped first)
 CREATE TABLE IF NOT EXISTS persona_evidence (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   persona_id    UUID NOT NULL REFERENCES personas(id) ON DELETE CASCADE,
