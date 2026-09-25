@@ -62,6 +62,7 @@ export interface Flag {
   why?: string;
   by: Array<'rule' | 'model' | 'logprob'>;
   p?: number;             // mean P(Yes) over the two wordings, for logprob checks
+  base?: Severity;        // severity from a deterministic rule match, if any
 }
 export interface Line {
   id: string;
@@ -755,6 +756,7 @@ function addFlag(flags: Flag[], f: Flag) {
   if (!ex) { flags.push(f); return; }
   for (const b of f.by) if (!ex.by.includes(b)) ex.by.push(b);
   if (!ex.quote && f.quote) ex.quote = f.quote;
+  if (f.base && !ex.base) ex.base = f.base;
   if (f.p !== undefined) ex.p = f.p;
   if (f.why && !ex.why) ex.why = f.why;
   const rank = { compliance: 2, warn: 1, note: 0 };
@@ -792,7 +794,7 @@ export function deterministicFlags(l: { text: string; field: string; structure: 
         const quote = m[0] + (text.slice(m.index + m[0].length).match(/^\w*/)?.[0] || ''); // finish the last word
         if (!best || rank[sev] > rank[best.sev]) best = { sev, quote, why };
       }
-      if (best) addFlag(flags, { rule: it.id, severity: best.sev, label: labelOf(it), source: it.source, quote: best.quote, why: best.why, by: ['rule'] });
+      if (best) addFlag(flags, { rule: it.id, severity: best.sev, label: labelOf(it), source: it.source, quote: best.quote, why: best.why, by: ['rule'], base: best.sev });
     } else if (it.check === 'case') {
       const letters = text.replace(/[^A-Za-z]/g, '');
       const upper = letters.replace(/[^A-Z]/g, '').length;
@@ -800,7 +802,7 @@ export function deterministicFlags(l: { text: string; field: string; structure: 
     } else if (it.check === 'require') {
       const trig = (it.trigger_patterns || []).map(p => new RegExp(p, 'i').exec(text)).find(Boolean);
       const ok = (it.requires_patterns || []).some(p => new RegExp(p, 'i').test(text));
-      if (trig && !ok) addFlag(flags, { rule: it.id, severity: it.severity || 'compliance', label: it.rule, source: it.source, quote: trig[0], why: 'Direct-pay claim without "at participating hospitals"', by: ['rule'] });
+      if (trig && !ok) addFlag(flags, { rule: it.id, severity: it.severity || 'compliance', label: it.rule, source: it.source, quote: trig[0], why: 'Direct-pay claim without "at participating hospitals"', by: ['rule'], base: it.severity || 'compliance' });
     } else if (it.check === 'structure') {
       if ((it.structures || []).includes(l.structure)) addFlag(flags, { rule: it.id, severity: it.severity || 'note', label: it.rule, source: it.source, quote: '', why: 'Testimony line: cast a Trupanion member', by: ['rule'] });
     } else if (it.check === 'verbatim' && pr) {
@@ -918,7 +920,7 @@ async function probeCheck(line: Line, r: Rules, api: Api, model: string) {
     const p = round(valid.reduce((a, b) => a + b, 0) / valid.length, 3);
     const existing = line.flags.find(x => x.rule === it.id);
     if (existing) { existing.p = p; if (!existing.by.includes('logprob') && p >= 0.25) existing.by.push('logprob'); return; }
-    if (p >= 0.5) addFlag(line.flags, { rule: it.id, severity: it.severity || 'compliance', label: it.rule, source: it.source, quote: '', why: `Both wordings lean Yes (P=${p})`, by: ['logprob'], p });
+    if (p >= 0.5) addFlag(line.flags, { rule: it.id, severity: 'warn', label: it.rule, source: it.source, quote: '', why: `Yes/no check only (P=${p}); the other checks didn't flag it`, by: ['logprob'], p });
     else if (p >= 0.25) addFlag(line.flags, { rule: it.id, severity: 'warn', label: it.rule, source: it.source, quote: '', why: `Borderline (P=${p}); worth a look`, by: ['logprob'], p });
   }));
 }
@@ -972,6 +974,7 @@ export async function checkBatch(batch: Batch, api: Api, emit: Emit = () => {}, 
         probeCheck(l, r, api, b.probe_model || 'gpt-4o-mini'),
         objection(l, r, api, b.objection_model || 'gpt-4o'),
       ]);
+      reconcile(l, r);
       l.status = 'checked';
     } catch (err: any) {
       if (err instanceof CapError || api.stopped) throw err;
@@ -984,6 +987,25 @@ export async function checkBatch(batch: Batch, api: Api, emit: Emit = () => {}, 
   });
   batch.stats.timings_ms.check = Date.now() - started;
   saveBatch(batch);
+}
+
+/**
+ * Red (compliance) needs agreement: a hard rule match, or the model check and
+ * the two yes/no wordings together. Any single layer alone is amber (warn), so
+ * a lone model or logprob call can't turn a line red. Only for compliance items
+ * that have wordings; everything else keeps its severity.
+ */
+function reconcile(l: Line, r: Rules) {
+  for (const it of r.compliance) {
+    if (!it.wordings || (it.severity || 'compliance') !== 'compliance') continue;
+    const f = l.flags.find(x => x.rule === it.id);
+    if (!f) continue;
+    const hasModel = f.by.includes('model');
+    const agree = hasModel && (f.p === undefined || f.p >= 0.25);
+    if (f.base === 'compliance' || agree) { f.severity = 'compliance'; continue; }
+    f.severity = 'warn';
+    if (hasModel && f.p !== undefined) f.why = `${f.why ? f.why + '; ' : ''}model flagged it but both yes/no wordings lean No (P=${f.p})`;
+  }
 }
 
 function sortFlags(l: Line) {
