@@ -105,3 +105,70 @@ that from round two "includes Trupanion's real Meta and TikTok results". Pass
 1 found anchors can't hold live results in this build (that's S8), and the
 ranking will likely move to probes or pairwise comparison. Worth correcting
 before the deck becomes the client's readout v2.
+
+## Pass 2 results (25 Sep): halted at the smoke gate
+
+Run against production through the API with Brook's SSO session. No code was
+changed. Pass 2 stopped at step 1: the smoke gate failed three times, so the
+sweep (nine concepts × three runs) did not run and panels were not rebuilt.
+Spend was three smoke tests, about 230 panel responses plus probes (roughly $5).
+
+State left in production: seed v3 and lived voice samples are applied to the
+three Trupanion personas (none of the three voices mentions insurance). The
+panels are unchanged (20 DINK, 28 Curators, 29 Families).
+
+| Smoke | Setup | Twin | p_stop | p_tap | p_quote | RalphScore |
+|---|---|---|---|---|---|---|
+| 1 | CUR_DAYONE, seed v1 | DINK | 0.978 | 0.950 | 0.899 | 89 |
+| | | Curators | 1.000 | 1.000 | 0.992 | 92 |
+| | | Families | 0.999 | 1.000 | 0.924 | 89 |
+| 2 | CUR_DAYONE, seed v3 + lived voice | DINK | 0.992 | 0.975 | 0.792 | 90 |
+| | | Curators | 1.000 | 1.000 | 1.000 | 93 |
+| | | Families | 0.966 | 0.966 | 0.962 | 87 |
+| 3 | DINK_IDIOT, seed v3 + lived voice | DINK | 0.950 | 0.950 | 0.947 | 92 |
+| | | Curators | 0.913 | 0.893 | 0.838 | 86 |
+| | | Families | 1.000 | 0.999 | 0.948 | 90 |
+
+All runs used `realism` and `probes` on and `vector_constraints` off. Probes
+were present on every response, so the plumbing works. The values sit at the
+ceiling.
+
+What the smoke tests show:
+
+1. **Attitude doesn't reach the probes.** With realism on, skeptics (attitude
+   1–3) are told they stop for fewer than 1 in 20 of these ads. In smoke 2 they
+   still gave p_stop 1.000 (Curators n=4, Families n=5, DINK n=1) with
+   sentiment 6.8–8. Only 1 of 77 responses had p_stop below 0.9 (4 of 77 in
+   smoke 3).
+2. **Realism didn't move the 1–10 scores.** Sentiment was 8 or 9 in 69 of 77
+   responses in smoke 2 and 68 of 77 in smoke 3. DINK gave DINK_IDIOT 92;
+   pass 1 had it at 63–79.
+3. **A bottom-ranked concept barely moves the probes.** Curators, the one twin
+   that ranked in pass 1, dropped from 1.000 to 0.913 on p_stop going from its
+   pass-1 top concept to a pass-1 bottom one. That is the right direction, but
+   it comes from two or three panel members flipping to No, not from a graded
+   probability. On a panel of 28 that is inside the run-to-run noise to expect
+   from a count that small. Families stayed at 1.000 on both.
+4. **Rebuilding panels would not help.** The concept prompt reads the base
+   persona live (profile, voice, realism baseline); only name, age, platform,
+   attitude, trait and voice modifier come from the panel member, and attitude
+   is shown above not to matter.
+
+Why the probes saturate (`services/ai.ts`, `runIntentProbes`): each probe is
+asked after the model's own in-character review, which sits in the transcript
+as the assistant turn under a system prompt that asks for feedback on a
+creative concept. "Would you stop scrolling to take it in?" follows a
+paragraph in which it already did, usually approvingly, and at temperature 0
+the answer is Yes with probability ~1. Both layers are the problem: the review
+is favourable, and the probe echoes it.
+
+**Read for Monday (29 Sep):** no twin is fit for the prediction of record on
+probes or RalphScore. This is reliability only in any case (no blind controls
+have run), and pass 2 did not get as far as measuring reliability.
+
+Next step is the measurement session, not another pass on this build. Things
+to try there: ask the probes cold, without the review in context and inside a
+feed of competing posts; ask them before any review; and pairwise comparison
+with position swap. If the probes are kept, the smoke gate needs a
+discrimination check (a known-weak concept must score clearly below a
+known-strong one), not just "not stuck at 0 or 1".
