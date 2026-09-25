@@ -272,8 +272,8 @@ Migration numbers: 015 is B1 (it was reserved for SM, which is now parked),
 |---|---|---|
 | Fri 25 – Sun 27 Sep | **B1-lite** (script-only Copy Studio) built; Brook reviews the rules file | Demo-ready Mon 9am |
 | Mon 28 Sep | Creative director kickoff (Brook in the room): brief, framework read, B1-lite demo, blind model comparison. Concept board to the client, stress-tested, not ranked | Writing model chosen |
-| Tue 29 Sep | Round-one copy session on B1-lite: about 20 lines per persona → 2–3 per visual; expectations recorded | Month 1 pre-test delivered |
-| Wed 30 Sep – Thu 1 Oct | First drafts. Full **B1 Studio** build starts, shaped by Tuesday's session | |
+| Date TBC (after the creative lead is up to speed) | First copy session on B1-lite: about 20 lines per persona → 2–3 per visual; expectations recorded | Month 1 pre-test delivered |
+| Early October | Full **B1 Studio** build, shaped by the creative lead's feedback on the demo and the first session | |
 | Week of 5 Oct | **B3** ingestion and model on Add3's historic export (parallel session). **B2** on the first production assets. Decision gate if the data has arrived | |
 | Week of 12 Oct | B3 ready before go-live. Month 1 expectations locked (B4 record) | Month 1 creative live (mid-Oct target) |
 | Week of 19 Oct | First B3 weekly note | First Wednesday read |
