@@ -23,7 +23,7 @@ Coordination and oversight happen in one standing session. Building happens in t
 | # | Session | Plan section | Branch | Migration | Start | Depends on | Can run in parallel with |
 |---|---|---|---|---|---|---|---|
 | S1 | Finish Phase 0 | Phase 0 | `voices/trupanion-phase0` (existing) | none new (007 done) | now | — | — |
-| SM | Measurement: pairwise comparison, blind controls, sweep statistics | R1 note, ranked list #1, #6, #7 | `voices/measurement` | 015 | ~30 Sep, after Monday's prediction of record | S1, twin fixes | — |
+| SM | Measurement: feasibility spike (gate), then pairwise or cold probes, blind controls, sweep statistics | R1 note, ranked list #1, #6, #7 | `voices/measurement` | 015 | ~30 Sep, after Monday's prediction of record | S1, twin fixes | — |
 | S2 | Evidence layer + Month-1 predicted-vs-actual | Phase 1, §4 008 (now 014) | `voices/evidence-layer` | 014 | after SM merged | SM | — |
 | S3 | Twin seeding, drift check, noise floor | Phase 1 (content and calibration) | `voices/twin-calibration` | none | ~7 Oct | S2 deployed | S4 (backend only) |
 | S4 | Copy-set backend + performance questions + feed framing | Phase 2, §2a, §4 009/010 | `voices/copy-set-backend` | 009, 010 | ~19 Oct | S2 merged | S3 |
@@ -71,28 +71,52 @@ Handoff: docs/build-log/S01-phase0.md. When done, tell me it's ready for review;
 
 ---
 
-### SM: Measurement (pairwise comparison, blind controls, sweep statistics)
+### SM: Measurement (feasibility spike, then pairwise comparison, blind controls, sweep statistics)
 
 ```
 Build session SM of the VOICES × Trupanion build. Create branch voices/measurement from an up-to-date main.
 
-Read first: CLAUDE.md, docs/build-sessions.md (ground rules), docs/build-log/S01-phase0.md (local DB and mock), docs/build-log/R1-trupanion-round-one.md (why this session exists), and the probes and realism code (backend/src/utils/probes.ts, utils/realism.ts, services/ai.ts). Ask me for the latest pass-2 ledger CSV before designing the statistics; it's the real data this must handle.
+Read first: CLAUDE.md, docs/build-sessions.md (ground rules), docs/build-log/S01-phase0.md (local DB and mock), docs/build-log/R1-trupanion-round-one.md including "Pass 2 results" (why this session exists), and backend/src/utils/probes.ts, utils/realism.ts and services/ai.ts (generateConceptResponse, runIntentProbes, generateVariants). Working inputs are client material outside the repo, in /Users/BD/ralph-voices/Claude outputs/voices-r1/: personas.json (seed v3), concepts.json (the nine cards), r1-pass1-ledger.csv, r1-pass2-smoke-results.json. Read them by absolute path and never commit them. Ask me for the four blind-control ads (SuperAds) and their expected order before Phase A runs.
 
-Why: each panel member scores one ad alone on 1-10 and GPT-4o bunches those at 7-9, so twins can't rank (Families 88-97 on everything). Models are far more consistent at "A or B" than at "rate this", and the predictions ledger only needs a ranking.
+What we know:
+- Scoring one ad alone on 1-10 bunches at 7-9 (pass 1: Families 88-97 on everything).
+- The intent probes saturate at 0.9-1.0 for every twin, skeptics included (pass 2 smoke). Each probe is asked after the model's own favourable review is in context, so "would you stop?" follows a paragraph in which it already did. A known-weak concept moved Curators p_stop only from 1.000 to 0.913.
+- Editing seeds or rebuilding panels doesn't fix this. The persona layer works; the measurement doesn't.
 
-Scope (migration 015 only; everything opt-in, existing concept tests unchanged):
-1. Pairwise test type (test_type 'pairwise'). A test holds 2-12 concepts (options.concepts: [{code, concept_text, is_control?, expected?}]). Each panel member sees two concepts in the same feed framing as the realism block and is asked which one they'd stop scrolling for, answered as one token (A or B). Read P(A) from logprobs, the same technique as utils/probes.ts, and ask again with the order swapped; the preference for a pair is the mean of the two orders, which cancels position bias. Also ask which one they'd tap and which one they'd get a quote from, so the ranking can be read on hook, CTR and intent separately. Store every judgment (migration 015: pairwise_judgments with test_id, variant_id, question, concept codes in the order shown, p_first). Report the first-position win rate across all judgments as a position-bias check.
-2. Design: all pairs for up to 9 concepts; above that, a balanced sparse design where each panel member sees k pairs (default 12) and every pair is covered equally across the panel. Log the call count before a run starts and refuse a run over a configurable cap (env PAIRWISE_MAX_CALLS).
-3. Ranking: Bradley-Terry per persona per question from the soft preferences, with a 95% range per concept from a seeded bootstrap over panel members (1,000 resamples). Two concepts whose ranges overlap are reported as tied. Store the result in test_results (summary.pairwise and per-persona in segments.by_persona[...].pairwise).
-4. Blind controls: concepts flagged is_control with expected 'win' or 'lose' (and the metric they won or lost on). Every pairwise result reports "n of m control pairs in the right order" per persona and question, and a controls_passed flag. A persona whose controls fail is marked "not for the ledger" in the results.
-5. Sweep and ledger export: POST /tests/:id/sweep {runs} re-runs the same test N times against the same panel; GET /projects/:id/ledger.csv exports one row per persona x concept x run x question with rank, strength, range, tie group, controls result, panel_version and seed or evidence version. Also report run-to-run Spearman and noise versus spread per persona, the same numbers the pass-2 runner computes, so the browser runner can retire.
-6. UI: create a pairwise test from the concept-first flow (a "Compare concepts" mode with 2-12 concept cards and a control flag on each), and a results view: ranking per persona and question, ranges, tie groups, controls banner, position-bias number. Use "panel members" and "concepts" in all copy.
+Three rules for everything in this session:
+1. Never ask a measurement question with the model's own review in context. Measurement calls are cold: persona, feed, question.
+2. A gate checks discrimination (controls and known-weak concepts land below known-strong ones), not just "not stuck at 0 or 1".
+3. Logprob reads at temperature 0 are near-deterministic, so repeating a run on the same panel says nothing about reliability. Measure reliability across independently built panels (population sampling), not repeated runs.
+
+PHASE A: feasibility spike. Do this first. No migration, no UI, no database, no Railway.
+A standalone script, backend/scripts/measurement-spike.ts, calls OpenAI directly with the key from the environment. For each of the three personas it builds two independent panels of 30 in memory (reuse generateVariants if it runs without the DB; otherwise the same fields with a normal attitude spread). Stimuli: the nine concepts plus the four controls. Compare two methods:
+- M1, cold probe: the ad shown inside a short feed of four or five neutral organic posts (the same framing as REALISM_SYSTEM_BLOCK); the stop, tap and quote questions asked as the first and only turn, one token, P(Yes) from logprobs.
+- M2, pairwise: two ads in the same feed; "which one would you stop for?" (then tap, then quote), answered A or B; P(A) from logprobs; asked in both orders and averaged. Ranking by Bradley-Terry.
+Print the call count and cost estimate, then wait for my OK. Cap: $25.
+Report per persona, method and question:
+- controls in the right order (n of m)
+- Spearman between the two independent panels, and noise versus spread
+- for M2, the first-position win rate
+- for M1, the distribution of P(Yes): it must not sit at the ceiling
+- cross-persona agreement (Spearman between the personas' rankings). If all three twins rank the same, the persona layer adds nothing over "GPT-4o's taste in ads". Say so plainly.
+- the rank of each concept next to the pass-1 Curators order
+Gate A: a method passes for a persona if every control is in the right order, the split-panel Spearman is above 0.8 and the spread is at least twice the noise. Write the results to docs/build-log/SM-spike.md and stop for my review before Phase B. If neither method passes for any persona, don't build Phase B: write it up and recommend what VOICES should and shouldn't claim.
+
+PHASE B: build. Only after I approve Phase A; build the method that passed (migration 015 only; everything opt-in; existing concept tests unchanged).
+1. Pairwise test type (test_type 'pairwise'), if M2 passed. A test holds 2-12 concepts (options.concepts: [{code, concept_text, is_control?, expected?}]). Measurement calls are cold, per rule 1. Store every judgment (pairwise_judgments: test_id, variant_id, question, concept codes in the order shown, p_first). Report the first-position win rate.
+   Cold probes (variant_config.probe_mode: 'cold'), if M1 passed. Also fix runIntentProbes so the review is never in context. The existing 'after_review' behaviour stays only as a legacy value.
+2. Design: all pairs for up to 9 concepts; above that, a balanced sparse design (each panel member sees k pairs, default 12, every pair covered equally). Log the call count before a run and refuse a run over env PAIRWISE_MAX_CALLS.
+3. Ranking: Bradley-Terry (or the mean P(Yes) for cold probes) per persona and question, with a 95% range from a seeded bootstrap over panel members (1,000 resamples). Overlapping ranges are reported as tied. Store in test_results (summary.pairwise; segments.by_persona[...].pairwise).
+4. Blind controls: is_control concepts with expected 'win' or 'lose' and a metric. Each result reports "n of m control pairs in the right order" per persona and question, and a controls_passed flag. A persona whose controls fail is marked "not for the ledger".
+5. Reliability and ledger: POST /tests/:id/sweep {runs, fresh_panels: true} builds a fresh panel per run (retiring, per migration 007) so run-to-run numbers measure population sampling. GET /projects/:id/ledger.csv: one row per persona × concept × run × question with rank, strength, range, tie group, controls result, panel_version and seed or evidence version. Report run-to-run Spearman, noise versus spread and cross-persona agreement, so the browser runner can retire.
+6. Smoke gate: a built-in check that takes one known-strong and one known-weak concept (or a control pair) and fails unless the strong one clearly wins for each persona.
+7. UI: a "Compare concepts" mode in the concept-first flow (2-12 concept cards, a control flag on each); a results view with the ranking per persona and question, ranges, tie groups, a controls banner, the position-bias number and cross-persona agreement. Use "panel members" and "concepts" in all copy.
 
 Out of scope: evidence (S2), copy-sets (S4/S5), format metadata (S6). Keep the statistics in a pure module with unit tests so S4 can reuse it.
 
-Verify locally with the mock (extend backend/scripts/mock-openai.mjs so A/B answers carry a known preference per concept, and prove the ranking recovers it and the controls check fires when they're reversed). Then give me the call count and cost estimate for the Trupanion nine plus four controls, three personas at 30, and a runner-free way to do pass 3.
+Verify locally with the mock (extend backend/scripts/mock-openai.mjs so A/B and cold-probe answers carry a known preference per concept; prove the ranking recovers it and the controls check fires when they're reversed). Then give me the call count and cost for pass 3 (the nine plus four controls, three personas at 30, three fresh panels) and how to run it without the browser runner.
 
-Handoff: docs/build-log/SM-measurement.md.
+Handoffs: docs/build-log/SM-spike.md (Phase A) and docs/build-log/SM-measurement.md (Phase B).
 ```
 
 ---
