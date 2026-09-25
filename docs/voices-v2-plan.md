@@ -282,19 +282,45 @@ B4 about 3. B1 and B3 can run in parallel sessions after the first week.
 
 ## 7. Open questions for Brook
 
-1. **The go-live date** for Month 1 creative. It's the hard deadline for B3.
-2. **Media spend per month and ads per round.** They decide how confident
-   B3 can be, and whether per-persona reads are realistic.
-3. **Can Add3 run equal-budget or A/B cells** for the lines and territories
-   we most want to learn about?
+Answered on 25 Sep:
+
+- **Assets per round.** Month 1: 6 statics (2 per persona), 3 hero videos, 2
+  TikTok-native builds, 3 carousels, 1 creator UGC capture. Months 2 and 3: 3
+  statics (1 per persona), 3 hero videos, 1 TikTok, 1 carousel. Ramp-up is
+  possible if early results show success. See section 7a.
+- **The readout is still internal.** Slide 5 can simply ship with the new
+  wording; no client-facing note about the change is needed.
+
+Still open:
+
+1. **The go-live date** for Month 1 creative (Brook is checking). It's the
+   hard deadline for B3.
+2. **Media spend per month** (Brook is checking). It decides how confident B3
+   can be.
+3. **Copy cells (new; for Add3):** can Add3 run 2–3 copy lines per asset as
+   separate ads in each persona ad set, reported per ad? And can they use
+   equal budgets or A/B cells where we most want to learn?
 4. **How does the creative director prefer to work?** Live sessions, or
    reviewing on their own? That decides whether B1 needs comments or sharing
    in its first version.
-5. **Trupanion's compliance format:** is there a template or tracker to export
-   to? Also the turnaround time, which was asked for on 24 Sep.
+5. **Trupanion's compliance format and turnaround** (asked on 24 Sep).
 6. **Who owns social listening** for the monthly persona refresh?
-7. **Whether readout v1 went to the client** with the old slide 5 wording,
-   and so whether v2 needs a line about the change.
+
+## 7a. What the asset volume means for the reads
+
+- Per persona that's about 4–5 assets in Month 1 and 2–3 a month after that,
+  across four formats. There are rarely two same-format ads for the same
+  persona, so ad-by-ad and format-by-persona reads will be thin within a
+  month.
+- **Copy is the lever.** Two or three shortlisted B1 lines per visual, run as
+  separate ads on the same asset, turn 8 assets into 20+ learning cells at
+  almost no production cost. The same line across visuals separates message
+  from execution. So B1's shortlist feeds B3's design directly, and B3's
+  features-first model pools across all of them.
+- Format effects are read across personas and months, not within one persona
+  in one month. The weekly note says so.
+- Ramp-up: B3's "scale" calls with ranges are the evidence for asking the
+  client for more volume.
 
 ## 8. Next steps once approved
 
