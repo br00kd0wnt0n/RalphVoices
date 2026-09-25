@@ -1,0 +1,77 @@
+{
+  "_note": "EXAMPLE ONLY, made-up content for a fictional brand (Pawsure). The real rules file is client material outside the repo. Used by backend/tests/studio.test.ts.",
+  "version": "example-1",
+  "updated": "2026-09-25",
+  "sources": {
+    "GUIDE": { "title": "Pawsure brand guide (fictional)" },
+    "LEGAL": { "title": "Pawsure legal notes (fictional)" },
+    "HOUSE": { "title": "House convention" }
+  },
+  "fields": {
+    "meta_primary": { "platform": "META", "label": "Meta primary text", "visible": 125, "max": 500, "source": "HOUSE" },
+    "meta_headline": { "platform": "META", "label": "Meta headline", "visible": 27, "max": 40, "source": "HOUSE" },
+    "tiktok_hook": { "platform": "TIKTOK", "label": "TikTok hook", "visible": 40, "max": 60, "source": "HOUSE" }
+  },
+  "tone_controls": {
+    "dry_warm": { "1": "dry", "3": "even", "5": "warm" },
+    "playful_plain": { "1": "playful", "3": "light", "5": "plain" },
+    "short_long": { "1": "short", "3": "medium", "5": "long" }
+  },
+  "structures": {
+    "question": "A question.", "stat": "One approved figure.", "testimony": "A member speaking.",
+    "scenario": "A moment.", "joke": "A joke with them.", "plain_promise": "A plain promise."
+  },
+  "facts": [
+    { "id": "F_OWN", "text": "Pawsure paid 1.5M claims last year", "numbers": ["1.5M"], "own": true, "source": "GUIDE p.2" },
+    { "id": "F_SURVEY", "text": "81% of owners in a category survey say cover is worth it", "numbers": ["81%"], "category": true, "check_hint": "attribute to owners in the survey, never to Pawsure members", "misattribution_patterns": ["81%[^.!?]{0,40}(pawsure|our) (members|customers)"], "source": "GUIDE p.3" }
+  ],
+  "figure_rule": {
+    "id": "FIG_UNSOURCED", "rule": "Every figure must come from the facts list.", "severity": "compliance", "source": "LEGAL §1",
+    "citation_rule": { "id": "FIG_CITATION", "rule": "Category stats need an on-ad citation.", "source": "LEGAL §2" },
+    "attribution_rule": { "id": "FIG_ATTRIBUTION", "rule": "Figure attributed to the wrong people.", "source": "LEGAL §2" }
+  },
+  "compliance": [
+    { "id": "COMP_DIRECT_PAY", "rule": "Direct pay always says 'at partner clinics'.", "severity": "compliance", "check": "require",
+      "trigger_patterns": ["\\bat checkout\\b", "pays? (the |your )?vets? directly"], "requires_patterns": ["partner clinics?"],
+      "wordings": ["Does the line promise direct pay without saying partner clinics?", "Is direct payment promised without the partner-clinic caveat?"], "source": "LEGAL §3" },
+    { "id": "COMP_PAYS_FOR_ITSELF", "rule": "Never say it pays for itself.", "severity": "compliance", "check": "banned",
+      "patterns": ["pa(y|ys|id) for (it|them)sel(f|ves)"], "wordings": ["Does the line say it pays for itself?", "Does the line say it saves more than it costs?"], "source": "LEGAL §4" },
+    { "id": "COMP_CHEAP", "rule": "No cheap-price promises for our own price.", "severity": "compliance", "check": "banned",
+      "patterns": ["lock(ed)?[- ]in", { "re": "\\bcheap\\b", "severity": "warn", "why": "Only a breach about our own price" }], "source": "LEGAL §5" },
+    { "id": "COMP_PRICE_LEAD", "rule": "Price never leads.", "severity": "compliance", "check": "price_lead", "lead_fields": ["meta_headline", "tiktok_hook"],
+      "patterns": ["\\$\\s?\\d[\\d,]*\\s?(/|a |per )\\s?(mo|month|day)\\b"], "source": "LEGAL §6" },
+    { "id": "COMP_UGC_MEMBER", "rule": "Testimony must be a member.", "severity": "note", "check": "structure", "structures": ["testimony"], "source": "LEGAL §7" },
+    { "id": "COMP_VERBATIM", "rule": "Verbatims are inspiration only.", "severity": "compliance", "check": "verbatim", "min_words": 6, "source": "LEGAL §8" }
+  ],
+  "brand": [
+    { "id": "BR_NAMING", "rule": "Don't call it 'pet cover'.", "severity": "warn", "check": "banned", "patterns": ["\\bpet cover\\b"], "status": "pending", "source": "GUIDE p.4" },
+    { "id": "BR_CASE", "rule": "Sentence case in copy.", "severity": "warn", "check": "case", "source": "GUIDE p.5" }
+  ],
+  "clarity": [
+    { "id": "CL_GLANCE", "rule": "Readable at a glance.", "severity": "warn", "check": "model", "source": "HOUSE" },
+    { "id": "CL_PRODUCT", "rule": "Product clear.", "severity": "warn", "check": "model", "source": "HOUSE" }
+  ],
+  "features": { "source": "HOUSE", "items": { "humour": "Built around a joke", "direct_vet_pay": "Direct pay", "dollar_figure": "A dollar amount" } },
+  "personas": {
+    "OWN": {
+      "name": "Example owners", "platforms": ["Facebook"], "default_fields": ["meta_primary", "meta_headline"],
+      "triggers": [
+        { "id": "OWN_A1", "label": "Peace of mind", "detail": "Never choosing on cost", "source": "GUIDE p.6" },
+        { "id": "OWN_A2", "label": "Less admin", "detail": "Nothing to file", "source": "GUIDE p.6" }
+      ],
+      "turn_offs": [
+        { "id": "OWN_T_BABY", "rule": "No baby talk.", "check": "banned", "patterns": ["fur ?bab(y|ies)"], "source": "GUIDE p.7" },
+        { "id": "OWN_T_SHAME", "rule": "Never shame the uninsured.", "check": "model", "source": "GUIDE p.7" }
+      ],
+      "language": [{ "text": "peace of mind", "source": "GUIDE p.8" }],
+      "verbatims": [{ "id": "V1", "text": "I never once had to think about whether I could afford the surgery for him", "attribution": "made up", "use": "inspiration_only", "source": "GUIDE p.9" }]
+    }
+  },
+  "territories": {
+    "OWN_CALM": { "persona": "OWN", "name": "Calm at the Counter", "angle": "OWN_A1", "format": "UGC", "premise": "The vet visit that stays calm.", "source": "GUIDE p.10" }
+  },
+  "needs_review": [
+    { "id": "NR_EXAMPLE", "question": "Is 'pet cover' banned?", "current_handling": "Warning, pending.", "source": "GUIDE p.4" }
+  ],
+  "decisions": []
+}
