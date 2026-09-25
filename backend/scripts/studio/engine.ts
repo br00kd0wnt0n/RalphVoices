@@ -220,7 +220,13 @@ const FATAL_CODES = new Set(['credit_balance_exhausted', 'insufficient_quota', '
 export function loadKey(mock: boolean) {
   if (mock) return;
   if (process.env.OPENAI_API_KEY && !process.env.OPENAI_API_KEY.includes('...')) return;
-  // Parse backend/.env by hand for this one variable; never dotenv.config().
+  // A key file holding only the key (no editing of .env needed): STUDIO_KEY_FILE or ~/.config/voices/openai.key.
+  const keyFile = process.env.STUDIO_KEY_FILE || path.join(process.env.HOME || '', '.config/voices/openai.key');
+  if (fs.existsSync(keyFile)) {
+    const k = fs.readFileSync(keyFile, 'utf8').trim();
+    if (k.length >= 20 && !k.includes('...')) { process.env.OPENAI_API_KEY = k; return; }
+  }
+  // Otherwise parse backend/.env by hand for this one variable; never dotenv.config().
   const envPath = [path.resolve(process.cwd(), '.env'), path.resolve(process.cwd(), 'backend/.env'), '/Users/BD/ralph-voices/backend/.env'].find(p => fs.existsSync(p));
   if (!envPath) throw new Error('No backend/.env found; export OPENAI_API_KEY in the shell instead');
   const m = /^OPENAI_API_KEY\s*=\s*(.*)$/m.exec(fs.readFileSync(envPath, 'utf8'));
