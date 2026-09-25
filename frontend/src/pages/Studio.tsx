@@ -186,6 +186,14 @@ function BriefPanel({ meta, brief, setBrief, onGenerate, running }: { meta: Meta
           </div>
         </div>
         {t && <p className="rounded-lg bg-neutral-50 p-3 text-base text-neutral-700"><span className="font-semibold">{t.format}.</span> {t.premise}</p>}
+        <div>
+          <Label>Angles in the grid (the persona's triggers × 6 structures × tone)</Label>
+          <div className="flex flex-wrap gap-1.5">
+            {meta.personas[brief.persona]?.triggers.map(tr => (
+              <Chip key={tr.id} tone={tr.id === t?.angle ? 'outline' : 'grey'} className={tr.id === t?.angle ? 'border-2 border-neutral-800' : ''}>{tr.label}</Chip>
+            ))}
+          </div>
+        </div>
 
         <div>
           <Label>Fields</Label>

@@ -20,6 +20,7 @@
 //   npx tsx scripts/studio.ts compare  --brief NAME --models gpt-4o,gpt-4.1[,gpt-5-mini] [--n 10] [--yes]
 //   npx tsx scripts/studio.ts reveal   --compare NAME
 //   npx tsx scripts/studio.ts status
+//   npx tsx scripts/studio.ts limits   [--models gpt-4o,gpt-4.1]       (models on the account and their TPM limits; 1-token calls)
 //   npx tsx scripts/studio.ts serve    [--port 4100]                   (local API for the /studio page; 127.0.0.1 only)
 // Common flags:
 //   --mock                   no network, no cost (in-process stand-in for OpenAI)
@@ -202,9 +203,26 @@ async function main() {
       for (const b of S.listBatches()) console.log(`  ${b.id}  ${b.lines} lines  $${b.usd.toFixed(3)}`);
       return;
     }
+    case 'limits': {
+      // Models on the account, and each candidate's tokens-per-minute limit from a 1-token call (~$0.0001 each).
+      S.loadKey(MOCK);
+      const OpenAI = (await import('openai')).default;
+      const c = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const ids = (await c.models.list()).data.map(m => m.id).filter(id => /^(gpt-|o\d)/.test(id)).sort();
+      console.log(`Chat models on the account (${ids.length}): ${ids.filter(i => !/audio|realtime|transcribe|tts|search|image/.test(i)).join(' ')}`);
+      for (const model of list(opt('models', 'gpt-4o,gpt-4o-mini,gpt-4.1,gpt-4.1-mini,gpt-5,gpt-5-mini,gpt-5.1'))) {
+        if (!ids.includes(model)) { console.log(`  ${model}: not on this account`); continue; }
+        try {
+          const reasoning = /^(gpt-5|o\d)/.test(model);
+          const { response } = await c.chat.completions.create({ model, messages: [{ role: 'user', content: 'Say ok' }], ...(reasoning ? { max_completion_tokens: 32, reasoning_effort: 'minimal' as any } : { max_tokens: 1 }) }).withResponse();
+          console.log(`  ${model}: ${response.headers.get('x-ratelimit-limit-tokens')} TPM, ${response.headers.get('x-ratelimit-limit-requests')} RPM`);
+        } catch (e: any) { console.log(`  ${model}: ${e?.status} ${e?.code || ''} ${String(e?.message).slice(0, 100)}`); }
+      }
+      return;
+    }
     case 'serve': { await serve(); return; }
     default:
-      console.log('Commands: brief, estimate, generate, check, planted, export, ingest, shortlist, compare, reveal, status, serve. See the header of scripts/studio.ts.');
+      console.log('Commands: brief, estimate, generate, check, planted, export, ingest, shortlist, compare, reveal, status, limits, serve. See the header of scripts/studio.ts.');
   }
 }
 

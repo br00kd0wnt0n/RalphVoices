@@ -321,6 +321,15 @@ the iframe loads.
   points people to tools.ralph.world (`GET /api/auth/config` tells it which mode
   is on).
 
+## Copy Studio, B1-lite (script + local page)
+
+VOICES v2 build 1 as a script: `backend/scripts/studio.ts` (CLI and `serve`) over `backend/scripts/studio/engine.ts`. No database, no auth, no deploy. It reads only `OPENAI_API_KEY` from `backend/.env` (never `dotenv.config()`, because that file's `DATABASE_URL` is production) and writes everything to `Claude outputs/voices-r1/studio/` (client material, never committed): `studio-rules.json`, `briefs/`, `batches/<id>/batch.json`, `exports/`, `taste.json`, `shortlist.csv/.md`, `compare/<name>/` (sheet plus a separate `key.json`), and `spend.json` (cumulative, $15 cap, asks above $2 per run).
+
+- Flow: `brief` → `generate` (a grid of angle × structure × tone, near-duplicates removed by embedding similarity) → checks on every line (deterministic first, then one JSON call per line, two-wording logprob checks for compliance items, and a skeptic's objection) → `export` (Sheets CSV + Markdown) → `ingest` (curated CSV back: taste examples for the next `generate`, plus a shortlist with `PERSONA_TERRITORY_FORMAT_v#_PLATFORM` stubs) → `compare` (blind writer comparison).
+- Every flag carries a rule id and the source from the rules file. Flags, not scores. The rules file schema and a made-up example are in `backend/scripts/studio/`; `backend/tests/studio.test.ts` runs against the example.
+- UI: `/studio` in the frontend, dev-only (routed when `import.meta.env.DEV` or `VITE_STUDIO_API` is set), talking to `npx tsx scripts/studio.ts serve` on 127.0.0.1:4100 (`frontend/src/lib/studioApi.ts`, not `api.ts`). `--mock` runs everything with no key and no cost.
+- Run instructions, timings and gaps: `docs/build-log/B1-lite.md`.
+
 ## Roadmap
 
 The Trupanion engagement build plan (evidence layer, copy-set tests, format dimension, reports, live-performance anchors, governance) is in `docs/trupanion-build-plan.md`. Phase 0 safeguards have shipped on `voices/trupanion-phase0`.
