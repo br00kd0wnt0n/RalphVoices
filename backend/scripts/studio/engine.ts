@@ -464,8 +464,8 @@ export interface Cell { cell: string; angle: string; structure: Structure; tone:
 /**
  * A deliberately varied grid. Angles are the persona's triggers (the
  * territory's own trigger counts twice); cell i takes angle i mod A and
- * structure (i + floor(i/A)) mod 6, so the first A*6 cells are all distinct
- * angle × structure pairs. Tone alternates between the brief's setting and a
+ * structure (i mod A + floor(i/A)) mod 6: each pass over the angles shifts the
+ * structures by one, so every structure appears within A cells of each pass. Tone alternates between the brief's setting and a
  * step warmer/drier and a step more playful/plainer. Fields are dealt from a
  * seeded shuffle so no angle is stuck with one field.
  */
@@ -489,7 +489,7 @@ export function planCells(b: Brief, count: number, offset = 0, seedExtra = ''): 
     cells.push({
       cell: `c${String(i + 1).padStart(2, '0')}`,
       angle: angles[i % A],
-      structure: STRUCTURES[(i + Math.floor(i / A)) % S],
+      structure: STRUCTURES[((i % A) + Math.floor(i / A)) % S],
       tone: tones[Math.floor(i / A) % tones.length],
       field: fieldDeck[i],
     });
@@ -534,6 +534,7 @@ TERRITORY: ${t.name} ${t.premise}
 
 RULES THAT BIND EVERY LINE:
 ${modelRules.map(c => `- ${c.rule}`).join('\n')}
+- Primary text and captions must make clear what is being sold: Trupanion, medical insurance for cats and dogs. Headlines and hooks can lean on the primary text.
 - Only use a number if it is in this facts list, exactly as written; never invent a figure. For the stat structure, prefer Trupanion's own facts:
 ${facts.map(f => `  - ${f.own ? '[Trupanion] ' : f.category ? '[category survey, needs citation] ' : f.illustrative ? '[illustrative] ' : ''}${f.text}${f.check_hint ? ` (${f.check_hint})` : ''}`).join('\n')}
 

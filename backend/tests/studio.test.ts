@@ -70,6 +70,18 @@ test('the grid spreads cells across angles and structures', () => {
   assert.ok(cells.every(c => b.fields.includes(c.field)));
 });
 
+test('every structure appears whatever the number of angles', () => {
+  for (const n of [6, 10, 20]) {
+    const b = S.makeBrief({ territory: 'OWN_CALM', n, name: `grid${n}` });
+    for (const A of [3, 4, 5, 6]) {
+      // Simulate A angle slots by checking the formula directly on the planned cells' indices.
+      const structures = new Set(Array.from({ length: Math.max(n, 12) }, (_, i) => ((i % A) + Math.floor(i / A)) % 6));
+      assert.equal(structures.size, 6, `A=${A}`);
+    }
+    assert.equal(new Set(S.planCells(b, Math.max(n, 12)).map(c => c.structure)).size, 6);
+  }
+});
+
 test('CSV survives quotes, commas, newlines and formula-like text', () => {
   const rows = [['id', 'text'], ['a', 'He said "hi", then\nleft'], ['b', '=SUM(A1)']];
   const back = S.parseCsv(S.toCsv(rows));
