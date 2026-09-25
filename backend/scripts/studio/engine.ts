@@ -867,7 +867,7 @@ ${items.map(i => `${i.id}: ${i.rule}`).join('\n')}
 
 CLARITY:
 glance: ${r.clarity.find(c => c.id === 'CL_GLANCE')?.rule}
-product_clear: ${r.clarity.find(c => c.id === 'CL_PRODUCT')?.rule}
+product_clear: ${r.clarity.find(c => c.id === 'CL_PRODUCT')?.rule} Assume the Trupanion name and logo appear on the ad; judge whether the words make clear it's medical insurance for pets.
 
 FEATURES (tag every one that applies):
 ${Object.entries(r.features.items).map(([k, v]) => `${k}: ${v}`).join('\n')}
@@ -891,7 +891,9 @@ async function modelCheck(line: Line, r: Rules, api: Api, model: string, idx: Re
     const verified = quote && lower.includes(quote.toLowerCase());
     addFlag(line.flags, { rule, severity: meta.severity, label: meta.label, source: meta.source, quote: verified ? quote : '', why: String(h?.why || '').slice(0, 140) + (quote && !verified ? ` (model paraphrased: "${quote.slice(0, 60)}")` : ''), by: ['model'] });
   }
+  const productField = ['meta_primary', 'tiktok_caption'].includes(line.field);
   for (const [key, id] of [['glance', 'CL_GLANCE'], ['product_clear', 'CL_PRODUCT']] as const) {
+    if (id === 'CL_PRODUCT' && !productField) continue; // headlines and hooks sit next to the primary text and logo
     if (j?.[key] && j[key].ok === false) {
       const meta = idx.get(id)!;
       addFlag(line.flags, { rule: id, severity: meta.severity, label: meta.label, source: meta.source, quote: '', why: String(j[key].why || '').slice(0, 140), by: ['model'] });
@@ -899,6 +901,10 @@ async function modelCheck(line: Line, r: Rules, api: Api, model: string, idx: Re
   }
   for (const ft of Array.isArray(j.features) ? j.features : []) if (r.features.items[ft] && !line.features.includes(ft)) line.features.push(ft);
 }
+
+// A yes/no flag on its own (no rule or model hit) needs this much: the mini model reads
+// short lines loosely, and live runs showed lone flags at 0.5-0.75 on clean lines.
+const LONE_LOGPROB = 0.8;
 
 /** Two wordings per compliance item, P(Yes) from logprobs, averaged. */
 async function probeCheck(line: Line, r: Rules, api: Api, model: string) {
@@ -920,8 +926,7 @@ async function probeCheck(line: Line, r: Rules, api: Api, model: string) {
     const p = round(valid.reduce((a, b) => a + b, 0) / valid.length, 3);
     const existing = line.flags.find(x => x.rule === it.id);
     if (existing) { existing.p = p; if (!existing.by.includes('logprob') && p >= 0.25) existing.by.push('logprob'); return; }
-    if (p >= 0.5) addFlag(line.flags, { rule: it.id, severity: 'warn', label: it.rule, source: it.source, quote: '', why: `Yes/no check only (P=${p}); the other checks didn't flag it`, by: ['logprob'], p });
-    else if (p >= 0.25) addFlag(line.flags, { rule: it.id, severity: 'warn', label: it.rule, source: it.source, quote: '', why: `Borderline (P=${p}); worth a look`, by: ['logprob'], p });
+    if (p >= LONE_LOGPROB) addFlag(line.flags, { rule: it.id, severity: 'warn', label: it.rule, source: it.source, quote: '', why: `Yes/no check only (P=${p}); the other checks didn't flag it`, by: ['logprob'], p });
   }));
 }
 
@@ -1001,6 +1006,8 @@ function reconcile(l: Line, r: Rules) {
     const f = l.flags.find(x => x.rule === it.id);
     if (!f) continue;
     const hasModel = f.by.includes('model');
+    const pr = l.probes?.[it.id]?.filter((x): x is number => x !== null) || [];
+    if (f.p === undefined && pr.length) f.p = round(pr.reduce((a, b) => a + b, 0) / pr.length, 3);
     const agree = hasModel && (f.p === undefined || f.p >= 0.25);
     if (f.base === 'compliance' || agree) { f.severity = 'compliance'; continue; }
     f.severity = 'warn';
