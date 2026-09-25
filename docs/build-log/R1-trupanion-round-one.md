@@ -99,12 +99,14 @@ reach Railway at all.
 
 ## Readout deck note
 
-Slide 5 describes the twins as scored on sentiment, engagement, share and
-comprehension and "calibrated against a growing bank of reference reactions"
-that from round two "includes Trupanion's real Meta and TikTok results". Pass
-1 found anchors can't hold live results in this build (that's S8), and the
-ranking will likely move to probes or pairwise comparison. Worth correcting
-before the deck becomes the client's readout v2.
+Updated 25 Sep. Brook has rewritten slide 5 of the Persona Intelligence Readout
+("What an audience twin is, and isn't"). The scoring and "calibrated against
+reference reactions" lines are gone. The twins are now described as a writing
+partner and stress test, with dated expectations per persona checked against
+live results (expected versus actual). The footer reads: "The twins sharpen
+before spend; the market decides." Slides 4 and 6 should use the same wording
+("stress-tested", "expectations", "expected versus actual"). See
+`docs/voices-v2-plan.md`.
 
 ## Pass 2 results (25 Sep): halted at the smoke gate
 

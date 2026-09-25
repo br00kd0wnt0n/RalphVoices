@@ -2,6 +2,8 @@
 
 Coordination and oversight happen in one standing session. Building happens in the dedicated sessions below, each in its own worktree and branch. The plan they build against is `docs/trupanion-build-plan.md`.
 
+> **Under review (25 Sep 2026):** `docs/voices-v2-plan.md` proposes replacing SM Phase B and S2–S9 with builds B1–B4 (Copy Studio, pre-flight audit, ingestion and weekly read, round close). Until Brook decides, don't start any session below other than the running SM Phase A spike.
+
 ## Ground rules (every build session)
 
 1. **Never touch the Railway databases.** Both `.env` and `backend/.env` point at Railway. **`yamanote` (the pgvector database) is production**; `yamabiko` is legacy (corrected by Brook, 23 Sep; an earlier note had these the wrong way round). Touch neither. Run everything against a local database by setting the variable explicitly, e.g. `DATABASE_URL=postgresql://postgres@127.0.0.1:54329/voices_dev npm run dev:backend`. dotenv doesn't override a variable that's already set. Migration 004 needs **pgvector** locally (`brew install pgvector`, or the `pgvector/pgvector:pg16` Docker image); ask Brook before installing anything.
