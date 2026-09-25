@@ -1,7 +1,6 @@
 # VOICES v2: plan for the Trupanion engagement
 
-Internal. Draft for Brook's review, 25 Sep 2026. **Nothing here gets built
-until Brook approves it.** Once approved, this plan replaces the build order in
+Internal. **Approved by Brook, 25 Sep 2026.** Once approved, this plan replaces the build order in
 `docs/trupanion-build-plan.md` and sessions S2–S9 in `docs/build-sessions.md`.
 Ground rules 1–9 in `docs/build-sessions.md` still apply.
 
@@ -269,13 +268,16 @@ Migration numbers: 015 is B1 (it was reserved for SM, which is now parked),
 
 ## 6. Timeline (estimates; to confirm with Brook and Add3)
 
-| Week of | Work | Milestone |
+| When | Work | Milestone |
 |---|---|---|
-| 29 Sep | Monday creative director briefing: strategy, evidence pack, Add3 learnings, the M3 checklist on the nine concepts. **B1 build starts.** Spike finishes | CD's working style and model preference feed B1 |
-| 6 Oct | B1 usable (brief, grid, flags, curate, export). First real Studio batch with the CD. B2 script on Tier 1 concepts | Month 1 pre-test delivered |
-| 13 Oct | B3 ingestion and model on Add3's historic export; decision gate runs if the data has arrived. Expectations for Month 1 recorded (B4 record only) | Month 1 creative live (mid-Oct target) |
-| 20 Oct | B3 weekly note on the first live data. B2 on production assets | First weekly read |
-| 27 Oct – Nov | B4 round close and ledger. Month 2 batch through B1 and B2 | Month 1 round close; Month 2 pre-test |
+| Fri 25 – Sun 27 Sep | **B1-lite** (script-only Copy Studio) built; Brook reviews the rules file | Demo-ready Mon 9am |
+| Mon 28 Sep | Creative director kickoff (Brook in the room): brief, framework read, B1-lite demo, blind model comparison. Concept board to the client, stress-tested, not ranked | Writing model chosen |
+| Tue 29 Sep | Round-one copy session on B1-lite: about 20 lines per persona → 2–3 per visual; expectations recorded | Month 1 pre-test delivered |
+| Wed 30 Sep – Thu 1 Oct | First drafts. Full **B1 Studio** build starts, shaped by Tuesday's session | |
+| Week of 5 Oct | **B3** ingestion and model on Add3's historic export (parallel session). **B2** on the first production assets. Decision gate if the data has arrived | |
+| Week of 12 Oct | B3 ready before go-live. Month 1 expectations locked (B4 record) | Month 1 creative live (mid-Oct target) |
+| Week of 19 Oct | First B3 weekly note | First Wednesday read |
+| From 26 Oct | B4 round close and ledger. Month 2 batch through the full B1 Studio and B2 | Month 1 round close; Month 2 pre-test |
 
 Rough effort, before review: B1 about 5–6 days, B2 about 2, B3 about 4–5,
 B4 about 3. B1 and B3 can run in parallel sessions after the first week.
