@@ -24,7 +24,7 @@
 //   npx tsx scripts/studio.ts serve    [--port 4100]                   (local API for the /studio page; 127.0.0.1 only)
 // Common flags:
 //   --mock                   no network, no cost (in-process stand-in for OpenAI)
-//   --tpm gpt-4o=15000,...   per-model tokens-per-minute pace. Default gpt-4o=15000; other models use 90% of their header limit
+//   --tpm gpt-4o=15000,...   per-model tokens-per-minute cap. Default: 90% of the limit the account reports (gpt-4o 30k at tier 1 → 27k); set it lower when sharing the account
 //   --cap 15                 session spend cap in USD (studio/spend.json is cumulative)
 //   --studio DIR             output folder (default: the client folder above)
 //   --yes                    needed for any run estimated over $2
@@ -46,7 +46,9 @@ const MOCK = flag('mock');
 const CAP = Number(opt('cap', '15'));
 const ASK_OVER = 2;
 function tpm(): Record<string, number> {
-  const t: Record<string, number> = { 'gpt-4o': 15000 };
+  // Default: 90% of each model's own limit, read from response headers. Pass
+  // --tpm gpt-4o=15000 when another job shares the account (e.g. the SM spike).
+  const t: Record<string, number> = {};
   for (const kv of list(opt('tpm'))) { const [k, v] = kv.split('='); if (k && Number(v)) t[k] = Number(v); }
   return t;
 }

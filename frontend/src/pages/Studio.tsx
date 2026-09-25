@@ -10,6 +10,8 @@ import { cn } from '@/lib/utils';
 
 const PINK = '#D94D8F';
 type Tab = 'brief' | 'review' | 'shortlist' | 'compare';
+// Deep links for the demo: /studio?tab=review&batch=<id>&open=L07 (opens that line's first flag), &compare=<name>.
+const params = new URLSearchParams(window.location.search);
 
 // ---------- small building blocks ----------
 
@@ -56,7 +58,7 @@ function Slider({ label, left, right, value, onChange }: { label: string; left: 
 export function Studio() {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [err, setErr] = useState('');
-  const [tab, setTab] = useState<Tab>('brief');
+  const [tab, setTab] = useState<Tab>((params.get('tab') as Tab) || 'brief');
   const [brief, setBrief] = useState<Brief>({ persona: 'DINK', territory: 'DINK_NEVER', fields: [], tone: { dry_warm: 3, playful_plain: 3, short_long: 2 }, banned_words: [], banned_ideas: [], reference_lines: [], n: 20, model: 'gpt-4o' });
   const [batch, setBatch] = useState<Batch | null>(null);
   const [status, setStatus] = useState('');
@@ -67,7 +69,7 @@ export function Studio() {
   useEffect(() => {
     refreshMeta().then(m => setBrief(b => ({ ...b, fields: m.personas[b.persona]?.default_fields || [] })))
       .catch(() => setErr('Studio API not running. In backend/: npx tsx scripts/studio.ts serve'));
-    studio.batches().then(bs => { if (bs[0]) studio.batch(bs[0].id).then(setBatch); }).catch(() => {});
+    studio.batches().then(bs => { const id = params.get('batch') || bs[0]?.id; if (id) studio.batch(id).then(setBatch); }).catch(() => {});
     return () => esRef.current?.close();
   }, [refreshMeta]);
 
@@ -240,7 +242,7 @@ function BriefPanel({ meta, brief, setBrief, onGenerate, running }: { meta: Meta
           <div>
             <Label>Writing model</Label>
             <input list="studio-models" className="w-full rounded-lg border-2 border-neutral-300 px-3 py-2.5 text-lg" value={brief.model} onChange={e => set({ model: e.target.value })} />
-            <datalist id="studio-models">{['gpt-4o', 'gpt-4.1', 'gpt-5', 'gpt-5-mini', 'gpt-4o-mini'].map(m => <option key={m} value={m} />)}</datalist>
+            <datalist id="studio-models">{['gpt-4o', 'gpt-4.1', 'gpt-5.5', 'gpt-5', 'gpt-5-mini'].map(m => <option key={m} value={m} />)}</datalist>
           </div>
         </div>
         <div className="flex items-center gap-4 border-t border-neutral-200 pt-5">
@@ -314,7 +316,7 @@ function Review({ meta, batch, setBatch, status, running, onMore }: { meta: Meta
 }
 
 function LineCard({ meta, line, onChange, onMore }: { meta: Meta; line: Line; onChange: (l: Line) => void; onMore: (l: Line, note: string) => void }) {
-  const [open, setOpen] = useState<string | null>(null);
+  const [open, setOpen] = useState<string | null>(params.get('open') === line.id.split('-').pop() ? line.flags[0]?.rule ?? null : null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(line.edited_text || line.text);
   const [note, setNote] = useState(line.note || '');
@@ -459,12 +461,12 @@ function Shortlist({ batch }: { batch: Batch | null }) {
 function Compare({ meta, brief }: { meta: Meta; brief: Brief }) {
   const [names, setNames] = useState<string[]>([]);
   const [set, setSet] = useState<CompareSet | null>(null);
-  const [models, setModels] = useState('gpt-4o, gpt-4.1, gpt-5-mini');
+  const [models, setModels] = useState('gpt-4o, gpt-4.1, gpt-5.5');
   const [n, setN] = useState(8);
   const [status, setStatus] = useState('');
   const [key, setKey] = useState<{ labels: Record<string, string>; tally: Record<string, number> } | null>(null);
   const load = (name: string) => { setKey(null); studio.compareSet(name).then(setSet); };
-  useEffect(() => { studio.compares().then(ns => { setNames(ns); if (ns[0]) load(ns[0]); }).catch(() => {}); }, []);
+  useEffect(() => { studio.compares().then(ns => { setNames(ns); const n = params.get('compare') || ns[0]; if (n) load(n); }).catch(() => {}); }, []);
 
   async function run() {
     setStatus('Starting…');

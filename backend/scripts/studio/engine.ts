@@ -292,7 +292,7 @@ export class Api {
     loadKey(this.mock);
     this.client = this.mock ? mockClient() : new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     // The mock has no rate limit; pace it only when asked (STUDIO_PACE_MOCK=1) to rehearse live timing.
-    this.pacer = new Pacer(opts.tpm ?? { 'gpt-4o': 15000 }, 8, this.mock && !process.env.STUDIO_PACE_MOCK);
+    this.pacer = new Pacer(opts.tpm ?? {}, 8, this.mock && !process.env.STUDIO_PACE_MOCK);
   }
   spent(): number { return readSpend().total_usd; }
   runTotal(): number { return Object.values(this.runUsd).reduce((a, b) => a + b, 0); }
@@ -603,7 +603,7 @@ export function estimate(b: Brief): { usd: number; calls: number; tokens: Record
   addT(b.probe_model!, prb.inTok + prb.calls);
   addT(b.objection_model!, obj.inTok + b.n * 70);
   const minutes: Record<string, number> = {};
-  for (const [m, t] of Object.entries(tokens)) minutes[m] = round(t / (m === 'gpt-4o' ? 15000 : m.includes('mini') ? 200000 : 30000), 2);
+  for (const [m, t] of Object.entries(tokens)) minutes[m] = round(t / (m.includes('mini') ? 180000 : 27000), 2); // tier-1 limits at 90%
   return { usd: round(usd, 3), calls: gen.calls + chk.calls + prb.calls + obj.calls + 1, tokens, minutes_at_budget: minutes };
 }
 
@@ -764,13 +764,21 @@ function addFlag(flags: Flag[], f: Flag) {
   if (rank[f.severity] > rank[ex.severity]) ex.severity = f.severity;
 }
 
+/** The words lost to truncation, from the start of the first cut word. */
+function truncTail(text: string, visible: number): string {
+  const cs = [...text];
+  let i = visible;
+  while (i > 0 && /\S/.test(cs[i - 1])) i--;
+  return cs.slice(i).join('');
+}
+
 export function deterministicFlags(l: { text: string; field: string; structure: string; persona: string }, r: Rules, brief?: Pick<Brief, 'banned_words'>): { flags: Flag[]; features: string[] } {
   const flags: Flag[] = [];
   const text = l.text;
   const f = r.fields[l.field];
   const chars = [...text].length;
   if (f && chars > f.max) addFlag(flags, { rule: 'LIMIT_MAX', severity: 'warn', label: `Over the ${f.label} limit (${chars}/${f.max})`, source: f.source, quote: '', why: `${chars} characters; limit ${f.max}`, by: ['rule'] });
-  else if (f && chars > f.visible) addFlag(flags, { rule: 'LIMIT_VISIBLE', severity: 'warn', label: `Truncated: ${chars} characters, ${f.visible} visible in ${f.label}`, source: f.source, quote: [...text].slice(f.visible).join(''), why: `${chars} characters; ${f.visible} visible`, by: ['rule'] });
+  else if (f && chars > f.visible) addFlag(flags, { rule: 'LIMIT_VISIBLE', severity: 'warn', label: `Truncated: ${chars} characters, ${f.visible} visible in ${f.label}`, source: f.source, quote: truncTail(text, f.visible), why: `${chars} characters; ${f.visible} visible`, by: ['rule'] });
 
   const pr = r.personas[l.persona];
   const items: RuleItem[] = [...r.compliance, ...r.brand, ...(pr?.turn_offs || [])];
