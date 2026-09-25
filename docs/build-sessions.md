@@ -29,7 +29,7 @@ Coordination and oversight happen in one standing session. Building happens in t
 | S4 | Copy-set backend + performance questions + feed framing | Phase 2, §2a, §4 009/010 | `voices/copy-set-backend` | 009, 010 | ~19 Oct | S2 merged | S3 |
 | S5 | Copy-set UI + compliance check | Phase 2, §2a | `voices/copy-set-ui` | none (uses 010) | ~28 Oct | S4 merged | — |
 | S6 | Format dimension + head-to-head | Phase 3, §2a | `voices/format-h2h` | 013 if needed | ~9 Nov | S5 merged | S7 |
-| S7 | Round report | Phase 3 | `voices/round-report` | none | ~12 Nov | S4 merged | S6 |
+| S7 | Round report: readout reasons, prediction lock, client export (docs/trupanion-readout-spec.md) | Phase 3 | `voices/round-report` | none (prediction_locks is in 015) | straight after SM | S4 merged | S6 |
 | S8 | Performance ingestion + live anchors + predicted-vs-actual | Phase 4, §7, §4 011 | `voices/performance-ingest` | 011 | ~1 Dec | S4 merged; S7 for the PvA report section | S9 |
 | S9 | Governance | Phase 4, §4 012 | `voices/governance` | 012 | ~8 Dec | S1 | S8 |
 
@@ -76,7 +76,7 @@ Handoff: docs/build-log/S01-phase0.md. When done, tell me it's ready for review;
 ```
 Build session SM of the VOICES × Trupanion build. Create branch voices/measurement from an up-to-date main.
 
-Read first: CLAUDE.md, docs/build-sessions.md (ground rules), docs/build-log/S01-phase0.md (local DB and mock), docs/build-log/R1-trupanion-round-one.md including "Pass 2 results" (why this session exists), and backend/src/utils/probes.ts, utils/realism.ts and services/ai.ts (generateConceptResponse, runIntentProbes, generateVariants). Working inputs are client material outside the repo, in /Users/BD/ralph-voices/Claude outputs/voices-r1/: personas.json (seed v3), concepts.json (the nine cards), r1-pass1-ledger.csv, r1-pass2-smoke-results.json. Read them by absolute path and never commit them. Ask me for the four blind-control ads (SuperAds) and their expected order before Phase A runs.
+Read first: CLAUDE.md, docs/build-sessions.md (ground rules), docs/build-log/S01-phase0.md (local DB and mock), docs/trupanion-readout-spec.md (Phase B UI), docs/build-log/R1-trupanion-round-one.md including "Pass 2 results" (why this session exists), and backend/src/utils/probes.ts, utils/realism.ts and services/ai.ts (generateConceptResponse, runIntentProbes, generateVariants). Working inputs are client material outside the repo, in /Users/BD/ralph-voices/Claude outputs/voices-r1/: personas.json (seed v3), concepts.json (the nine cards), r1-pass1-ledger.csv, r1-pass2-smoke-results.json. Read them by absolute path and never commit them. Ask me for the four blind-control ads (SuperAds) and their expected order before Phase A runs.
 
 What we know:
 - Scoring one ad alone on 1-10 bunches at 7-9 (pass 1: Families 88-97 on everything).
@@ -110,7 +110,7 @@ PHASE B: build. Only after I approve Phase A; build the method that passed (migr
 4. Blind controls: is_control concepts with expected 'win' or 'lose' and a metric. Each result reports "n of m control pairs in the right order" per persona and question, and a controls_passed flag. A persona whose controls fail is marked "not for the ledger".
 5. Reliability and ledger: POST /tests/:id/sweep {runs, fresh_panels: true} builds a fresh panel per run (retiring, per migration 007) so run-to-run numbers measure population sampling. GET /projects/:id/ledger.csv: one row per persona × concept × run × question with rank, strength, range, tie group, controls result, panel_version and seed or evidence version. Report run-to-run Spearman, noise versus spread and cross-persona agreement, so the browser runner can retire.
 6. Smoke gate: a built-in check that takes one known-strong and one known-weak concept (or a control pair) and fails unless the strong one clearly wins for each persona.
-7. UI: a "Compare concepts" mode in the concept-first flow (2-12 concept cards, a control flag on each); a results view with the ranking per persona and question, ranges, tie groups, a controls banner, the position-bias number and cross-persona agreement. Use "panel members" and "concepts" in all copy.
+7. UI: a "Compare concepts" mode in the concept-first flow (2-12 concept cards, a control flag on each), and the readout view specified in docs/trupanion-readout-spec.md: GET /api/readouts/:key, and /readouts/:key with the verdict strip, rankings per persona, the concept × persona grid and the ledger CSV. Also create the prediction_locks table in migration 015; the lock button, reasons, client export and live results are S7 and come straight after SM. Leave TestResults.tsx as it is, apart from a "Part of readout" link. Use "panel members" and "concepts" in all copy.
 
 Out of scope: evidence (S2), copy-sets (S4/S5), format metadata (S6). Keep the statistics in a pure module with unit tests so S4 can reuse it.
 
