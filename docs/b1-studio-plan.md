@@ -115,6 +115,34 @@ The name is **Ready for production**, never "Approved": creative sign-off isn't 
   - If compliance reviewed a different wording from the one signed off, the handoff shows the line as pending.
 - **Built 28 Sep:** backend `services/studio/ready.ts` (acceptance tests `tests/helpers/readyScenario.ts`, files and Postgres) and the page's Ready for production tab. The naming stub is stored on every line version and expectations record, and the nav leaves room for B3b's read-only "Live" tab after Ready for production.
 
+### 4b. Pre-flight (step 6, after Ready for production; Brook, 28 Sep) and the Live placeholder
+
+For Brook's end-to-end demo to Nick; the target is Wed 30 Sep or Thu 1 Oct.
+
+- **Upload per naming stub.** For each signed-off persona × territory, you upload the finished asset for each stub: a static image, carousel cards (several images) or a video (.mp4/.mov).
+  - The screen shows the cost and time estimate, then runs the audit as a background job with progress, the same way generation runs.
+  - The audit engine is B2's library (`backend/src/services/audit/`: `runAudit`, `estimateAudit`, `featuresRow`, plus a new copy-match check). B2's PR merges before this one.
+- **Report.** Per asset, the report shows:
+  - flags (red, amber, grey) with the quoted words or a frame thumbnail, and the source
+  - the text found on the asset, and the transcript for video
+  - features, the skeptic's objection, and cross-persona grey notes
+  - the signed-off copy lines for that stub alongside
+  **Copy match** (text on the asset against the signed-off wording) is the headline check.
+- **Agree or disagree** on each flag, recording who and when. The round's agreement rate is Brook's 90% target measure.
+- **Ready to traffic**, per asset, set by Nick or Brook.
+  - It needs red flags resolved: fixed by a new upload, or overridden with a reason, as in Ready for production.
+  - Vivan sees the status; it doesn't change the compliance status on the copy.
+- **Exports:** the features CSV for B3 (`weekly.ts features`) and an asset handoff list (stub, file, status, open flags).
+- **Storage.** Asset files go to R2 (`ENABLE_R2_STORAGE=true` in production, Brook 28 Sep) through the existing R2 client.
+  - Keys: `studio/preflight/<stub>/<upload id>/<filename>`.
+  - Files are never linked publicly; they're served through the signed-in API.
+  - With R2 off (local and dev only), files go into Postgres with a 25 MB cap per file and a clear error above it.
+- **ffmpeg on Railway** for video frames: one extra Nix package in `backend/nixpacks.toml`. Without it, video shows the engine's "frames unavailable" note, not an error.
+- **Migration 017** (additive, idempotent) adds the Pre-flight tables. 016 is reserved for B3 (PR #13, held); B4 moves to 018.
+- **Cost:** the same OpenAI key and $50 monthly cap, with spend logged per audit.
+- **Live (placeholder):** "Live" appears in the nav after Pre-flight, visibly disabled, labelled "Coming soon", with the tooltip "Live results next to each signed-off line, from the first weeks in market". There's no route or API behind it yet (B3b).
+- **No reference docs or readout in the tool** (decision 10). The Readout tab and the reference-doc endpoints are removed. The header shows the text wordmark "Trupanion" when there's no logo asset.
+
 ### 5. Moving today's material across
 
 - Upload `studio-rules.json` v2.1 as the first active rules version, through the admin endpoint and never directly into the database. **It's client material going into Ralph's production database, so Brook confirms first** (open question 3).
@@ -144,8 +172,9 @@ Testing:
 | 4 | Frontend: production route and nav, signed-in client, attribution and history, per-user stars, rules view, iframe check (**done 28 Sep**; `docs/build-log/B1-studio-p4.md`) | 1 day |
 | 4a | **Ready for production** (added 28 Sep): sign-off with versions and hashes, red-flag gate with overrides, expectations record, compliance status, handoff pack and compliance sheet; backend, tests and page (**done 28 Sep**) | **+1 day** |
 | 5 | Import script, handoff, and staging-style check on the local database with real keys (**done 28 Sep**; `docs/build-log/B1-studio-p5.md`, with the deploy checklist) | 0.5 day |
-| 6 | Deploy with Brook: env vars, migration, rules upload, production smoke test | 0.5 day |
-| | **Total** | **about 6 days** (was 5; +1 day for Ready for production. v2 plan estimate: 5–6) |
+| 6 | Deploy with Brook: env vars, migration, rules upload, production smoke test (**deployed 28 Sep**) | 0.5 day |
+| 7 | **Pre-flight and the Live placeholder** (added 28 Sep, design in 4b), in five parts:<br>• migration 017, R2 storage, audit jobs, flags and agreement, Ready to traffic, exports (1.5 days)<br>• the page: upload, estimate, progress, report, status (1.5 days)<br>• wiring to B2's library (0.5 day)<br>• removing the Readout, the Live placeholder and the wordmark (0.25 day)<br>• acceptance, screenshots, deploy checklist (0.5 day) | **+4 days** |
+| | **Total** | **about 10 days** (6 to the first deploy, plus 4 for Pre-flight. The demo target, Wed 30 Sep or Thu 1 Oct, is tight for 4 days of work; if needed, the demo shows statics and carousels first and video after the ffmpeg build change) |
 
 Phases 1–2 can start straight away. Phase 6 waits for Brook.
 
@@ -170,6 +199,12 @@ All seven open questions are answered (relayed by the coordination session; Broo
    - The expectations record is stored for B4.
    - The compliance status (Vivan) doesn't block sign-off.
    - **Effort: +1 day** (the total is about 6 days).
+
+10. **No reference docs or readout in the tool** (28 Sep).
+    - The Readout tab and the reference-doc endpoints are removed, in both hosted and local modes, and no deck upload is built.
+    - `studio_assets` stays (it's in 015) but isn't used for decks or the readout.
+    - With no logo asset, the header shows the text wordmark "Trupanion". Brook can ask for a logo later.
+11. **Pre-flight is step 6** (design in 4b). Files go to R2, which is on in production. Migration numbers: 016 is B3's, 017 is Pre-flight, 018 is B4.
 
 ## Open questions for Brook (answered 28 Sep; see Decisions above)
 
