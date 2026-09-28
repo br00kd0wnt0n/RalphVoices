@@ -112,7 +112,6 @@ Line to land: *the twins sharpen before spend; the market decides.* The Studio w
 ## Known gaps
 
 - **Typing in Sheets:** a note typed straight into a cell starting with `+`, `=` or `-` is read by Sheets as a formula. Start notes with a word. The Studio's own export guards against this.
-- **Test sheet in Drive:** "VOICES Studio – Sheets round-trip test – DINK_NEVER (internal)" is in Brook's Drive root. Delete it when you're done with it.
 - **Compare lines are unchecked** (it's a writer taste test). Don't lift compare lines into production without running them through `check`.
 - **Model-only flags vary run to run.** Deterministic flags don't. On the same batch, a re-check changed a few amber model flags. Treat model flags as prompts to look, not verdicts.
 - **gpt-5.5 cost** is estimated at a conservative placeholder price: the price table has no entry for it.
