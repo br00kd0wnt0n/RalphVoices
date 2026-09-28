@@ -127,6 +127,15 @@ Testing:
 
 Phases 1–2 can start straight away. Phase 6 waits for Brook.
 
+## Decisions (Brook, 28 Sep 2026)
+
+1. **Rules in production:** yes. The Trupanion rules file can be stored in Ralph's production database (uploaded through `rules-push`, versioned, one active).
+2. **Access:** Brook and the creative director for the first release. The `STUDIO_EMAILS` value needs the creative director's email (pending).
+3. **Carry over:** yes. On the first deploy, today's runs, decisions, territory edits, taste examples, compares and spend are imported with `db-import --with-spend`.
+4. **Monthly spend cap:** $50 (`STUDIO_MONTHLY_CAP_USD=50`).
+
+Still open from the original list: comments and sharing (question 5; notes on lines for now), shared-decision behaviour (question 2; plan: latest decision stands, attributed, with history, as built in phase 1), and a separate Anthropic key for production (question 7; to create at deploy).
+
 ## Open questions for Brook
 
 1. **Access:** who goes on `STUDIO_EMAILS` for the first release? Brook and the creative director; anyone else (Gareth, Vivan)?
