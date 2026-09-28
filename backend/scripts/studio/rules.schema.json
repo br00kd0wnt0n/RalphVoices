@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Copy Studio rules file",
+  "description": "Rules the B1-lite Copy Studio checks every line against. The real file is client material and lives outside the repo (Claude outputs/voices-r1/studio/studio-rules.json); rules.example.json here has made-up content. Every rule item carries a 'source' so every flag can cite one. Patterns are case-insensitive JavaScript regular expressions.",
+  "type": "object",
+  "required": ["version", "sources", "fields", "structures", "facts", "figure_rule", "compliance", "brand", "clarity", "features", "personas", "territories", "needs_review"],
+  "definitions": {
+    "severity": { "enum": ["compliance", "warn", "note"] },
+    "pattern": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "object", "required": ["re"], "properties": { "re": { "type": "string" }, "severity": { "$ref": "#/definitions/severity" }, "why": { "type": "string" } } }
+      ]
+    },
+    "rule": {
+      "type": "object",
+      "required": ["id", "rule", "check", "source"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+        "rule": { "type": "string", "description": "The rule in words; shown on the flag and given to the model checks." },
+        "severity": { "$ref": "#/definitions/severity" },
+        "check": { "enum": ["banned", "require", "price_lead", "case", "structure", "verbatim", "model"], "description": "banned: any pattern flags. require: a trigger pattern without a requires pattern flags. price_lead: banned, but compliance only in lead_fields or the first clause. case: all-caps copy. structure: lines of the listed structures. verbatim: min_words in a row copied from a persona verbatim. model: judged only by the per-line JSON check." },
+        "patterns": { "type": "array", "items": { "$ref": "#/definitions/pattern" } },
+        "trigger_patterns": { "type": "array", "items": { "type": "string" } },
+        "requires_patterns": { "type": "array", "items": { "type": "string" } },
+        "lead_fields": { "type": "array", "items": { "type": "string" } },
+        "structures": { "type": "array", "items": { "type": "string" } },
+        "min_words": { "type": "integer", "minimum": 3 },
+        "wordings": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2, "description": "Two yes/no wordings for the logprob check (compliance items only)." },
+        "status": { "type": "string", "description": "'pending' marks a rule awaiting client confirmation." },
+        "needs_confirmation": { "type": "boolean" },
+        "source": { "type": "string" }
+      }
+    }
+  },
+  "properties": {
+    "version": { "type": "string" },
+    "updated": { "type": "string" },
+    "sources": { "type": "object", "additionalProperties": { "type": "object", "required": ["title"], "properties": { "title": { "type": "string" }, "path": { "type": "string" }, "url": { "type": "string" } } } },
+    "fields": { "type": "object", "additionalProperties": { "type": "object", "required": ["platform", "label", "visible", "max", "source"], "properties": { "platform": { "enum": ["META", "TIKTOK"] }, "label": { "type": "string" }, "visible": { "type": "integer" }, "max": { "type": "integer" }, "source": { "type": "string" } } } },
+    "tone_controls": { "type": "object" },
+    "structures": { "type": "object", "required": ["question", "stat", "testimony", "scenario", "joke", "plain_promise"], "additionalProperties": { "type": "string" } },
+    "facts": { "type": "array", "items": { "type": "object", "required": ["id", "text", "numbers", "source"], "properties": {
+      "id": { "type": "string" }, "text": { "type": "string" }, "numbers": { "type": "array", "items": { "type": "string" } },
+      "personas": { "type": "array", "items": { "type": "string" } }, "own": { "type": "boolean" }, "category": { "type": "boolean" }, "illustrative": { "type": "boolean" },
+      "check_hint": { "type": "string" }, "misattribution_patterns": { "type": "array", "items": { "type": "string" } }, "source": { "type": "string" } } } },
+    "figure_rule": { "type": "object", "required": ["id", "rule", "source"] },
+    "compliance": { "type": "array", "items": { "$ref": "#/definitions/rule" } },
+    "brand": { "type": "array", "items": { "$ref": "#/definitions/rule" } },
+    "clarity": { "type": "array", "items": { "$ref": "#/definitions/rule" } },
+    "features": { "type": "object", "required": ["items", "source"], "properties": { "items": { "type": "object", "additionalProperties": { "type": "string" } }, "source": { "type": "string" } } },
+    "personas": { "type": "object", "additionalProperties": { "type": "object", "required": ["name", "default_fields", "triggers", "turn_offs", "language", "verbatims"], "properties": {
+      "name": { "type": "string" }, "platforms": { "type": "array", "items": { "type": "string" } }, "default_fields": { "type": "array", "items": { "type": "string" } },
+      "triggers": { "type": "array", "items": { "type": "object", "required": ["id", "label", "detail", "source"] } },
+      "turn_offs": { "type": "array", "items": { "$ref": "#/definitions/rule" } },
+      "language": { "type": "array", "items": { "type": "object", "required": ["text", "source"] } },
+      "verbatims": { "type": "array", "items": { "type": "object", "required": ["id", "text", "use", "source"], "properties": { "use": { "const": "inspiration_only" } } } } } } },
+    "territories": { "type": "object", "additionalProperties": { "type": "object", "required": ["persona", "name", "angle", "format", "premise", "source"], "properties": { "format": { "enum": ["STATIC", "UGC", "CAROUSEL", "VIDEO"] } } } },
+    "needs_review": { "type": "array", "items": { "type": "object", "required": ["id", "question", "current_handling", "source"] } },
+    "decisions": { "type": "array", "items": { "type": "object", "required": ["id", "decision", "by", "date"] } }
+  }
+}

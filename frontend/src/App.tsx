@@ -11,6 +11,11 @@ import { HowItWorks } from '@/pages/HowItWorks';
 import { Admin } from '@/pages/Admin';
 import { Login } from '@/pages/Login';
 import { useAuth } from '@/hooks/useAuth';
+import { Studio } from '@/pages/Studio';
+
+// B1-lite Copy Studio: a local, dev-only page that talks to `scripts/studio.ts serve`
+// on 127.0.0.1. Not routed in production builds unless VITE_STUDIO_API is set.
+const STUDIO_ENABLED = import.meta.env.DEV || !!import.meta.env.VITE_STUDIO_API;
 
 // Route guard — redirects unauthenticated users to /login while preserving
 // the original destination so we can return there post-login.
@@ -27,6 +32,7 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
+        {STUDIO_ENABLED && <Route path="/studio" element={<Studio />} />}
         <Route
           path="/"
           element={
