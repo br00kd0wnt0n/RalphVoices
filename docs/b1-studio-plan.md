@@ -1,6 +1,6 @@
 # B1 Studio: hosted Copy Studio on tools.ralph.world (plan)
 
-Status: **plan for Brook's review, 28 Sep 2026.** Branch `voices/b1-studio`. Nothing is built yet.
+Status (28 Sep 2026): **phases 1–2 built** on branch `voices/b1-studio` (storage layer, migration 015, PgStore, import tool; see `docs/build-log/B1-studio-p1-2.md`). Phases 0 ("you write first", shipped in PR #8) and 3–6 remain; 3–6 wait for Brook's answers to the open questions below.
 
 It builds on B1-lite (`docs/build-log/B1-lite.md`, merged in PR #6 and #7) and on section B1 of the v2 plan (`docs/voices-v2-plan.md`, still on branch `voices/r1-pass2-smoke-halt`, not yet on `main`).
 

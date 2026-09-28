@@ -877,9 +877,9 @@ export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: 
     }
     batch.stats.near_duplicates_removed = batch.dropped.length;
   }
-  await getStore().saveEmbeddings(id, embStore);
   batch.stats.timings_ms.generate = (batch.stats.timings_ms.generate || 0) + (Date.now() - started);
   await saveBatch(batch);
+  await getStore().saveEmbeddings(id, embStore); // after the lines exist (the database links embeddings to lines)
   const fresh = batch.lines.slice(firstNew);
   for (const l of fresh) emit({ type: 'line', line: l });
   emit({ type: 'status', message: `${fresh.length} lines ready${batch.dropped.length ? ` (${batch.dropped.length} near-duplicates removed)` : ''}. Checking…` });
@@ -928,8 +928,8 @@ export async function moreLikeThis(batchId: string, lineId: string, guidance: st
     const l = { ...newLine(batch.brief, r, batchId, batch.lines.length + 1, w.cell, w.text, batch.brief.model), parent: lineId, guidance };
     batch.lines.push(l); added.push(l); embStore[l.id] = embs[i];
   });
-  await getStore().saveEmbeddings(batchId, embStore);
   await saveBatch(batch);
+  await getStore().saveEmbeddings(batchId, embStore); // after the lines exist
   for (const l of added) emit({ type: 'line', line: l });
   await checkBatch(batch, api, emit, added.map(l => l.id));
   batch.stats.timings_ms.more = (batch.stats.timings_ms.more || 0) + (Date.now() - started);

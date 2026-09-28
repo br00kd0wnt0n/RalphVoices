@@ -27,11 +27,16 @@
 //   --tpm gpt-4o=15000,...   per-model tokens-per-minute cap. Default: 90% of the limit the account reports (gpt-4o 30k at tier 1 → 27k); set it lower when sharing the account
 //   --cap 15                 session spend cap in USD (studio/spend.json is cumulative)
 //   --studio DIR             output folder (default: the client folder above)
+//   --store pg --database-url URL   use Postgres (migration 015) instead of files; local hosts only unless --allow-remote
+//   rules-push [--file F] [--activate]   upload a rules file to the database as a version
+//   db-import [--from DIR] [--with-spend]   copy a studio folder into the database (re-runnable)
 //   --yes                    needed for any run estimated over $2
 
 import fs from 'node:fs';
 import path from 'node:path';
 import * as S from '../src/services/studio/engine.js';
+import { FileStore } from '../src/services/studio/store.js';
+import { PgStore } from '../src/services/studio/pgStore.js';
 
 const argv = process.argv.slice(2);
 const command = argv[0];
@@ -43,6 +48,20 @@ const list = (s: string) => s.split(',').map(x => x.trim()).filter(Boolean);
 if (opt('studio')) S.setStudioDir(path.resolve(opt('studio')));
 if (opt('rules')) S.setRulesPath(path.resolve(opt('rules')));
 const MOCK = flag('mock');
+
+// Storage: files (default) or Postgres. The database URL must be given
+// explicitly (--database-url or STUDIO_DATABASE_URL); DATABASE_URL is never
+// read, because backend/.env points it at production. Non-local hosts are
+// refused unless --allow-remote (the deploy step, with Brook's go-ahead).
+let pgStore: PgStore | null = null;
+function databaseUrl(): string {
+  const url = opt('database-url') || process.env.STUDIO_DATABASE_URL || '';
+  if (!url) throw new Error('--store pg needs --database-url (or STUDIO_DATABASE_URL); DATABASE_URL is deliberately not used');
+  const host = new URL(url).hostname;
+  if (!['127.0.0.1', 'localhost', '::1'].includes(host) && !flag('allow-remote')) throw new Error(`Refusing non-local database host ${host}; pass --allow-remote only for the approved deploy step`);
+  return url;
+}
+if (opt('store') === 'pg') { pgStore = PgStore.fromUrl(databaseUrl()); S.setStore(pgStore); }
 const CAP = Number(opt('cap', '15'));
 const ASK_OVER = 2;
 function tpm(): Record<string, number> {
@@ -110,7 +129,7 @@ const PLANTED: Array<{ text: string; field: string; expect: string; severity?: S
 ];
 
 async function main() {
-  if (command && !['limits', 'help'].includes(command)) await S.refreshRules();
+  if (command && !['limits', 'help', 'rules-push', 'db-import'].includes(command)) await S.refreshRules();
   switch (command) {
     case 'brief': {
       const b = S.makeBrief({
@@ -202,7 +221,7 @@ async function main() {
     case 'reveal': { console.log(JSON.stringify(await S.revealCompare(opt('compare')), null, 2)); return; }
     case 'status': {
       const s = await S.readSpend();
-      console.log(`Studio folder: ${S.studioDir()}\nSpend: $${s.total_usd.toFixed(3)} of $${CAP} over ${s.runs.length} runs.`);
+      console.log(`${pgStore ? 'Store: Postgres' : `Studio folder: ${S.studioDir()}`}\nSpend: $${s.total_usd.toFixed(3)} of $${CAP} over ${s.runs.length} runs.`);
       for (const b of await S.listBatches()) console.log(`  ${b.id}  ${b.lines} lines  $${b.usd.toFixed(3)}`);
       return;
     }
@@ -221,6 +240,48 @@ async function main() {
           console.log(`  ${model}: ${response.headers.get('x-ratelimit-limit-tokens')} TPM, ${response.headers.get('x-ratelimit-limit-requests')} RPM`);
         } catch (e: any) { console.log(`  ${model}: ${e?.status} ${e?.code || ''} ${String(e?.message).slice(0, 100)}`); }
       }
+      return;
+    }
+    case 'rules-push': {
+      // Upload a rules file to the database as a version; --activate makes it live.
+      if (!pgStore) throw new Error('rules-push needs --store pg');
+      const file = opt('file', path.join(S.studioDir(), 'studio-rules.json'));
+      const body = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const version = opt('version', body.version || new Date().toISOString().slice(0, 10));
+      await pgStore.putRules(version, body, { activate: flag('activate'), by: opt('user', 'cli'), notes: opt('notes') || undefined });
+      console.log(`Rules ${version} uploaded${flag('activate') ? ' and activated' : ' as a draft'}.`);
+      console.table(await pgStore.listRules());
+      return;
+    }
+    case 'db-import': {
+      // Copy everything in a studio folder into the database. Safe to re-run: every write is an upsert.
+      if (!pgStore) throw new Error('db-import needs --store pg');
+      const src = new FileStore(opt('from', S.studioDir()), { rulesPath: opt('rules') || undefined, inputsDir: S.INPUTS });
+      const rules = await src.getRules();
+      await pgStore.putRules(rules.version || 'imported', rules, { activate: true, by: opt('user', 'import'), notes: `Imported from ${src.dir}` });
+      for (const key of ['personas', 'voices'] as const) { const v = await src.getInput(key); if (v) await pgStore.putInput(key, v); }
+      const edits = await src.getTerritoryEdits();
+      for (const [code, t] of Object.entries(edits)) await pgStore.saveTerritoryEdit(code, t);
+      const briefsDir = path.join(src.dir, 'briefs');
+      let briefs = 0;
+      if (fs.existsSync(briefsDir)) for (const f of fs.readdirSync(briefsDir).filter(x => x.endsWith('.json'))) { await pgStore.saveBrief(JSON.parse(fs.readFileSync(path.join(briefsDir, f), 'utf8'))); briefs++; }
+      const ids = await src.listBatchIds();
+      let lines = 0;
+      for (const id of ids) {
+        const b = await src.getBatch(id);
+        await pgStore.saveBatch(b);
+        await pgStore.saveEmbeddings(id, await src.getEmbeddings(id));
+        lines += b.lines.length;
+      }
+      const editsFile = path.join(src.dir, 'edits.jsonl');
+      let history = 0;
+      if (fs.existsSync(editsFile)) for (const l of fs.readFileSync(editsFile, 'utf8').split('\n').filter(Boolean)) { await pgStore.recordEdit(JSON.parse(l)); history++; }
+      await pgStore.saveTaste(await src.getTaste());
+      const compares = await src.listCompares();
+      for (const name of compares) { await pgStore.saveCompare(await src.getCompare(name)); await pgStore.saveCompareKey(name, await src.getCompareKey(name)); }
+      const spend = await src.listSpend();
+      if (flag('with-spend')) for (const e of spend) await pgStore.addSpend({ ...e, label: e.label || (e as any).tag || 'imported', at: e.at || new Date().toISOString() });
+      console.log(`Imported from ${src.dir}: rules ${rules.version} (active), ${Object.keys(edits).length} territory edits, ${briefs} briefs, ${ids.length} runs (${lines} lines), ${history} decision-history records, ${(await src.getTaste()).length} taste examples, ${compares.length} compares${flag('with-spend') ? `, ${spend.length} spend records` : ' (spend not imported; add --with-spend)'}.`);
       return;
     }
     case 'serve': { await serve(); return; }
@@ -383,4 +444,4 @@ async function serve() {
   });
 }
 
-main().catch(err => { console.error(err?.message || err); process.exit(1); });
+main().then(async () => { if (command !== 'serve') await pgStore?.close(); }).catch(async err => { console.error(err?.message || err); await pgStore?.close(); process.exit(1); });
