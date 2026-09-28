@@ -17,7 +17,7 @@
 //   npx tsx scripts/studio.ts export   --batch ID                      (CSV for Sheets + Markdown view)
 //   npx tsx scripts/studio.ts ingest   --csv PATH                      (curated sheet back in: taste examples + shortlist)
 //   npx tsx scripts/studio.ts shortlist
-//   npx tsx scripts/studio.ts compare  --brief NAME --models gpt-4o,gpt-4.1[,gpt-5-mini] [--n 10] [--yes]
+//   npx tsx scripts/studio.ts compare  --brief NAME --models gpt-4o,gpt-4.1,gpt-5.5,claude-opus-5 [--n 10] [--yes]   (2-4 writers; claude-* needs ~/.config/voices/anthropic.key)
 //   npx tsx scripts/studio.ts reveal   --compare NAME
 //   npx tsx scripts/studio.ts status
 //   npx tsx scripts/studio.ts limits   [--models gpt-4o,gpt-4.1]       (models on the account and their TPM limits; 1-token calls)

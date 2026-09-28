@@ -15,6 +15,7 @@ import OpenAI from 'openai';
 import { withRetry } from '../../src/utils/retry.js';
 import { probabilityYes } from '../../src/utils/probes.js';
 import { mockClient } from './mock.js';
+import { claudeWrite, isClaude } from './claude.js';
 
 // ---------- paths ----------
 
@@ -202,6 +203,9 @@ const PRICES: Record<string, { input: number; output: number }> = {
   'gpt-5-mini': { input: 0.25, output: 2 },
   'gpt-5-nano': { input: 0.05, output: 0.4 },
   'gpt-5.1': { input: 1.25, output: 10 },
+  'claude-opus-5': { input: 5, output: 25 },
+  'claude-opus-5-5': { input: 4, output: 20 },
+  'claude-sonnet-5': { input: 2, output: 10 },
   'text-embedding-3-small': { input: 0.02, output: 0 },
   '*': { input: 5, output: 15 },
 };
@@ -312,6 +316,7 @@ export class Api {
     temperature?: number; json?: boolean; logprobs?: boolean;
   }): Promise<{ text: string; top: Array<{ token: string; logprob: number }> }> {
     this.guard();
+    if (isClaude(o.model) && !this.mock) return this.claude(o);
     const reasoning = isReasoning(o.model);
     const params: any = {
       model: o.model,
@@ -339,6 +344,25 @@ export class Api {
       this.add(o.stage, costOf(o.model, data.usage), (data.usage?.total_tokens || 0));
       const choice = data.choices?.[0];
       return { text: choice?.message?.content || '', top: choice?.logprobs?.content?.[0]?.top_logprobs || [] };
+    } catch (err: any) {
+      if (err?.fatal) this.stopped = true;
+      throw err;
+    } finally {
+      this.pacer.release(o.model);
+    }
+  }
+
+  /** Claude writer calls (JSON only; no logprobs, so never used for the checks). */
+  private async claude(o: { stage: string; model: string; system: string; user: string; max_tokens: number; logprobs?: boolean }) {
+    if (o.logprobs) throw new Error(`${o.model} can't run the yes/no checks (no logprobs); use an OpenAI model for checks`);
+    await this.pacer.take(o.model, estTokens(o.system) + estTokens(o.user) + o.max_tokens);
+    try {
+      const r = await withRetry(() => claudeWrite(o).catch((err: any) => {
+        if (err?.status === 401 || err?.status === 403) err.fatal = true;
+        throw err;
+      }), `${o.stage} ${o.model}`, 6);
+      this.add(o.stage, costOf(o.model, r.usage), r.usage.total_tokens);
+      return { text: r.text, top: [] };
     } catch (err: any) {
       if (err?.fatal) this.stopped = true;
       throw err;
@@ -1233,7 +1257,7 @@ export function shortlist(): ShortRow[] {
 export function writeShortlist(): { count: number; path: string; mdPath: string; csv: string; md: string } {
   const rows = shortlist();
   const cols: Array<keyof ShortRow> = ['stub', 'id', 'persona', 'territory', 'field', 'platform', 'format', 'text', 'angle', 'structure', 'tone', 'features', 'flags', 'note'];
-  const csv = toCsv([cols as string[], ...rows.map(x => cols.map(c => x[c]))]);
+  const csv = toCsv([cols as string[], ...rows.map(x => cols.map(c => String(x[c])))]);
   const md = ['# Shortlist', '', 'Naming stubs follow PERSONA_TERRITORY_FORMAT_v#_PLATFORM (add _YYMMDD at trafficking).', ''];
   let last = '';
   for (const x of rows) {
@@ -1255,12 +1279,12 @@ export interface CompareLine { id: string; label: string; field: string; text: s
 export interface CompareSet { name: string; brief: Brief; n_per_model: number; lines: CompareLine[]; created: string; revealed?: boolean; usd?: number; timings_ms?: number }
 
 export async function compare(b: Brief, models: string[], nPer: number, api: Api, emit: Emit = () => {}): Promise<CompareSet> {
-  if (models.length < 2 || models.length > 3) throw new Error('Compare takes 2 or 3 models');
+  if (models.length < 2 || models.length > 4) throw new Error('Compare takes 2 to 4 models');
   const r = loadRules();
   const started = Date.now();
   api.resetRun();
   const name = `${b.territory}-${stamp()}`;
-  const labels = shuffle(['A', 'B', 'C'].slice(0, models.length), mulberry32(hashStr(name)));
+  const labels = shuffle(['A', 'B', 'C', 'D'].slice(0, models.length), mulberry32(hashStr(name)));
   const key: Record<string, string> = {};
   models.forEach((m, i) => { key[labels[i]] = m; });
   const cells = planCells({ ...b, name }, nPer);

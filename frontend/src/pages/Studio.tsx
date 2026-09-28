@@ -242,7 +242,7 @@ function BriefPanel({ meta, brief, setBrief, onGenerate, running }: { meta: Meta
           <div>
             <Label>Writing model</Label>
             <input list="studio-models" className="w-full rounded-lg border-2 border-neutral-300 px-3 py-2.5 text-lg" value={brief.model} onChange={e => set({ model: e.target.value })} />
-            <datalist id="studio-models">{['gpt-4o', 'gpt-4.1', 'gpt-5.5', 'gpt-5', 'gpt-5-mini'].map(m => <option key={m} value={m} />)}</datalist>
+            <datalist id="studio-models">{['gpt-4o', 'gpt-4.1', 'gpt-5.5', 'claude-opus-5', 'gpt-5-mini'].map(m => <option key={m} value={m} />)}</datalist>
           </div>
         </div>
         <div className="flex items-center gap-4 border-t border-neutral-200 pt-5">
@@ -461,7 +461,7 @@ function Shortlist({ batch }: { batch: Batch | null }) {
 function Compare({ meta, brief }: { meta: Meta; brief: Brief }) {
   const [names, setNames] = useState<string[]>([]);
   const [set, setSet] = useState<CompareSet | null>(null);
-  const [models, setModels] = useState('gpt-4o, gpt-4.1, gpt-5.5');
+  const [models, setModels] = useState('gpt-4o, gpt-4.1, gpt-5.5, claude-opus-5');
   const [n, setN] = useState(8);
   const [status, setStatus] = useState('');
   const [key, setKey] = useState<{ labels: Record<string, string>; tally: Record<string, number> } | null>(null);
@@ -491,7 +491,7 @@ function Compare({ meta, brief }: { meta: Meta; brief: Brief }) {
           <div className="text-2xl font-bold">Blind compare</div>
           <div className="text-base text-neutral-600">The current brief ({meta.personas[brief.persona]?.name} · {meta.territories[brief.territory]?.name}) goes to each writer. Lines are shuffled and unlabelled; star the ones you'd use, then reveal.</div>
         </div>
-        <div><Label>Writers</Label><input className="w-72 rounded-lg border-2 border-neutral-300 px-3 py-2 text-lg" value={models} onChange={e => setModels(e.target.value)} /></div>
+        <div><Label>Writers (2-4)</Label><input className="w-96 rounded-lg border-2 border-neutral-300 px-3 py-2 text-lg" value={models} onChange={e => setModels(e.target.value)} /></div>
         <div><Label>Lines each</Label><input type="number" className="w-24 rounded-lg border-2 border-neutral-300 px-3 py-2 text-lg" value={n} onChange={e => setN(Number(e.target.value))} /></div>
         <PinkButton onClick={run} disabled={!!status}>{status || 'Run blind compare'}</PinkButton>
       </div>

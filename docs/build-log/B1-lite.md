@@ -84,7 +84,7 @@ Line to land: *the twins sharpen before spend; the market decides.* The Studio w
 | Curators on CUR_DAYONE | 20 lines, 4 angles (Curators have 4 triggers), 6 structures, 0 of 25 near-duplicates (0%). 36 flags (1 red, 32 amber, 3 notes), all with a source |
 | Planted lines | 8/8, live: "pays for itself", direct pay without "at participating hospitals", "whole bill", pre-existing, checkups covered and "every claim paid in seconds" all red; the correct direct-pay line is clean; "Cheap pet insurance…" is amber only |
 | CSV round trip | Done through Google Sheets on 28 Sep. The DINK batch CSV, with keep/edit/cut decisions and notes (curly quotes, em dashes, doubled quotes, a line break in a note, a leading "+"), was imported into Brook's Drive as a native Sheet and exported back as CSV: 21 rows, 0 cells changed (Sheets exports CRLF, which the parser handles). Ingest then matched 20/20 (2 keep, 1 edit, 1 cut), wrote 4 taste examples and a 3-line shortlist with stubs. This ran on a scratch copy, so Brook's taste store stays empty. Also covered in the test suite |
-| Blind compare | gpt-4o / gpt-4.1 / gpt-5.5, 8 lines each, 7.8 s, $0.10; the key is in a separate file |
+| Blind compare | gpt-4o / gpt-4.1 / gpt-5.5, 8 lines each, 7.8 s, $0.10. On 28 Sep, with Claude added (claude-opus-5): 4 writers × 8 lines, 17 s, $0.26 (`compare/DINK_NEVER-260928-101602`). Both keys are in separate files, unopened |
 
 ## Timings and cost
 
@@ -116,7 +116,7 @@ Line to land: *the twins sharpen before spend; the market decides.* The Studio w
 - **Compare lines are unchecked** (it's a writer taste test). Don't lift compare lines into production without running them through `check`.
 - **Model-only flags vary run to run.** Deterministic flags don't. On the same batch, a re-check changed a few amber model flags. Treat model flags as prompts to look, not verdicts.
 - **gpt-5.5 cost** is estimated at a conservative placeholder price: the price table has no entry for it.
-- **No Anthropic writer.** Brook asked whether it's worth considering; it's recommended as a compare writer only (the checks need logprobs). It needs a key and Brook's OK.
+- **Claude writes; it doesn't check.** `claude-*` models can be the compare writers or the brief's writing model (`backend/scripts/studio/claude.ts`: official `@anthropic-ai/sdk`, structured JSON output, server-side refusal fallback `fallbacks: "default"` on). The checks stay on OpenAI because the yes/no layer needs logprobs. The key is read from `~/.config/voices/anthropic.key` or `ANTHROPIC_API_KEY`. A key pasted into chat on 28 Sep must be revoked if it wasn't already.
 - **Batch housekeeping.** Superseded batches (the pre-fix Curators run and the 28k timing run) sit in the review dropdown; there's no delete in the UI.
 - **Server.** The API server doesn't hot-reload; restart `serve` after pulling changes. Two browser tabs editing the same batch at once would each save their own view.
 - **Figure and caveat patterns are English regexes.** Paraphrases rely on the model and yes/no layers.
@@ -139,4 +139,4 @@ Line to land: *the twins sharpen before spend; the market decides.* The Studio w
 - `frontend/src/pages/Studio.tsx`, `frontend/src/lib/studioApi.ts`, `frontend/src/App.tsx` (one dev-only route)
 - Client folder (not in the repo): `Claude outputs/voices-r1/studio/` (rules, batches, exports, compare, `spend.json`, `screens/1-brief.png` … `4-compare.png`)
 
-No migrations and no new environment variables. The optional `STUDIO_KEY_FILE`, `STUDIO_DIR`, `STUDIO_DUP` and `STUDIO_SIMILAR` are read by the script only.
+No migrations. One new dependency: `@anthropic-ai/sdk` (backend, approved by Brook 28 Sep). No new required environment variables. The optional `STUDIO_KEY_FILE`, `STUDIO_DIR`, `STUDIO_DUP` and `STUDIO_SIMILAR` are read by the script only.
