@@ -1239,7 +1239,8 @@ export function writeShortlist(): { count: number; path: string; mdPath: string;
   for (const x of rows) {
     const g = `${x.persona} · ${x.territory}`;
     if (g !== last) { md.push(`## ${g}`, ''); last = g; }
-    md.push(`- \`${x.stub}\` (${x.field}): ${x.text}${x.note ? ` *(${x.note})*` : ''}`);
+    const oneLine = (t: string) => t.replace(/\s*\n\s*/g, ' ');
+    md.push(`- \`${x.stub}\` (${x.field}): ${oneLine(x.text)}${x.note ? ` *(${oneLine(x.note)})*` : ''}`);
   }
   const p = P('shortlist.csv'), mp = P('shortlist.md');
   ensureDir(STUDIO);

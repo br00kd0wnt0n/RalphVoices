@@ -83,7 +83,7 @@ Line to land: *the twins sharpen before spend; the market decides.* The Studio w
 | DINKs on DINK_NEVER | 20 lines, 5 angles, 6 structures, 1 of 25 near-duplicates removed (4%), 0 similar kept. 28 flags after the v2.1 tuning (1 red, 24 amber, 3 notes), all with a source |
 | Curators on CUR_DAYONE | 20 lines, 4 angles (Curators have 4 triggers), 6 structures, 0 of 25 near-duplicates (0%). 36 flags (1 red, 32 amber, 3 notes), all with a source |
 | Planted lines | 8/8, live: "pays for itself", direct pay without "at participating hospitals", "whole bill", pre-existing, checkups covered and "every claim paid in seconds" all red; the correct direct-pay line is clean; "Cheap pet insurance…" is amber only |
-| CSV round trip | Export → edit → ingest passes with quotes, commas, line breaks, a loosely typed "Keep ", Sheets-style LF line endings and an unknown id (reported, not fatal). It's in the test suite. **Not yet opened in a real Google Sheet** (see gaps) |
+| CSV round trip | Done through Google Sheets on 28 Sep. The DINK batch CSV, with keep/edit/cut decisions and notes (curly quotes, em dashes, doubled quotes, a line break in a note, a leading "+"), was imported into Brook's Drive as a native Sheet and exported back as CSV: 21 rows, 0 cells changed (Sheets exports CRLF, which the parser handles). Ingest then matched 20/20 (2 keep, 1 edit, 1 cut), wrote 4 taste examples and a 3-line shortlist with stubs. This ran on a scratch copy, so Brook's taste store stays empty. Also covered in the test suite |
 | Blind compare | gpt-4o / gpt-4.1 / gpt-5.5, 8 lines each, 7.8 s, $0.10; the key is in a separate file |
 
 ## Timings and cost
@@ -111,7 +111,8 @@ Line to land: *the twins sharpen before spend; the market decides.* The Studio w
 
 ## Known gaps
 
-- **Real Google Sheets round trip not yet done.** It's simulated in tests with Sheets-style CSV. Brook: File → Import the batch CSV, edit, File → Download → CSV, then `ingest` (or Import on the Shortlist screen).
+- **Typing in Sheets:** a note typed straight into a cell starting with `+`, `=` or `-` is read by Sheets as a formula. Start notes with a word. The Studio's own export guards against this.
+- **Test sheet in Drive:** "VOICES Studio – Sheets round-trip test – DINK_NEVER (internal)" is in Brook's Drive root. Delete it when you're done with it.
 - **Compare lines are unchecked** (it's a writer taste test). Don't lift compare lines into production without running them through `check`.
 - **Model-only flags vary run to run.** Deterministic flags don't. On the same batch, a re-check changed a few amber model flags. Treat model flags as prompts to look, not verdicts.
 - **gpt-5.5 cost** is estimated at a conservative placeholder price: the price table has no entry for it.
