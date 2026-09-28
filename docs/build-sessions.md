@@ -28,6 +28,7 @@ Coordination and oversight happen in one standing session. Building happens in t
 | B1-lite | Copy Studio as a script (v2) | voices-v2-plan.md B1 | `voices/b1-lite` | none | Fri 25 Sep | — | done (PRs #6–#9) |
 | B1 Studio | Hosted Copy Studio (v2) | voices-v2-plan.md B1; b1-studio-plan.md | `voices/b1-studio` | 015 | 28 Sep | B1-lite | B3 |
 | B3 | Ingestion and weekly read (v2) | voices-v2-plan.md B3 | `voices/b3-weekly-read` | 016 | 28 Sep | — | B1 Studio |
+| B2 | Pre-flight audit on finished assets (v2) | voices-v2-plan.md B2 | `voices/b2-preflight` | none | 30 Sep (first drafts) | — | B1 Studio, B3 |
 | B3b | Live tab in the hosted Studio (v2) | voices-v2-plan.md B3b | `voices/b3b-live-tab` | none (reads 015 + 016) | after the first live week | B1 Studio deployed, B3 | — |
 | SM | Measurement: feasibility spike (gate), then pairwise or cold probes, blind controls, sweep statistics | R1 note, ranked list #1, #6, #7 | `voices/measurement` | 015 | ~30 Sep, after Monday's prediction of record | S1, twin fixes | — |
 | S2 | Evidence layer + Month-1 predicted-vs-actual | Phase 1, §4 008 (now 014) | `voices/evidence-layer` | 014 | after SM merged | SM | — |
@@ -48,6 +49,61 @@ Migration numbers are reserved as above so parallel sessions never collide. **00
 - Dates after S2 shift by roughly a week; re-plan them when SM merges.
 
 ## Prompt starters
+
+### B2: Pre-flight audit on finished assets (from 30 Sep)
+
+```
+Build session B2 of VOICES v2 (Trupanion). Create branch voices/b2-preflight from an up-to-date origin/main.
+
+Goal: check finished ad assets (statics, carousel cards, video) against each persona's turn-offs, the copy and brand rules, and clarity at a glance, before they go to Add3. It's also the feature tagger B3's weekly read learns from. Flags with sources; never a score. This delivers the Month 1 pre-test on finished assets. Target: the tool working in about 2 days, and a first report on the Month 1 drafts within a day of Brook dropping them in. First drafts are due Wed 30 Sep or Thu 1 Oct.
+
+Read first:
+- CLAUDE.md, and the ground rules in docs/build-sessions.md (follow them exactly: never touch the Railway databases; no push, merge or deploy without Brook's say-so; commits end with Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>).
+- docs/voices-v2-plan.md: sections 2, B2 and 7a. docs/build-log/B1-lite.md, for how Studio's checks and flags work.
+- The spike's M3 code on the local branch voices/measurement-spike (backend/scripts/measurement-spike.ts): the two-wording yes/no logprob reading, TPM pacing, the spend log, and the stop when credits run out.
+- B3's feature import, on the local branch voices/b3-weekly-read: backend/scripts/weekly.ts (`features --file SHORTLIST_OR_AUDIT.csv`, joined by naming stub). Your features export must load there unchanged.
+- Client material, outside the repo; read by absolute path, never commit:
+  - /Users/BD/ralph-voices/Claude outputs/voices-r1/studio/studio-rules.json (v2.2): turn-offs, compliance, brand, clarity and the feature vocabulary. It's the single source of rules; don't fork it.
+  - /Users/BD/ralph-voices/Claude outputs/voices-r1/rubric.json (M3 rubric, draft 2)
+  - /Users/BD/ralph-voices/Claude outputs/voices-r1/sm-spike/full/m3-audit.json: the M3 feature table on the nine concept cards, which you match in acceptance
+  - /Users/BD/Downloads/Trupanion-Brand-Guidelines.pdf: photography do's and don'ts, logo and type
+
+Parallel sessions: B1 Studio is moving backend/scripts/studio/* to backend/src/services/studio/ on voices/b1-studio, and B3 owns services/weekly and migration 016. So:
+- Keep B2 self-contained in backend/src/services/audit/ and backend/scripts/audit.ts.
+- Don't import from studio or weekly code; read the rules file directly.
+- No migration, no UI, no package.json change without asking Brook.
+- The OpenAI account's TPM is shared with the Studio, so pace to it.
+
+Scope:
+1. Input: Brook drops assets into /Users/BD/ralph-voices/Claude outputs/voices-r1/assets/<round>/, each file or folder named by its naming stub (PERSONA_TERRITORY_FORMAT_v#_PLATFORM). Carousels are a folder of numbered cards. Videos are .mp4/.mov. There's an optional sidecar <stub>.txt with the primary text, headline and caption, one field per line with a label.
+2. Video: extract keyframes with ffmpeg (installed): the first frame, the frame at 1.5 s (the hook), then one every 3 s, capped at 8. On-screen text comes from vision reading the frames. A voice-over transcript is optional; if you want OpenAI transcription, estimate the cost and ask first.
+3. On-image text: extract all visible text per image or frame with vision (gpt-4o, image_detail high). tesseract is installed as a cross-check for missed or garbled words. Run the copy checks on the on-image text and on the sidecar copy: every compliance rule (at participating hospitals, pays for itself, paid share, pre-existing, routine care, claim speed, cheap/locked, price lead, coverage caveats, superlatives), brand naming, and character limits for the copy fields.
+4. Visual checks, as yes/no questions read from logprobs, two wordings averaged, each with its rules-file source:
+   - the rubric features (humour, real people, shows older people, shows kids, vet authority, member testimony, dollar figure…)
+   - the persona turn-offs that can be seen (e.g. a pet shown as practice for kids; a sad, scared or sick pet (BR_SAD_PET); a dead-pet scenario near children; pity framing of older owners)
+   - glance readability (the main point lands in about 1.5 s), product clarity (would a viewer know this sells medical insurance for pets?), and on-image text load (word count on the first frame or card)
+   - for video: whether the brand or product is clear by the 1.5 s frame and by the last frame
+5. Output, per asset × intended persona:
+   - a Markdown report: flags (red/amber/grey, with the quoted words or the frame, and the source), features, the skeptic's one-line objection in that persona's voice, and the extracted text
+   - a round summary: assets with red flags first
+   - a features CSV that B3's `weekly.ts features --file` accepts (naming stub plus feature columns), so every live ad carries its features into the weekly read
+   - never a score or a ranking of assets
+6. Also check each asset against the other two personas' turn-offs, as grey notes. Cross-persona travel is useful to the creative director.
+
+Acceptance (show Brook output, not claims):
+- Run on the nine round-one concept cards as text-only assets: the feature table matches the spike's M3 table (report agreement per feature; explain any disagreement over 0.3).
+- Planted test images (make them yourself: plain text on a coloured background, plus one stock-style pet image if you have a safe source; otherwise text only). "pays for itself" and a direct-pay claim without "at participating hospitals" must be flagged red. A clean one must pass with no red flags.
+- On the first 3 real Month 1 drafts: Brook marks each flag as agree or disagree. Target at least 90% agreement. Report the misses.
+- The features CSV loads into B3's `weekly.ts features` on B3's local test database without errors.
+- Report cost and time per asset.
+
+Cost: cap $10 for the session. Print an estimate and ask before any run over $2.
+
+Handoff: docs/build-log/B2-preflight.md. Cover how to run a round (copy-paste commands), what each check does and its source, agreement results, costs, known gaps (e.g. motion and sound aren't judged), and how the hosted Studio could show these reports later. Summary numbers only; no client assets or copy in the repo. Commit on the branch. Don't push until Brook says so. Message the coordination session ("VOICES × Trupanion") with report paths when there's something for Brook to review.
+```
+
+---
+
 
 ### B3: Ingestion and weekly read (from 28 Sep; the critical path)
 
