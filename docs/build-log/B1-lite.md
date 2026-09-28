@@ -1,6 +1,6 @@
 # B1-lite: Copy Studio as a script and a local page
 
-Session B1-lite of VOICES v2 (Trupanion), 25 Sep 2026. Branch `voices/b1-lite` from `origin/main` (cb5998d). Not pushed.
+Session B1-lite of VOICES v2 (Trupanion), 25–28 Sep 2026. Merged to `main` in PR #6 (Studio), #7 (landing page) and #8 (write first, saved runs, territories, readout, dark design); the header and navigation tidy-up is on `voices/studio-tidy`. Runs locally from the main checkout; not deployed (hosted plan: `docs/b1-studio-plan.md` on `voices/b1-studio`).
 
 The first live copy session with the creative lead is **date TBC**. This build is demo-ready for the Monday 28 Sep kickoff; it isn't production-hardened.
 
@@ -35,6 +35,8 @@ Changes Brook asked for after the kickoff:
 - **Blind compare is a separate exercise.** It's out of the tabs and the landing flow; a dashed header button opens it on its own indigo page, which says its lines aren't checked, saved to runs or shortlisted.
 - **Design pass: dark theme and one type scale.** 12 px labels, 14 px meta and chips, 16 px body and controls, 18 px card titles, 22 px for the copy lines themselves, 24 px section titles, 48 px landing headline. The palette is near-black with raised cards; pink stays the accent, and flags are tinted chips (red compliance, amber warning, grey note).
 - **Logos in the header:** Ralph roundel · Voices Studio × Trupanion. The Trupanion mark (white, no tagline) was cut from the brand guidelines PDF and lives in the client folder (`studio/brand/trupanion-logo-white.png`), served by an allow-listed API route (`/brand/client-logo`); it's never in the repo, and the header drops it if the file is missing.
+- **Tidy-up (28 Sep, later):** the header is one level line; the flow tabs are numbered with chevrons; Readout (teal, "reference") and Blind compare (indigo, "separate exercise") sit apart on the right; "Add your name" is a compact button. The landing fits one laptop screen. In-page links that duplicated the header were removed. The planted-line test runs (`adhoc-*`) no longer appear in "Your runs". Runs made before names existed were attributed to Brook.
+- **"Do the Math" territory:** added by this session to the rules file on 25 Sep as a springboard (from the trigger maps' springboards and the creative lead brief's "Gaps across the set"), not a pitch concept. Brook to keep or retire it (Territories tab).
 - Tests: 15 studio tests (own lines and continuing a run, runs by person, territory edits and history, reference-document allow-list).
 
 ## How to run a batch (copy-paste)
@@ -75,21 +77,22 @@ Other commands: `planted` (acceptance lines), `check --territory X --text "..."`
 
 Outputs go to `Claude outputs/voices-r1/studio/`: `briefs/`, `batches/<id>/batch.json`, `exports/<id>.csv|.md`, `taste.json`, `shortlist.csv|.md`, `compare/<name>/sheet.csv` plus `key.json`, `spend.json` and `screens/`.
 
-## Monday demo script (5 minutes, the page)
+## Demo script (5 minutes, the page)
 
-Before the meeting: run `serve` (live) and `dev:frontend`, and open `/studio`. The two real batches and one blind compare are already there. Keep the compare key closed.
+Before: run `serve` (live) and `dev:frontend` from the main checkout, open `/studio`, and add your name (top right). The header is the only navigation: **How it works**, then the flow as numbered tabs (① Territories › ② Write & brief › ③ Review › ④ Shortlist), with **Readout** (reference) and **Blind compare** (separate exercise) set apart on the right.
 
-0. **Landing (30 s).** `/studio` opens on "How it works": the five steps (Brief → Generate → Review → Shortlist → Blind compare), each with what Studio does and what you do, a key to the flag colours, and what Studio is and isn't. Click "Start a brief".
-1. **Brief (1 min).** Pick DINKs with pets → Never the Choice. Point to the angle chips (the five triggers from the evidence pack), the fields with their visible limits, and the three tone sliders. Say: the room sets the tone, the off-limits ideas and 2-3 reference lines. Optionally press Generate: a batch takes about 75 seconds at the account's current limit, and lines appear as they're checked.
-2. **Review (2 min).** Open batch `DINK_NEVER-260925-174516`. Show a card:
-   - the character count against the field
-   - amber and red chips; click one to show the rule, the quoted words and the source (evidence pack, creative lead brief, brand guidelines)
-   - the skeptic's objection
-   Keep one line, cut one, and edit one. The edit re-runs the instant checks: type "it pays for itself" to show it turn red. Add a note and press "More like this". Toggle Group by Structure to show the spread. Say: every line is tagged by angle, structure, tone and content features, so what we learn carries into the next batch.
-3. **Shortlist and export (1 min).** Show the naming stubs (`PERSONA_TERRITORY_FORMAT_v#_PLATFORM`), then "Batch CSV for Sheets": the sheet has keep/cut/edit, edited-text and note columns, and "Import curated CSV" reads it back. Kept and edited lines with notes become examples of the creative director's taste for the next batch.
-4. **Blind compare (1 min).** Open `DINK_NEVER-260925-180016`: 24 shuffled lines from three unnamed writers. Ask the creative director to star the lines they'd use, then press "Reveal the writers". The chosen writer becomes the brief's writing model. That's a setting, not a code change.
+0. **How it works (20 s).** One screen: the five steps with what Studio does and what you do, the flag key, and what Studio is and isn't.
+1. **Territories (40 s).** The pitch territories, each marked "from the pitch", "edited" or "new". Edit one live (premise, lead angle, format) with a reason such as "client feedback 28 Sep"; show the history. Retire one that was dropped.
+2. **Write & brief (1 min).** Pick persona and territory. Type two or three lines in "Your lines" (Enter adds a row) and press **Check my lines**: in about 15 s they're in Review, marked "yours", with the same flags and skeptic as Studio's lines. Include "it pays for itself" in one to show a red flag.
+3. **Review (1.5 min).** Press **Generate more in this run**: about 20 lines around yours, in about 75 s. Click a chip for the rule, the quoted words and the source; keep, cut and edit (an edit re-runs the instant checks); add a note; "More like this". Toggle Group by Structure to show the spread.
+4. **Shortlist (40 s).** Kept lines with naming stubs; export the CSV for Sheets and import it back. Show **Your runs** on the brief tab and **Continue**: runs are saved under your name.
+5. **Side trips (30 s).** **Readout**: the persona intelligence readout, opened at the persona you're writing for. **Blind compare**: a separate page, to choose the writing model; stars, then reveal.
 
-Line to land: *the twins sharpen before spend; the market decides.* The Studio writes and stress-tests options; it doesn't predict winners.
+Line to land: *the twins sharpen before spend; the market decides.* Studio writes and stress-tests options; it doesn't predict winners.
+
+## Screenshots (28 Sep, 1920×1080, live data)
+
+In `Claude outputs/voices-r1/studio/screens/` (client material, not in the repo): `0-landing`, `1-territories`, `2-write`, `3-review` (Brook's run `DINK_NEVER-260928145053`, one flag opened), `4-shortlist` (Brook's five kept lines), `5-readout`, `6-compare` (Brook's 4-writer set, key unopened). The 25 Sep set is in `screens/archive-25sep/`. `3-review` shows Brook's own note on one card and `5-readout` shows internal readout text; check before using either in a client-facing deck.
 
 ## Acceptance (live runs, 25 Sep)
 
