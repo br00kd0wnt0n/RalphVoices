@@ -111,3 +111,55 @@ test('mock batch: generate, check, export, ingest round trip', async () => {
   assert.match(sl[0].stub, /^OWN_CALM_UGC_v\d_META$/);
   assert.equal(S.loadTaste().length, 2);
 });
+
+test('the creative director writes first: own lines are tagged, checked, and Studio writes around them', async () => {
+  const api = new S.Api({ mock: true });
+  const b = S.makeBrief({ territory: 'OWN_CALM', n: 6, name: 'own', own_lines: [
+    { text: 'Calm at the counter, at partner clinics.', field: 'meta_primary' },
+    { text: 'The vet, not the bill, decides.', field: 'meta_headline' },
+  ] });
+  // Check my lines only.
+  const first = await S.generate(b, api, () => {}, { ownOnly: true, user: 'Brook' });
+  assert.equal(first.lines.length, 2);
+  assert.ok(first.lines.every(l => l.model === 'human' && l.status === 'checked'));
+  assert.ok(first.lines.every(l => ['OWN_A1', 'OWN_A2'].includes(l.angle)));
+  assert.equal(first.created_by, 'Brook');
+  // Continue the same run: generate around them. Their lines aren't added twice.
+  const more = await S.generate(b, api, () => {}, { batchId: first.id, user: 'Someone else' });
+  assert.equal(more.id, first.id);
+  assert.equal(more.lines.filter(l => l.model === 'human').length, 2);
+  assert.ok(more.lines.filter(l => l.model !== 'human').length >= 4);
+  assert.ok(more.lines.every(l => l.status === 'checked'));
+  assert.equal(more.created_by, 'Brook', 'the run keeps its owner');
+  // Studio's first-round cells skip the pairs the creative director covered.
+  const covered = new Set(more.lines.filter(l => l.model === 'human').map(l => `${l.angle}|${l.structure}`));
+  const cells = S.planCells(b, 6, 0, '', covered);
+  assert.ok(cells.every(c => !covered.has(`${c.angle}|${c.structure}`)));
+  // Runs are listed by person, and decisions are attributed.
+  assert.equal(S.listBatches('brook').filter(x => x.id === first.id).length, 1);
+  assert.equal(S.listBatches('nobody').length, 0);
+  const l = S.setDecision(first.id, more.lines[0].id, { decision: 'keep' }, 'Brook');
+  assert.equal(l.decided_by, 'Brook');
+});
+
+test('reference documents are only served from the configured list', () => {
+  assert.throws(() => S.referenceDocPath('../../etc/passwd'), /No reference document/);
+  assert.ok(S.referenceDocs().some(d => d.id === 'readout'));
+});
+
+test('territories are editable, with history; the pitch version is untouched', () => {
+  const before = S.loadRules().territories.OWN_CALM;
+  assert.equal(before.origin, 'pitch');
+  const e = S.saveTerritory('OWN_CALM', { premise: 'Calmer, per client feedback.', angle: 'OWN_A2' }, 'client feedback 28 Sep', 'Brook');
+  assert.equal(e.territory.origin, 'edited');
+  assert.equal(e.territory.history!.length, 1);
+  assert.equal(e.territory.history![0].before!.premise, before.premise);
+  assert.equal(S.loadRules().territories.OWN_CALM.premise, 'Calmer, per client feedback.');
+  const added = S.saveTerritory(null, { persona: 'OWN', name: 'Nothing to File', angle: 'OWN_A2', format: 'STATIC', premise: 'The admin that never happens.' }, 'CD idea', 'Brook');
+  assert.equal(added.code, 'OWN_NOTHING_TO_FILE');
+  assert.equal(added.territory.origin, 'new');
+  assert.throws(() => S.saveTerritory(null, { persona: 'OWN', name: 'Bad', angle: 'DINK_A1', format: 'STATIC' }, '', 'Brook'), /isn't one of/);
+  S.saveTerritory('OWN_NOTHING_TO_FILE', { status: 'retired' }, 'dropped after kickoff', 'Brook');
+  assert.throws(() => S.makeBrief({ territory: 'OWN_NOTHING_TO_FILE' }), /retired/);
+  S.saveTerritory('OWN_CALM', { premise: before.premise, angle: before.angle }, 'revert for other tests', 'test');
+});

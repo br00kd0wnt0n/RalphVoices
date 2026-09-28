@@ -35,6 +35,13 @@ function writer(user: string) {
   return JSON.stringify({ lines });
 }
 
+function tagger(sys: string, user: string) {
+  const angles = [...sys.matchAll(/^([A-Z]+_A\d+):/gm)].map(m => m[1]);
+  const structures = ['question', 'stat', 'testimony', 'scenario', 'joke', 'plain_promise'];
+  const n = user.split('\n').filter(Boolean).length;
+  return JSON.stringify({ tags: Array.from({ length: n }, (_, i) => ({ i: i + 1, angle: angles[i % Math.max(1, angles.length)], structure: structures[i % 6] })) });
+}
+
 function checker(user: string) {
   const line = /LINE: (.*)$/m.exec(user)?.[1] || '';
   const hits: any[] = [];
@@ -82,6 +89,7 @@ export function mockClient() {
       const user: string = params.messages[1].content;
       let content = '', logprobs: any = null;
       if (params.logprobs) { const p = probe(user); content = p.top[0].token; logprobs = { content: [{ token: content, logprob: p.top[0].logprob, top_logprobs: p.top }] }; }
+      else if (params.response_format && /You classify lines of ad copy/.test(sys)) content = tagger(sys, user);
       else if (params.response_format && /Write exactly one line per cell/.test(sys)) content = writer(user);
       else if (params.response_format) content = checker(user);
       else content = 'Sounds nice, but what does it actually cost me when the premium goes up next year?';
