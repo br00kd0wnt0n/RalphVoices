@@ -26,7 +26,7 @@ CLI and pure modules; no UI, no API route, no change to how concept tests run.
 | `backend/src/services/weekly/store.ts` | Database read and write, including `saveReads` and `latestReads` (the latest read per naming stub). Takes its own pool (never `db/index.ts`, which loads `backend/.env`). |
 | `backend/config/territory-names.example.json` | A made-up territory-name mapping for tests. The real names are read at runtime from Studio's rules file in Claude outputs. |
 | `backend/scripts/weekly.ts` | CLI: `migrate`, `ingest`, `features`, `note`, `latest`, `read`, `simulate`, `status`. |
-| `backend/tests/weekly.test.ts` | 34 tests: parser variants, ingest, windows, the model on simulated truth, the thin week, the null case, the quote-column fallback, hold bars, ties agreeing with calls, the 3-ad minimum, the note's two layouts and wording, client labels, the number guard, and an opt-in database test (`WEEKLY_TEST_DATABASE_URL`). |
+| `backend/tests/weekly.test.ts` | 35 tests: parser variants, ingest, windows, the model on simulated truth, the thin week, the null case, the quote-column fallback, hold bars, ties agreeing with calls, the 3-ad minimum, the note's two layouts and wording, client labels, the number guard, and an opt-in database test (`WEEKLY_TEST_DATABASE_URL`). |
 
 `backend/package.json` is untouched: run it with `npx tsx scripts/weekly.ts`. `npm test` picks up the new test file.
 
@@ -124,7 +124,7 @@ With config v3 and reads chained from the start of the flight, 15 ads were calle
 
 **Idempotent ingest:** the same Meta file ingested twice: first "ads 39 new, 1,092 metric rows new", then "0 new, 39 updated; 0 new, 1,092 updated". `live_metrics` held 1,204 rows after Meta twice plus TikTok once (1,092 + 112).
 
-**Type checks and tests:** `npx tsc --noEmit` in backend (only the known pdf-parse and rcb-client errors) and frontend (clean). `scripts/weekly.ts` type-checks with the same compiler options. `npm test`: 89 pass, 1 skipped (the opt-in database test). With `WEEKLY_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:54329/voices_b3_test`, the weekly tests are 34 of 34.
+**Type checks and tests:** `npx tsc --noEmit` in backend (only the known pdf-parse and rcb-client errors) and frontend (clean). `scripts/weekly.ts` type-checks with the same compiler options. `npm test`: 89 pass, 1 skipped (the opt-in database test). With `WEEKLY_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:54329/voices_b3_test`, the weekly tests are 35 of 35.
 
 **Sample notes for Brook to review** (simulated data, outside the repo): `/Users/BD/ralph-voices/Claude outputs/voices-r1/weekly/sample/`
 - `weekly-2026-10-12.md`, `weekly-2026-10-19.md`, `weekly-2026-11-02.md`: weeks 1, 2 and 4 of a simulated Month 1, from the database. Each is a one-screen front (under 30 lines) and then the appendix. Week 2 and later show "what moved" in the appendix. Each has a `-ledger.csv`.
