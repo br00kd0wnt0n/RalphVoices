@@ -1,0 +1,16 @@
+{
+  "_note": "Made-up example rubric for the B2 audit tests.",
+  "version": "example-1",
+  "system": "You check social ad descriptions against a checklist.",
+  "items": [
+    { "id": "humour", "group": "hook", "wording": ["Is it a joke?", "Is it trying to be funny?"] },
+    { "id": "real_people", "group": "hook", "wording": ["Are real people on screen?", "Are real people shown?"] },
+    { "id": "dollar_figure", "group": "value", "wording": ["Does the ad show a specific dollar amount?", "Is there a concrete cost figure in the ad?"] },
+    { "id": "pet_as_practice", "group": "do-not", "wording": ["Is the pet practice for kids?", "Is the pet a rehearsal for parenthood?"] },
+    { "id": "pity_older", "group": "do-not", "wording": ["Are older people pitied?", "Is an empty house sad?"] },
+    { "id": "shames_uninsured", "group": "do-not", "wording": ["Does it shame the uninsured?", "Does it make them feel irresponsible?"] },
+    { "id": "overpromise", "group": "do-not", "wording": ["Does it overpromise?", "Too good to be true?"] },
+    { "id": "one_glance", "group": "clarity", "wording": ["Is the ad's main point clear from its headline or first frame alone?", "Would a viewer get the main point from the headline or opening frame?"] },
+    { "id": "clear_product", "group": "clarity", "wording": ["Would a viewer know this is an ad for pet medical insurance?", "Would someone seeing this ad understand that it is selling medical insurance for pets?"] }
+  ]
+}
