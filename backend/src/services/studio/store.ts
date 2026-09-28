@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export interface SpendEntry { label: string; usd: number; by_stage?: Record<string, number>; calls?: Record<string, number>; at: string; user?: string }
+export interface Asset { contentType: string; data: Buffer; filename?: string }
 export interface EditRecord { line_id: string; batch_id: string; before: unknown; after: unknown; by: string; at: string }
 
 export interface StudioStore {
@@ -43,9 +44,14 @@ export interface StudioStore {
   saveCompareKey(name: string, labels: Record<string, string>): Promise<void>;
   listCompares(): Promise<string[]>;
 
-  spendTotal(): Promise<number>;
+  /** Total spend, optionally since an ISO date (the monthly cap). */
+  spendTotal(since?: string): Promise<number>;
   listSpend(): Promise<SpendEntry[]>;
   addSpend(entry: SpendEntry): Promise<void>;
+
+  /** Files the Studio serves: doc:<id> (reference documents), brand:<name> (the client logo). */
+  getAsset(name: string): Promise<Asset | null>;
+  hasAsset(name: string): Promise<boolean>;
 
   /** Optional file outputs (FileStore writes them for Sheets and screen-sharing; PgStore doesn't). */
   writeOutput?(relPath: string, content: string): Promise<string>;
@@ -58,7 +64,7 @@ function writeJson(p: string, v: unknown) { fs.mkdirSync(path.dirname(p), { recu
 
 export class FileStore implements StudioStore {
   readonly kind = 'file' as const;
-  constructor(public dir: string, private opts: { rulesPath?: string; inputsDir?: string } = {}) {}
+  constructor(public dir: string, private opts: { rulesPath?: string; inputsDir?: string; assets?: Record<string, { path: string; contentType: string }> } = {}) {}
   private P(...parts: string[]) { return path.join(this.dir, ...parts); }
 
   async getRules() {
@@ -127,7 +133,10 @@ export class FileStore implements StudioStore {
   }
 
   private spendFile() { const p = this.P('spend.json'); return fs.existsSync(p) ? readJson(p) : { total_usd: 0, runs: [] }; }
-  async spendTotal() { return Number(this.spendFile().total_usd) || 0; }
+  async spendTotal(since?: string) {
+    if (!since) return Number(this.spendFile().total_usd) || 0;
+    return (this.spendFile().runs as SpendEntry[]).filter(r => (r.at || '') >= since).reduce((t, r) => t + (r.usd || 0), 0);
+  }
   async listSpend() { return this.spendFile().runs as SpendEntry[]; }
   async addSpend(e: SpendEntry) {
     const s = this.spendFile();
@@ -135,6 +144,13 @@ export class FileStore implements StudioStore {
     s.total_usd = Math.round(s.runs.reduce((t: number, r: any) => t + (r.usd || 0), 0) * 10000) / 10000;
     writeJson(this.P('spend.json'), s);
   }
+
+  async getAsset(name: string): Promise<Asset | null> {
+    const a = this.opts.assets?.[name];
+    if (!a || !fs.existsSync(a.path)) return null;
+    return { contentType: a.contentType, data: fs.readFileSync(a.path), filename: path.basename(a.path) };
+  }
+  async hasAsset(name: string) { const a = this.opts.assets?.[name]; return !!a && fs.existsSync(a.path); }
 
   async writeOutput(rel: string, content: string) {
     const p = this.P(rel);

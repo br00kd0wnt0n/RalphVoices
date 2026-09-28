@@ -3,7 +3,7 @@
 // imports src/db (which loads .env), so it can't reach a database by accident.
 
 import pg from 'pg';
-import type { EditRecord, SpendEntry, StudioStore } from './store.js';
+import type { Asset, EditRecord, SpendEntry, StudioStore } from './store.js';
 
 type Queryable = Pick<pg.Pool, 'query' | 'connect'>;
 
@@ -201,7 +201,10 @@ export class PgStore implements StudioStore {
 
   // ---------- spend ----------
 
-  async spendTotal() { return Number((await this.db.query(`SELECT COALESCE(SUM(usd), 0) AS t FROM studio_spend`)).rows[0].t); }
+  async spendTotal(since?: string) {
+    const r = since ? await this.db.query(`SELECT COALESCE(SUM(usd), 0) AS t FROM studio_spend WHERE at >= $1`, [since]) : await this.db.query(`SELECT COALESCE(SUM(usd), 0) AS t FROM studio_spend`);
+    return Number(r.rows[0].t);
+  }
   async listSpend(): Promise<SpendEntry[]> {
     const r = await this.db.query(`SELECT label, usd, by_stage, calls, by_user, at FROM studio_spend ORDER BY at, id`);
     return r.rows.map(x => ({ label: x.label, usd: Number(x.usd), by_stage: x.by_stage, calls: x.calls, user: x.by_user ?? undefined, at: new Date(x.at).toISOString() }));
@@ -209,5 +212,18 @@ export class PgStore implements StudioStore {
   async addSpend(e: SpendEntry) {
     await this.db.query(`INSERT INTO studio_spend (label, usd, by_stage, calls, by_user, at) VALUES ($1, $2, $3, $4, $5, $6)`,
       [e.label, e.usd, e.by_stage ?? null, e.calls ?? null, e.user ?? null, e.at]);
+  }
+
+  // ---------- assets (readout, deck, client logo) ----------
+
+  async getAsset(name: string): Promise<Asset | null> {
+    const r = await this.db.query(`SELECT content_type, data, filename FROM studio_assets WHERE name = $1`, [name]);
+    return r.rows[0] ? { contentType: r.rows[0].content_type, data: r.rows[0].data, filename: r.rows[0].filename ?? undefined } : null;
+  }
+  async hasAsset(name: string) { return (await this.db.query(`SELECT 1 FROM studio_assets WHERE name = $1`, [name])).rowCount! > 0; }
+  async putAsset(name: string, asset: Asset) {
+    await this.db.query(`INSERT INTO studio_assets (name, content_type, data, filename, updated_at) VALUES ($1, $2, $3, $4, NOW())
+                         ON CONFLICT (name) DO UPDATE SET content_type = EXCLUDED.content_type, data = EXCLUDED.data, filename = EXCLUDED.filename, updated_at = NOW()`,
+      [name, asset.contentType, asset.data, asset.filename ?? null]);
   }
 }

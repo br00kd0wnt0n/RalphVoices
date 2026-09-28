@@ -110,3 +110,12 @@ CREATE TABLE IF NOT EXISTS studio_spend (
   by_user     TEXT,
   at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Files the hosted Studio serves (the persona readout, its deck, the client logo).
+CREATE TABLE IF NOT EXISTS studio_assets (
+  name          TEXT PRIMARY KEY,                -- e.g. doc:readout, doc:readout-deck, brand:client-logo
+  content_type  TEXT NOT NULL,
+  data          BYTEA NOT NULL,
+  filename      TEXT,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

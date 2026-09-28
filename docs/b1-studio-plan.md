@@ -131,13 +131,15 @@ Phases 1–2 can start straight away. Phase 6 waits for Brook.
 
 All seven open questions are answered (relayed by the coordination session; Brook approved them on 28 Sep):
 
-1. **Access (`STUDIO_EMAILS`):** Brook, the creative director, and Vivan (producer: naming and export) for the first release. Gareth isn't on it yet. The creative director's and Vivan's sign-in emails are still needed.
+1. **Access (`STUDIO_EMAILS`), complete for the first release:** Brook (the address he signs in to tools.ralph.world with; confirm at deploy), nick.larson@ralph.world (the creative director) and vivan@ralph.world (producer: naming and export). Gareth isn't on it yet.
+   **Sign-in:** everyone signs in through Narrativ SSO (Google, ralph.world). There's no Studio-only login and no new auth path, and `PASSWORD_LOGIN_EMAILS` isn't used for this. (A Studio-scoped invite login was proposed on 28 Sep and dropped the same day once it was confirmed the creative director has a Ralph address.)
 2. **Shared decisions:** the latest decision stands, attributed, with the full history kept. This is what phase 1 built (`saveLine`, `studio_edits`).
 3. **Rules in production:** yes, the Trupanion rules go in the production database, which already holds the Trupanion personas and tests. Only Brook can upload and activate rules versions (he's on `ADMIN_EMAILS`).
 4. **Monthly spend cap:** $50 (`STUDIO_MONTHLY_CAP_USD=50`).
 5. **Comments and sharing:** not in the first version; notes on lines are enough.
 6. **Carry-over:** import the 28 Sep kickoff runs (Brook's DINK_NEVER run and any runs by the creative director) with their decisions and taste examples. Everything else starts clean; the 25 Sep test batches aren't imported. `db-import` needs a run filter for this (phase 6).
 7. **Anthropic key:** a fresh key for Railway, separate from the laptop key. Brook creates it and never pastes it into chat. The key pasted into the session on 28 Sep should be revoked, if it hasn't been.
+8. **Release:** hold PR #11. Migration 015 goes to `main` together with the code that uses it (phases 3–4), in the phase 6 deploy with Brook, because the backend runs migrations on boot and Railway auto-deploys `main`.
 
 ## Open questions for Brook (answered 28 Sep; see Decisions above)
 
