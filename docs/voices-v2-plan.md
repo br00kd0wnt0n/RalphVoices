@@ -263,8 +263,9 @@ isn't a build. The rules are written down before any data is looked at.
 | RalphScore | Stays on the per-test page. Not used in anything Trupanion sees |
 | Insights chat | Folded into B1 as "ask the skeptic" per persona |
 
-Migration numbers: 015 is B1 (it was reserved for SM, which is now parked),
-016 is B3 and 017 is B4. 009–014 stay unused.
+Migration numbers: 015 is B1 Studio (it was reserved for SM, which is now parked),
+016 is B3 and 017 is B4. Status on 28 Sep: B1-lite shipped (PRs #6–#9); B1 Studio (hosted) and B3
+are in progress. 009–014 stay unused.
 
 ## 6. Timeline (estimates; to confirm with Brook and Add3)
 

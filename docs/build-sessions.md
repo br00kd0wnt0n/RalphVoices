@@ -2,7 +2,7 @@
 
 Coordination and oversight happen in one standing session. Building happens in the dedicated sessions below, each in its own worktree and branch. The plan they build against is `docs/trupanion-build-plan.md`.
 
-> **VOICES v2 approved by Brook (25 Sep 2026).** `docs/voices-v2-plan.md` replaces SM Phase B and S2–S9 with builds B1–B4. The only active sessions are B1-lite (prompt below) and the SM Phase A spike, which is finishing. The older prompts below are kept for reference; don't start them.
+> **VOICES v2 approved by Brook (25 Sep 2026).** `docs/voices-v2-plan.md` replaces SM Phase B and S2–S9 with builds B1–B4. Status on 28 Sep: B1-lite has shipped (PRs #6–#9). The hosted B1 Studio is in progress on `voices/b1-studio` (plan: `docs/b1-studio-plan.md` on that branch; migration 015). B3 (ingestion and weekly read; migration 016) starts now and is the critical path before the mid-October go-live. B2 starts when first drafts land. The SM spike is stopped. The older prompts below are kept for reference; don't start them.
 
 ## Ground rules (every build session)
 
@@ -25,7 +25,9 @@ Coordination and oversight happen in one standing session. Building happens in t
 | # | Session | Plan section | Branch | Migration | Start | Depends on | Can run in parallel with |
 |---|---|---|---|---|---|---|---|
 | S1 | Finish Phase 0 | Phase 0 | `voices/trupanion-phase0` (existing) | none new (007 done) | now | — | — |
-| B1-lite | Copy Studio as a script (v2) | voices-v2-plan.md B1 | `voices/b1-lite` | none | Fri 25 Sep | — | SM spike (finishing) |
+| B1-lite | Copy Studio as a script (v2) | voices-v2-plan.md B1 | `voices/b1-lite` | none | Fri 25 Sep | — | done (PRs #6–#9) |
+| B1 Studio | Hosted Copy Studio (v2) | voices-v2-plan.md B1; b1-studio-plan.md | `voices/b1-studio` | 015 | 28 Sep | B1-lite | B3 |
+| B3 | Ingestion and weekly read (v2) | voices-v2-plan.md B3 | `voices/b3-weekly-read` | 016 | 28 Sep | — | B1 Studio |
 | SM | Measurement: feasibility spike (gate), then pairwise or cold probes, blind controls, sweep statistics | R1 note, ranked list #1, #6, #7 | `voices/measurement` | 015 | ~30 Sep, after Monday's prediction of record | S1, twin fixes | — |
 | S2 | Evidence layer + Month-1 predicted-vs-actual | Phase 1, §4 008 (now 014) | `voices/evidence-layer` | 014 | after SM merged | SM | — |
 | S3 | Twin seeding, drift check, noise floor | Phase 1 (content and calibration) | `voices/twin-calibration` | none | ~7 Oct | S2 deployed | S4 (backend only) |
@@ -45,6 +47,61 @@ Migration numbers are reserved as above so parallel sessions never collide. **00
 - Dates after S2 shift by roughly a week; re-plan them when SM merges.
 
 ## Prompt starters
+
+### B3: Ingestion and weekly read (from 28 Sep; the critical path)
+
+```
+Build session B3 of VOICES v2 (Trupanion). Create branch voices/b3-weekly-read from an up-to-date origin/main.
+
+Deadline: working end to end by Fri 9 Oct, before Month 1 creative goes live (mid-October target; the date is still being confirmed with Add3). The weekly read is a billed deliverable: weekly performance reads to the client from Month 2. This is the build that can't slip.
+
+Read first:
+- CLAUDE.md, and the ground rules in docs/build-sessions.md (follow them exactly: never touch the Railway databases; local Postgres on :54329 only; no push, merge or deploy without Brook's say-so; commits end with Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>).
+- docs/voices-v2-plan.md: sections 1-2, B3, B4, 7 and 7a.
+- docs/trupanion-readout-spec.md: its statistics ideas (ranges, tie groups, "not enough data") carry over, but read it as background; its prediction lock belongs to B4.
+- Client material, outside the repo; read by absolute path, never commit:
+  - /Users/BD/ralph-voices/Claude outputs/add3-tagging-email.md: the naming convention and ad set structure agreed with Add3
+  - /Users/BD/Downloads/Trupanion Creative Report May 2026 (1).pdf: Add3's report; shows the metrics they track (spend, impressions, clicks, CTR, CPC, quotes, CPQ, enrollments, CPE) and their shape
+  - /Users/BD/ralph-voices/Claude outputs/voices-r1/studio/studio-rules.json: the feature vocabulary (the `features` block) that Studio and the audit tag lines with
+
+Context:
+- Asset volume: Month 1 has 6 statics, 3 hero videos, 2 TikTok builds, 3 carousels and 1 UGC capture. Months 2 and 3 have 3 statics, 3 hero videos, 1 TikTok and 1 carousel each. Per persona that's about 4-5 assets a month, then 2-3.
+- So ad-by-ad reads are thin. Copy lines per visual (2-3 per asset, as separate ads) are the learning lever. So is pooling by feature: "member testimony" learns from every ad that has it.
+- Naming convention: PERSONA_TERRITORY_FORMAT_v#_PLATFORM_YYMMDD, e.g. FAM_SUMMER_ST_v2_META_261013. Persona is DINK, CUR or FAM. Format is ST, VID, CAR, TT or UGC. Platform is META or TT. One ad set per persona per platform.
+- No live data exists yet. Add3's historic export has been requested but hasn't arrived, and its exact columns are unknown. Build against the standard Meta Ads Manager ad-level export and keep the column mapping in config.
+
+Scope (migration 016 only; CLI and pure modules first; no UI in this session):
+1. Ingest. `backend/scripts/weekly.ts ingest --file <csv> --platform meta|tiktok`:
+   - Parse ad names by the convention. Anything that doesn't parse is quarantined and listed, never silently dropped.
+   - The column mapping is config (Meta Ads Manager defaults: ad name, campaign, ad set, day or reporting period, spend, impressions, reach, frequency, 3-second video plays, ThruPlays, link clicks, landing page views, and the quote and enrollment conversion columns, whose names Add3 will confirm).
+   - Prospecting versus retargeting is decided by a configurable rule on campaign or ad set name. Creative reads use prospecting only.
+   - Features for each ad: join from a Studio shortlist or audit export if present, keyed by the naming stub; otherwise none.
+   - Store in live_ads and live_metrics (a row per ad per day or period). Re-ingesting the same file is idempotent.
+2. Model. A pure module with unit tests; no new heavy dependencies (ask before any package):
+   - Rates: hook rate (3-second plays / impressions, video only), link CTR, and quotes per 1,000 impressions, each read as a binomial rate. Cost per quote is derived. Cost per enrollment is reported but never used for a call.
+   - Partial pooling: shrink each ad towards its persona × format mean (empirical Bayes beta-binomial is fine to start). Report each ad's rate with a 90% range.
+   - Feature effects: a pooled estimate per feature (and per persona × feature where the data allows), with ranges. It's fine to say "not enough data" and leave it out.
+   - P(best in cell) by Monte Carlo from the posteriors, seeded.
+   - Calls: scale, cut or keep testing, with thresholds written down in config before any data arrives (e.g. minimum impressions per ad; P(best) ≥ 0.8 to scale; P(worse than the cell median) ≥ 0.9 to cut). Below the minimum, the call is "too early to call".
+   - Cost benchmarks: if Trupanion's allowable acquisition cost (PAC) by state arrives, compare cost per quote against it. Until then, leave it out, and say so.
+3. Weekly note. `weekly.ts note --week <date>` drafts Markdown per persona: what moved, how sure we are, and three recommended actions (scale, cut, keep testing, with the reason), plus a CSV ledger. All numbers are computed deterministically. If an LLM is used for prose, it gets the computed numbers and may not introduce any new number (check that). Wording rules: every number has its range nearby; never "predict", "winner" inside a tie, or scores; "too early to call" is a valid headline. Brook edits the draft before the Wednesday read.
+4. Simulation. `weekly.ts simulate` writes a synthetic Meta export with known true effects per persona, format and feature, at realistic volumes (the asset counts above; impressions in the tens of thousands per ad per week; CTR around 1-2%; quotes a fraction of clicks). The model must recover the planted effects when the data allows, and must say "too early" when it doesn't.
+5. When Add3's historic export lands in /Users/BD/ralph-voices/Claude outputs/ (Brook will say where), run ingest and read on it. Report which columns mapped, what was quarantined, and what the read says. This also feeds the v2 plan's decision gate (back-test).
+
+Acceptance (show Brook output, not claims):
+- A simulation at Month-1 volumes: planted large effects are recovered with ranges that cover the truth; small effects come back as "too early" or tied.
+- A thin week (a few thousand impressions per ad) produces "too early to call", not a false winner.
+- The parser handles convention variants (case, stray spaces, extra suffixes) and quarantines bad names with the reason.
+- Migration 016 runs twice on the local database. Type checks and tests pass.
+- A sample weekly note from simulated data. Brook reviews the wording.
+
+Cost: about $5 of OpenAI at most (only for optional prose). Ask before installing packages.
+
+Handoff: docs/build-log/B3-weekly-read.md. Cover what shipped, the config thresholds and why, how to run a week (copy-paste commands), the column mapping and the open items for Add3 (conversion column names, SuperAds export shape, TikTok export), known gaps, and what B4 needs from here. Summary numbers only; no client data in the repo.
+```
+
+---
+
 
 ### B1-lite: Copy Studio as a script (Fri 25 – Mon 28 Sep)
 
