@@ -15,6 +15,7 @@ import type pg from 'pg';
 import * as S from './engine.js';
 import type { Signoff } from './ready.js';
 import { getPrivateObject, isR2Enabled, putPrivateObject } from '../r2.js';
+import { FatalError } from '../audit/api.js';
 import type { AssetKind, AuditEngine, AuditFlag, AuditResult, SignedCopy } from './preflightEngine.js';
 
 type Queryable = Pick<pg.Pool, 'query'>;
@@ -204,7 +205,11 @@ export class Preflight {
       emit({ type: 'done', batch: a.stub });
       return result;
     } catch (err: any) {
-      await this.db.query(`UPDATE studio_audits SET status = 'failed', error = $2, finished_at = NOW() WHERE id = $1`, [auditId, String(err?.message || err)]);
+      // An OpenAI outage (B2 stops after 3 failed calls: FatalError) or a rate limit is worth retrying: the upload is kept.
+      const msg = String(err?.message || err);
+      const retryable = err instanceof FatalError || /unreachable|rate limit|429|timed? ?out|ECONN|503|502/i.test(msg);
+      await this.db.query(`UPDATE studio_audits SET status = 'failed', error = $2, result = $3, finished_at = NOW() WHERE id = $1`,
+        [auditId, retryable ? `${msg} (The upload is kept: run the audit again.)` : msg, { retryable }]);
       throw err;
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });

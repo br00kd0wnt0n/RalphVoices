@@ -259,6 +259,19 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   await pf.runAudit(await pf.createAudit(vid.upload_id));
   assert.equal((await pf.report(stub)).audit!.result.frames_unavailable, true);
 
+  // An OpenAI outage fails the audit as retryable; running it again on the same upload works.
+  const { FatalError } = await import('../src/services/audit/api.js');
+  const down = new Preflight((store as any).db, { ...mockEngine, name: 'down', run: async () => { throw new FatalError('OpenAI unreachable: 3 calls failed in a row'); } }, { storage: 'db' });
+  const upOut = await pf.upload(stub, [{ buffer: png(caveatLine), filename: 'retry.png', contentType: 'image/png' }]);
+  const failed = await down.createAudit(upOut.upload_id);
+  await assert.rejects(() => down.runAudit(failed), /unreachable/);
+  const rf = await pf.report(stub);
+  assert.equal(rf.audit!.status, 'failed');
+  assert.equal(rf.audit!.result.retryable, true);
+  assert.match(rf.audit!.error!, /run the audit again/);
+  await pf.runAudit(await pf.createAudit(upOut.upload_id));
+  assert.equal((await pf.report(stub)).audit!.status, 'done');
+
   // 7. Over HTTP: a real multipart upload through the shared router.
   const express = (await import('express')).default;
   const { createStudioRouter } = await import('../src/services/studio/router.js');
