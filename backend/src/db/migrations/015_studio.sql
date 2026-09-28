@@ -1,6 +1,7 @@
 -- 015: Copy Studio (VOICES v2 build 1). Everything the Studio saves: rules
 -- versions, territory edits, briefs, runs and their lines, line embeddings,
--- the decision history, taste examples, blind compares and spend.
+-- the decision history, taste examples, blind compares, spend, and the
+-- Ready for production records (sign-offs, line versions, expectations).
 -- Idempotent: every statement is IF NOT EXISTS, because migrations re-run on
 -- every boot. Lines keep their full engine shape in `body` (jsonb) plus the
 -- columns the app filters on, so the engine's Line type needs no mapping.
@@ -121,3 +122,46 @@ CREATE TABLE IF NOT EXISTS studio_assets (
   filename      TEXT,
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Ready for production. Sign-offs, line versions and expectations are
+-- append-only: a signed-off wording is never rewritten; an edit after sign-off
+-- is a new version. Overrides of red flags and the compliance status live on
+-- the line (studio_lines.body), with every change in studio_edits.
+CREATE TABLE IF NOT EXISTS studio_signoffs (
+  id          TEXT PRIMARY KEY,
+  persona     TEXT NOT NULL,
+  territory   TEXT NOT NULL,
+  version     INTEGER NOT NULL,                -- per persona × territory
+  body        JSONB NOT NULL,                  -- the lines (id, version, stub, field, text, sha256) and the gate record
+  ready_by    TEXT NOT NULL,
+  ready_at    TIMESTAMPTZ NOT NULL,
+  sha256      TEXT NOT NULL,                   -- over the set's line hashes
+  UNIQUE (persona, territory, version)
+);
+
+CREATE TABLE IF NOT EXISTS studio_line_versions (
+  line_id     TEXT NOT NULL,
+  batch_id    TEXT NOT NULL,
+  version     INTEGER NOT NULL,
+  field       TEXT NOT NULL,
+  text        TEXT NOT NULL,
+  sha256      TEXT NOT NULL,                   -- of field + text
+  created_by  TEXT,
+  created_at  TIMESTAMPTZ NOT NULL,
+  signoff_id  TEXT,                            -- set when the version was the one signed off
+  PRIMARY KEY (line_id, version)
+);
+
+-- Which line(s) the team expects to lead, and why; locked with the sign-off. Read by B4 (expected vs actual).
+CREATE TABLE IF NOT EXISTS studio_expectations (
+  id          TEXT PRIMARY KEY,
+  persona     TEXT NOT NULL,
+  territory   TEXT NOT NULL,
+  signoff_id  TEXT NOT NULL,
+  line_ids    JSONB NOT NULL,
+  reason      TEXT NOT NULL,
+  created_by  TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL,
+  sha256      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS studio_expectations_pt ON studio_expectations (persona, territory, created_at);

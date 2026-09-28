@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as S from '../src/services/studio/engine.js';
 import { PgStore } from '../src/services/studio/pgStore.js';
+import { scenario as readyScenario } from './helpers/readyScenario.js';
 
 const URL_ = process.env.STUDIO_TEST_DATABASE_URL || '';
 const skip = !URL_ ? 'set STUDIO_TEST_DATABASE_URL to run the Postgres tests' : false;
@@ -20,7 +21,7 @@ before(async () => {
   const host = new URL(URL_).hostname;
   if (!['127.0.0.1', 'localhost', '::1'].includes(host)) throw new Error(`Refusing non-local test database ${host}`);
   store = PgStore.fromUrl(URL_);
-  const tables = ['studio_assets', 'studio_spend', 'studio_compares', 'studio_taste', 'studio_edits', 'studio_line_embeddings', 'studio_lines', 'studio_batches', 'studio_briefs', 'studio_territory_edits', 'studio_inputs', 'studio_rules'];
+  const tables = ['studio_expectations', 'studio_line_versions', 'studio_signoffs', 'studio_assets', 'studio_spend', 'studio_compares', 'studio_taste', 'studio_edits', 'studio_line_embeddings', 'studio_lines', 'studio_batches', 'studio_briefs', 'studio_territory_edits', 'studio_inputs', 'studio_rules'];
   await (store as any).db.query(`TRUNCATE ${tables.join(', ')} RESTART IDENTITY CASCADE`);
   const rules = JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8'));
   await store.putRules('example-1', rules, { activate: true, by: 'test' });
@@ -128,4 +129,13 @@ test('hosted rules endpoints: anyone lists, only admins upload or activate, vers
     assert.equal(((await S.refreshRules()) as any).version, 'example-3');
     assert.equal((await call('POST', '/rules/nope/activate', {}, true)).status, 400);
   } finally { server.close(); }
+});
+
+test('Ready for production on Postgres (sign-off gate, overrides, versions, expectations, handoff)', { skip }, async () => {
+  const tables = ['studio_expectations', 'studio_line_versions', 'studio_signoffs', 'studio_edits', 'studio_line_embeddings', 'studio_lines', 'studio_batches', 'studio_taste'];
+  await (store as any).db.query(`TRUNCATE ${tables.join(', ')} RESTART IDENTITY CASCADE`);
+  const rules = JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8'));
+  await store.putRules('ready-1', { ...rules, version: 'ready-1' }, { activate: true });
+  await S.refreshRules();
+  await readyScenario();
 });

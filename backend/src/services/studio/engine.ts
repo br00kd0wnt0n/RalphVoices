@@ -9,6 +9,7 @@
 // dotenv.config(), because that file's DATABASE_URL points at production).
 // Nothing imports src/db or src/routes.
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import OpenAI from 'openai';
@@ -105,8 +106,24 @@ export interface Line {
   edited_text?: string;
   note?: string;
   decided_by?: string;
-  decided_at?: string;
+  decided_at?: string;   // the last human change to the line (decision, override, compliance, sign-off)
+  /** Red flags a person has overridden, with the written reason (Ready for production gate). */
+  overrides?: Override[];
+  /** Trupanion compliance review: pending (default), cleared or changes_requested. Doesn't block sign-off. */
+  compliance?: { status: ComplianceStatus; note?: string; by?: string; at?: string; sha256?: string };  // sha256: the wording it was reviewed on
+  /** The line's place in the latest Ready for production sign-off. */
+  ready?: { signoff_id: string; version: number; sha256: string; ready_by: string; ready_at: string; stub: string; changed_since?: boolean };
+  /** When the final wording was last fully re-checked (after an edit). */
+  rechecked_at?: string;
 }
+export interface Override { rule: string; reason: string; by: string; at: string }
+export type ComplianceStatus = 'pending' | 'cleared' | 'changes_requested';
+/** One wording of a line as it stood at a sign-off or after one. Never rewritten. */
+export interface LineVersion { line_id: string; batch_id: string; version: number; field: string; text: string; sha256: string; created_by: string; created_at: string; signoff_id?: string }
+export const sha256 = (s: string) => crypto.createHash('sha256').update(s, 'utf8').digest('hex');
+/** The words that go to production: the edit when there is one. */
+export const finalText = (l: Pick<Line, 'decision' | 'edited_text' | 'text'>) => (l.decision === 'edit' && l.edited_text ? l.edited_text : l.text);
+export const lineHash = (l: Pick<Line, 'field' | 'decision' | 'edited_text' | 'text'>) => sha256(`${l.field}\n${finalText(l)}`);
 export interface Batch {
   id: string;
   brief: Brief;
@@ -1439,8 +1456,17 @@ export async function setDecision(batchId: string, lineId: string, patch: { deci
     for (const f of modelFlags) addFlag(l.flags, { ...f, why: `${f.why || ''} (on the original wording)`.trim() });
     sortFlags(l);
   }
-  // Only this line is written, so decisions on other lines by other people stand.
   const st = getStore();
+  // A signed-off line is never rewritten: a change of wording becomes a new version, and the sign-off keeps its own.
+  if (l.ready && lineHash(l) !== l.ready.sha256) {
+    const versions = await st.listLineVersions(l.id);
+    const h = lineHash(l);
+    if (!versions.some(v => v.sha256 === h)) {
+      await st.saveLineVersion({ line_id: l.id, batch_id: batchId, version: Math.max(0, ...versions.map(v => v.version)) + 1, field: l.field, text: finalText(l), sha256: h, created_by: user || 'unknown', created_at: l.decided_at! });
+    }
+    l.ready.changed_since = true;
+  } else if (l.ready) l.ready.changed_since = false;
+  // Only this line is written, so decisions on other lines by other people stand.
   await st.saveLine(batchId, l);
   await st.recordEdit({ line_id: l.id, batch_id: batchId, before, after: { decision: l.decision || '', edited_text: l.edited_text || '', note: l.note || '' }, by: user || 'unknown', at: l.decided_at });
   const taste = new Map((await loadTaste()).map(t => [t.id, t]));

@@ -49,6 +49,14 @@ export interface StudioStore {
   listSpend(): Promise<SpendEntry[]>;
   addSpend(entry: SpendEntry): Promise<void>;
 
+  /** Ready for production: sign-offs, line versions and expectations records. Append-only. */
+  saveSignoff(s: any): Promise<void>;
+  listSignoffs(): Promise<any[]>;
+  saveLineVersion(v: any): Promise<void>;
+  listLineVersions(lineId: string): Promise<any[]>;
+  saveExpectation(e: any): Promise<void>;
+  listExpectations(): Promise<any[]>;
+
   /** Files the Studio serves: doc:<id> (reference documents), brand:<name> (the client logo). */
   getAsset(name: string): Promise<Asset | null>;
   hasAsset(name: string): Promise<boolean>;
@@ -144,6 +152,15 @@ export class FileStore implements StudioStore {
     s.total_usd = Math.round(s.runs.reduce((t: number, r: any) => t + (r.usd || 0), 0) * 10000) / 10000;
     writeJson(this.P('spend.json'), s);
   }
+
+  private appendJsonl(name: string, v: unknown) { fs.mkdirSync(this.P('ready'), { recursive: true }); fs.appendFileSync(this.P('ready', name), JSON.stringify(v) + '\n'); }
+  private readJsonl(name: string): any[] { const p = this.P('ready', name); return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)) : []; }
+  async saveSignoff(x: any) { this.appendJsonl('signoffs.jsonl', x); }
+  async listSignoffs() { return this.readJsonl('signoffs.jsonl'); }
+  async saveLineVersion(v: any) { this.appendJsonl('line-versions.jsonl', v); }
+  async listLineVersions(lineId: string) { return this.readJsonl('line-versions.jsonl').filter(v => v.line_id === lineId).sort((a, b) => a.version - b.version); }
+  async saveExpectation(e: any) { this.appendJsonl('expectations.jsonl', e); }
+  async listExpectations() { return this.readJsonl('expectations.jsonl'); }
 
   async getAsset(name: string): Promise<Asset | null> {
     const a = this.opts.assets?.[name];

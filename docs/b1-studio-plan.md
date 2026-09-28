@@ -94,6 +94,27 @@ Idempotent (`IF NOT EXISTS`), because every migration re-runs on each boot. It'l
 - **Admin:** a small, read-only view of the active rules (version, decisions, open items), plus upload and activate.
 - **iframe check:** the page works inside the tools.ralph.world iframe (SSO exchange already handled by `useAuth`).
 
+### 4a. Ready for production (the last step of a run, after Shortlist; Brook, 28 Sep)
+
+The name is **Ready for production**, never "Approved": creative sign-off isn't compliance clearance. The UI never says "approved"; the one exception is the compliance status "cleared". No scores.
+
+- **Sign-off.** Per persona × territory, the creative lead (Nick) marks a set of kept lines as Ready for production. The sign-off records `ready_by` and `ready_at`, and locks the set.
+  - Each signed-off line is stored as version 1, with its final text and a SHA-256 of that content.
+  - A later edit makes version 2 (with its own hash). It never rewrites the signed-off text. The page shows the version history.
+- **Red-flag gate.** The screen lists every red (compliance) flag on the lines being signed off. Each must be either cleared by an edit (re-checked) or overridden with a written reason. Overrides are stored with who, when and the reason, and show on the line from then on. Sign-off is blocked while any red flag is unresolved. Amber and grey flags don't block.
+- **Expectations record (the v2 plan's B4 input).** On the same screen, per persona × territory, the team records which line(s) they expect to lead and why: a pick from the ready lines plus free text. It is dated, hashed (SHA-256) and locked together with the sign-off, so B4 can later compare expected against actual.
+- **Compliance status per line:** `pending` (the default), `cleared` or `changes_requested`, with an optional note. Vivan updates it (anyone on `STUDIO_EMAILS` can). It records who and when, doesn't block sign-off, and shows next to each line in the handoff.
+- **Handoff pack (export).**
+  - **CSV and Markdown:** per line, the naming code, field, final text, character count, format, compliance status (with its note) and `ready_by`/`ready_at`.
+  - **A clean compliance sheet for Trupanion:** naming code, field and final text only, with no internal flags, objections or notes.
+- **Data (extends migration 015, still unmerged and idempotent):**
+  - `studio_signoffs`: one per persona × territory × version, with the line ids, `ready_by`, `ready_at` and the set's hash.
+  - `studio_line_versions`: line id, version, text, field, hash, created_by and created_at.
+  - `studio_expectations`: persona, territory, signoff id, line ids, reason, created_by, created_at and sha256.
+  - Overrides (rule, reason, by, at) and compliance status (status, note, by, at, and the hash of the wording it was reviewed on) live on the line in `studio_lines.body`, like decisions. Every change is also recorded in `studio_edits`.
+  - If compliance reviewed a different wording from the one signed off, the handoff shows the line as pending.
+- **Backend: built 28 Sep** (`services/studio/ready.ts`). Acceptance tests: `tests/helpers/readyScenario.ts`, run on files and Postgres. The page (the Ready for production tab) comes with the rest of phase 4's frontend.
+
 ### 5. Moving today's material across
 
 - Upload `studio-rules.json` v2.1 as the first active rules version, through the admin endpoint and never directly into the database. **It's client material going into Ralph's production database, so Brook confirms first** (open question 3).
@@ -121,9 +142,10 @@ Testing:
 | 2 | Migration 015 and `PgStore`; tests against the local database | 1 day |
 | 3 | `/api/studio` routes: auth, access list, database-backed jobs with reconnect, rules endpoints, monthly cap (**done 28 Sep**; `docs/build-log/B1-studio-p3.md`) | 1 day |
 | 4 | Frontend: production route and nav, signed-in client, attribution and history, per-user stars, rules view, iframe check | 1 day |
+| 4a | **Ready for production** (added 28 Sep): sign-off with versions and hashes, red-flag gate with overrides, expectations record, compliance status, handoff pack and compliance sheet; backend, tests and page | **+1 day** |
 | 5 | Import script, handoff, and staging-style check on the local database with real keys | 0.5 day |
 | 6 | Deploy with Brook: env vars, migration, rules upload, production smoke test | 0.5 day |
-| | **Total** | **about 5 days** (v2 plan estimate: 5–6) |
+| | **Total** | **about 6 days** (was 5; +1 day for Ready for production. v2 plan estimate: 5–6) |
 
 Phases 1–2 can start straight away. Phase 6 waits for Brook.
 
@@ -140,6 +162,14 @@ All seven open questions are answered (relayed by the coordination session; Broo
 6. **Carry-over:** import the 28 Sep kickoff runs (Brook's DINK_NEVER run and any runs by the creative director) with their decisions and taste examples. Everything else starts clean; the 25 Sep test batches aren't imported. `db-import` needs a run filter for this (phase 6).
 7. **Anthropic key:** a fresh key for Railway, separate from the laptop key. Brook creates it and never pastes it into chat. The key pasted into the session on 28 Sep should be revoked, if it hasn't been.
 8. **Release:** hold PR #11. Migration 015 goes to `main` together with the code that uses it (phases 3–4), in the phase 6 deploy with Brook, because the backend runs migrations on boot and Railway auto-deploys `main`.
+
+9. **Ready for production** is the last step of a run, after Shortlist, and is built in phase 4 (design in 4a):
+   - It's called "Ready for production", not "Approved".
+   - Red flags must be fixed, or overridden with a recorded written reason, before sign-off. Amber and grey flags don't block.
+   - The signed-off set is locked: later edits create new versions, and the history is shown.
+   - The expectations record is stored for B4.
+   - The compliance status (Vivan) doesn't block sign-off.
+   - **Effort: +1 day** (the total is about 6 days).
 
 ## Open questions for Brook (answered 28 Sep; see Decisions above)
 

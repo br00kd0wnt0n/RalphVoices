@@ -8,7 +8,8 @@ import type { Asset, EditRecord, SpendEntry, StudioStore } from './store.js';
 type Queryable = Pick<pg.Pool, 'query' | 'connect'>;
 
 // Decision fields a whole-run save must not roll back (see saveBatch).
-const DECISION_KEYS = ['decision', 'edited_text', 'note', 'decided_by', 'decided_at'];
+// Human fields on a line: a whole-run save (the checker) with an older decided_at never overwrites them.
+const DECISION_KEYS = ['decision', 'edited_text', 'note', 'decided_by', 'decided_at', 'overrides', 'compliance', 'ready', 'rechecked_at'];
 
 export class PgStore implements StudioStore {
   readonly kind = 'pg' as const;
@@ -228,6 +229,34 @@ export class PgStore implements StudioStore {
   }
 
   // ---------- assets (readout, deck, client logo) ----------
+
+  // ---------- Ready for production ----------
+
+  async saveSignoff(x: any) {
+    await this.db.query(
+      `INSERT INTO studio_signoffs (id, persona, territory, version, body, ready_by, ready_at, sha256) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [x.id, x.persona, x.territory, x.version, x, x.ready_by, x.ready_at, x.sha256]);
+  }
+  async listSignoffs() { return (await this.db.query(`SELECT body FROM studio_signoffs ORDER BY ready_at`)).rows.map(r => r.body); }
+  async saveLineVersion(v: any) {
+    await this.db.query(
+      `INSERT INTO studio_line_versions (line_id, batch_id, version, field, text, sha256, created_by, created_at, signoff_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (line_id, version) DO NOTHING`,
+      [v.line_id, v.batch_id, v.version, v.field, v.text, v.sha256, v.created_by, v.created_at, v.signoff_id ?? null]);
+  }
+  async listLineVersions(lineId: string) {
+    const r = await this.db.query(`SELECT * FROM studio_line_versions WHERE line_id = $1 ORDER BY version`, [lineId]);
+    return r.rows.map(x => ({ ...x, created_at: new Date(x.created_at).toISOString(), signoff_id: x.signoff_id ?? undefined }));
+  }
+  async saveExpectation(e: any) {
+    await this.db.query(
+      `INSERT INTO studio_expectations (id, persona, territory, signoff_id, line_ids, reason, created_by, created_at, sha256) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [e.id, e.persona, e.territory, e.signoff_id, JSON.stringify(e.line_ids), e.reason, e.created_by, e.created_at, e.sha256]);
+  }
+  async listExpectations() {
+    const r = await this.db.query(`SELECT * FROM studio_expectations ORDER BY created_at`);
+    return r.rows.map(x => ({ ...x, created_at: new Date(x.created_at).toISOString() }));
+  }
 
   async getAsset(name: string): Promise<Asset | null> {
     const r = await this.db.query(`SELECT content_type, data, filename FROM studio_assets WHERE name = $1`, [name]);

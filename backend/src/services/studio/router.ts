@@ -8,6 +8,7 @@ import express, { type Request, type Response, type Router } from 'express';
 import path from 'node:path';
 import * as S from './engine.js';
 import type { PgStore } from './pgStore.js';
+import * as R from './ready.js';
 
 export interface StudioRouterOptions {
   /** The person acting on this request (recorded on runs, decisions, edits and spend). */
@@ -137,6 +138,31 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     const { persona, territory, lines } = req.body || {};
     res.json(await S.checkTexts(persona, territory, lines || [], o.api(req)));
   }));
+
+  // ----- Ready for production (after Shortlist) -----
+  const pt = (q: any) => ({ persona: q.persona ? String(q.persona) : undefined, territory: q.territory ? String(q.territory) : undefined });
+  r.get('/ready', wrap(async (req, res) => {
+    const { persona, territory } = pt(req.query);
+    if (!persona || !territory) throw new Error('Pass persona and territory');
+    res.json(await R.readyView(persona, territory));
+  }));
+  r.post('/ready', wrap(async (req, res) => {
+    try { res.json(await R.signOff(req.body || {}, o.who(req))); }
+    catch (err: any) {
+      if (err instanceof R.GateError) return res.status(409).json({ error: err.message, blocking: err.blocking });
+      throw err;
+    }
+  }));
+  r.post('/batches/:id/lines/:line/override', wrap(async (req, res) => res.json(await R.overrideFlag(req.params.id, req.params.line, String(req.body?.rule || ''), String(req.body?.reason || ''), o.who(req)))));
+  r.patch('/batches/:id/lines/:line/compliance', wrap(async (req, res) => res.json(await R.setCompliance(req.params.id, req.params.line, String(req.body?.status || ''), req.body?.note, o.who(req)))));
+  r.post('/batches/:id/lines/:line/recheck', wrap(async (req, res) => {
+    if (!o.mock && (await spent()) + 0.02 > o.cap) return res.status(402).json({ error: `Spend is at ${capText()}.` });
+    res.json(await R.recheckLine(req.params.id, req.params.line, o.api(req), o.who(req)));
+  }));
+  r.get('/lines/:line/versions', wrap(async (req, res) => res.json(await S.getStore().listLineVersions(req.params.line))));
+  r.get('/handoff.csv', wrap(async (req, res) => download(res, 'text/csv; charset=utf-8', 'ready-for-production.csv', (await R.handoffPack(pt(req.query))).csv)));
+  r.get('/handoff.md', wrap(async (req, res) => download(res, 'text/markdown; charset=utf-8', 'ready-for-production.md', (await R.handoffPack(pt(req.query))).md)));
+  r.get('/compliance-sheet.csv', wrap(async (req, res) => download(res, 'text/csv; charset=utf-8', 'trupanion-compliance-sheet.csv', (await R.handoffPack(pt(req.query))).complianceCsv)));
 
   // ----- territories -----
   r.post('/territories', wrap(async (req, res) => res.json(await S.saveTerritory(null, req.body?.territory || {}, String(req.body?.note || ''), o.who(req)))));
