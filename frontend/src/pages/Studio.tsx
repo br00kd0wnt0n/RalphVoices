@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils';
 
 const PINK = '#D94D8F';
 type Tab = 'home' | 'territories' | 'brief' | 'review' | 'shortlist' | 'compare' | 'readout';
-const TABS: Array<[Tab, string]> = [['home', 'How it works'], ['territories', 'Territories'], ['brief', 'Write & brief'], ['review', 'Review'], ['shortlist', 'Shortlist'], ['compare', 'Blind compare'], ['readout', 'Readout']];
+const TABS: Array<[Tab, string]> = [['home', 'How it works'], ['territories', 'Territories'], ['brief', 'Write & brief'], ['review', 'Review'], ['shortlist', 'Shortlist'], ['readout', 'Readout']];
 // Deep links for the demo: /studio?tab=review&batch=<id>&open=L07 (opens that line's first flag), &compare=<name>.
 const params = new URLSearchParams(window.location.search);
 
@@ -132,6 +132,26 @@ export function Studio() {
     follow(r.job, batch.id);
   }
 
+  if (tab === 'compare') {
+    // A separate exercise, deliberately outside the writing flow: its lines
+    // aren't checked, aren't saved to runs and never reach the shortlist.
+    return (
+      <div className="min-h-screen bg-slate-100 text-neutral-900" style={{ fontSize: 18 }}>
+        <header className="bg-slate-900 px-8 py-6 text-white">
+          <div className="flex flex-wrap items-center gap-4">
+            <span className="rounded-full border border-slate-500 px-3 py-0.5 text-sm uppercase tracking-wide text-slate-300">Separate exercise</span>
+            <span className="text-sm text-slate-400">VOICES Studio</span>
+            <button onClick={() => setTab('home')} className="ml-auto rounded-lg border-2 border-slate-500 px-4 py-2 text-base font-medium hover:border-white">← Back to Studio</button>
+          </div>
+          <h1 className="mt-4 text-4xl font-bold tracking-tight" style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>Blind compare: choose the writing model</h1>
+          <p className="mt-2 max-w-4xl text-lg text-slate-300">The same brief goes to several models. Their lines are shuffled and unlabelled: star the ones you’d use, then reveal who wrote them. This sits outside your work: lines here aren’t checked, aren’t saved to your runs and never reach the shortlist.</p>
+        </header>
+        {err && <div className="mx-8 mt-4 rounded-lg border-2 border-red-300 bg-red-50 p-4 text-lg text-red-900">{err}</div>}
+        <main className="px-8 py-6">{meta && <Compare meta={meta} brief={brief} />}</main>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900" style={{ fontSize: 18 }}>
       <header className="sticky top-0 z-20 flex flex-wrap items-center gap-4 border-b border-neutral-200 bg-white px-8 py-4">
@@ -146,6 +166,7 @@ export function Studio() {
           ))}
         </nav>
         <div className="ml-auto flex items-center gap-3 text-base text-neutral-600">
+          <button onClick={() => setTab('compare')} title="A separate exercise, outside the writing flow" className="rounded-lg border-2 border-dashed border-slate-400 bg-slate-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700">Blind compare ↗</button>
           <UserBadge user={user} onChange={n => { setUser(n); setUserState(n); setRunsTick(t => t + 1); }} />
           {running && <span className="animate-pulse font-medium" style={{ color: PINK }}>● {status}</span>}
           {meta?.mock && <Chip tone="amber">mock: no cost</Chip>}
@@ -161,7 +182,6 @@ export function Studio() {
         {meta && tab === 'review' && <Review meta={meta} batch={batch} setBatch={setBatch} status={status} running={running} onMore={more} onMoreRun={() => run({ into: batch })} onDecided={() => setRunsTick(t => t + 1)} />}
         {tab === 'readout' && <Readout persona={brief.persona} meta={meta} />}
         {meta && tab === 'shortlist' && <Shortlist batch={batch} />}
-        {meta && tab === 'compare' && <Compare meta={meta} brief={brief} />}
       </main>
     </div>
   );
@@ -175,7 +195,6 @@ const STEPS: Array<{ tab: Tab; title: string; what: string; you: string }> = [
   { tab: 'brief', title: 'Generate', what: 'About 20 lines around yours: the angles and structures you haven’t used, in your voice, never repeating you.', you: 'Watch the lines arrive, already checked.' },
   { tab: 'review', title: 'Review', what: 'Each line shows its length, its flags and a skeptic’s objection. Click a flag for the words and the source.', you: 'Keep, cut or edit. Add a note, or ask for more like this.' },
   { tab: 'shortlist', title: 'Shortlist', what: 'Kept lines get naming codes, ready for production. Runs are saved under your name.', you: 'Curate in Sheets, import it back, or continue a run later.' },
-  { tab: 'compare', title: 'Blind compare', what: 'One brief, several writing models, lines shuffled and unlabelled.', you: 'Star the lines you’d use, then reveal. Your pick becomes the writer.' },
 ];
 
 function Home({ go }: { go: (t: Tab) => void }) {
@@ -197,7 +216,7 @@ function Home({ go }: { go: (t: Tab) => void }) {
 
       <section>
         <h2 className="mb-5 text-3xl font-bold tracking-tight" style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>How Voices Studio works</h2>
-        <ol className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <ol className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
           {STEPS.map((s, i) => (
             <li key={s.title}>
               <button onClick={() => go(s.tab)} className="group flex h-full w-full flex-col rounded-xl border-2 border-neutral-200 bg-white p-5 text-left transition hover:border-[#D94D8F]">
@@ -211,6 +230,15 @@ function Home({ go }: { go: (t: Tab) => void }) {
             </li>
           ))}
         </ol>
+      </section>
+
+      <section className="flex flex-wrap items-center gap-5 rounded-xl border-2 border-dashed border-slate-400 bg-slate-900 p-6 text-white">
+        <div className="min-w-[18rem] flex-1">
+          <div className="text-sm uppercase tracking-wide text-slate-400">Separate exercise</div>
+          <h3 className="mt-1 text-2xl font-bold">Blind compare: choose the writing model</h3>
+          <p className="mt-1 text-base text-slate-300">Outside the flow above. Several models write to the same brief, unlabelled; you star the lines you’d use, then reveal who wrote them. Nothing here goes into your runs or the shortlist.</p>
+        </div>
+        <button onClick={() => go('compare')} className="rounded-lg border-2 border-white px-5 py-3 text-lg font-semibold hover:bg-white hover:text-slate-900">Open blind compare</button>
       </section>
 
       <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -893,8 +921,8 @@ function Compare({ meta, brief }: { meta: Meta; brief: Brief }) {
     <div className="max-w-6xl space-y-6">
       <div className="flex flex-wrap items-end gap-4 rounded-xl border border-neutral-200 bg-white p-5">
         <div className="mr-auto">
-          <div className="text-2xl font-bold">Blind compare</div>
-          <div className="text-base text-neutral-600">The current brief ({meta.personas[brief.persona]?.name} · {meta.territories[brief.territory]?.name}) goes to each writer. Lines are shuffled and unlabelled; star the ones you'd use, then reveal.</div>
+          <div className="text-2xl font-bold">The brief</div>
+          <div className="text-base text-neutral-600">{meta.personas[brief.persona]?.name} · {meta.territories[brief.territory]?.name}, from your brief tab. Pick 2–4 writers.</div>
         </div>
         <div><Label>Writers (2-4)</Label><input className="w-96 rounded-lg border-2 border-neutral-300 px-3 py-2 text-lg" value={models} onChange={e => setModels(e.target.value)} /></div>
         <div><Label>Lines each</Label><input type="number" className="w-24 rounded-lg border-2 border-neutral-300 px-3 py-2 text-lg" value={n} onChange={e => setN(Number(e.target.value))} /></div>
