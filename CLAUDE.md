@@ -331,6 +331,14 @@ VOICES v2 build 1 as a script: `backend/scripts/studio.ts` (CLI and `serve`) ove
 - UI: `/studio` in the frontend, dev-only (routed when `import.meta.env.DEV` or `VITE_STUDIO_API` is set), talking to `npx tsx scripts/studio.ts serve` on 127.0.0.1:4100 (`frontend/src/lib/studioApi.ts`, not `api.ts`). `--mock` runs everything with no key and no cost.
 - Run instructions, timings and gaps: `docs/build-log/B1-lite.md`.
 
+## Pre-flight audit, B2 (script)
+
+VOICES v2 build 2: `backend/scripts/audit.ts` (CLI) over `backend/src/services/audit/` (self-contained; imports nothing from Studio or weekly code). No database, no auth, no deploy. Reads the rules from `Claude outputs/voices-r1/studio/studio-rules.json` and the M3 rubric from `Claude outputs/voices-r1/rubric.json`; the OpenAI key from `~/.config/voices/openai.key` (never `dotenv.config()`). Assets in `Claude outputs/voices-r1/assets/<round>/`, named by naming stub (a folder of numbered cards is a carousel; `.mp4/.mov` is video; `<stub>.txt` is sidecar copy). Output in `Claude outputs/voices-r1/audit/<round>/`: `reports/<stub>.md`, `summary.md`, `features.csv` (for B3's `weekly.ts features --file`), `flag-sheet.csv`, `audit.json`, `calls.jsonl`; `audit/spend.json` is cumulative ($10 cap, `--yes` over $2).
+
+- Commands: `estimate --round R`, `run --round R [--only STUB] [--yes]`, `concepts` (the nine concept cards against the spike's M3 table), `plant` (planted test images), `agree --file SHEET` (agreement from Brook's marks), `status`. `--mock` runs free.
+- Flags, never scores: red = compliance (a rule match, or the reviewer and the two-wording yes/no agreeing), amber = warning (intended persona's turn-offs, brand, clarity, limits, text load), grey = note (the other personas' turn-offs, UGC casting). Every flag carries its rules-file source.
+- Run instructions, what each check does, agreement and costs: `docs/build-log/B2-preflight.md`.
+
 ## Roadmap
 
 The Trupanion engagement build plan (evidence layer, copy-set tests, format dimension, reports, live-performance anchors, governance) is in `docs/trupanion-build-plan.md`. Phase 0 safeguards have shipped on `voices/trupanion-phase0`.
