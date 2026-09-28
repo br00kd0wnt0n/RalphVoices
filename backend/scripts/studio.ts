@@ -60,9 +60,14 @@ let pgStore: PgStore | null = null;
 function databaseUrl(): string {
   const url = opt('database-url') || process.env.STUDIO_DATABASE_URL || '';
   if (!url) throw new Error('--store pg needs --database-url (or STUDIO_DATABASE_URL); DATABASE_URL is deliberately not used');
-  const host = new URL(url).hostname;
+  // Never echo the value: it carries the database password.
+  let parsed: URL;
+  try { parsed = new URL(url.trim()); } catch { throw new Error('The database URL isn\'t a valid URL (it should start with postgresql://). Copy DATABASE_PUBLIC_URL from the Postgres service in Railway.'); }
+  if (!/^postgres(ql)?:$/.test(parsed.protocol)) throw new Error(`The database URL starts with ${parsed.protocol}// but should be postgresql:// (that looks like a web address, not the database). Copy DATABASE_PUBLIC_URL from the Postgres service in Railway.`);
+  const host = parsed.hostname;
+  if (host.endsWith('.railway.internal')) throw new Error(`${host} only resolves inside Railway; use the public URL (DATABASE_PUBLIC_URL, a proxy.rlwy.net host).`);
   if (!['127.0.0.1', 'localhost', '::1'].includes(host) && !flag('allow-remote')) throw new Error(`Refusing non-local database host ${host}; pass --allow-remote only for the approved deploy step`);
-  return url;
+  return url.trim();
 }
 if (opt('store') === 'pg') { pgStore = PgStore.fromUrl(databaseUrl()); S.setStore(pgStore); }
 const CAP = Number(opt('cap', '15'));
