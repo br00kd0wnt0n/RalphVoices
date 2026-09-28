@@ -11,6 +11,7 @@ import { readWeek, type AdData, type Read } from '../src/services/weekly/model.j
 import { simulate, checkRecovery } from '../src/services/weekly/simulate.js';
 import { draftNote, lintNote, newNumbers } from '../src/services/weekly/note.js';
 import { rng, beta } from '../src/services/weekly/stats.js';
+import { readSeries } from '../src/services/weekly/series.js';
 
 const cfg = loadConfig();
 const N = cfg.naming;
@@ -340,4 +341,62 @@ test('historic mode keeps ads outside the convention for the back-test, and join
   const h = aggregate(rows, '2026-03-01', '2026-03-31', { historic: true });
   assert.deepEqual(h.ads.map(a => [a.persona, a.format, a.stub]).sort(), [['HIST', 'ST', 'Zoomie Wipeouts'], ['HIST', 'VID', 'Vet Bills UGC']]);
   assert.equal(rows[0].parsed, null, 'input rows are not modified');
+});
+
+// ---------- hysteresis (config calls.hold) ----------
+
+const hAd = (k: string, quotes: number): AdData => ({
+  key: k, ad_name: k, stub: k, asset: k, persona: 'DINK', territory: 'X', format: 'ST', platform: 'META', version: 1, features: null,
+  first_day: '2026-10-12', last_day: '2026-10-25', days_live: 14, live_now: true, spend: 600, impressions: 60000, video_3s: 0,
+  link_clicks: 900, landing_page_views: 0, quotes, enrollments: 0,
+});
+const hOpts = { from: '2026-10-12', to: '2026-10-25', quotesAvailable: true };
+const qCall = (r: Read, k: string) => r.ads.find(a => a.key === k)!.metrics.quotes_per_1k!;
+
+test('a scale holds while P(best) stays above the hold bar, and only if it was scaled last week', () => {
+  const now = [hAd('A', 46), hAd('B', 36), hAd('C', 36)];
+  const fresh = readWeek(now, cfg, hOpts);
+  const p = qCall(fresh, 'A').p_best!;
+  assert.ok(p >= cfg.calls.hold.p_best_scale && p < cfg.calls.p_best_scale, `P(best) ${p} sits between the bars`);
+  assert.equal(qCall(fresh, 'A').call, 'keep testing', 'not enough to start a scale');
+  const lastWeek = readWeek([hAd('A', 60), hAd('B', 36), hAd('C', 36)], cfg, hOpts);
+  assert.equal(qCall(lastWeek, 'A').call, 'scale');
+  const held = readWeek(now, cfg, { ...hOpts, prev: lastWeek });
+  assert.equal(qCall(held, 'A').call, 'scale');
+  assert.match(qCall(held, 'A').reason, /held from last week/);
+  assert.equal(held.ads.find(a => a.key === 'A')!.headline.call, 'scale');
+  // Evidence falls below the hold bar: the scale drops.
+  assert.equal(qCall(readWeek([hAd('A', 38), hAd('B', 36), hAd('C', 36)], cfg, { ...hOpts, prev: lastWeek }), 'A').call, 'keep testing');
+});
+
+test('a cut holds while P(worse than median) stays above the hold bar', () => {
+  const now = [hAd('B', 36), hAd('C', 36), hAd('A', 24)];
+  const fresh = readWeek(now, cfg, hOpts);
+  const p = qCall(fresh, 'A').p_worse_than_median!;
+  assert.ok(p >= cfg.calls.hold.p_worse_than_median_cut && p < cfg.calls.p_worse_than_median_cut, `P(worse) ${p} sits between the bars`);
+  assert.equal(qCall(fresh, 'A').call, 'keep testing');
+  const lastWeek = readWeek([hAd('B', 36), hAd('C', 36), hAd('A', 12)], cfg, hOpts);
+  assert.equal(qCall(lastWeek, 'A').call, 'cut');
+  assert.equal(qCall(readWeek(now, cfg, { ...hOpts, prev: lastWeek }), 'A').call, 'cut');
+});
+
+test('hold bars cut week-to-week reversals in a simulated month without losing accuracy', () => {
+  const noHold = { ...cfg, calls: { ...cfg.calls, hold: { p_best_scale: cfg.calls.p_best_scale, p_beat_median_tied_scale: cfg.calls.p_beat_median_tied_scale, p_worse_than_median_cut: cfg.calls.p_worse_than_median_cut } } };
+  const count = (c: typeof cfg) => {
+    let reversals = 0;
+    for (let s = 1; s <= 6; s++) {
+      const sim = simulate('month1', 2000 + s);
+      const fm = loadFeatureCsv(sim.features_csv, 'sim', c).map;
+      const rows = [...parseExport(sim.meta_csv, 'meta', c, fm).rows, ...parseExport(sim.tiktok_csv, 'tiktok', c, fm).rows].map(fromIngest);
+      const { reads } = readSeries(rows, sim.truth.start, addDays(sim.truth.start, 27), c, { quotesAvailable: true });
+      const g = (x: string) => (x.startsWith('scale') ? 'scale' : x);
+      for (let w = 2; w < reads.length; w++) for (const a of reads[w].ads) {
+        const b = reads[w - 1].ads.find(x => x.key === a.key), c0 = reads[w - 2].ads.find(x => x.key === a.key);
+        if (b && c0 && g(a.headline.call) !== g(b.headline.call) && g(a.headline.call) === g(c0.headline.call)) reversals++;
+      }
+    }
+    return reversals;
+  };
+  const without = count(noHold), withHold = count(cfg);
+  assert.ok(withHold < without, `reversals ${withHold} with holds vs ${without} without`);
 });

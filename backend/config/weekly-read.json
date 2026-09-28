@@ -1,8 +1,9 @@
 {
   "_note": "B3 weekly read (VOICES v2, Trupanion). Written 28 Sep 2026, before any live data. Change a threshold only with a dated entry in `changes` and a reason; the weekly note prints the config version it ran with.",
-  "version": 1,
+  "version": 2,
   "changes": [
-    { "date": "2026-09-28", "version": 1, "by": "B3 build", "what": "First version, set before Month 1 goes live." }
+    { "date": "2026-09-28", "version": 1, "by": "B3 build", "what": "First version, set before Month 1 goes live." },
+    { "date": "2026-09-28", "version": 2, "by": "B3 build, asked by Brook", "what": "Hold bars on calls (calls.hold): a call made last week stays until the evidence falls well back, so ads near a threshold don't flip between scale and keep testing week to week. Still before any live data." }
   ],
 
   "naming": {
@@ -104,6 +105,8 @@
     "_scale": "Scale when P(best in cell) >= 0.8. If no single ad reaches it but the top two together do and each beats the cell median with P >= 0.9, both are 'scale (tied)': never 'the winner'.",
     "p_worse_than_median_cut": 0.9,
     "_cut": "Cut when P(worse than the cell median) >= 0.9.",
+    "hold": { "p_best_scale": 0.6, "p_beat_median_tied_scale": 0.75, "p_worse_than_median_cut": 0.75 },
+    "_hold": "Hysteresis. A call needs the full bar to start and a lower bar to stay: last week's scale stays while P(best) >= 0.6 (and nothing else has reached 0.8); a tied scale stays while the ad is still in the top two by P(best) and beats the median with P >= 0.75; a cut stays while P(worse than median) >= 0.75. Without it, ads near 0.8 or 0.9 flip between calls from one week's noise. Holds apply only to ads still readable and delivering, and each week's read is chained from the start of the flight.",
     "otherwise": "keep testing"
   },
 

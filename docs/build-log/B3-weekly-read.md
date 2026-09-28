@@ -17,6 +17,7 @@ CLI and pure modules; no UI, no API route, no change to how concept tests run.
 | `backend/src/services/weekly/naming.ts` | Parses `PERSONA_TERRITORY_FORMAT_v#_PLATFORM_YYMMDD`; a bad name fails with a reason. |
 | `backend/src/services/weekly/csv.ts` | CSV reader and writer (no dependency). |
 | `backend/src/services/weekly/ingest.ts` | Export → rows: column mapping, number and date parsing, the audience rule, the feature join, the quarantine list, and summing of breakdown rows. |
+| `backend/src/services/weekly/series.ts` | Reads chained week by week from the start of the flight, so hold bars can see last week's calls. |
 | `backend/src/services/weekly/window.ts` | Rows → one record per ad over a date window. Prospecting ads with parsed names only; the rest are counted. Overlapping exports are de-duplicated. Monday–Sunday weeks. |
 | `backend/src/services/weekly/stats.ts` | Seeded RNG, beta, gamma and binomial draws, quantiles. |
 | `backend/src/services/weekly/model.ts` | The model (below). Pure. |
@@ -24,7 +25,7 @@ CLI and pure modules; no UI, no API route, no change to how concept tests run.
 | `backend/src/services/weekly/simulate.ts` | Synthetic Meta and TikTok exports with planted effects, plus the recovery check. |
 | `backend/src/services/weekly/store.ts` | Database read and write. Takes its own pool (never `db/index.ts`, which loads `backend/.env`). |
 | `backend/scripts/weekly.ts` | CLI: `migrate`, `ingest`, `features`, `note`, `read`, `simulate`, `status`. |
-| `backend/tests/weekly.test.ts` | 26 tests: parser variants, ingest, windows, the model on simulated truth, the thin week, the null case, the quote-column fallback, the note's wording and the number guard. |
+| `backend/tests/weekly.test.ts` | 29 tests, including hold bars: parser variants, ingest, windows, the model on simulated truth, the thin week, the null case, the quote-column fallback, the note's wording and the number guard. |
 
 `backend/package.json` is untouched: run it with `npx tsx scripts/weekly.ts`. `npm test` picks up the new test file.
 
@@ -42,7 +43,7 @@ CLI and pure modules; no UI, no API route, no change to how concept tests run.
 
 **Deviation from the plan:** the plan says "pools across ads through territory, format and feature effects". Ad rates pool through persona, platform and format. Territory isn't a pooling level, because with two territories per persona a month a territory is nearly one asset. Features enter through the regression, not the ad-level prior. The prior then stays simple, and a feature can't flatter the ads that carry it.
 
-## Config thresholds and why (`backend/config/weekly-read.json`, version 1)
+## Config thresholds and why (`backend/config/weekly-read.json`, version 2)
 
 | Setting | Value | Why |
 |---|---|---|
@@ -54,6 +55,7 @@ CLI and pure modules; no UI, no API route, no change to how concept tests run.
 | `calls.p_best_scale` | 0.8 | Scale when P(best in ad set) ≥ 0.8. |
 | `calls.max_tied_scale`, `p_beat_median_tied_scale` | 2, 0.9 | If the top two together reach 0.8 and each beats the median with P ≥ 0.9, both are "scale (tied)". Never "the winner". |
 | `calls.p_worse_than_median_cut` | 0.9 | Cut when P(worse than the ad set's median) ≥ 0.9. |
+| `calls.hold` (v2) | scale 0.6, tied scale 0.75, cut 0.75 | Hysteresis. Starting a call needs the full bar; keeping last week's call needs only the lower one. A scale stays while P(best) ≥ 0.6 and nothing else has reached 0.8. A tied scale stays while the ad is still in the top two and beats the median with P ≥ 0.75. A cut stays while P(worse) ≥ 0.75. Reads are chained week by week from the start of the flight (`series.ts`), so each week knows last week's calls. |
 | `calls.primary_metric` / `fallback_metric` | quotes per 1,000 / link CTR | Calls are made on quotes. Clicks can support a cut, never a scale (`fallback_can_scale: false`). |
 | `model.interval` | 0.9 | 90% ranges throughout. |
 | `model.between_ad_cv` | default 0.25, 0.05–0.8, estimated from 6+ ads | Sets how hard ads are pulled towards their group. |
@@ -105,7 +107,7 @@ All numbers come from simulated exports (made-up territory codes, planted effect
 
 **Idempotent ingest:** the same Meta file ingested twice: first "ads 39 new, 1,092 metric rows new", then "0 new, 39 updated; 0 new, 1,092 updated". `live_metrics` held 1,204 rows after Meta twice plus TikTok once (1,092 + 112).
 
-**Type checks and tests:** `npx tsc --noEmit` in backend (only the known pdf-parse and rcb-client errors) and frontend (clean). `scripts/weekly.ts` type-checks with the same compiler options. `npm test`: 81 of 81 pass.
+**Type checks and tests:** `npx tsc --noEmit` in backend (only the known pdf-parse and rcb-client errors) and frontend (clean). `scripts/weekly.ts` type-checks with the same compiler options. `npm test`: 84 of 84 pass.
 
 **Sample notes for Brook to review** (simulated data, outside the repo): `/Users/BD/ralph-voices/Claude outputs/voices-r1/weekly/sample/`
 - `weekly-2026-10-12.md`, `weekly-2026-10-19.md`, `weekly-2026-11-02.md`: weeks 1, 2 and 4 of a simulated Month 1, from the database. Week 2 and later show "what moved".
@@ -191,7 +193,7 @@ npx tsx scripts/weekly.ts read --file "<path>" --platform meta --historic --note
 
 ## Known gaps
 
-- **Calls can flip week to week near a threshold** (seen in the simulation: scale (tied) → keep testing → scale). "What moved" shows every flip. A cheap fix is hysteresis: keep a scale until P(best) falls below 0.6, and a cut until P(worse) falls below 0.75. Not done, because it changes thresholds that were written before any data. Brook to decide.
+- **Calls near a threshold (fixed in config v2, at Brook's request):** hold bars (`calls.hold`) now keep last week's call until the evidence falls well back. Over 30 simulated months, A→B→A reversals fell from 57 to 24, and from 9 to 2 with no true differences. End-of-month accuracy held: 158 of 169 scales in the true top two, 370 of 381 cuts in the bottom half. The cost: with no true differences, a wrong call is held longer (end-of-month calls 9 → 14 in 1,080 ad reads). "What moved" still shows every change, and a held call says so in its reason.
 - **Between-ad spread is estimated before features and formats are taken out**, so it's on the high side. Ranges on features are conservative, and large effects are clear about half the time at Month-1 volumes. A residual-based estimate is a B4 candidate once real data shows how ads actually vary.
 - **P(best) is among ads with enough data.** A new ad joins its ad set's comparison once it passes the minimum. Until then it's listed as "too early to call".
 - **One ad set per persona per platform is assumed.** An ad set name isn't used for cells, so Advantage+ or broader structures still work (cells come from the ad name). The cell label ("DINK_META") is ours, not Add3's ad set name.

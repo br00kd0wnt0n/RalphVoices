@@ -183,7 +183,11 @@ export function groupMeans(ads: AdData[], m: MetricKey, cfg: WeeklyConfig, cv: n
   return means;
 }
 
-export function readWeek(adsIn: AdData[], cfg: WeeklyConfig, opts: { from: string; to: string; quotesAvailable: boolean }): Read {
+// opts.prev: last week's read of the same flight. Its calls are held while the
+// evidence stays above the lower hold bars (config calls.hold).
+export function readWeek(adsIn: AdData[], cfg: WeeklyConfig, opts: { from: string; to: string; quotesAvailable: boolean; prev?: Read | null }): Read {
+  const prevCalls = new Map<string, Partial<Record<MetricKey, Call>>>();
+  for (const a of opts.prev?.ads || []) prevCalls.set(a.key, Object.fromEntries(Object.entries(a.metrics).map(([k, r]) => [k, r!.call])));
   const iv = cfg.model.interval;
   const qLo = (1 - iv) / 2, qHi = 1 - qLo;
   const notes: string[] = [];
@@ -246,7 +250,7 @@ export function readWeek(adsIn: AdData[], cfg: WeeklyConfig, opts: { from: strin
         L.tied_with = tied.map(a => a.stub);
         for (const a of tied) a.metrics[m]!.tied_with = [leader.stub];
       }
-      decideCalls(members, m, cfg);
+      decideCalls(members, m, cfg, prevCalls);
     }
   }
 
@@ -291,7 +295,7 @@ export function readWeek(adsIn: AdData[], cfg: WeeklyConfig, opts: { from: strin
   return read;
 }
 
-function decideCalls(members: AdRead[], m: MetricKey, cfg: WeeklyConfig) {
+function decideCalls(members: AdRead[], m: MetricKey, cfg: WeeklyConfig, prevCalls: Map<string, Partial<Record<MetricKey, Call>>> = new Map()) {
   const c = cfg.calls;
   const def = cfg.metrics[m];
   const rd = members.filter(a => a.metrics[m]!.readable);
@@ -303,9 +307,13 @@ function decideCalls(members: AdRead[], m: MetricKey, cfg: WeeklyConfig) {
   for (const a of byBest) { tiedTop.push(a); acc += a.metrics[m]!.p_best ?? 0; if (acc >= c.p_best_scale) break; }
   if (acc < c.p_best_scale || tiedTop.length < 2 || tiedTop.length > c.max_tied_scale || !tiedTop.every(a => (a.metrics[m]!.p_beat_median ?? 0) >= c.p_beat_median_tied_scale)) tiedTop = [];
 
+  const h = c.hold;
+  const freshScale = rd.filter(a => (a.metrics[m]!.p_best ?? 0) >= c.p_best_scale);
+  const top2 = byBest.slice(0, c.max_tied_scale);
   for (const a of members) {
     const r = a.metrics[m]!;
     const pct = (p: number | null) => `${Math.round((p ?? 0) * 100)}%`;
+    const was = prevCalls.get(a.key)?.[m];
     if (!a.live_now) { r.call = 'too early to call'; r.reason = 'not delivering in the last 7 days'; continue; }
     if (a.impressions < def.min_impressions) { r.call = 'too early to call'; r.reason = `${a.impressions.toLocaleString('en-US')} impressions; needs ${def.min_impressions.toLocaleString('en-US')}`; continue; }
     if (a.days_live < c.min_days_live) { r.call = 'too early to call'; r.reason = `live ${a.days_live} day${a.days_live === 1 ? '' : 's'}; needs ${c.min_days_live}`; continue; }
@@ -315,7 +323,18 @@ function decideCalls(members: AdRead[], m: MetricKey, cfg: WeeklyConfig) {
       const other = tiedTop.filter(b => b !== a).map(b => b.stub).join(', ');
       r.call = 'scale (tied)'; r.reason = `tied with ${other}; together P(best) ${pct(tiedTop.reduce((s, b) => s + (b.metrics[m]!.p_best ?? 0), 0))}, each ahead of the ad set's median (P ${pct(r.p_beat_median)})`; continue;
     }
+    // Holds: last week's scale stays while it's still well ahead and nothing else has taken the lead.
+    if (was === 'scale' && r.p_best >= h.p_best_scale) {
+      r.call = 'scale'; r.reason = `held from last week: P(best in ad set) ${pct(r.p_best)}, below the bar to start a scale (P(best) ${pct(c.p_best_scale)}) but above the bar to keep one (P(best) ${pct(h.p_best_scale)})`; continue;
+    }
+    if ((was === 'scale' || was === 'scale (tied)') && !freshScale.length && top2.includes(a) && (r.p_beat_median ?? 0) >= h.p_beat_median_tied_scale) {
+      const other = top2.filter(b => b !== a).map(b => b.stub).join(', ');
+      r.call = 'scale (tied)'; r.reason = `held from last week: still in the top two with ${other}, ahead of the ad set's median (P ${pct(r.p_beat_median)}; keeps a tied scale while P(beat median) is ${pct(h.p_beat_median_tied_scale)} or more)`; continue;
+    }
     if ((r.p_worse_than_median ?? 0) >= c.p_worse_than_median_cut) { r.call = 'cut'; r.reason = `P(worse than the ad set's median) ${pct(r.p_worse_than_median)}`; continue; }
+    if (was === 'cut' && (r.p_worse_than_median ?? 0) >= h.p_worse_than_median_cut) {
+      r.call = 'cut'; r.reason = `held from last week: P(worse than the ad set's median) ${pct(r.p_worse_than_median)}, above the bar to keep a cut (P(worse) ${pct(h.p_worse_than_median_cut)})`; continue;
+    }
     r.call = 'keep testing'; r.reason = `P(best) ${pct(r.p_best)}, P(worse than median) ${pct(r.p_worse_than_median)}: neither bar reached`;
   }
 }

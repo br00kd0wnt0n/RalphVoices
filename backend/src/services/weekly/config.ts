@@ -60,6 +60,7 @@ export interface WeeklyConfig {
     max_tied_scale: number;
     p_beat_median_tied_scale: number;
     p_worse_than_median_cut: number;
+    hold: { p_best_scale: number; p_beat_median_tied_scale: number; p_worse_than_median_cut: number };
   };
   features: {
     min_ads_with: number;
@@ -92,6 +93,9 @@ export function checkConfig(c: any): WeeklyConfig {
   need(p01(c.model?.interval), 'model.interval in (0,1)');
   need(p01(c.calls?.p_best_scale) && p01(c.calls?.p_worse_than_median_cut) && p01(c.calls?.p_beat_median_tied_scale), 'calls probabilities in (0,1)');
   need(METRIC_KEYS.includes(c.calls?.primary_metric), 'calls.primary_metric');
+  const h = c.calls?.hold;
+  need(h && p01(h.p_best_scale) && p01(h.p_beat_median_tied_scale) && p01(h.p_worse_than_median_cut), 'calls.hold probabilities in (0,1)');
+  need(h.p_best_scale <= c.calls.p_best_scale && h.p_beat_median_tied_scale <= c.calls.p_beat_median_tied_scale && h.p_worse_than_median_cut <= c.calls.p_worse_than_median_cut, 'calls.hold bars must not be above the bars to start a call');
   need(c.model?.mc_draws >= 500, 'model.mc_draws >= 500');
   need(Number.isInteger(c.features?.min_residual_df) && c.features.min_residual_df >= 1, 'features.min_residual_df');
   new RegExp(c.audience.retargeting_pattern, 'i');

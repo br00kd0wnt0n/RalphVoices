@@ -26,7 +26,8 @@ import pg from 'pg';
 import { loadConfig, DEFAULT_CONFIG_PATH, type WeeklyConfig, type SourcePlatform } from '../src/services/weekly/config.js';
 import { parseExport, loadFeatureCsv, type FeatureMap, type ExportResult } from '../src/services/weekly/ingest.js';
 import { aggregate, fromIngest, weekOf, addDays, type MetricRow } from '../src/services/weekly/window.js';
-import { readWeek, type Read } from '../src/services/weekly/model.js';
+import { type Read } from '../src/services/weekly/model.js';
+import { readSeries } from '../src/services/weekly/series.js';
 import { draftNote, lintNote, newNumbers } from '../src/services/weekly/note.js';
 import { simulate, checkRecovery, type Scenario } from '../src/services/weekly/simulate.js';
 import { saveExport, loadRows, updateFeatures, ingestSources } from '../src/services/weekly/store.js';
@@ -91,14 +92,8 @@ function reportExport(res: ExportResult) {
 }
 
 function doRead(rows: MetricRow[], week: { start: string; end: string }, since: string, quotesAvailable: boolean, historic = false): { read: Read; prev: Read | null; win: ReturnType<typeof aggregate>; weekImps: Map<string, number> } {
-  const win = aggregate(rows, since, week.end, { historic });
-  const read = readWeek(win.ads, cfg, { from: since, to: week.end, quotesAvailable: quotesAvailable && win.quotes_seen });
-  const prevEnd = addDays(week.start, -1);
-  let prev: Read | null = null;
-  if (prevEnd >= since && rows.some(r => r.period_end <= prevEnd && r.period_start >= since)) {
-    const pw = aggregate(rows, since, prevEnd, { historic });
-    prev = readWeek(pw.ads, cfg, { from: since, to: prevEnd, quotesAvailable: quotesAvailable && pw.quotes_seen });
-  }
+  // Chained from the start of the flight so last week's calls are held where the evidence allows.
+  const { read, prev, win } = readSeries(rows, since, week.end, cfg, { quotesAvailable, historic });
   const weekImps = new Map<string, number>();
   for (const r of rows) if (r.period_start >= week.start && r.period_end <= week.end) weekImps.set(r.key, (weekImps.get(r.key) || 0) + (r.impressions || 0));
   return { read, prev, win, weekImps };
@@ -262,7 +257,7 @@ async function main() {
         const fm = loadFeatureCsv(sim.features_csv, 'sim shortlist', cfg).map;
         const rows = [...parseExport(sim.meta_csv, 'meta', cfg, fm).rows, ...parseExport(sim.tiktok_csv, 'tiktok', cfg, fm).rows].map(fromIngest);
         const to = addDays(sim.truth.start, sim.truth.days - 1);
-        const read = readWeek(aggregate(rows, sim.truth.start, to).ads, cfg, { from: sim.truth.start, to, quotesAvailable: true });
+        const { read } = readSeries(rows, sim.truth.start, to, cfg, { quotesAvailable: true });
         const rec = checkRecovery(read, sim.truth);
         console.log('\nPlanted effect'.padEnd(34) + 'metric'.padEnd(16) + 'size'.padEnd(7) + 'truth'.padEnd(7) + 'estimate [90% range]'.padEnd(26) + 'status');
         for (const r of rec.rows) console.log(`${r.what.padEnd(33)} ${r.metric.padEnd(15)} ${r.size.padEnd(6)} ${('×' + r.truth.toFixed(2)).padEnd(6)} ${(r.estimate === null ? '—' : `×${r.estimate.toFixed(2)} [${r.lo!.toFixed(2)}, ${r.hi!.toFixed(2)}]`).padEnd(25)} ${r.status}`);
