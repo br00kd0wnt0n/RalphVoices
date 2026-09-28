@@ -139,12 +139,17 @@ export function Studio() {
   }
 
   /** Reopen a saved run: its lines in Review, its brief in the brief tab, new lines go into it. */
-  async function continueRun(id: string) {
+  async function continueRun(id: string, opts: { resume?: boolean } = {}) {
     const b = await studio.batch(id);
     setBatch(b);
     setBrief({ ...b.brief, own_lines: [] });
     setAttached(b.id);
     setTab('review');
+    if (opts.resume) {
+      const r = await studio.resume(id);
+      setStatus('Checking the lines this run left unchecked…');
+      follow(r.job, id);
+    }
   }
 
   async function more(line: Line, note: string) {
@@ -289,7 +294,7 @@ function Home() {
 
 function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onContinue, attachedRun, onNewRun }: {
   meta: Meta; brief: Brief; setBrief: (b: Brief) => void; run: (o?: { ownOnly?: boolean }) => void; running: boolean;
-  user: string; runsTick: number; onContinue: (id: string) => void;
+  user: string; runsTick: number; onContinue: (id: string, opts?: { resume?: boolean }) => void;
   attachedRun: Batch | null; onNewRun: () => void;
 }) {
   const [more, setMore] = useState(false);
@@ -440,7 +445,7 @@ function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onCon
 
 // ---------- runs: saved by person, continue any time ----------
 
-function RunsList({ user, tick, meta, onContinue }: { user: string; tick: number; meta: Meta; onContinue: (id: string) => void }) {
+function RunsList({ user, tick, meta, onContinue }: { user: string; tick: number; meta: Meta; onContinue: (id: string, opts?: { resume?: boolean }) => void }) {
   const [mine, setMine] = useState(true);
   const [runs, setRuns] = useState<RunSummary[]>([]);
   useEffect(() => { studio.batches(mine && user ? user : undefined).then(setRuns).catch(() => setRuns([])); }, [user, mine, tick]);
@@ -459,9 +464,12 @@ function RunsList({ user, tick, meta, onContinue }: { user: string; tick: number
               <div className="truncate text-base font-medium">{meta.territories[r.territory]?.name || r.territory}</div>
               <div className="text-sm text-[#858B96]">
                 {new Date(r.updated).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · {r.lines} lines{r.yours ? ` (${r.yours} yours)` : ''} · {r.kept} kept{!mine && r.created_by ? ` · ${r.created_by}` : ''}
+                {r.unchecked > 0 && <span className="text-amber-300"> · {r.unchecked} unchecked</span>}
               </div>
             </div>
-            <GhostButton className="px-3 py-1 text-sm" onClick={() => onContinue(r.id)}>Continue</GhostButton>
+            {r.unchecked > 0
+              ? <GhostButton className="px-3 py-1 text-sm" onClick={() => onContinue(r.id, { resume: true })} title="The run was interrupted; check the lines it left unchecked">Resume</GhostButton>
+              : <GhostButton className="px-3 py-1 text-sm" onClick={() => onContinue(r.id)}>Continue</GhostButton>}
           </li>
         ))}
       </ul>

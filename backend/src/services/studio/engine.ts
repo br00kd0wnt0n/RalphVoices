@@ -34,7 +34,7 @@ export function readJson<T = any>(p: string): T { return JSON.parse(fs.readFileS
 let store: StudioStore | null = null;
 export function setStore(s: StudioStore) { store = s; rulesCache = null; }
 export function getStore(): StudioStore {
-  if (!store) store = new FileStore(STUDIO, { rulesPath: rulesPath || undefined, inputsDir: INPUTS });
+  if (!store) store = new FileStore(STUDIO, { rulesPath: rulesPath || undefined, inputsDir: INPUTS, assets: localAssets() });
   return store;
 }
 const round = (x: number, d = 3) => Math.round(x * 10 ** d) / 10 ** d;
@@ -111,6 +111,7 @@ export interface Batch {
   id: string;
   brief: Brief;
   created: string;
+  rules_version?: string;  // the rules version the lines were last checked under
   created_by?: string;   // who started the run (local: the name the page asks for; hosted: the signed-in user)
   updated?: string;
   lines: Line[];
@@ -139,6 +140,7 @@ type Emit = (e: StudioEvent) => void;
 // ---------- rules ----------
 
 export interface Rules {
+  version?: string;
   sources: Record<string, any>;
   fields: Record<string, { platform: string; label: string; visible: number; max: number; source: string }>;
   tone_controls: Record<string, Record<string, string>>;
@@ -330,7 +332,7 @@ export class CapError extends Error {}
  * a request against the limit. A model's budget is the --tpm value if given
  * for it, else 90% of the limit its response headers report, else 20k.
  */
-class Pacer {
+export class Pacer {
   private windows = new Map<string, Array<{ t: number; tokens: number }>>();
   private learned = new Map<string, number>();
   private inflight = new Map<string, number>();
@@ -361,28 +363,38 @@ class Pacer {
   release(model: string) { this.inflight.set(model, Math.max(0, (this.inflight.get(model) || 1) - 1)); }
 }
 
-export interface ApiOptions { mock?: boolean; tpm?: Record<string, number>; cap?: number }
+export interface ApiOptions { mock?: boolean; tpm?: Record<string, number>; cap?: number; capWindow?: 'all' | 'month'; pacer?: Pacer; user?: string }
 
 export class Api {
   client: any;
   pacer: Pacer;
   mock: boolean;
   cap: number;
+  capWindow: 'all' | 'month';
   runUsd: Record<string, number> = {};
   runCalls: Record<string, number> = {};
   runTokens: Record<string, number> = {};
   stopped = false;
+  /** Who the spend is recorded against (the signed-in user, when hosted). */
+  user?: string;
   constructor(opts: ApiOptions = {}) {
     this.mock = !!opts.mock;
     this.cap = opts.cap ?? 15;
+    this.capWindow = opts.capWindow ?? 'all';
+    this.user = opts.user;
     loadKey(this.mock);
     this.client = this.mock ? mockClient() : new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     // The mock has no rate limit; pace it only when asked (STUDIO_PACE_MOCK=1) to rehearse live timing.
-    this.pacer = new Pacer(opts.tpm ?? {}, 8, this.mock && !process.env.STUDIO_PACE_MOCK);
+    // Pass a shared pacer when several jobs run at once (the hosted Studio makes one Api per job).
+    this.pacer = opts.pacer ?? new Pacer(opts.tpm ?? {}, 8, this.mock && !process.env.STUDIO_PACE_MOCK);
   }
   private spentBase = 0;
   /** Spend so far across all runs, read once at the start of each run for the cap check. */
-  async loadSpent() { this.spentBase = this.mock ? 0 : await getStore().spendTotal(); return this.spentBase; }
+  async loadSpent() {
+    const since = this.capWindow === 'month' ? new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString() : undefined;
+    this.spentBase = this.mock ? 0 : await getStore().spendTotal(since);
+    return this.spentBase;
+  }
   spent(): number { return this.spentBase; }
   runTotal(): number { return Object.values(this.runUsd).reduce((a, b) => a + b, 0); }
   async resetRun() { this.runUsd = {}; this.runCalls = {}; this.runTokens = {}; await this.loadSpent(); }
@@ -393,7 +405,7 @@ export class Api {
   }
   private guard() {
     if (this.stopped) throw new CapError('Stopped');
-    if (!this.mock && this.spent() + this.runTotal() > this.cap - 0.02) { this.stopped = true; throw new CapError(`Session cap of $${this.cap} reached`); }
+    if (!this.mock && this.spent() + this.runTotal() > this.cap - 0.02) { this.stopped = true; throw new CapError(this.capWindow === 'month' ? `This month's Studio budget of $${this.cap} is used up` : `Session cap of $${this.cap} reached`); }
   }
 
   async chat(o: {
@@ -473,7 +485,7 @@ export class Api {
   /** Record this run's spend in the cumulative ledger (studio/spend.json). */
   async commit(label: string, user?: string) {
     if (this.mock || !this.runTotal()) return;
-    await getStore().addSpend({ label, usd: round(this.runTotal(), 4), by_stage: Object.fromEntries(Object.entries(this.runUsd).map(([k, v]) => [k, round(v, 4)])), calls: this.runCalls, at: new Date().toISOString(), user });
+    await getStore().addSpend({ label, usd: round(this.runTotal(), 4), by_stage: Object.fromEntries(Object.entries(this.runUsd).map(([k, v]) => [k, round(v, 4)])), calls: this.runCalls, at: new Date().toISOString(), user: user ?? this.user });
   }
 
 }
@@ -686,6 +698,8 @@ export async function saveBatch(b: Batch): Promise<void> { b.updated = new Date(
 export interface RunSummary {
   id: string; name: string; persona: string; territory: string; created: string; updated: string; created_by: string;
   lines: number; yours: number; kept: number; undecided: number; usd: number;
+  /** Lines not yet checked (a run interrupted by a restart); resume checks them. */
+  unchecked: number;
 }
 /** Saved runs, newest activity first; pass a name to list one person's runs. */
 export async function listBatches(user?: string): Promise<RunSummary[]> {
@@ -701,6 +715,7 @@ export async function listBatches(user?: string): Promise<RunSummary[]> {
       lines: b.lines.length, yours: b.lines.filter(l => l.model === 'human').length,
       kept: b.lines.filter(l => l.decision === 'keep' || l.decision === 'edit').length,
       undecided: b.lines.filter(l => !l.decision).length, usd: b.stats.usd_total,
+      unchecked: b.lines.filter(l => l.status !== 'checked').length,
     });
   }
   return out.filter(r => !user || r.created_by.toLowerCase() === user.toLowerCase()).sort((a, b) => b.updated.localeCompare(a.updated));
@@ -1161,6 +1176,7 @@ export async function checkBatch(batch: Batch, api: Api, emit: Emit = () => {}, 
   const b = batch.brief;
   const idx = ruleIndex(r, b.persona);
   const started = Date.now();
+  if (r.version) batch.rules_version = r.version;
   const lines = batch.lines.filter(l => !onlyIds || onlyIds.includes(l.id));
 
   // Deterministic first, for every line, so the grid fills with the hard flags at once.
@@ -1532,43 +1548,61 @@ export async function meta() {
   };
 }
 
-// ---------- reference documents (the intelligence readout) ----------
+// ---------- reference documents and the client logo ----------
 
-// Client material, read from the Claude outputs folder and never committed.
-// studio/docs.json can override the list: [{ id, title, kind: 'md' | 'file', path }]
-// with paths relative to Claude outputs. Buyer verbatims (the quote bank) stay
-// analyst-only and aren't listed.
-export interface RefDoc { id: string; title: string; kind: 'md' | 'file'; path: string; note?: string }
+// Client material: never committed. Locally the files come from the Claude
+// outputs and studio folders; hosted, from the database (studio_assets, loaded
+// by `studio.ts db-import`). Only listed names are served, never arbitrary paths.
+// Buyer verbatims (the quote bank) stay analyst-only and aren't listed.
+export interface RefDoc { id: string; title: string; kind: 'md' | 'file'; path: string; contentType: string }
 const OUTPUTS = path.dirname(INPUTS);
-const DEFAULT_DOCS: RefDoc[] = [
-  { id: 'readout', title: 'Persona intelligence readout (v1.2, team version)', kind: 'md', path: 'intelligence-readout-v1-team.md' },
-  { id: 'readout-deck', title: 'Persona intelligence readout (v1.2 deck, .pptx)', kind: 'file', path: 'Trupanion_Persona_Intelligence_Readout_v1.2.pptx' },
+export const REFERENCE_DOCS: RefDoc[] = [
+  { id: 'readout', title: 'Persona intelligence readout (v1.2, team version)', kind: 'md', path: 'intelligence-readout-v1-team.md', contentType: 'text/markdown; charset=utf-8' },
+  { id: 'readout-deck', title: 'Persona intelligence readout (v1.2 deck, .pptx)', kind: 'file', path: 'Trupanion_Persona_Intelligence_Readout_v1.2.pptx', contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' },
 ];
-export function referenceDocs(): Array<Omit<RefDoc, 'path'> & { available: boolean }> {
-  return docsList().map(({ path: pth, ...d }) => ({ ...d, available: fs.existsSync(path.join(OUTPUTS, pth)) }));
+const BRAND_ASSETS: Record<string, { path: string; contentType: string }> = { 'client-logo': { path: 'brand/trupanion-logo-white.png', contentType: 'image/png' } };
+/** Asset names and where FileStore finds them on this machine. */
+export function localAssets(): Record<string, { path: string; contentType: string }> {
+  const out: Record<string, { path: string; contentType: string }> = {};
+  for (const d of REFERENCE_DOCS) out[`doc:${d.id}`] = { path: path.join(OUTPUTS, d.path), contentType: d.contentType };
+  for (const [k, v] of Object.entries(BRAND_ASSETS)) out[`brand:${k}`] = { path: path.join(STUDIO, v.path), contentType: v.contentType };
+  return out;
 }
-function docsList(): RefDoc[] {
-  const p = P('docs.json');
-  return fs.existsSync(p) ? readJson<RefDoc[]>(p) : DEFAULT_DOCS;
+export async function referenceDocs(): Promise<Array<{ id: string; title: string; kind: 'md' | 'file'; available: boolean }>> {
+  const st = getStore();
+  return Promise.all(REFERENCE_DOCS.map(async d => ({ id: d.id, title: d.title, kind: d.kind, available: await st.hasAsset(`doc:${d.id}`) })));
 }
-/** The document's absolute path, only for ids on the list (no arbitrary paths). */
-export function referenceDocPath(id: string): { doc: RefDoc; file: string } {
-  const doc = docsList().find(d => d.id === id);
+export async function referenceDoc(id: string) {
+  const doc = REFERENCE_DOCS.find(d => d.id === id);
   if (!doc) throw new Error(`No reference document ${id}`);
-  const file = path.resolve(OUTPUTS, doc.path);
-  if (!file.startsWith(OUTPUTS + path.sep) || !fs.existsSync(file)) throw new Error(`${doc.title} isn't available on this machine`);
-  return { doc, file };
+  const asset = await getStore().getAsset(`doc:${id}`);
+  if (!asset) throw new Error(`${doc.title} isn't available`);
+  return { doc, asset };
+}
+export async function brandAsset(name: string) {
+  if (!BRAND_ASSETS[name]) throw new Error(`No brand asset ${name}`);
+  const asset = await getStore().getAsset(`brand:${name}`);
+  if (!asset) throw new Error(`${name} isn't available`);
+  return asset;
 }
 
-// ---------- brand assets (client logo) ----------
+// ---------- resuming a run ----------
 
-// Client trademarks stay out of the repo: the page asks the API for them by
-// name and they're read from the studio folder. Only listed names are served.
-const BRAND_ASSETS: Record<string, string> = { 'client-logo': 'brand/trupanion-logo-white.png' };
-export function brandAssetPath(name: string): string {
-  const rel = BRAND_ASSETS[name];
-  if (!rel) throw new Error(`No brand asset ${name}`);
-  const file = P(rel);
-  if (!fs.existsSync(file)) throw new Error(`${name} isn't available on this machine`);
-  return file;
+/** Check any lines a run left unchecked (e.g. the server restarted mid-run). */
+export async function resumeChecks(batchId: string, api: Api, emit: Emit = () => {}): Promise<Batch> {
+  const batch = await loadBatch(batchId);
+  const todo = batch.lines.filter(l => l.status !== 'checked').map(l => l.id);
+  if (!todo.length) { emit({ type: 'done', batch: batchId }); return batch; }
+  const started = Date.now();
+  await api.resetRun();
+  emit({ type: 'status', message: `Resuming: checking ${todo.length} line${todo.length === 1 ? '' : 's'}` });
+  await checkBatch(batch, api, emit, todo);
+  batch.stats.timings_ms.resume = (batch.stats.timings_ms.resume || 0) + (Date.now() - started);
+  for (const [k, v] of Object.entries(api.runUsd)) batch.stats.usd[k] = round((batch.stats.usd[k] || 0) + v, 4);
+  batch.stats.usd_total = round(Object.values(batch.stats.usd).reduce((a, b) => a + b, 0), 4);
+  await saveBatch(batch);
+  await api.commit(`resume ${batchId}`);
+  emit({ type: 'stats', stats: batch.stats });
+  emit({ type: 'done', batch: batchId });
+  return batch;
 }

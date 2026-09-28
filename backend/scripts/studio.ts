@@ -259,7 +259,7 @@ async function main() {
     case 'db-import': {
       // Copy everything in a studio folder into the database. Safe to re-run: every write is an upsert.
       if (!pgStore) throw new Error('db-import needs --store pg');
-      const src = new FileStore(opt('from', S.studioDir()), { rulesPath: opt('rules') || undefined, inputsDir: S.INPUTS });
+      const src = new FileStore(opt('from', S.studioDir()), { rulesPath: opt('rules') || undefined, inputsDir: S.INPUTS, assets: S.localAssets() });
       const rules = await src.getRules();
       await pgStore.putRules(rules.version || 'imported', rules, { activate: true, by: opt('user', 'import'), notes: `Imported from ${src.dir}` });
       for (const key of ['personas', 'voices'] as const) { const v = await src.getInput(key); if (v) await pgStore.putInput(key, v); }
@@ -282,9 +282,11 @@ async function main() {
       await pgStore.saveTaste(await src.getTaste());
       const compares = await src.listCompares();
       for (const name of compares) { await pgStore.saveCompare(await src.getCompare(name)); await pgStore.saveCompareKey(name, await src.getCompareKey(name)); }
+      let assets = 0;
+      for (const name of Object.keys(S.localAssets())) { const x = await src.getAsset(name); if (x) { await pgStore.putAsset(name, x); assets++; } }
       const spend = await src.listSpend();
       if (flag('with-spend')) for (const e of spend) await pgStore.addSpend({ ...e, label: e.label || (e as any).tag || 'imported', at: e.at || new Date().toISOString() });
-      console.log(`Imported from ${src.dir}: rules ${rules.version} (active), ${Object.keys(edits).length} territory edits, ${briefs} briefs, ${ids.length} runs (${lines} lines), ${history} decision-history records, ${(await src.getTaste()).length} taste examples, ${compares.length} compares${flag('with-spend') ? `, ${spend.length} spend records` : ' (spend not imported; add --with-spend)'}.`);
+      console.log(`Imported from ${src.dir}: rules ${rules.version} (active), ${Object.keys(edits).length} territory edits, ${briefs} briefs, ${ids.length} runs (${lines} lines), ${history} decision-history records, ${(await src.getTaste()).length} taste examples, ${compares.length} compares, ${assets} assets${flag('with-spend') ? `, ${spend.length} spend records` : ' (spend not imported; add --with-spend)'}.`);
       return;
     }
     case 'serve': { await serve(); return; }
@@ -303,10 +305,10 @@ function printLine(l: S.Line, pad = '  ') {
 
 async function serve() {
   const express = (await import('express')).default;
+  const { createStudioRouter } = await import('../src/services/studio/router.js');
   const app = express();
   const port = Number(opt('port', '4100'));
-  const a = api();
-  const jobs = new Map<string, { events: S.StudioEvent[]; clients: Set<any>; done: boolean }>();
+  const pacer = api().pacer;
 
   app.use((req: any, res: any, next: any) => {
     const origin = req.headers.origin || '';
@@ -318,132 +320,21 @@ async function serve() {
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     next();
   });
-  app.use(express.json({ limit: '2mb' }));
-  app.use(express.text({ type: ['text/csv', 'text/plain'], limit: '5mb' }));
 
-  // Local only: the page sends the name it asked for. The hosted build uses the signed-in user.
+  // Local only: the page sends the name it asked for. The hosted build (routes/studio.ts) uses the signed-in user.
   const who = (req: any) => String(req.headers['x-studio-user'] || '').trim().slice(0, 60) || undefined;
-  const wrap = (fn: (req: any, res: any) => any) => async (req: any, res: any) => {
-    try { await fn(req, res); } catch (err: any) { res.status(400).json({ error: String(err?.message || err) }); }
-  };
-  function startJob(id: string, run: (emit: (e: S.StudioEvent) => void) => Promise<unknown>) {
-    const job = { events: [] as S.StudioEvent[], clients: new Set<any>(), done: false };
-    jobs.set(id, job);
-    const emit = (e: S.StudioEvent) => {
-      // Lines are re-sent as they change; keep only the latest copy for late subscribers.
-      if (e.type === 'line') { const i = job.events.findIndex(x => x.type === 'line' && x.line.id === e.line.id); if (i >= 0) job.events.splice(i, 1); }
-      job.events.push(e);
-      for (const c of job.clients) c.write(`data: ${JSON.stringify(e)}\n\n`);
-    };
-    run(emit).catch(err => emit({ type: 'error', message: String(err?.message || err) })).finally(() => {
-      job.done = true;
-      for (const c of job.clients) c.end();
-    });
-  }
-
   const base = '/api/studio';
-  // Reload rules and territories on each request, so edits (and, when hosted, other servers' edits) are always current.
-  app.use(base, async (_req: any, _res: any, next: any) => { try { await S.refreshRules(); next(); } catch (err) { next(err); } });
-  app.get(`${base}/meta`, wrap(async (_req, res) => res.json({ ...(await S.meta()), mock: MOCK, cap: CAP, ask_over: ASK_OVER })));
-  app.post(`${base}/estimate`, wrap(async (req, res) => { const b = S.makeBrief(req.body.brief || {}); res.json({ brief: b, ...S.estimate(b, { ownOnly: !!req.body.own_only }), spent: (await S.readSpend()).total_usd }); }));
-  app.get(`${base}/batches`, wrap(async (req, res) => res.json(await S.listBatches(req.query.user ? String(req.query.user) : undefined))));
-  app.get(`${base}/batches/:id`, wrap(async (req, res) => res.json(await S.loadBatch(req.params.id))));
-  app.post(`${base}/generate`, wrap(async (req, res) => {
-    const b = S.makeBrief(req.body.brief || {});
-    const ownOnly = !!req.body.own_only;
-    const e = S.estimate(b, { ownOnly });
-    const spent = (await S.readSpend()).total_usd;
-    if (!MOCK && e.usd > ASK_OVER && !req.body.confirm) return res.status(409).json({ needs_confirm: true, estimate: e.usd });
-    if (!MOCK && spent + e.usd > CAP) return res.status(402).json({ error: `This would take spend past the $${CAP} cap ($${spent.toFixed(2)} spent).` });
-    await S.saveBrief(b);
-    // Continue an existing run, or start a new one.
-    const id = req.body.batch ? String(req.body.batch) : `${b.territory}-${new Date().toISOString().replace(/[-:T]/g, '').slice(2, 14)}`;
-    startJob(`${id}~${Date.now()}`, emit => S.generate(b, a, emit, { batchId: id, ownOnly, user: who(req) }));
-    res.json({ batch: id, job: [...jobs.keys()].pop(), estimate: e.usd });
-  }));
-  app.get(`${base}/jobs/:id/events`, (req: any, res: any) => {
-    const job = jobs.get(req.params.id);
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders?.();
-    if (!job) { res.write(`data: ${JSON.stringify({ type: 'error', message: 'No such job' })}\n\n`); return res.end(); }
-    for (const e of job.events) res.write(`data: ${JSON.stringify(e)}\n\n`);
-    if (job.done) return res.end();
-    job.clients.add(res);
-    req.on('close', () => job.clients.delete(res));
-  });
-  app.patch(`${base}/batches/:id/lines/:line`, wrap(async (req, res) => res.json(await S.setDecision(req.params.id, req.params.line, req.body || {}, who(req)))));
-  app.post(`${base}/batches/:id/lines/:line/more`, wrap(async (req, res) => {
-    const jobId = `${req.params.id}~more~${Date.now()}`;
-    startJob(jobId, emit => S.moreLikeThis(req.params.id, req.params.line, String(req.body?.note || ''), Number(req.body?.k || 3), a, emit));
-    res.json({ job: jobId });
-  }));
-  app.get(`${base}/batches/:id/export.csv`, wrap(async (req, res) => {
-    const x = await S.exportBatch(req.params.id);
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="${req.params.id}.csv"`);
-    res.send(x.csv);
-  }));
-  app.get(`${base}/batches/:id/export.md`, wrap(async (req, res) => {
-    const x = await S.exportBatch(req.params.id);
-    res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="${req.params.id}.md"`);
-    res.send(x.md);
-  }));
-  app.post(`${base}/ingest`, wrap(async (req, res) => res.json(await S.ingest(typeof req.body === 'string' ? req.body : String(req.body?.csv || '')))));
-  app.get(`${base}/shortlist`, wrap(async (_req, res) => res.json(await S.shortlist())));
-  app.get(`${base}/shortlist.csv`, wrap(async (_req, res) => {
-    const s = await S.writeShortlist();
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', 'attachment; filename="shortlist.csv"');
-    res.send(s.csv);
-  }));
-  app.get(`${base}/shortlist.md`, wrap(async (_req, res) => {
-    const s = await S.writeShortlist();
-    res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
-    res.setHeader('Content-Disposition', 'attachment; filename="shortlist.md"');
-    res.send(s.md);
-  }));
-  app.post(`${base}/check`, wrap(async (req, res) => {
-    const { persona, territory, lines } = req.body || {};
-    res.json(await S.checkTexts(persona, territory, lines || [], a));
-  }));
-  app.get(`${base}/compare`, wrap(async (_req, res) => res.json(await S.listCompares())));
-  app.post(`${base}/compare`, wrap(async (req, res) => {
-    const b = S.makeBrief(req.body.brief || {});
-    const models: string[] = req.body.models || [];
-    const n = Number(req.body.n || 8);
-    const id = `compare~${Date.now()}`;
-    startJob(id, emit => S.compare(b, models, n, a, emit));
-    res.json({ job: id });
-  }));
-  app.get(`${base}/compare/:name`, wrap(async (req, res) => res.json(await S.loadCompare(req.params.name))));
-  app.patch(`${base}/compare/:name/lines/:id`, wrap(async (req, res) => {
-    const s = await S.loadCompare(req.params.name);
-    const l = s.lines.find(x => x.id === req.params.id);
-    if (!l) throw new Error('No such line');
-    if (req.body.favourite !== undefined) l.favourite = !!req.body.favourite;
-    if (req.body.note !== undefined) l.note = String(req.body.note);
-    await S.saveCompare(s);
-    res.json(l);
-  }));
-  app.post(`${base}/compare/:name/reveal`, wrap(async (req, res) => res.json(await S.revealCompare(req.params.name))));
-
-  app.post(`${base}/territories`, wrap(async (req, res) => res.json(await S.saveTerritory(null, req.body?.territory || {}, String(req.body?.note || ''), who(req)))));
-  app.put(`${base}/territories/:code`, wrap(async (req, res) => res.json(await S.saveTerritory(req.params.code, req.body?.territory || {}, String(req.body?.note || ''), who(req)))));
-  app.get(`${base}/brand/:name`, (req: any, res: any) => {
-    try { res.setHeader('Cache-Control', 'max-age=3600'); res.sendFile(S.brandAssetPath(req.params.name)); } catch { res.sendStatus(404); }
-  });
-  app.get(`${base}/docs`, wrap(async (_req, res) => res.json(S.referenceDocs())));
-  app.get(`${base}/docs/:id`, wrap(async (req, res) => {
-    const { doc, file } = S.referenceDocPath(req.params.id);
-    if (doc.kind === 'md') { res.setHeader('Content-Type', 'text/markdown; charset=utf-8'); return res.send(fs.readFileSync(file, 'utf8')); }
-    res.download(file, path.basename(file));
+  app.use(base, createStudioRouter({
+    who,
+    api: req => new S.Api({ mock: MOCK, tpm: tpm(), cap: CAP, pacer, user: who(req) }),
+    mock: MOCK,
+    cap: CAP,
+    capWindow: 'all',
+    askOver: ASK_OVER,
   }));
 
   app.listen(port, '127.0.0.1', () => {
-    console.log(`Studio API on http://127.0.0.1:${port}${base} (${MOCK ? 'MOCK, no cost' : `live, cap $${CAP}`}); files in ${S.studioDir()}`);
+    console.log(`Studio API on http://127.0.0.1:${port}${base} (${MOCK ? 'MOCK, no cost' : `live, cap $${CAP}`}); ${pgStore ? 'local database' : `files in ${S.studioDir()}`}`);
   });
 }
 

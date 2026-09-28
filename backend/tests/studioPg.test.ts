@@ -20,7 +20,7 @@ before(async () => {
   const host = new URL(URL_).hostname;
   if (!['127.0.0.1', 'localhost', '::1'].includes(host)) throw new Error(`Refusing non-local test database ${host}`);
   store = PgStore.fromUrl(URL_);
-  const tables = ['studio_spend', 'studio_compares', 'studio_taste', 'studio_edits', 'studio_line_embeddings', 'studio_lines', 'studio_batches', 'studio_briefs', 'studio_territory_edits', 'studio_inputs', 'studio_rules'];
+  const tables = ['studio_assets', 'studio_spend', 'studio_compares', 'studio_taste', 'studio_edits', 'studio_line_embeddings', 'studio_lines', 'studio_batches', 'studio_briefs', 'studio_territory_edits', 'studio_inputs', 'studio_rules'];
   await (store as any).db.query(`TRUNCATE ${tables.join(', ')} RESTART IDENTITY CASCADE`);
   const rules = JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8'));
   await store.putRules('example-1', rules, { activate: true, by: 'test' });
@@ -33,11 +33,11 @@ after(async () => { if (!skip) await store.close(); });
 
 test('rules come from the active database version; a second activation retires the first', { skip }, async () => {
   const r = await S.refreshRules();
-  assert.equal(r.version, 'example-1');
+  assert.equal((r as any).version, 'example-1');
   await store.putRules('example-2', { ...r, version: 'example-2' }, { activate: true });
   const list = await store.listRules();
   assert.equal(list.filter((x: any) => x.status === 'active').length, 1);
-  assert.equal((await S.refreshRules()).version, 'example-2');
+  assert.equal(((await S.refreshRules()) as any).version, 'example-2');
 });
 
 test('a run is written, read back, continued and decided on, all in the database', { skip }, async () => {
@@ -48,6 +48,7 @@ test('a run is written, read back, continued and decided on, all in the database
   const back = await S.loadBatch(first.id);
   assert.equal(back.lines.length, more.lines.length);
   assert.equal(back.created_by, 'Brook');
+  assert.equal(back.rules_version, 'example-2');
   assert.ok(back.lines.every(l => l.status === 'checked'));
   assert.equal(Object.keys(await store.getEmbeddings(first.id)).length, back.lines.length);
 
@@ -84,6 +85,47 @@ test('territory edits, compares with a hidden key, and spend live in the databas
   const { labels } = await S.revealCompare(set.name);
   assert.deepEqual(Object.values(labels).sort(), ['writer-a', 'writer-b']);
 
+  await store.addSpend({ label: 'last month', usd: 1, at: '2000-01-01T00:00:00Z' });
   await store.addSpend({ label: 'test', usd: 0.25, at: new Date().toISOString() });
-  assert.equal((await S.readSpend()).total_usd, 0.25);
+  assert.equal((await S.readSpend()).total_usd, 1.25);
+  const monthly = new S.Api({ cap: 50, capWindow: 'month' });
+  (monthly as any).mock = false;
+  assert.equal(await monthly.loadSpent(), 0.25);
+});
+
+test('reference documents and the client logo are served from the database', { skip }, async () => {
+  assert.equal((await S.referenceDocs()).find(d => d.id === 'readout')!.available, false);
+  await store.putAsset('doc:readout', { contentType: 'text/markdown', data: Buffer.from('# Readout'), filename: 'readout.md' });
+  assert.equal((await S.referenceDocs()).find(d => d.id === 'readout')!.available, true);
+  assert.equal((await S.referenceDoc('readout')).asset.data.toString(), '# Readout');
+});
+
+test('hosted rules endpoints: anyone lists, only admins upload or activate, versions are never overwritten', { skip }, async () => {
+  const express = (await import('express')).default;
+  const { createStudioRouter } = await import('../src/services/studio/router.js');
+  const app = express();
+  const isAdmin = (req: any) => req.headers['x-admin'] === '1';
+  app.use('/s', createStudioRouter({ who: () => 'brook', api: () => new S.Api({ mock: true }), mock: true, cap: 50, capWindow: 'month', askOver: 2, rules: { store, isAdmin } }));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(r => server.once('listening', r));
+  const base = `http://127.0.0.1:${(server.address() as any).port}/s`;
+  const call = async (method: string, p: string, body?: unknown, admin = false) => {
+    const res = await fetch(base + p, { method, headers: { 'Content-Type': 'application/json', ...(admin ? { 'X-Admin': '1' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    return { status: res.status, body: (await res.json()) as any };
+  };
+  try {
+    const current = S.loadRules();
+    assert.equal((await call('GET', '/rules')).status, 200);
+    assert.equal((await call('POST', '/rules', { version: 'example-3', rules: current })).status, 403);
+    assert.match((await call('POST', '/rules', { version: 'bad', rules: { personas: {} } }, true)).body.error, /missing sources/);
+    const up = await call('POST', '/rules', { version: 'example-3', rules: current, notes: 'test' }, true);
+    assert.equal(up.status, 200);
+    assert.equal(up.body.find((x: any) => x.version === 'example-3').status, 'draft');
+    assert.equal((await call('POST', '/rules', { version: 'example-3', rules: current }, true)).status, 400);
+    assert.equal((await call('POST', '/rules/example-3/activate', {})).status, 403);
+    const act = await call('POST', '/rules/example-3/activate', {}, true);
+    assert.equal(act.body.filter((x: any) => x.status === 'active').map((x: any) => x.version).join(), 'example-3');
+    assert.equal(((await S.refreshRules()) as any).version, 'example-3');
+    assert.equal((await call('POST', '/rules/nope/activate', {}, true)).status, 400);
+  } finally { server.close(); }
 });

@@ -146,9 +146,29 @@ test('the creative director writes first: own lines are tagged, checked, and Stu
   assert.deepEqual(history[0].after, { decision: 'keep', edited_text: '', note: '' });
 });
 
-test('reference documents are only served from the configured list', () => {
-  assert.throws(() => S.referenceDocPath('../../etc/passwd'), /No reference document/);
-  assert.ok(S.referenceDocs().some(d => d.id === 'readout'));
+test('reference documents are only served from the configured list', async () => {
+  await assert.rejects(() => S.referenceDoc('../../etc/passwd'), /No reference document/);
+  await assert.rejects(() => S.brandAsset('../secrets'), /No brand asset/);
+  assert.ok((await S.referenceDocs()).some(d => d.id === 'readout'));
+  assert.ok(Object.keys(S.localAssets()).includes('brand:client-logo'));
+});
+
+test('resuming a run checks only the lines left unchecked', async () => {
+  const api = new S.Api({ mock: true });
+  const b = S.makeBrief({ territory: 'OWN_CALM', n: 4, name: 'resume-test' });
+  const run = await S.generate(b, api, () => {}, { check: false });
+  assert.ok(run.lines.every(l => l.status !== 'checked'));
+  assert.equal((await S.listBatches()).find(x => x.id === run.id)!.unchecked, run.lines.length);
+  const done = await S.resumeChecks(run.id, api);
+  assert.ok(done.lines.every(l => l.status === 'checked'));
+  assert.ok(done.stats.timings_ms.resume >= 0);
+  assert.equal((await S.listBatches()).find(x => x.id === run.id)!.unchecked, 0);
+});
+
+test('a monthly cap counts only this month\'s spend', async () => {
+  const api = new S.Api({ mock: true, cap: 50, capWindow: 'month' });
+  assert.equal(api.capWindow, 'month');
+  assert.equal(await api.loadSpent(), 0);
 });
 
 test('territories are editable, with history; the pitch version is untouched', async () => {

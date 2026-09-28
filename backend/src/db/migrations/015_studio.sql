@@ -46,8 +46,10 @@ CREATE TABLE IF NOT EXISTS studio_batches (
   created_at  TIMESTAMPTZ NOT NULL,
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   stats       JSONB NOT NULL DEFAULT '{}'::jsonb,
-  dropped     JSONB NOT NULL DEFAULT '[]'::jsonb
+  dropped     JSONB NOT NULL DEFAULT '[]'::jsonb,
+  rules_version TEXT                          -- the rules version its lines were last checked under
 );
+ALTER TABLE studio_batches ADD COLUMN IF NOT EXISTS rules_version TEXT;
 CREATE INDEX IF NOT EXISTS studio_batches_created_by ON studio_batches (created_by);
 CREATE INDEX IF NOT EXISTS studio_batches_updated ON studio_batches (updated_at DESC);
 

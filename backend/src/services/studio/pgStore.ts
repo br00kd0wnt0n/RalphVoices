@@ -37,6 +37,18 @@ export class PgStore implements StudioStore {
       await c.query('COMMIT');
     } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
   }
+  /** Make an uploaded version the active one (the previous active version is retired). */
+  async activateRules(version: string) {
+    const c = await this.db.connect();
+    try {
+      await c.query('BEGIN');
+      const hit = await c.query(`SELECT 1 FROM studio_rules WHERE version = $1`, [version]);
+      if (!hit.rowCount) throw new Error(`No rules version ${version}`);
+      await c.query(`UPDATE studio_rules SET status = 'retired' WHERE status = 'active' AND version <> $1`, [version]);
+      await c.query(`UPDATE studio_rules SET status = 'active' WHERE version = $1`, [version]);
+      await c.query('COMMIT');
+    } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
+  }
   async listRules() { return (await this.db.query(`SELECT version, status, notes, created_by, created_at FROM studio_rules ORDER BY created_at DESC`)).rows; }
 
   async getInput(key: 'personas' | 'voices') {
@@ -78,7 +90,7 @@ export class PgStore implements StudioStore {
     const row = b.rows[0];
     const lines = await this.db.query(`SELECT body FROM studio_lines WHERE batch_id = $1 ORDER BY position`, [id]);
     return {
-      id: row.id, brief: row.brief, created: new Date(row.created_at).toISOString(), created_by: row.created_by ?? undefined,
+      id: row.id, brief: row.brief, created: new Date(row.created_at).toISOString(), created_by: row.created_by ?? undefined, rules_version: row.rules_version ?? undefined,
       updated: new Date(row.updated_at).toISOString(), lines: lines.rows.map(x => x.body), dropped: row.dropped, stats: row.stats,
     };
   }
@@ -94,11 +106,12 @@ export class PgStore implements StudioStore {
     try {
       await c.query('BEGIN');
       await c.query(
-        `INSERT INTO studio_batches (id, brief, persona, territory, created_by, created_at, updated_at, stats, dropped)
-         VALUES ($1, $2, $3, $4, $5, $6, COALESCE($9::timestamptz, NOW()), $7, $8)
+        `INSERT INTO studio_batches (id, brief, persona, territory, created_by, created_at, updated_at, stats, dropped, rules_version)
+         VALUES ($1, $2, $3, $4, $5, $6, COALESCE($9::timestamptz, NOW()), $7, $8, $10)
          ON CONFLICT (id) DO UPDATE SET brief = EXCLUDED.brief, created_by = COALESCE(studio_batches.created_by, EXCLUDED.created_by),
-           updated_at = EXCLUDED.updated_at, stats = EXCLUDED.stats, dropped = EXCLUDED.dropped`,
-        [b.id, b.brief, b.brief.persona, b.brief.territory, b.created_by ?? null, b.created, b.stats ?? {}, JSON.stringify(b.dropped ?? []), b.updated ?? null]);
+           updated_at = EXCLUDED.updated_at, stats = EXCLUDED.stats, dropped = EXCLUDED.dropped,
+           rules_version = COALESCE(EXCLUDED.rules_version, studio_batches.rules_version)`,
+        [b.id, b.brief, b.brief.persona, b.brief.territory, b.created_by ?? null, b.created, b.stats ?? {}, JSON.stringify(b.dropped ?? []), b.updated ?? null, b.rules_version ?? null]);
       for (let i = 0; i < b.lines.length; i++) await this.upsertLine(c, b.id, b.lines[i], i, false);
       await c.query('COMMIT');
     } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }

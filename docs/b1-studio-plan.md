@@ -119,7 +119,7 @@ Testing:
 | 0 | "You write first" on B1-lite (can ship before the hosted build) | 0.5 day |
 | 1 | Move the engine into `src/services/studio`; `StudioStore` with `FileStore`; CLI unchanged; tests green | 0.5 day |
 | 2 | Migration 015 and `PgStore`; tests against the local database | 1 day |
-| 3 | `/api/studio` routes: auth, access list, database-backed jobs with reconnect, rules endpoints, monthly cap | 1 day |
+| 3 | `/api/studio` routes: auth, access list, database-backed jobs with reconnect, rules endpoints, monthly cap (**done 28 Sep**; `docs/build-log/B1-studio-p3.md`) | 1 day |
 | 4 | Frontend: production route and nav, signed-in client, attribution and history, per-user stars, rules view, iframe check | 1 day |
 | 5 | Import script, handoff, and staging-style check on the local database with real keys | 0.5 day |
 | 6 | Deploy with Brook: env vars, migration, rules upload, production smoke test | 0.5 day |

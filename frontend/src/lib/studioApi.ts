@@ -21,10 +21,12 @@ export interface RunStats {
   generated: number; near_duplicates_removed: number; similar_flagged: number;
   timings_ms: Record<string, number>; usd: Record<string, number>; usd_total: number;
 }
-export interface Batch { id: string; brief: Brief; created: string; created_by?: string; updated?: string; lines: Line[]; stats: RunStats }
+export interface Batch { id: string; brief: Brief; created: string; created_by?: string; updated?: string; rules_version?: string; lines: Line[]; stats: RunStats }
 export interface RunSummary {
   id: string; name: string; persona: string; territory: string; created: string; updated: string; created_by: string;
   lines: number; yours: number; kept: number; undecided: number; usd: number;
+  /** Lines left unchecked when a run was interrupted (e.g. a server restart). */
+  unchecked: number;
 }
 export interface FieldSpec { platform: string; label: string; visible: number; max: number; source: string }
 export interface Territory {
@@ -83,6 +85,8 @@ export const studio = {
   batch: (id: string) => req<Batch>(`/batches/${encodeURIComponent(id)}`),
   decide: (batch: string, line: string, patch: Partial<Pick<Line, 'decision' | 'edited_text' | 'note'>>) =>
     req<Line>(`/batches/${encodeURIComponent(batch)}/lines/${encodeURIComponent(line)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  /** Check the lines an interrupted run left unchecked. */
+  resume: (batch: string) => req<{ job: string }>(`/batches/${encodeURIComponent(batch)}/resume`, { method: 'POST' }),
   more: (batch: string, line: string, note: string, k = 3) =>
     req<{ job: string }>(`/batches/${encodeURIComponent(batch)}/lines/${encodeURIComponent(line)}/more`, { method: 'POST', body: JSON.stringify({ note, k }) }),
   saveTerritory: (code: string | null, territory: Partial<Territory>, note: string) =>
