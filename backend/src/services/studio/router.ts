@@ -270,7 +270,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
       res.json(await store.listRules());
     }));
     r.post('/rules/:version/activate', admin(async (req, res) => {
-      await store.activateRules(req.params.version);
+      await store.activateRules(req.params.version, o.who(req));
       await S.refreshRules();
       res.json(await store.listRules());
     }));

@@ -76,7 +76,7 @@ export interface Signoff {
 export interface Expectation { id: string; persona: string; territory: string; signoff_id: string; line_ids: string[]; reason: string; created_by: string; created_at: string; sha256: string }
 export interface ReadyLine { line: Line; final_text: string; sha256: string; stub: string; red: Flag[]; compliance: NonNullable<Line['compliance']>; versions: LineVersion[] }
 export interface ReadyView { persona: string; territory: string; lines: ReadyLine[]; signoffs: Signoff[]; expectations: Expectation[]; latest: Signoff | null }
-export interface RulesVersion { version: string; status: 'draft' | 'active' | 'retired'; notes?: string; created_by?: string; created_at: string }
+export interface RulesVersion { version: string; status: 'draft' | 'active' | 'retired'; notes?: string; created_by?: string; created_at: string; activated_by?: string | null; activated_at?: string | null }
 export type StudioEvent =
   | { type: 'status'; message: string }
   | { type: 'line'; line: Line }
@@ -203,7 +203,7 @@ export const studio = {
   // Rules versions (hosted only)
   rules: () => req<RulesVersion[]>('/rules'),
   activateRules: (version: string) => req<RulesVersion[]>(`/rules/${enc(version)}/activate`, { method: 'POST' }),
-  uploadRules: (version: string, rules: unknown, notes: string) => req<RulesVersion[]>('/rules', { method: 'POST', body: JSON.stringify({ version, rules, notes }) }),
+  uploadRules: (version: string, rules: unknown, notes: string, activate = false) => req<RulesVersion[]>('/rules', { method: 'POST', body: JSON.stringify({ version, rules, notes, activate }) }),
 
   download,
   events,

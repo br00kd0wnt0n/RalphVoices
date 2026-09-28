@@ -1266,13 +1266,23 @@ function Rules({ admin, onActivated }: { admin: boolean; onActivated: () => void
   const [version, setVersion] = useState('');
   const [notes, setNotes] = useState('');
   const [file, setFile] = useState<File | null>(null);
+  const [drafted, setDrafted] = useState<string | null>(null); // just uploaded as a draft: not live yet
   const load = () => studio.rules().then(setList).catch(e => setError(e.message));
   useEffect(() => { load(); }, []);
-  async function upload() {
+  const live = list.find(r => r.status === 'active');
+  async function activate(v: string, ask = true) {
+    if (ask && !window.confirm(`Make ${v} the live rules? New checks use it straight away.`)) return;
+    try { setList(await studio.activateRules(v)); setDrafted(null); onActivated(); } catch (e: any) { setError(e.message); }
+  }
+  async function upload(andActivate: boolean) {
     if (!file) return;
     try {
       const body = JSON.parse(await file.text());
-      setList(await studio.uploadRules(version || body.version, body, notes));
+      const v = version || body.version;
+      if (andActivate && !window.confirm(`Upload ${v} and make it the live rules? New checks use it straight away.`)) return;
+      setList(await studio.uploadRules(v, body, notes, andActivate));
+      setDrafted(andActivate ? null : v);
+      if (andActivate) onActivated();
       setFile(null); setVersion(''); setNotes(''); setError('');
     } catch (e: any) { setError(e.message); }
   }
@@ -1280,30 +1290,45 @@ function Rules({ admin, onActivated }: { admin: boolean; onActivated: () => void
     <div className="max-w-4xl space-y-5">
       <div>
         <h1 className="text-2xl font-bold tracking-tight" style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>Rules</h1>
-        <p className="text-base text-[#A3A8B1]">Every line is checked against the active rules version, built from the client’s legal, brand and persona material. Each run records the version it was checked under. {admin ? 'You can upload and activate versions.' : 'Only an admin can change them.'}</p>
+        <p className="text-base text-[#A3A8B1]">Every line is checked against the live rules version, built from the client’s legal, brand and persona material. Each run records the version it was checked under. {admin ? 'You can upload and activate versions.' : 'Only an admin can change them.'}</p>
       </div>
+      <div className={cn('flex flex-wrap items-center gap-3 rounded-xl border-2 px-5 py-4', live ? 'border-emerald-500/60 bg-emerald-500/10' : 'border-amber-400/60 bg-amber-400/10')}>
+        <span className={cn('text-sm font-semibold uppercase tracking-wider', live ? 'text-emerald-300' : 'text-amber-200')}>Live</span>
+        {live
+          ? <span className="text-lg"><span className="font-mono font-semibold">{live.version}</span><span className="text-base text-[#A3A8B1]">{live.activated_by ? `, activated by ${live.activated_by}` : live.created_by ? `, uploaded by ${live.created_by}` : ''}{live.activated_at ? ` at ${when(live.activated_at)}` : ` on ${when(live.created_at)}`}</span></span>
+          : <span className="text-base text-amber-100">No rules are live yet. Upload a version and activate it.</span>}
+      </div>
+      {drafted && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border-2 border-amber-400/60 bg-amber-400/10 px-5 py-4 text-base text-amber-50">
+          <span><span className="font-mono font-semibold">{drafted}</span> uploaded as a draft. {live ? <><span className="font-mono">{live.version}</span> is still live.</> : 'Nothing is live yet.'}</span>
+          <PinkButton className="ml-auto px-4 py-1.5 text-base" onClick={() => activate(drafted)}>Activate {drafted}</PinkButton>
+        </div>
+      )}
       {error && <div className="rounded-lg border-2 border-red-500/45 bg-red-500/10 p-3 text-base text-red-200">{error}</div>}
       <ul className="divide-y divide-[#272B34] rounded-xl border border-[#272B34] bg-[#16181D]">
         {list.map(r => (
           <li key={r.version} className="flex flex-wrap items-center gap-3 px-5 py-3">
             <span className="font-mono text-base font-semibold">{r.version}</span>
-            <Chip tone={r.status === 'active' ? 'outline' : 'grey'} className={r.status === 'active' ? 'border-emerald-500 text-emerald-300' : ''}>{r.status}</Chip>
+            <Chip tone={r.status === 'active' ? 'outline' : 'grey'} className={r.status === 'active' ? 'border-emerald-500 text-emerald-300' : ''}>{r.status === 'active' ? 'live' : r.status}</Chip>
             <span className="text-sm text-[#858B96]">{when(r.created_at)}{r.created_by ? ` · ${r.created_by}` : ''}{r.notes ? ` · ${r.notes}` : ''}</span>
-            {admin && r.status !== 'active' && <GhostButton className="ml-auto" onClick={async () => { if (window.confirm(`Make ${r.version} the active rules? New checks use it straight away.`)) { try { setList(await studio.activateRules(r.version)); onActivated(); } catch (e: any) { setError(e.message); } } }}>Activate</GhostButton>}
+            {admin && r.status !== 'active' && <GhostButton className="ml-auto" onClick={() => activate(r.version)}>Activate</GhostButton>}
           </li>
         ))}
-        {!list.length && !error && <li className="px-5 py-3 text-[#858B96]">Loading…</li>}
+        {!list.length && !error && <li className="px-5 py-3 text-[#858B96]">No versions yet.</li>}
       </ul>
       {admin && (
         <section className="space-y-3 rounded-xl border border-dashed border-[#4A505D] p-5">
           <h2 className="text-lg font-semibold">Upload a new version</h2>
-          <p className="text-sm text-[#A3A8B1]">A studio-rules.json file. It’s saved as a draft; activate it above when it’s ready. Versions are never overwritten.</p>
+          <p className="text-sm text-[#A3A8B1]">A studio-rules.json file. “Upload and activate” makes it live straight away; “Upload as draft” keeps the current version live until you activate the new one. Versions are never overwritten.</p>
           <input type="file" accept="application/json,.json" onChange={e => setFile(e.target.files?.[0] || null)} className="text-sm" />
           <div className="grid grid-cols-2 gap-3">
             <input className="rounded-lg border-2 border-[#343946] px-3 py-2 text-base" placeholder="Version (defaults to the file’s)" value={version} onChange={e => setVersion(e.target.value)} />
             <input className="rounded-lg border-2 border-[#343946] px-3 py-2 text-base" placeholder="What changed" value={notes} onChange={e => setNotes(e.target.value)} />
           </div>
-          <PinkButton disabled={!file} onClick={upload}>Upload as draft</PinkButton>
+          <div className="flex gap-2">
+            <PinkButton disabled={!file} onClick={() => upload(true)}>Upload and activate</PinkButton>
+            <GhostButton disabled={!file} className="text-base" onClick={() => upload(false)}>Upload as draft</GhostButton>
+          </div>
         </section>
       )}
     </div>

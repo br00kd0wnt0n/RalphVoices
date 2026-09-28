@@ -83,3 +83,8 @@ CREATE TABLE IF NOT EXISTS studio_asset_status (
   ready_at    TIMESTAMPTZ,
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Rules versions (015): record who made a version live and when, so the Rules
+-- view can say "Live: v2.3, activated by … at …" (a draft looked live on 28 Sep).
+ALTER TABLE studio_rules ADD COLUMN IF NOT EXISTS activated_by TEXT;
+ALTER TABLE studio_rules ADD COLUMN IF NOT EXISTS activated_at TIMESTAMPTZ;

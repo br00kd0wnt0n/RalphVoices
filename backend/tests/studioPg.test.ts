@@ -125,6 +125,9 @@ test('hosted rules endpoints: anyone lists, only admins upload or activate, vers
     assert.equal((await call('POST', '/rules/example-3/activate', {})).status, 403);
     const act = await call('POST', '/rules/example-3/activate', {}, true);
     assert.equal(act.body.filter((x: any) => x.status === 'active').map((x: any) => x.version).join(), 'example-3');
+    const live = act.body.find((x: any) => x.version === 'example-3');
+    assert.equal(live.activated_by, 'brook', 'the Rules view says who made it live');
+    assert.ok(live.activated_at);
     assert.equal(((await S.refreshRules()) as any).version, 'example-3');
     assert.equal((await call('POST', '/rules/nope/activate', {}, true)).status, 400);
   } finally { server.close(); }
