@@ -58,9 +58,18 @@ const MOCK = flag('mock');
 // refused unless --allow-remote (the deploy step, with Brook's go-ahead).
 let pgStore: PgStore | null = null;
 function databaseUrl(): string {
-  const url = opt('database-url') || process.env.STUDIO_DATABASE_URL || '';
+  // Tolerate a pasted value with surrounding spaces or quotes.
+  const url = (opt('database-url') || process.env.STUDIO_DATABASE_URL || '').trim().replace(/^['"]|['"]$/g, '');
   if (!url) throw new Error('--store pg needs --database-url (or STUDIO_DATABASE_URL); DATABASE_URL is deliberately not used');
-  const host = new URL(url).hostname;
+  // Never echo the value: it carries the database password.
+  let parsed: URL;
+  try { parsed = new URL(url); } catch {
+    const hint = url.startsWith('${{') ? ' That is a Railway reference, not the value: copy it from the Postgres service itself.' : /^\*+$/.test(url) ? ' That is the masked value: reveal it (eye icon) or use Copy.' : '';
+    throw new Error(`The database URL isn't a valid URL (it should start with postgresql://).${hint} Copy DATABASE_PUBLIC_URL from the Postgres service in Railway.`);
+  }
+  if (!/^postgres(ql)?:$/.test(parsed.protocol)) throw new Error(`The database URL starts with ${parsed.protocol}// but should be postgresql:// (that looks like a web address, not the database). Copy DATABASE_PUBLIC_URL from the Postgres service in Railway.`);
+  const host = parsed.hostname;
+  if (host.endsWith('.railway.internal')) throw new Error(`${host} only resolves inside Railway; use the public URL (DATABASE_PUBLIC_URL, a proxy.rlwy.net host).`);
   if (!['127.0.0.1', 'localhost', '::1'].includes(host) && !flag('allow-remote')) throw new Error(`Refusing non-local database host ${host}; pass --allow-remote only for the approved deploy step`);
   return url;
 }
@@ -126,6 +135,9 @@ const PLANTED: Array<{ text: string; field: string; expect: string; severity?: S
   { text: 'With Trupanion, your vet can be paid directly at checkout at participating hospitals.', field: 'meta_primary', expect: 'COMP_DIRECT_PAY', absent: true },
   { text: 'We pay the whole bill.', field: 'meta_headline', expect: 'COMP_PAID_SHARE' },
   { text: 'Even pre-existing conditions are covered from day one.', field: 'meta_primary', expect: 'COMP_PREEXISTING' },
+  // Rules v2.3: only claims that pre-existing conditions are covered; the honest CUR_VET caveat must pass.
+  { text: 'Even pre-existing conditions are covered', field: 'meta_headline', expect: 'COMP_PREEXISTING' },
+  { text: 'Conditions that appear before coverage begins may be considered pre-existing.', field: 'meta_primary', expect: 'COMP_PREEXISTING', absent: true },
   { text: 'Checkups covered. Vaccines covered. Relax.', field: 'meta_primary', expect: 'COMP_ROUTINE' },
   { text: 'Every claim paid in seconds.', field: 'meta_headline', expect: 'COMP_CLAIM_SPEED' },
   { text: 'Cheap pet insurance can cost you more when it matters most.', field: 'meta_primary', expect: 'COMP_CHEAP_LOCKED', severity: 'warn' },

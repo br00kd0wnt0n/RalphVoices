@@ -29,6 +29,7 @@
         "wordings": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2, "description": "Two yes/no wordings for the logprob check (compliance items only)." },
         "status": { "type": "string", "description": "'pending' marks a rule awaiting client confirmation." },
         "needs_confirmation": { "type": "boolean" },
+        "applies_to": { "enum": ["text", "visual", "both"], "default": "text", "description": "What the rule is checked on. text (default): copy lines, in Studio. visual: images and video frames only, in B2's pre-flight audit; Studio ignores these. both: Studio's text checks and B2's visual checks." },
         "source": { "type": "string" }
       }
     }

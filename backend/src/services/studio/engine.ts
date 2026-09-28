@@ -182,6 +182,8 @@ export interface RuleItem {
   patterns?: Pat[]; trigger_patterns?: string[]; requires_patterns?: string[];
   lead_fields?: string[];
   wordings?: [string, string]; structures?: string[]; min_words?: number; status?: string; needs_confirmation?: boolean;
+  /** What the rule is checked on: copy ('text', the default), images and frames only ('visual', B2's audit), or 'both'. */
+  applies_to?: 'text' | 'visual' | 'both';
 }
 export interface Fact {
   id: string; text: string; numbers: string[]; personas?: string[]; source: string;
@@ -216,6 +218,13 @@ let voicesCache: Record<string, string> = {};
 export async function refreshRules(): Promise<Rules> {
   const s = getStore();
   const r = await s.getRules() as Rules;
+  // Studio checks words: rules for images and frames only (applies_to: 'visual', used by B2's
+  // audit) are left out here, so no text check, prompt or yes/no question ever sees them.
+  const forText = (x: RuleItem) => (x.applies_to || 'text') !== 'visual';
+  r.compliance = (r.compliance || []).filter(forText);
+  r.brand = (r.brand || []).filter(forText);
+  r.clarity = (r.clarity || []).filter(forText);
+  for (const pr of Object.values(r.personas || {})) if (pr.turn_offs) pr.turn_offs = pr.turn_offs.filter(forText);
   // Territory edits (the creative director's, from client feedback or taste)
   // sit on top of the pitch versions in the rules.
   for (const t of Object.values(r.territories)) t.origin = 'pitch';
