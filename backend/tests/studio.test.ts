@@ -213,3 +213,14 @@ test('two runs started in the same second get different ids', async () => {
   assert.notEqual(r1.id, r2.id);
   assert.equal((await S.loadBatch(r1.id)).lines.length, r1.lines.length);
 });
+
+test("'price leads' is only red when the line has a price; a model hit without one stays amber", () => {
+  const mk = (text: string, flag: Partial<S.Flag>) => ({ text, field: 'meta_primary', decision: '', flags: [{ rule: 'COMP_PRICE_LEAD', severity: 'compliance', label: 'price', source: 'LEGAL', quote: '', by: ['model', 'logprob'], ...flag }] } as any as S.Line);
+  const noPrice = mk('Cheap cover can cost you more when it matters most.', { p: 0.41 });
+  S.reconcile(noPrice, rules);
+  assert.equal(noPrice.flags[0].severity, 'warn');
+  assert.match(noPrice.flags[0].why!, /no price/);
+  const priced = mk('Peace of mind, and only $30 a month.', { p: 0.41 });
+  S.reconcile(priced, rules);
+  assert.equal(priced.flags[0].severity, 'compliance', 'with a price, model and yes/no agreeing still makes it red');
+});

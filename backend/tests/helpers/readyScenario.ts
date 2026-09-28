@@ -115,4 +115,20 @@ export async function scenario() {
   const pack2 = S.parseCsv((await R.handoffPack()).csv);
   assert.equal(pack2.find(r => r[6] === 'Honestly, the policy pays for itself.')![9], 'Cleared');
   assert.equal(pack2.find(r => r[6].endsWith('Every time.'))![9], 'Cleared', 'cleared on the wording that is now signed off');
+
+  // A line kept later that sorts first in the shortlist would take v1 of the same code; sign-off gives it a free number instead.
+  const late = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'late', own_lines: [{ text: 'Calm, even on a Sunday.', field: 'meta_primary' }] }), api, () => {}, { ownOnly: true, user: 'nick', batchId: 'OWN_CALM-000000-000000' });  // sorts first
+  const lateLine = late.lines[0];
+  await S.setDecision(late.id, lateLine.id, { decision: 'keep' }, 'nick');
+  const wanted = (await S.shortlist()).find(r => r.id === lateLine.id)!.stub;
+  assert.ok((await S.getStore().listSignoffs()).some((so: any) => so.lines.some((x: any) => x.stub === wanted && x.line_id !== lateLine.id)), 'the shortlist hands the late line a code that is already signed off');
+  const third = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: [...ids, lateLine.id], expectation }, 'nick');
+  const codes = third.signoff.lines.map(x => x.stub);
+  assert.equal(new Set(codes).size, codes.length, 'no two lines share a naming code');
+  assert.notEqual(third.signoff.lines.find(x => x.line_id === lateLine.id)!.stub, wanted, 'the late line got a free number');
+  const everSigned = new Map<string, string>();
+  for (const so of await S.getStore().listSignoffs()) for (const x of so.lines) {
+    assert.ok(!everSigned.has(x.stub) || everSigned.get(x.stub) === x.line_id, `${x.stub} was signed off for two different lines`);
+    everSigned.set(x.stub, x.line_id);
+  }
 }

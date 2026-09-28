@@ -143,7 +143,7 @@ Testing:
 | 3 | `/api/studio` routes: auth, access list, database-backed jobs with reconnect, rules endpoints, monthly cap (**done 28 Sep**; `docs/build-log/B1-studio-p3.md`) | 1 day |
 | 4 | Frontend: production route and nav, signed-in client, attribution and history, per-user stars, rules view, iframe check (**done 28 Sep**; `docs/build-log/B1-studio-p4.md`) | 1 day |
 | 4a | **Ready for production** (added 28 Sep): sign-off with versions and hashes, red-flag gate with overrides, expectations record, compliance status, handoff pack and compliance sheet; backend, tests and page (**done 28 Sep**) | **+1 day** |
-| 5 | Import script, handoff, and staging-style check on the local database with real keys | 0.5 day |
+| 5 | Import script, handoff, and staging-style check on the local database with real keys (**done 28 Sep**; `docs/build-log/B1-studio-p5.md`, with the deploy checklist) | 0.5 day |
 | 6 | Deploy with Brook: env vars, migration, rules upload, production smoke test | 0.5 day |
 | | **Total** | **about 6 days** (was 5; +1 day for Ready for production. v2 plan estimate: 5–6) |
 

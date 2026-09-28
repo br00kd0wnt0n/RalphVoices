@@ -5,7 +5,7 @@
 // Ready for production, is creative sign-off, never "approval".
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { HOSTED, getUser, setSignedInUser, setUser, studio, type Batch, type Brief, type CompareSet, type Flag, type Line, type Meta, type OwnLine, type RefDoc, type RunSummary, type ShortRow, type StudioEvent, type Territory, type Tone, type EditRecord, type LineVersion, type Reveal, type ComplianceStatus, type ReadyView, type RulesVersion } from '@/lib/studioApi';
+import { HOSTED, getUser, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type CompareSet, type Flag, type Line, type Meta, type OwnLine, type RefDoc, type RunSummary, type ShortRow, type StudioEvent, type Territory, type Tone, type EditRecord, type LineVersion, type Reveal, type ComplianceStatus, type ReadyView, type RulesVersion } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { ArrowLeft, BookOpen, ChevronRight, ScrollText, Shuffle } from 'lucide-react';
 
@@ -81,6 +81,7 @@ export function Studio() {
   const [user, setUserState] = useState(getUser());
   const [runsTick, setRunsTick] = useState(0); // refreshes the runs list after a run or a decision
   const [attached, setAttached] = useState<string | null>(null); // the run new lines go into, if any
+  const [admin, setAdmin] = useState(false); // hosted, before rules exist (meta can't load yet)
   const esRef = useRef<{ close: () => void } | null>(null);
 
   const refreshMeta = useCallback(() => studio.meta().then(m => {
@@ -91,7 +92,17 @@ export function Studio() {
   }), []);
   useEffect(() => {
     refreshMeta().then(m => setBrief(b => ({ ...b, fields: m.personas[b.persona]?.default_fields || [] })))
-      .catch((e: any) => setErr(HOSTED ? (e.status === 403 ? e.message : e.status === 404 ? 'Voices Studio isn’t switched on here yet.' : `Couldn’t reach Voices Studio: ${e.message}`) : 'Studio API not running. In backend/: npx tsx scripts/studio.ts serve'));
+      .catch(async (e: any) => {
+        if (HOSTED && e.body?.error === 'no_rules') {
+          // First run after a deploy: nothing works until an admin uploads and activates the rules.
+          const a = await studioAccess();
+          setAdmin(a.admin);
+          if (a.admin) { setTab('rules'); setErr('No rules are active yet. Upload studio-rules.json below, then activate it.'); }
+          else setErr('Voices Studio is still being set up: no rules are active yet.');
+          return;
+        }
+        setErr(HOSTED ? (e.status === 403 ? e.message : e.status === 404 ? 'Voices Studio isn’t switched on here yet.' : `Couldn’t reach Voices Studio: ${e.message}`) : 'Studio API not running. In backend/: npx tsx scripts/studio.ts serve');
+      });
     studio.batches().then(bs => { const id = params.get('batch') || bs[0]?.id; if (id) studio.batch(id).then(setBatch); }).catch(() => {});
     return () => esRef.current?.close();
   }, [refreshMeta]);
@@ -243,7 +254,7 @@ export function Studio() {
         {tab === 'readout' && <Readout persona={brief.persona} meta={meta} />}
         {meta && tab === 'shortlist' && <Shortlist batch={batch} onReady={() => setTab('ready')} />}
         {meta && tab === 'ready' && <Ready meta={meta} batch={batch} user={user} />}
-        {meta && tab === 'rules' && <Rules admin={!!meta.user?.admin} />}
+        {tab === 'rules' && (meta || admin) && <Rules admin={!!meta?.user?.admin || admin} onActivated={() => refreshMeta().then(() => setErr('')).catch(() => {})} />}
       </main>
     </div>
   );
@@ -1366,7 +1377,7 @@ function ReadyCard({ meta, item, included, lead, onInclude, onLead, onChanged, o
 
 // ---------- rules versions (hosted) ----------
 
-function Rules({ admin }: { admin: boolean }) {
+function Rules({ admin, onActivated }: { admin: boolean; onActivated: () => void }) {
   const [list, setList] = useState<RulesVersion[]>([]);
   const [error, setError] = useState('');
   const [version, setVersion] = useState('');
@@ -1395,7 +1406,7 @@ function Rules({ admin }: { admin: boolean }) {
             <span className="font-mono text-base font-semibold">{r.version}</span>
             <Chip tone={r.status === 'active' ? 'outline' : 'grey'} className={r.status === 'active' ? 'border-emerald-500 text-emerald-300' : ''}>{r.status}</Chip>
             <span className="text-sm text-[#858B96]">{when(r.created_at)}{r.created_by ? ` · ${r.created_by}` : ''}{r.notes ? ` · ${r.notes}` : ''}</span>
-            {admin && r.status !== 'active' && <GhostButton className="ml-auto" onClick={async () => { if (window.confirm(`Make ${r.version} the active rules? New checks use it straight away.`)) { try { setList(await studio.activateRules(r.version)); } catch (e: any) { setError(e.message); } } }}>Activate</GhostButton>}
+            {admin && r.status !== 'active' && <GhostButton className="ml-auto" onClick={async () => { if (window.confirm(`Make ${r.version} the active rules? New checks use it straight away.`)) { try { setList(await studio.activateRules(r.version)); onActivated(); } catch (e: any) { setError(e.message); } } }}>Activate</GhostButton>}
           </li>
         ))}
         {!list.length && !error && <li className="px-5 py-3 text-[#858B96]">Loading…</li>}

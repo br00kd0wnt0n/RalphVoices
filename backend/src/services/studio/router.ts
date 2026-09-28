@@ -75,7 +75,15 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   };
 
   // Reload rules and territories on each request, so edits (and other servers' edits) are always current.
-  r.use(async (_req, _res, next) => { try { await S.refreshRules(); next(); } catch (err) { next(err); } });
+  // A fresh database has no rules until an admin uploads them, so the rules routes work without them and
+  // everything else says so plainly (503 no_rules) instead of failing.
+  r.use(async (req, res, next) => {
+    try { await S.refreshRules(); next(); } catch (err: any) {
+      if (!/No active Studio rules/.test(String(err?.message))) return next(err);
+      if (o.rules && req.path.startsWith('/rules')) return next();
+      res.status(503).json({ error: 'no_rules', message: 'No rules are active yet. An admin uploads studio-rules.json in the Rules view and activates it.' });
+    }
+  });
 
   r.get('/meta', wrap(async (req, res) => {
     const { studio_dir, ...m } = await S.meta();
@@ -215,7 +223,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
       // Versions are never overwritten: past runs name the version they were checked against.
       if ((await store.listRules()).some((x: any) => x.version === version)) throw new Error(`Rules version ${version} already exists; upload it under a new version`);
       await store.putRules(version, { ...body, version }, { activate: !!req.body?.activate, by: o.who(req), notes: req.body?.notes ? String(req.body.notes) : undefined });
-      await S.refreshRules();
+      if (req.body?.activate) await S.refreshRules();  // a draft changes nothing live (and there may be no active rules yet)
       res.json(await store.listRules());
     }));
     r.post('/rules/:version/activate', admin(async (req, res) => {

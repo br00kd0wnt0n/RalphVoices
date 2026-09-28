@@ -139,3 +139,30 @@ test('Ready for production on Postgres (sign-off gate, overrides, versions, expe
   await S.refreshRules();
   await readyScenario();
 });
+
+test('a fresh database with no rules: routes say no_rules, and an admin can still upload and activate them', { skip }, async () => {
+  const express = (await import('express')).default;
+  const { createStudioRouter } = await import('../src/services/studio/router.js');
+  await (store as any).db.query('TRUNCATE studio_rules');
+  const app = express();
+  const isAdmin = (req: any) => req.headers['x-admin'] === '1';
+  app.use('/s', createStudioRouter({ who: () => 'brook', api: () => new S.Api({ mock: true }), mock: true, cap: 50, capWindow: 'month', askOver: 2, rules: { store, isAdmin } }));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(r => server.once('listening', r));
+  const base = `http://127.0.0.1:${(server.address() as any).port}/s`;
+  const call = async (method: string, p: string, body?: unknown) => {
+    const res = await fetch(base + p, { method, headers: { 'Content-Type': 'application/json', 'X-Admin': '1' }, body: body ? JSON.stringify(body) : undefined });
+    return { status: res.status, body: (await res.json()) as any };
+  };
+  try {
+    const meta = await call('GET', '/meta');
+    assert.equal(meta.status, 503);
+    assert.equal(meta.body.error, 'no_rules');
+    assert.equal((await call('GET', '/rules')).status, 200);
+    const rules = JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8'));
+    assert.equal((await call('POST', '/rules', { version: 'first', rules })).status, 200);
+    assert.equal((await call('GET', '/meta')).status, 503, 'uploaded as a draft: still nothing active');
+    assert.equal((await call('POST', '/rules/first/activate', {})).status, 200);
+    assert.equal((await call('GET', '/meta')).status, 200);
+  } finally { server.close(); }
+});

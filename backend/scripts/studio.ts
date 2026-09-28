@@ -13,7 +13,8 @@
 //   npx tsx scripts/studio.ts generate --brief NAME [--yes] [--no-check]
 //   npx tsx scripts/studio.ts check    --batch ID                      (re-run every check on a batch)
 //   npx tsx scripts/studio.ts check    --territory DINK_NEVER --text "..." [--field meta_primary]...
-//   npx tsx scripts/studio.ts planted  --territory DINK_NEVER         (acceptance: planted non-compliant lines must be flagged)
+//   npx tsx scripts/studio.ts planted  --territory DINK_NEVER [--api https://host]  (acceptance: planted non-compliant lines must be flagged;
+//                                         --api runs them through a hosted Studio, signed in with STUDIO_TOKEN)
 //   npx tsx scripts/studio.ts export   --batch ID                      (CSV for Sheets + Markdown view)
 //   npx tsx scripts/studio.ts ingest   --csv PATH                      (curated sheet back in: taste examples + shortlist)
 //   npx tsx scripts/studio.ts shortlist
@@ -29,7 +30,7 @@
 //   --studio DIR             output folder (default: the client folder above)
 //   --store pg --database-url URL   use Postgres (migration 015) instead of files; local hosts only unless --allow-remote
 //   rules-push [--file F] [--activate]   upload a rules file to the database as a version
-//   db-import [--from DIR] [--since YYYY-MM-DD | --runs a,b] [--compares] [--with-spend] [--dry-run]
+//   db-import [--from DIR] [--since YYYY-MM-DD | --runs a,b] [--compares] [--with-spend] [--with-rules] [--dry-run]
 //                                         copy a studio folder into the database (re-runnable); the agreed
 //                                         carry-over is --since 2026-09-28 --with-spend
 //   --yes                    needed for any run estimated over $2
@@ -184,9 +185,22 @@ async function main() {
     }
     case 'planted': {
       const territory = opt('territory', 'DINK_NEVER');
-      const persona = S.loadRules().territories[territory].persona;
+      const persona = opt('persona') || S.loadRules().territories[territory].persona;
       const started = Date.now();
-      const lines = await S.checkTexts(persona, territory, PLANTED.map(p => ({ text: p.text, field: p.field })), api());
+      const items = PLANTED.map(p => ({ text: p.text, field: p.field }));
+      // --api URL: run them through a hosted Studio's /check route instead (the smoke test), signed in with STUDIO_TOKEN.
+      const apiUrl = opt('api');
+      let lines: S.Line[];
+      if (apiUrl) {
+        if (!process.env.STUDIO_TOKEN) throw new Error('--api needs STUDIO_TOKEN (a signed-in Voices token) in the environment');
+        const res = await fetch(`${apiUrl.replace(/\/$/, '')}/api/studio/check`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.STUDIO_TOKEN}` },
+          body: JSON.stringify({ persona, territory, lines: items }),
+        });
+        if (!res.ok) throw new Error(`${apiUrl} /check: HTTP ${res.status} ${await res.text()}`);
+        lines = (await res.json()) as S.Line[];
+        console.log(`Checked through ${apiUrl}\n`);
+      } else lines = await S.checkTexts(persona, territory, items, api());
       let pass = 0;
       lines.forEach((l, i) => {
         const p = PLANTED[i];
@@ -281,13 +295,13 @@ async function main() {
         unnamed += b.lines.filter((l: any) => l.decision && !l.decided_by).length;
         attributed += attributeDecisions(b, plan.history).length;
       }
-      console.log(`From ${src.dir}\nRules: ${rules.version} (becomes the active version)\nTerritory edits: ${Object.keys(edits).length}\nAssets: ${assetNames.join(', ') || 'none'}\n${describePlan(plan)}\nSpend: ${flag('with-spend') ? `${spend.length} records, $${spend.reduce((t, e) => t + (e.usd || 0), 0).toFixed(3)}` : 'not imported (add --with-spend)'}`);
+      console.log(`From ${src.dir}\nRules: ${flag('with-rules') ? `${rules.version} (becomes the active version)` : 'not touched (upload and activate them in the Studio\'s Rules view; --with-rules to import them here)'}\nTerritory edits: ${Object.keys(edits).length}\nAssets: ${assetNames.join(', ') || 'none'}\n${describePlan(plan)}\nSpend: ${flag('with-spend') ? `${spend.length} records, $${spend.reduce((t, e) => t + (e.usd || 0), 0).toFixed(3)}` : 'not imported (add --with-spend)'}`);
       if (unnamed) console.log(`Decisions with no name or time: ${unnamed}, attributed to the run's author at the run's last save.`);
       if (attributed) console.log(`Decisions with no history: ${attributed}, each given one history record marked imported.`);
       if (!opt('since') && !opt('runs')) console.log('Note: no --since or --runs, so every run except planted-line checks is included. The agreed carry-over is --since 2026-09-28.');
       if (flag('dry-run')) { console.log('Dry run: nothing written.'); return; }
       if (!pgStore) throw new Error('db-import needs --store pg (or --dry-run)');
-      await pgStore.putRules(rules.version || 'imported', rules, { activate: true, by: opt('user', 'import'), notes: 'Imported from the local studio folder' });
+      if (flag('with-rules')) await pgStore.putRules(rules.version || 'imported', rules, { activate: true, by: opt('user', 'import'), notes: 'Imported from the local studio folder' });
       for (const key of ['personas', 'voices'] as const) { const v = await src.getInput(key); if (v) await pgStore.putInput(key, v); }
       for (const [code, t] of Object.entries(edits)) await pgStore.saveTerritoryEdit(code, t);
       for (const f of plan.briefs) await pgStore.saveBrief(JSON.parse(fs.readFileSync(path.join(briefsDir, f), 'utf8')));

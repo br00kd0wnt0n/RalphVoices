@@ -286,6 +286,7 @@ Backend (`.env`):
 - `FRONTEND_URL` — For CORS (default: `http://localhost:5173`)
 - `NARRATIV_SSO_SECRET` — HS256 signing secret shared with Narrativ for shell→tool SSO. Must be byte-identical to `TOOL_SSO_SECRET_VOICES` on Narrativ. Empty/unset = SSO disabled (password login still works).
 - `NARRATIV_VOICES_WEBHOOK_SECRET`, `NARRATIV_BASE_URL` — outbound HMAC webhook for the Voices→Narrativ return signal (existing).
+- `ENABLE_STUDIO` — `true` mounts Copy Studio at `/api/studio` (off by default). `STUDIO_EMAILS` — who may use it (plus `ADMIN_EMAILS`; fails closed). `STUDIO_MONTHLY_CAP_USD` (default 50), `STUDIO_ASK_OVER_USD` (default 2). `ANTHROPIC_API_KEY` — Claude writer in Blind compare. `STUDIO_MOCK=true` — mock client, local development only (ignored when `NODE_ENV=production`; never set on Railway). Deploy checklist: `docs/build-log/B1-studio-p5.md`.
 
 Frontend (`.env`):
 - `VITE_API_URL` — Backend API URL (default: `/api`)

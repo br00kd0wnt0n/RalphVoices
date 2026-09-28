@@ -99,6 +99,26 @@ export async function recheckLine(batchId: string, lineId: string, api: Api, use
   return write(batchId, line, before, { flags: line.flags.map(f => f.rule), rechecked: true }, user);
 }
 
+/**
+ * A naming code, once signed off, belongs to that line for good (B3b joins live results on it). The
+ * shortlist numbers lines by position, so a newer line can land on a code already signed off for another
+ * line; this bumps it to the next free number for that persona, territory, format and platform.
+ */
+async function stubAllocator(): Promise<(lineId: string, want: string) => string> {
+  const taken = new Map<string, string>();
+  for (const so of (await getStore().listSignoffs()) as Signoff[]) for (const x of so.lines) taken.set(x.stub, x.line_id);
+  return (lineId, want) => {
+    const owner = taken.get(want);
+    if (!owner || owner === lineId) { taken.set(want, lineId); return want; }
+    const m = /^(.*)_v(\d+)_([A-Z]+)$/.exec(want);
+    if (!m) { const alt = `${want}_${lineId.split('-').pop()}`; taken.set(alt, lineId); return alt; }
+    for (let n = Number(m[2]) + 1; ; n++) {
+      const next = `${m[1]}_v${n}_${m[3]}`;
+      if (!taken.has(next)) { taken.set(next, lineId); return next; }
+    }
+  };
+}
+
 /** Everything the Ready for production screen needs for one persona × territory. */
 export async function readyView(persona: string, territory: string) {
   const st = getStore();
@@ -112,12 +132,14 @@ export async function readyView(persona: string, territory: string) {
   const signoffs = ((await st.listSignoffs()) as Signoff[]).filter(s => s.persona === persona && s.territory === territory).sort((a, b) => a.version - b.version);
   const expectations = ((await st.listExpectations()) as Expectation[]).filter(e => e.persona === persona && e.territory === territory);
   const stubs = new Map((await shortlist()).map(r => [r.id, r.stub]));
+  const freeStub = await stubAllocator();
+  for (const l of lines) if (l.ready?.stub) freeStub(l.id, l.ready.stub);
   const out = [];
   for (const l of lines) {
     out.push({
       line: l, final_text: finalText(l), sha256: lineHash(l),
-      // The naming code it was signed off under, or the one it would get now.
-      stub: l.ready?.stub || stubs.get(l.id) || l.id,
+      // The naming code it was signed off under, or the one it would get if signed off now.
+      stub: l.ready?.stub || freeStub(l.id, stubs.get(l.id) || l.id),
       red: unresolvedRed(l),
       compliance: l.compliance || { status: 'pending' as const },
       versions: (await st.listLineVersions(l.id)) as LineVersion[],
@@ -156,11 +178,12 @@ export async function signOff(input: { persona: string; territory: string; line_
   const version = (view.latest?.version || 0) + 1;
   const id = `${territory}-ready-v${version}`;
   const stubs = new Map((await shortlist()).map(r => [r.id, r.stub]));
+  const freeStub = await stubAllocator();
   const signed: Signoff['lines'] = [];
   for (const lineId of ids) {
     const { line: l } = byId.get(lineId)!;
     const h = lineHash(l);
-    const stub = l.ready?.stub || stubs.get(l.id) || l.id;
+    const stub = l.ready?.stub || freeStub(l.id, stubs.get(l.id) || l.id);
     const versions = (await st.listLineVersions(l.id)) as LineVersion[];
     let v = versions.find(x => x.sha256 === h);
     if (!v) {
@@ -225,7 +248,7 @@ export async function handoffRows(filter: { persona?: string; territory?: string
         format: r.territories[s.territory]?.format || '', text: x.text, chars: x.chars, version: x.version,
         compliance: reviewedOther ? 'pending' : (c?.status || 'pending'),
         compliance_note: reviewedOther ? 'Reviewed on a different wording' : (c?.note || ''),
-        overrides: ovs.map(o => `${labelOf(o)}: overridden by ${o.by}, “${o.reason}”`).join(' | '),
+        overrides: ovs.map(o => `${labelOf(o).replace(/\.$/, '')}: overridden by ${o.by}, “${o.reason}”`).join(' | '),
         check_specifically: ovs.length ? `Please check specifically: ${ovs.map(o => labelOf(o).replace(/\.$/, '')).join('; ')}` : '',
         ready_by: s.ready_by, ready_at: s.ready_at,
         changed_since: current?.ready?.signoff_id === s.id && current.ready.changed_since ? 'yes: a newer version exists' : '',

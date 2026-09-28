@@ -1264,11 +1264,19 @@ export async function checkBatch(batch: Batch, api: Api, emit: Emit = () => {}, 
  * a lone model or logprob call can't turn a line red. Only for compliance items
  * that have wordings; everything else keeps its severity.
  */
-function reconcile(l: Line, r: Rules) {
+export function reconcile(l: Line, r: Rules) {
   for (const it of r.compliance) {
-    if (!it.wordings || (it.severity || 'compliance') !== 'compliance') continue;
+    if ((it.severity || 'compliance') !== 'compliance') continue;
     const f = l.flags.find(x => x.rule === it.id);
     if (!f) continue;
+    // "Price leads" can only be a breach when there's a price in the line (the rule's own patterns).
+    // Without one, a model judgement stays amber: a live check flagged "Cheap … can cost you more" red.
+    if (it.check === 'price_lead' && f.base !== 'compliance' && !(it.patterns || []).some(p0 => new RegExp(pat(p0).re, 'i').test(finalText(l)))) {
+      f.severity = 'warn';
+      if (!/no price in the line/.test(f.why || '')) f.why = `${f.why ? f.why + '; ' : ''}no price in the line, so not a breach of this rule`;
+      continue;
+    }
+    if (!it.wordings) continue;
     const hasModel = f.by.includes('model');
     const pr = l.probes?.[it.id]?.filter((x): x is number => x !== null) || [];
     if (f.p === undefined && pr.length) f.p = round(pr.reduce((a, b) => a + b, 0) / pr.length, 3);
