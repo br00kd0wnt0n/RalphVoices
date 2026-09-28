@@ -128,7 +128,7 @@ With config v3 and reads chained from the start of the flight, 15 ads were calle
 
 **Sample notes for Brook to review** (simulated data, outside the repo): `/Users/BD/ralph-voices/Claude outputs/voices-r1/weekly/sample/`
 - `weekly-2026-10-12.md`, `weekly-2026-10-19.md`, `weekly-2026-11-02.md`: weeks 1, 2 and 4 of a simulated Month 1, from the database. Each is a one-screen front (under 30 lines) and then the appendix. Week 2 and later show "what moved" in the appendix. Each has a `-ledger.csv`.
-- `weekly-2026-10-12-client.md`, `-10-19-client.md`, `-11-02-client.md`: the client variant, the front only. Ads carry readable labels ("DINK · territory name · carousel v2 (Meta)") with the stub in small print. The simulated territory codes aren't in Studio's rules, so they fall back to the code (e.g. "SIMB"); real codes show their names.
+- `weekly-2026-10-12-client.md`, `-10-19-client.md`, `-11-02-client.md`: the client variant, the front only. Ads carry readable labels ("DINK · territory name · carousel v2 (Meta)") with the stub in brackets (plain text, no HTML, so it pastes cleanly into email and Docs). The simulated territory codes aren't in Studio's rules, so they fall back to the code (e.g. "SIMB"); real codes show their names.
 - `thin-week/weekly-2026-10-12.md` and `-client.md`: the thin week, "too early to call" throughout.
 
 ## How to run a week

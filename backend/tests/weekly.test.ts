@@ -343,8 +343,8 @@ test('cost per enrollment is hidden below the minimum enrollments', () => {
 });
 
 test('wording lint catches banned words (and their forms), internal terms up front, and rates without ranges', () => {
-  const md = ['The winner is FAM_SUMMER.', 'CTR was 1.4% this week.', 'CTR 1.4% (range 1.2%–1.6%).', 'Our model predicts growth.', 'Effect +34% (range +13% to +60%).', 'The cell leader.', APPENDIX_MARKER, 'P(best) 86% and P(worse than median) 3%; the cell leader.'].join('\n');
-  assert.deepEqual(lintNote(md, cfg).map(i => [i.line, i.rule]), [[1, 'banned word "winner"'], [2, 'rate without a range'], [4, 'banned word "predicts"'], [6, 'internal term "cell" before the appendix']]);
+  const md = ['The winner is FAM_SUMMER.', 'CTR was 1.4% this week.', 'CTR 1.4% (range 1.2%–1.6%).', 'Our model predicts growth.', 'Effect +34% (range +13% to +60%).', 'The cell leader.', 'Scale X <sub>X_STUB</sub>.', APPENDIX_MARKER, 'P(best) 86% and P(worse than median) 3%; the cell leader.'].join('\n');
+  assert.deepEqual(lintNote(md, cfg).map(i => [i.line, i.rule]), [[1, 'banned word "winner"'], [2, 'rate without a range'], [4, 'banned word "predicts"'], [6, 'internal term "cell" before the appendix'], [7, 'HTML tag before the appendix (it shows literally when pasted into email or Docs)']]);
 });
 
 test('the prose guard rejects any number, or number word, not in the source', () => {
@@ -522,7 +522,8 @@ test('client labels: persona · territory name · format in words v# (platform),
   const w = aggregate([...parseExport(sim.meta_csv, 'meta', cfg).rows].map(fromIngest), '2026-10-12', '2026-11-08');
   const { read } = simRead('month1', 42);
   const md = draftNote(read, { week: { start: '2026-11-02', end: '2026-11-08' }, since: '2026-10-12', window: w, prev: null, week_impressions: new Map(), sources: [] }, cfg, { audience: 'client', territoryNames: names }).markdown;
-  assert.ok(md.includes('FAM · Example Territory E · static v2 (Meta) <sub>FAM_SIME_ST_v2_META</sub>'), 'label with the stub in small print');
+  assert.ok(md.includes('FAM · Example Territory E · static v2 (Meta) (FAM_SIME_ST_v2_META)'), 'label with the stub in brackets');
+  assert.ok(!/<[a-z\/][^>]*>/i.test(md), 'no HTML tags in the client note');
   assert.ok(!/\*\*(Scale|Cut)\S*\*\* [A-Z]+_[A-Z0-9]+_/.test(md), 'no bare stubs as the name of an action');
   assert.deepEqual(lintNote(md, cfg), []);
   const internal = draftNote(read, { week: { start: '2026-11-02', end: '2026-11-08' }, since: '2026-10-12', window: w, prev: null, week_impressions: new Map(), sources: [] }, cfg, { territoryNames: names }).markdown;

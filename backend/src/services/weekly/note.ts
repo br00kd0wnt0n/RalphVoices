@@ -47,7 +47,7 @@ const fmtName = (f: string) => FORMAT_NAME[f] || f;
 const plural = (n: number, w: string, ws = `${w}s`) => `${n} ${n === 1 ? w : ws}`;
 
 // How the first screen names an ad. Internal: the naming stub. Client: a readable
-// label, "DINK · Territory name · carousel v2 (Meta)", with the stub in small print.
+// label, "DINK · Territory name · carousel v2 (Meta) (DINK_TERR_CAR_v2_META)".
 export type Namer = (a: AdRead, short?: boolean) => string;
 const stubName: Namer = a => a.stub;
 const FORMAT_WORD: Record<string, string> = { ST: 'static', VID: 'video', CAR: 'carousel', TT: 'TikTok-native', UGC: 'creator video' };
@@ -56,7 +56,8 @@ export function readableLabel(a: Pick<AdRead, 'persona' | 'territory' | 'format'
   return `${a.persona} · ${name.replace(/[.\s]+$/, '')} · ${FORMAT_WORD[a.format] || a.format} v${a.version} (${PLATFORM_NAME[a.platform] || a.platform})`;
 }
 export function clientNamer(territoryNames: Record<string, string> = {}): Namer {
-  return (a, short) => (short ? readableLabel(a, territoryNames) : `${readableLabel(a, territoryNames)} <sub>${a.stub}</sub>`);
+  // Plain brackets, not HTML: the client note gets pasted into email and Google Docs.
+  return (a, short) => (short ? readableLabel(a, territoryNames) : `${readableLabel(a, territoryNames)} (${a.stub})`);
 }
 
 export interface NoteOptions {
@@ -350,6 +351,7 @@ export function lintNote(md: string, cfg: WeeklyConfig): LintIssue[] {
   const internal = cfg.wording.internal_terms.map(t => ({ t, re: new RegExp(/^\w/.test(t) ? `\\b${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\w*` : t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') }));
   md.split('\n').forEach((line, i) => {
     if (i < frontLines && !line.startsWith('<!--')) for (const { t, re } of internal) if (re.test(line)) issues.push({ rule: `internal term "${t}" before the appendix`, line: i + 1, text: line });
+    if (i < frontLines && !line.startsWith('<!--') && /<\/?[a-z][^>]*>/i.test(line)) issues.push({ rule: 'HTML tag before the appendix (it shows literally when pasted into email or Docs)', line: i + 1, text: line });
     const b = banned.exec(line);
     if (b) issues.push({ rule: `banned word "${b[1]}"`, line: i + 1, text: line });
     // A percentage or "per 1,000" rate needs a range nearby. P(...) values, effect
