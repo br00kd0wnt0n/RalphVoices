@@ -1,17 +1,18 @@
 // B1-lite Copy Studio: deterministic checks, grid, CSV round trip and a mock
 // batch end to end. Uses the made-up example rules (scripts/studio/rules.example.json)
 // and a temp studio folder, so it needs no client material, key or network.
-import { test } from 'node:test';
+import { before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import * as S from '../scripts/studio/engine.js';
+import * as S from '../src/services/studio/engine.js';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-test-'));
 S.setStudioDir(dir);
 S.setRulesPath(path.join(__dirname, '../scripts/studio/rules.example.json'));
-const rules = S.loadRules();
+let rules: S.Rules;
+before(async () => { rules = await S.refreshRules(); });
 const det = (text: string, field = 'meta_primary', structure = 'plain_promise') =>
   S.deterministicFlags({ text, field, structure, persona: 'OWN' }, rules, { banned_words: ['hassle-free'] }).flags;
 const find = (flags: S.Flag[], rule: string) => flags.find(f => f.rule === rule);
@@ -96,20 +97,20 @@ test('mock batch: generate, check, export, ingest round trip', async () => {
   assert.ok(batch.lines.length >= 6);
   assert.ok(batch.lines.every(l => l.status === 'checked'));
   assert.ok(batch.lines.flatMap(l => l.flags).every(f => f.source), 'every flag has a source');
-  const { csv } = S.exportBatch(batch.id);
+  const { csv } = await S.exportBatch(batch.id);
   const rows = S.parseCsv(csv);
   const h = rows[0];
   rows[1][h.indexOf('decision')] = 'keep';
   rows[2][h.indexOf('decision')] = 'edit';
   rows[2][h.indexOf('edited_text')] = 'Calm at the counter, at partner clinics.';
   rows[2][h.indexOf('note')] = 'plainer';
-  const r = S.ingest(rows.map(x => x.map(c => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c)).join(',')).join('\n'));
+  const r = await S.ingest(rows.map(x => x.map(c => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c)).join(',')).join('\n'));
   assert.equal(r.kept, 1);
   assert.equal(r.edited, 1);
   assert.equal(r.shortlist, 2);
-  const sl = S.shortlist();
+  const sl = await S.shortlist();
   assert.match(sl[0].stub, /^OWN_CALM_UGC_v\d_META$/);
-  assert.equal(S.loadTaste().length, 2);
+  assert.equal((await S.loadTaste()).length, 2);
 });
 
 test('the creative director writes first: own lines are tagged, checked, and Studio writes around them', async () => {
@@ -136,10 +137,13 @@ test('the creative director writes first: own lines are tagged, checked, and Stu
   const cells = S.planCells(b, 6, 0, '', covered);
   assert.ok(cells.every(c => !covered.has(`${c.angle}|${c.structure}`)));
   // Runs are listed by person, and decisions are attributed.
-  assert.equal(S.listBatches('brook').filter(x => x.id === first.id).length, 1);
-  assert.equal(S.listBatches('nobody').length, 0);
-  const l = S.setDecision(first.id, more.lines[0].id, { decision: 'keep' }, 'Brook');
+  assert.equal((await S.listBatches('brook')).filter(x => x.id === first.id).length, 1);
+  assert.equal((await S.listBatches('nobody')).length, 0);
+  const l = await S.setDecision(first.id, more.lines[0].id, { decision: 'keep' }, 'Brook');
   assert.equal(l.decided_by, 'Brook');
+  const history = await S.lineHistory(l.id);
+  assert.equal(history.length, 1);
+  assert.deepEqual(history[0].after, { decision: 'keep', edited_text: '', note: '' });
 });
 
 test('reference documents are only served from the configured list', () => {
@@ -147,19 +151,19 @@ test('reference documents are only served from the configured list', () => {
   assert.ok(S.referenceDocs().some(d => d.id === 'readout'));
 });
 
-test('territories are editable, with history; the pitch version is untouched', () => {
+test('territories are editable, with history; the pitch version is untouched', async () => {
   const before = S.loadRules().territories.OWN_CALM;
   assert.equal(before.origin, 'pitch');
-  const e = S.saveTerritory('OWN_CALM', { premise: 'Calmer, per client feedback.', angle: 'OWN_A2' }, 'client feedback 28 Sep', 'Brook');
+  const e = await S.saveTerritory('OWN_CALM', { premise: 'Calmer, per client feedback.', angle: 'OWN_A2' }, 'client feedback 28 Sep', 'Brook');
   assert.equal(e.territory.origin, 'edited');
   assert.equal(e.territory.history!.length, 1);
   assert.equal(e.territory.history![0].before!.premise, before.premise);
   assert.equal(S.loadRules().territories.OWN_CALM.premise, 'Calmer, per client feedback.');
-  const added = S.saveTerritory(null, { persona: 'OWN', name: 'Nothing to File', angle: 'OWN_A2', format: 'STATIC', premise: 'The admin that never happens.' }, 'CD idea', 'Brook');
+  const added = await S.saveTerritory(null, { persona: 'OWN', name: 'Nothing to File', angle: 'OWN_A2', format: 'STATIC', premise: 'The admin that never happens.' }, 'CD idea', 'Brook');
   assert.equal(added.code, 'OWN_NOTHING_TO_FILE');
   assert.equal(added.territory.origin, 'new');
-  assert.throws(() => S.saveTerritory(null, { persona: 'OWN', name: 'Bad', angle: 'DINK_A1', format: 'STATIC' }, '', 'Brook'), /isn't one of/);
-  S.saveTerritory('OWN_NOTHING_TO_FILE', { status: 'retired' }, 'dropped after kickoff', 'Brook');
+  await assert.rejects(() => S.saveTerritory(null, { persona: 'OWN', name: 'Bad', angle: 'DINK_A1', format: 'STATIC' }, '', 'Brook'), /isn't one of/);
+  await S.saveTerritory('OWN_NOTHING_TO_FILE', { status: 'retired' }, 'dropped after kickoff', 'Brook');
   assert.throws(() => S.makeBrief({ territory: 'OWN_NOTHING_TO_FILE' }), /retired/);
-  S.saveTerritory('OWN_CALM', { premise: before.premise, angle: before.angle }, 'revert for other tests', 'test');
+  await S.saveTerritory('OWN_CALM', { premise: before.premise, angle: before.angle }, 'revert for other tests', 'test');
 });

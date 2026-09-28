@@ -31,7 +31,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import * as S from './studio/engine.js';
+import * as S from '../src/services/studio/engine.js';
 
 const argv = process.argv.slice(2);
 const command = argv[0];
@@ -65,9 +65,9 @@ function parseTone(s: string): Partial<S.Tone> {
   return t;
 }
 
-function printEstimate(b: S.Brief) {
+async function printEstimate(b: S.Brief) {
   const e = S.estimate(b);
-  const spent = S.readSpend().total_usd;
+  const spent = (await S.readSpend()).total_usd;
   console.log(`Estimate for ${b.name}: ~${e.calls} calls, ~$${e.usd.toFixed(2)} (spent so far $${spent.toFixed(2)} of the $${CAP} cap).`);
   console.log(`  TPM load: ${Object.entries(e.tokens).map(([m, t]) => `${m} ~${Math.round(t / 1000)}k tokens (~${e.minutes_at_budget[m]} min at its limit)`).join('; ')}`);
   return { ...e, spent };
@@ -94,7 +94,7 @@ function report(b: S.Batch) {
   console.log(`  time: generate ${secs(b.stats.timings_ms.generate)}, checks ${secs(b.stats.timings_ms.check)}, total ${secs(b.stats.timings_ms.total)}`);
   console.log(`  cost: $${b.stats.usd_total.toFixed(3)} (${Object.entries(b.stats.usd).map(([k, v]) => `${k} $${v.toFixed(3)}`).join(', ')})`);
   console.log(`  calls: ${Object.entries(b.stats.calls).map(([k, v]) => `${k} ${v}`).join(', ')}; TPM budgets used: ${JSON.stringify(b.stats.model_budgets_tpm)}`);
-  console.log(`  batch file: ${S.batchPath(b.id)}`);
+  console.log(`  saved: run ${b.id} (${S.getStore().kind} store)`);
 }
 
 // Acceptance: planted lines that must (or must not) be flagged.
@@ -110,6 +110,7 @@ const PLANTED: Array<{ text: string; field: string; expect: string; severity?: S
 ];
 
 async function main() {
+  if (command && !['limits', 'help'].includes(command)) await S.refreshRules();
   switch (command) {
     case 'brief': {
       const b = S.makeBrief({
@@ -119,32 +120,32 @@ async function main() {
         n: Number(opt('n', '20')), model: opt('model') || undefined,
         checker_model: opt('checker-model') || undefined, probe_model: opt('probe-model') || undefined, objection_model: opt('objection-model') || undefined,
       });
-      const p = S.saveBrief(b);
+      const p = await S.saveBrief(b);
       console.log(`Brief ${b.name} written to ${p}`);
       console.log(JSON.stringify(b, null, 2));
-      printEstimate(b);
+      await printEstimate(b);
       return;
     }
-    case 'estimate': { printEstimate(S.loadBrief(opt('brief'))); return; }
+    case 'estimate': { await printEstimate(await S.loadBrief(opt('brief'))); return; }
     case 'generate': {
-      const b = S.loadBrief(opt('brief'));
-      const e = printEstimate(b);
+      const b = await S.loadBrief(opt('brief'));
+      const e = await printEstimate(b);
       if (!MOCK && e.usd > ASK_OVER && !flag('yes')) { console.log(`Not running: estimate is over $${ASK_OVER}. Re-run with --yes once Brook has OKed it.`); return; }
       if (!MOCK && e.spent + e.usd > CAP) { console.log(`Refusing: this would take spend past the $${CAP} cap.`); return; }
       const batch = await S.generate(b, api(), onEvent, { check: !flag('no-check') });
       report(batch);
-      const x = S.exportBatch(batch.id);
+      const x = await S.exportBatch(batch.id);
       console.log(`  export: ${x.csvPath}\n          ${x.mdPath}`);
       return;
     }
     case 'check': {
       if (opt('batch')) {
-        const batch = S.loadBatch(opt('batch'));
+        const batch = await S.loadBatch(opt('batch'));
         const a = api();
         const started = Date.now();
         await S.checkBatch(batch, a, onEvent);
         batch.stats.timings_ms.recheck = Date.now() - started;
-        S.saveBatch(batch);
+        await S.saveBatch(batch);
         a.commit(`recheck ${batch.id}`);
         report(batch);
         return;
@@ -176,19 +177,19 @@ async function main() {
       return;
     }
     case 'export': {
-      const x = S.exportBatch(opt('batch'));
+      const x = await S.exportBatch(opt('batch'));
       console.log(`CSV: ${x.csvPath}\nMarkdown: ${x.mdPath}`);
       return;
     }
     case 'ingest': {
-      const r = S.ingest(fs.readFileSync(opt('csv'), 'utf8'));
+      const r = await S.ingest(fs.readFileSync(opt('csv'), 'utf8'));
       console.log(`Ingested ${r.rows} rows: ${r.matched} matched (${r.kept} keep, ${r.edited} edit, ${r.cut} cut)${r.unknown.length ? `; unknown ids: ${r.unknown.join(', ')}` : ''}.`);
       console.log(`Taste examples now: ${r.taste_total}. Shortlist: ${r.shortlist} lines → ${r.shortlistPath}`);
       return;
     }
-    case 'shortlist': { const s = S.writeShortlist(); console.log(`${s.count} lines → ${s.path}\n${s.md}`); return; }
+    case 'shortlist': { const s = await S.writeShortlist(); console.log(`${s.count} lines → ${s.path}\n${s.md}`); return; }
     case 'compare': {
-      const b = S.loadBrief(opt('brief'));
+      const b = await S.loadBrief(opt('brief'));
       const models = list(opt('models', 'gpt-4o,gpt-4.1'));
       const n = Number(opt('n', '10'));
       const est = S.estimate({ ...b, n }).usd * 0.35 * models.length; // generation share of a batch, per model
@@ -198,11 +199,11 @@ async function main() {
       console.log(`Blind sheet: ${path.join(S.studioDir(), 'compare', set.name, 'sheet.csv')} (${set.lines.length} lines, writers ${[...new Set(set.lines.map(l => l.label))].sort().join('/')}); key kept separately in key.json. $${set.usd?.toFixed(3)}, ${secs(set.timings_ms)}.`);
       return;
     }
-    case 'reveal': { console.log(JSON.stringify(S.revealCompare(opt('compare')), null, 2)); return; }
+    case 'reveal': { console.log(JSON.stringify(await S.revealCompare(opt('compare')), null, 2)); return; }
     case 'status': {
-      const s = S.readSpend();
+      const s = await S.readSpend();
       console.log(`Studio folder: ${S.studioDir()}\nSpend: $${s.total_usd.toFixed(3)} of $${CAP} over ${s.runs.length} runs.`);
-      for (const b of S.listBatches()) console.log(`  ${b.id}  ${b.lines} lines  $${b.usd.toFixed(3)}`);
+      for (const b of await S.listBatches()) console.log(`  ${b.id}  ${b.lines} lines  $${b.usd.toFixed(3)}`);
       return;
     }
     case 'limits': {
@@ -277,18 +278,20 @@ async function serve() {
   }
 
   const base = '/api/studio';
-  app.get(`${base}/meta`, wrap((_req, res) => res.json({ ...S.meta(), mock: MOCK, cap: CAP, ask_over: ASK_OVER })));
-  app.post(`${base}/estimate`, wrap((req, res) => { const b = S.makeBrief(req.body.brief || {}); res.json({ brief: b, ...S.estimate(b, { ownOnly: !!req.body.own_only }), spent: S.readSpend().total_usd }); }));
-  app.get(`${base}/batches`, wrap((req, res) => res.json(S.listBatches(req.query.user ? String(req.query.user) : undefined))));
-  app.get(`${base}/batches/:id`, wrap((req, res) => res.json(S.loadBatch(req.params.id))));
-  app.post(`${base}/generate`, wrap((req, res) => {
+  // Reload rules and territories on each request, so edits (and, when hosted, other servers' edits) are always current.
+  app.use(base, async (_req: any, _res: any, next: any) => { try { await S.refreshRules(); next(); } catch (err) { next(err); } });
+  app.get(`${base}/meta`, wrap(async (_req, res) => res.json({ ...(await S.meta()), mock: MOCK, cap: CAP, ask_over: ASK_OVER })));
+  app.post(`${base}/estimate`, wrap(async (req, res) => { const b = S.makeBrief(req.body.brief || {}); res.json({ brief: b, ...S.estimate(b, { ownOnly: !!req.body.own_only }), spent: (await S.readSpend()).total_usd }); }));
+  app.get(`${base}/batches`, wrap(async (req, res) => res.json(await S.listBatches(req.query.user ? String(req.query.user) : undefined))));
+  app.get(`${base}/batches/:id`, wrap(async (req, res) => res.json(await S.loadBatch(req.params.id))));
+  app.post(`${base}/generate`, wrap(async (req, res) => {
     const b = S.makeBrief(req.body.brief || {});
     const ownOnly = !!req.body.own_only;
     const e = S.estimate(b, { ownOnly });
-    const spent = S.readSpend().total_usd;
+    const spent = (await S.readSpend()).total_usd;
     if (!MOCK && e.usd > ASK_OVER && !req.body.confirm) return res.status(409).json({ needs_confirm: true, estimate: e.usd });
     if (!MOCK && spent + e.usd > CAP) return res.status(402).json({ error: `This would take spend past the $${CAP} cap ($${spent.toFixed(2)} spent).` });
-    S.saveBrief(b);
+    await S.saveBrief(b);
     // Continue an existing run, or start a new one.
     const id = req.body.batch ? String(req.body.batch) : `${b.territory}-${new Date().toISOString().replace(/[-:T]/g, '').slice(2, 14)}`;
     startJob(`${id}~${Date.now()}`, emit => S.generate(b, a, emit, { batchId: id, ownOnly, user: who(req) }));
@@ -306,34 +309,34 @@ async function serve() {
     job.clients.add(res);
     req.on('close', () => job.clients.delete(res));
   });
-  app.patch(`${base}/batches/:id/lines/:line`, wrap((req, res) => res.json(S.setDecision(req.params.id, req.params.line, req.body || {}, who(req)))));
-  app.post(`${base}/batches/:id/lines/:line/more`, wrap((req, res) => {
+  app.patch(`${base}/batches/:id/lines/:line`, wrap(async (req, res) => res.json(await S.setDecision(req.params.id, req.params.line, req.body || {}, who(req)))));
+  app.post(`${base}/batches/:id/lines/:line/more`, wrap(async (req, res) => {
     const jobId = `${req.params.id}~more~${Date.now()}`;
     startJob(jobId, emit => S.moreLikeThis(req.params.id, req.params.line, String(req.body?.note || ''), Number(req.body?.k || 3), a, emit));
     res.json({ job: jobId });
   }));
-  app.get(`${base}/batches/:id/export.csv`, wrap((req, res) => {
-    const x = S.exportBatch(req.params.id);
+  app.get(`${base}/batches/:id/export.csv`, wrap(async (req, res) => {
+    const x = await S.exportBatch(req.params.id);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${req.params.id}.csv"`);
     res.send(x.csv);
   }));
-  app.get(`${base}/batches/:id/export.md`, wrap((req, res) => {
-    const x = S.exportBatch(req.params.id);
+  app.get(`${base}/batches/:id/export.md`, wrap(async (req, res) => {
+    const x = await S.exportBatch(req.params.id);
     res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${req.params.id}.md"`);
     res.send(x.md);
   }));
-  app.post(`${base}/ingest`, wrap((req, res) => res.json(S.ingest(typeof req.body === 'string' ? req.body : String(req.body?.csv || '')))));
-  app.get(`${base}/shortlist`, wrap((_req, res) => res.json(S.shortlist())));
-  app.get(`${base}/shortlist.csv`, wrap((_req, res) => {
-    const s = S.writeShortlist();
+  app.post(`${base}/ingest`, wrap(async (req, res) => res.json(await S.ingest(typeof req.body === 'string' ? req.body : String(req.body?.csv || '')))));
+  app.get(`${base}/shortlist`, wrap(async (_req, res) => res.json(await S.shortlist())));
+  app.get(`${base}/shortlist.csv`, wrap(async (_req, res) => {
+    const s = await S.writeShortlist();
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="shortlist.csv"');
     res.send(s.csv);
   }));
-  app.get(`${base}/shortlist.md`, wrap((_req, res) => {
-    const s = S.writeShortlist();
+  app.get(`${base}/shortlist.md`, wrap(async (_req, res) => {
+    const s = await S.writeShortlist();
     res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="shortlist.md"');
     res.send(s.md);
@@ -342,8 +345,8 @@ async function serve() {
     const { persona, territory, lines } = req.body || {};
     res.json(await S.checkTexts(persona, territory, lines || [], a));
   }));
-  app.get(`${base}/compare`, wrap((_req, res) => res.json(S.listCompares())));
-  app.post(`${base}/compare`, wrap((req, res) => {
+  app.get(`${base}/compare`, wrap(async (_req, res) => res.json(await S.listCompares())));
+  app.post(`${base}/compare`, wrap(async (req, res) => {
     const b = S.makeBrief(req.body.brief || {});
     const models: string[] = req.body.models || [];
     const n = Number(req.body.n || 8);
@@ -351,25 +354,25 @@ async function serve() {
     startJob(id, emit => S.compare(b, models, n, a, emit));
     res.json({ job: id });
   }));
-  app.get(`${base}/compare/:name`, wrap((req, res) => res.json(S.loadCompare(req.params.name))));
-  app.patch(`${base}/compare/:name/lines/:id`, wrap((req, res) => {
-    const s = S.loadCompare(req.params.name);
+  app.get(`${base}/compare/:name`, wrap(async (req, res) => res.json(await S.loadCompare(req.params.name))));
+  app.patch(`${base}/compare/:name/lines/:id`, wrap(async (req, res) => {
+    const s = await S.loadCompare(req.params.name);
     const l = s.lines.find(x => x.id === req.params.id);
     if (!l) throw new Error('No such line');
     if (req.body.favourite !== undefined) l.favourite = !!req.body.favourite;
     if (req.body.note !== undefined) l.note = String(req.body.note);
-    S.saveCompare(s);
+    await S.saveCompare(s);
     res.json(l);
   }));
-  app.post(`${base}/compare/:name/reveal`, wrap((req, res) => res.json(S.revealCompare(req.params.name))));
+  app.post(`${base}/compare/:name/reveal`, wrap(async (req, res) => res.json(await S.revealCompare(req.params.name))));
 
-  app.post(`${base}/territories`, wrap((req, res) => res.json(S.saveTerritory(null, req.body?.territory || {}, String(req.body?.note || ''), who(req)))));
-  app.put(`${base}/territories/:code`, wrap((req, res) => res.json(S.saveTerritory(req.params.code, req.body?.territory || {}, String(req.body?.note || ''), who(req)))));
+  app.post(`${base}/territories`, wrap(async (req, res) => res.json(await S.saveTerritory(null, req.body?.territory || {}, String(req.body?.note || ''), who(req)))));
+  app.put(`${base}/territories/:code`, wrap(async (req, res) => res.json(await S.saveTerritory(req.params.code, req.body?.territory || {}, String(req.body?.note || ''), who(req)))));
   app.get(`${base}/brand/:name`, (req: any, res: any) => {
     try { res.setHeader('Cache-Control', 'max-age=3600'); res.sendFile(S.brandAssetPath(req.params.name)); } catch { res.sendStatus(404); }
   });
-  app.get(`${base}/docs`, wrap((_req, res) => res.json(S.referenceDocs())));
-  app.get(`${base}/docs/:id`, wrap((req, res) => {
+  app.get(`${base}/docs`, wrap(async (_req, res) => res.json(S.referenceDocs())));
+  app.get(`${base}/docs/:id`, wrap(async (req, res) => {
     const { doc, file } = S.referenceDocPath(req.params.id);
     if (doc.kind === 'md') { res.setHeader('Content-Type', 'text/markdown; charset=utf-8'); return res.send(fs.readFileSync(file, 'utf8')); }
     res.download(file, path.basename(file));
