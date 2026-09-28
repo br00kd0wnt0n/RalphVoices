@@ -19,14 +19,13 @@ import type { AuditApi, Content } from './api.js';
 import { FatalError } from './api.js';
 import { buildItems, type YesNoItem } from './checks.js';
 import { addFlag, copyFlags, labelOf, ocrOnlyWords, sevOf, wordCount, type TextBlock } from './copyChecks.js';
-import { ocr } from './assets.js';
+import { extractAudio, ocr } from './assets.js';
+import { CONFIG } from './config.js';
+import { copyMatch, type SignedOffCopy } from './copyMatch.js';
+import { defaultTools, type Tools } from './tools.js';
 import type { Asset, AssetAudit, Flag, FrameText, Rubric, RuleItem, Rules, YesNo } from './types.js';
 
-export const MODELS = { vision: 'gpt-4o', yesno: 'gpt-4o', compliance: 'gpt-4o-mini', reviewer: 'gpt-4o', objection: 'gpt-4o' };
-
-/** On-image words on the first frame or card above this are an amber flag. HOUSE default; Brook to confirm. */
-export const TEXT_LOAD_MAX = 20;
-export const TEXT_LOAD_SOURCE = 'HOUSE: B2 default of 20 words on the first frame or card (Brook to confirm); TM Busy Families "give you 1.5 seconds"';
+export const MODELS = CONFIG.models;
 
 export const ASSET_SYSTEM = 'You check finished social ads against a checklist. You see the ad itself (a static image, carousel cards or video keyframes) and a transcription of its words. Judge only what the ad actually shows or says (images, on-image text, copy, voice-over). Do not guess at intent or at what a different cut of the ad might contain.';
 const COPY_SYSTEM = 'You check the words of a social ad for Trupanion (medical insurance for cats and dogs) against a compliance checklist. Judge only the words given, as written.';
@@ -41,7 +40,12 @@ export interface AuditContext {
   personas: Record<string, Persona>;
   concurrency?: number;
   log?: (s: string) => void;
+  tools?: Tools;
+  signedOff?: SignedOffCopy;     // Studio's signed-off copy for this stub: the copy-match check
+  onProgress?: (e: Progress) => void;
 }
+
+export interface Progress { stage: 'read' | 'transcribe' | 'checks' | 'compliance' | 'review' | 'objection' | 'done'; calls_done: number; calls_estimated: number; message: string }
 
 async function pool<T>(tasks: Array<() => Promise<T>>, n: number): Promise<T[]> {
   const out: T[] = new Array(tasks.length);
@@ -60,16 +64,17 @@ async function pool<T>(tasks: Array<() => Promise<T>>, n: number): Promise<T[]> 
 
 const img = (p: string, detail: 'low' | 'high') => ({ type: 'image' as const, image: { path: p, detail } });
 const txt = (text: string) => ({ type: 'text' as const, text });
-const withWording = (source: string, w: string) => (w === 'B2' || source.includes(w) ? source : `${source}; ${w}`);
+const withWording = (source: string, w: string) => (w.startsWith('B2') || w === 'rules' || source.includes(w) ? source : `${source}; ${w}`);
 const yesNoPrompt = (ad: string, q: string) => `AD:\n${ad}\n\n${q} Answer with exactly one word: Yes or No.`;
 
 /** A 512 px copy for detail-low questions: smaller uploads, same tokens (85). */
-function lowCopy(src: string, dir: string): string {
+function lowCopy(src: string, dir: string, tools: Tools): string {
+  if (!tools.ffmpeg) return src;
   fs.mkdirSync(dir, { recursive: true });
   const out = path.join(dir, path.basename(src).replace(/\.[^.]+$/, '') + '-512.jpg');
   if (fs.existsSync(out)) return out;
   try {
-    execFileSync('ffmpeg', ['-y', '-v', 'error', '-i', src, '-vf', "scale='if(gt(iw,ih),min(512,iw),-2)':'if(gt(iw,ih),-2,min(512,ih))'", '-q:v', '3', out]);
+    execFileSync(tools.ffmpeg, ['-y', '-v', 'error', '-i', src, '-vf', "scale='if(gt(iw,ih),min(512,iw),-2)':'if(gt(iw,ih),-2,min(512,ih))'", '-q:v', '3', out]);
     return out;
   } catch { return src; }
 }
@@ -100,7 +105,8 @@ async function readFrames(a: Asset, ctx: AuditContext): Promise<FrameText[]> {
     });
     let j: any = {};
     try { j = JSON.parse(r.text || '{}'); } catch { /* keep empty */ }
-    const tess = ocr(f.path);
+    const tess = ocr(f.path, ctx.tools || defaultTools());
+    ctx.onProgress?.({ stage: 'read', calls_done: ctx.api.calls, calls_estimated: 0, message: `read ${f.label}` });
     const text = String(j.text || '');
     return { label: f.label, text, ocr: tess, ocr_only: ocrOnlyWords(text, tess), description: String(j.description || '') };
   }), ctx.concurrency || 3);
@@ -162,17 +168,38 @@ async function objection(a: Asset, ad: string, images: Content, persona: Persona
 export async function auditAsset(a: Asset, ctx: AuditContext): Promise<AssetAudit> {
   const t0 = Date.now();
   const usd0 = ctx.api.usd, calls0 = ctx.api.calls;
-  const persona = a.stub?.persona || null;
+  const persona = a.persona || a.stub?.persona || null;
   const errors: string[] = [];
   const log = ctx.log || (() => {});
   const n = ctx.concurrency || 3;
+  const tools = ctx.tools || defaultTools();
+  const notes: string[] = [];
+  const timings: Record<string, number> = {};
+  let tStage = Date.now();
+  const lap = (k: string) => { timings[k] = Math.round((Date.now() - tStage) / 100) / 10; tStage = Date.now(); };
+  const est = estimateAsset(a, ctx).calls;
+  const progress = (stage: Progress['stage'], message: string) => ctx.onProgress?.({ stage, calls_done: ctx.api.calls - calls0, calls_estimated: est, message });
+  if (a.kind === 'video' && !a.frames.length) notes.push(tools.ffmpeg && tools.ffprobe ? 'Video frames unavailable (ffmpeg could not read the file); checked on the copy and voice-over only.' : 'Video frames unavailable (ffmpeg not installed); checked on the copy and voice-over only.');
+  if (!a.text_only && a.frames.length && !tools.tesseract) notes.push('No OCR cross-check (tesseract not installed); on-image text is vision only.');
 
-  // 1. Read the frames.
+  // 1. Read the frames; transcribe the voice-over when there's no transcript sidecar.
+  progress('read', `reading ${a.frames.length} image${a.frames.length === 1 ? '' : 's'}`);
   const frames = a.text_only ? [] : await readFrames(a, ctx);
+  lap('read');
+  if (a.kind === 'video' && !a.transcript && (a.has_audio || !tools.ffprobe)) {
+    try {
+      progress('transcribe', 'transcribing the voice-over');
+      const mp3 = extractAudio(a.source, path.join(ctx.workDir, 'audio', `${a.stub?.stub || a.name}.mp3`), tools);
+      a.transcript = await ctx.api.transcribe(`transcribe ${a.name}`, MODELS.transcribe, mp3, a.duration || 0);
+      a.transcript_source = ctx.api.mock ? 'mock' : 'openai';
+      log(`  transcribed ${Math.round(a.duration || 0)} s of audio (${a.transcript.length} chars)`);
+    } catch (e: any) { if (e instanceof FatalError) throw e; errors.push(`transcribe: ${e?.message}`); notes.push(`Voice-over not transcribed (${String(e?.message || e).slice(0, 80)}).`); }
+    lap('transcribe');
+  }
   log(`  read ${frames.length} image${frames.length === 1 ? '' : 's'}`);
   const ad = describeAsset(a, frames);
   const lowDir = path.join(ctx.workDir, 'low', a.stub?.stub || a.name);
-  const lows = a.frames.map(f => lowCopy(f.path, lowDir));
+  const lows = a.frames.map(f => lowCopy(f.path, lowDir, tools));
   const images: Content = lows.map(p => img(p, 'low'));
 
   // 2. Rule-based copy checks.
@@ -182,8 +209,17 @@ export async function auditAsset(a: Asset, ctx: AuditContext): Promise<AssetAudi
     if (!flags.some(x => x.rule === f.rule && x.where === f.where)) addFlag(flags, { ...f, by: ['ocr'] });
   }
 
+  // 2b. Copy match against the signed-off copy, when Studio passes it.
+  let matchRows: AssetAudit['copy_match'] = [];
+  if (ctx.signedOff && !a.text_only) {
+    const cm = copyMatch(ctx.signedOff, [...frames.map(f => ({ where: f.label, text: f.text })), ...(a.transcript ? [{ where: 'voice-over', text: a.transcript }] : [])], ctx.rules);
+    matchRows = cm.rows;
+    for (const f of cm.flags) flags.push(f);
+  }
+
   // 3. Yes/no items, two wordings each.
-  const items = buildItems(ctx.rules, ctx.rubric, { video: a.kind === 'video' });
+  progress('checks', 'yes/no checks');
+  const items = buildItems(ctx.rules, ctx.rubric, { video: a.kind === 'video', visual: !a.text_only });
   const frameFor = (it: YesNoItem): Content => {
     if (!it.frame) return images;
     const i = a.frames.findIndex(f => f.role === it.frame);
@@ -194,11 +230,11 @@ export async function auditAsset(a: Asset, ctx: AuditContext): Promise<AssetAudi
     const f = frames.find((_, i) => a.frames[i]?.role === it.frame);
     return f ? `Trupanion social ad, one frame (${f.label}).\nOn-image text: ${f.text.trim() ? `"${f.text.trim().replace(/\n+/g, ' / ')}"` : '(none)'}\nShows: ${f.description}` : ad;
   };
-  const asked = a.kind === 'video' ? items : items.filter(i => !i.frame);
+  const asked = a.kind === 'video' && a.frames.length ? items : items.filter(i => !i.frame);
   const system = a.text_only ? ctx.rubric.system : ASSET_SYSTEM;
   const tasks = asked.flatMap(it => it.wordings.map((w, k) => async () => {
     const content: Content = a.text_only ? [txt(yesNoPrompt(ad, w))] : [...frameFor(it), txt(yesNoPrompt(frameText(it), w))];
-    try { return { id: it.id, k, p: await ctx.api.yesNo(`${a.name} ${it.id} ${'AB'[k]}`, MODELS.yesno, system, content) }; }
+    try { const p = await ctx.api.yesNo(`${a.name} ${it.id} ${'AB'[k]}`, MODELS.yesno, system, content); progress('checks', it.id); return { id: it.id, k, p }; }
     catch (e: any) { if (e instanceof FatalError) throw e; errors.push(`${it.id} ${'AB'[k]}: ${e?.message}`); return { id: it.id, k, p: null }; }
   }));
   const reads = await pool(tasks, n);
@@ -210,6 +246,8 @@ export async function auditAsset(a: Asset, ctx: AuditContext): Promise<AssetAudi
     if (both.length) yn[it.id] = { id: it.id, p: Math.round((both.reduce((s, x) => s + x, 0) / both.length) * 1000) / 1000, pa, pb };
   }
   log(`  ${reads.length} yes/no reads`);
+  lap('checks');
+  progress('compliance', 'compliance checks');
 
   // 4. Compliance yes/no on the words alone.
   const words = blocks.map(b => b.text).filter(t => t.trim()).join('\n');
@@ -224,12 +262,17 @@ export async function auditAsset(a: Asset, ctx: AuditContext): Promise<AssetAudi
     if (ps.length) compP[c.id] = Math.round((ps.reduce((s, x) => s + x, 0) / ps.length) * 1000) / 1000;
   }
 
+  lap('compliance');
   // 5. The reviewer's quoted hits; 6. the skeptic.
+  progress('review', 'reviewer');
   let hits: Awaited<ReturnType<typeof reviewer>> = [];
   let obj = '';
   try { hits = await reviewer(a, ad, a.text_only ? [] : images, ctx); } catch (e: any) { if (e instanceof FatalError) throw e; errors.push(`reviewer: ${e?.message}`); }
+  lap('review');
+  progress('objection', 'the skeptic');
   try { obj = await objection(a, ad, a.text_only ? [] : images, persona ? ctx.personas[persona] : undefined, ctx); } catch (e: any) { if (e instanceof FatalError) throw e; errors.push(`objection: ${e?.message}`); }
 
+  lap('objection');
   // Assemble flags.
   const byId = new Map(allRuleItems(ctx.rules).map(i => [`${i.persona || ''}:${i.id}`, i]));
   const ruleOf = (id: string) => [...byId.values()].find(i => i.id === id);
@@ -249,7 +292,7 @@ export async function auditAsset(a: Asset, ctx: AuditContext): Promise<AssetAudi
     if (h && (caveatInPlace || (p !== undefined && p < 0.2))) { setAside.push({ rule: c.id, quote: h.quote, why: caveatInPlace ? 'the required caveat is in the ad' : `the yes/no reads ${p}` }); continue; }
     if (h && p !== undefined && p >= 0.5) addFlag(flags, { severity: sevOf(c.severity, 'red'), rule: c.id, label: labelOf(c), source: c.source, quote: h.quote, where: h.where, why: h.why, by: ['model', 'yesno'], p });
     else if (h) addFlag(flags, { severity: 'amber', rule: c.id, label: labelOf(c), source: c.source, quote: h.quote, where: h.where, why: `${h.why || ''} (reviewer; the yes/no reads ${p ?? 'n/a'})`.trim(), by: ['model'], p });
-    else if (p !== undefined && p >= 0.8) lone.push(c);
+    else if (p !== undefined && p >= CONFIG.lone_yesno_min) lone.push(c);
   }
   // A lone gpt-4o-mini read (no rule match, no quote) is loose on short copy:
   // it's asked again on gpt-4o with the same two wordings, and flagged only if both agree.
@@ -264,7 +307,7 @@ export async function auditAsset(a: Asset, ctx: AuditContext): Promise<AssetAudi
   }
 
   // Turn-offs and brand: amber for the intended persona, grey for the other two.
-  const qualify = (p: number | undefined, hit: boolean) => hit || (p !== undefined && p >= 0.8);
+  const qualify = (p: number | undefined, hit: boolean) => hit || (p !== undefined && p >= CONFIG.lone_yesno_min);
   for (const it of items.filter(i => i.kind === 'turnoff' || i.kind === 'brand')) {
     const rule = ruleOf(it.rule!)!;
     const p = yn[it.id]?.p;
@@ -304,25 +347,27 @@ export async function auditAsset(a: Asset, ctx: AuditContext): Promise<AssetAudi
     const first = frames[0];
     const w = wordCount(first.text);
     textLoad = { words: w, where: first.label };
-    if (w > TEXT_LOAD_MAX) addFlag(flags, { severity: 'amber', rule: 'TEXT_LOAD', label: `Heavy on-image text: ${w} words on the ${first.label}`, source: TEXT_LOAD_SOURCE, where: first.label, by: ['rule'] });
+    if (w > CONFIG.text_load.max_words) addFlag(flags, { severity: 'amber', rule: 'TEXT_LOAD', label: `Heavy on-image text: ${w} words on the ${first.label}`, source: CONFIG.text_load.source, where: first.label, by: ['rule'] });
   }
   if (!a.stub) addFlag(flags, { severity: 'amber', rule: 'NAMING', label: `Name doesn't parse as a naming stub (${a.stub_error}); B3 can't join its features`, source: 'Naming convention agreed with Add3 (PERSONA_TERRITORY_FORMAT_v#_PLATFORM)', by: ['rule'] });
 
   const features: Record<string, number> = {};
   for (const it of items) if (yn[it.id] && (it.kind === 'feature')) features[it.id] = yn[it.id].p;
 
+  progress('done', 'done');
   const order = { red: 0, amber: 1, grey: 2 } as const;
   flags.sort((x, y) => order[x.severity] - order[y.severity] || (x.persona || '').localeCompare(y.persona || ''));
   return {
     asset: a.name, stub: a.stub?.stub || null, persona, kind: a.kind, frames, copy: a.copy,
-    features, items: yn, flags, set_aside: setAside, objection: obj, text_load: textLoad,
+    transcript: a.transcript ? { text: a.transcript, source: a.transcript_source || 'sidecar' } : a.kind === 'video' ? { text: '', source: a.has_audio ? 'transcription failed' : 'no audio track' } : null,
+    features, items: yn, flags, set_aside: setAside, copy_match: matchRows, notes, timings, objection: obj, text_load: textLoad,
     usd: ctx.api.usd - usd0, seconds: Math.round((Date.now() - t0) / 100) / 10, calls: ctx.api.calls - calls0, errors,
   };
 }
 
 /** Rough cost and token count for an asset before running it (for the $2 ask). */
 export function estimateAsset(a: Asset, ctx: Pick<AuditContext, 'api' | 'rules' | 'rubric'>): { usd: number; tokens: number; calls: number } {
-  const items = buildItems(ctx.rules, ctx.rubric, { video: a.kind === 'video' });
+  const items = buildItems(ctx.rules, ctx.rubric, { video: a.kind === 'video', visual: !a.text_only });
   const nFrames = a.frames.length;
   const adChars = a.text_only ? a.text_only.length : 250 + nFrames * 450 + Object.values(a.copy).join(' ').length + (a.transcript?.length || 0);
   const highTok = a.frames.reduce((s, f) => s + ctx.api.estTokens({ system: '', content: [img(f.path, 'high')] }), 0);
@@ -330,6 +375,7 @@ export function estimateAsset(a: Asset, ctx: Pick<AuditContext, 'api' | 'rules' 
   const compTok = ctx.rules.compliance.filter(c => c.wordings).length * 2 * (adChars / 4 + 80);
   const revTok = 2 * (nFrames * 85 + adChars / 4 + 1800);
   const g = 2.5 / 1e6, out = 10 / 1e6;
-  const usd = (highTok + nFrames * 150) * g + nFrames * 300 * out + yesTok * g + compTok * 0.15 / 1e6 + revTok * g + 700 * out;
+  const audio = a.kind === 'video' && a.has_audio && !a.transcript ? ((a.duration || 0) / 60) * CONFIG.transcribe_usd_per_minute : 0;
+  const usd = audio + (highTok + nFrames * 150) * g + nFrames * 300 * out + yesTok * g + compTok * 0.15 / 1e6 + revTok * g + 700 * out;
   return { usd, tokens: Math.round(highTok + yesTok + revTok), calls: nFrames + items.length * 2 + ctx.rules.compliance.filter(c => c.wordings).length * 2 + 2 };
 }

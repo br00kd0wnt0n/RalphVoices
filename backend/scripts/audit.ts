@@ -29,6 +29,7 @@ import { execFileSync } from 'node:child_process';
 import { AuditApi, readSpend } from '../src/services/audit/api.js';
 import { discoverRound } from '../src/services/audit/assets.js';
 import { MODELS } from '../src/services/audit/engine.js';
+import { CONFIG } from '../src/services/audit/config.js';
 import { mockResponder } from '../src/services/audit/mock.js';
 import { agreement, parseCsvObjects } from '../src/services/audit/report.js';
 import { ASSETS_DIR, AUDIT_DIR, CLIENT_DIR, loadRubric, loadRules, readJson } from '../src/services/audit/rules.js';
@@ -42,21 +43,21 @@ const flag = (n: string) => argv.includes(`--${n}`);
 function opt(n: string, d = ''): string { const i = argv.indexOf(`--${n}`); return i >= 0 && argv[i + 1] !== undefined && !argv[i + 1].startsWith('--') ? argv[i + 1] : d; }
 
 const MOCK = flag('mock');
-const CAP = Number(opt('cap', '10'));
-const ASK_OVER = 2;
+const CAP = Number(opt('cap', String(CONFIG.cap_usd)));
+const ASK_OVER = CONFIG.ask_over_usd;
 const SPEND = path.join(AUDIT_DIR, 'spend.json');
 
 function makeApi(logPath?: string) {
-  const tpm = Number(opt('tpm', '15000'));
+  const tpm = Number(opt('tpm', String(CONFIG.tpm_default)));
   return new AuditApi({
     mock: MOCK ? mockResponder() : undefined,
     tpm: { [MODELS.yesno]: tpm, [MODELS.compliance]: 150000 },
-    capUsd: CAP, spendPath: SPEND, logPath,
+    capUsd: CAP, spendPath: SPEND, logPath, transcribeUsdPerMinute: CONFIG.transcribe_usd_per_minute,
   });
 }
 
 function mins(tokens: number) {
-  const tpm = Number(opt('tpm', '15000'));
+  const tpm = Number(opt('tpm', String(CONFIG.tpm_default)));
   return tokens / tpm;
 }
 
@@ -64,7 +65,7 @@ function printEstimate(est: ReturnType<typeof estimateRound>) {
   console.log('\nEstimate (before any call):');
   for (const x of est.per) console.log(`  ${(x.asset.stub?.stub || x.asset.name).padEnd(34)} ${x.asset.kind.padEnd(8)} ${String(x.asset.frames.length || 'text').padStart(4)} img  ${String(x.calls).padStart(4)} calls  ~$${x.usd.toFixed(3)}`);
   const spent = MOCK ? 0 : readSpend(SPEND).total_usd;
-  console.log(`  Total ~$${est.usd.toFixed(2)} (${est.calls} calls, ~${Math.ceil(mins(est.tokens))} min at ${opt('tpm', '15000')} gpt-4o TPM). Spent so far $${spent.toFixed(2)} of the $${CAP} cap.`);
+  console.log(`  Total ~$${est.usd.toFixed(2)} (${est.calls} calls, ~${Math.ceil(mins(est.tokens))} min at ${opt('tpm', String(CONFIG.tpm_default))} gpt-4o TPM). Spent so far $${spent.toFixed(2)} of the $${CAP} cap.`);
   return spent;
 }
 
@@ -199,9 +200,13 @@ for s in specs:
   // A 9-second video from three cards (3 s each), to exercise the keyframe path.
   const vid = path.join(dir, '_vid');
   execFileSync('ffmpeg', ['-y', '-v', 'error', '-framerate', '1/3', '-i', path.join(vid, '%d.png'), '-c:v', 'libx264', '-r', '25', '-pix_fmt', 'yuv420p', path.join(dir, 'FAM_PLANTVID_VID_v1_META.mp4')]);
+  // The same cards with a spoken claim (macOS `say`, made here): the voice-over must be transcribed and flagged red.
+  const vo = path.join(vid, 'vo.aiff');
+  execFileSync('say', ['-o', vo, 'Summer plans? Honestly, they pay the whole vet bill. Trupanion.']);
+  execFileSync('ffmpeg', ['-y', '-v', 'error', '-framerate', '1/3', '-i', path.join(vid, '%d.png'), '-i', vo, '-c:v', 'libx264', '-r', '25', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-t', '9', path.join(dir, 'FAM_PLANTVO_VID_v1_META.mp4')]);
   fs.writeFileSync(path.join(dir, 'FAM_PLANTVID_VID_v1_META.txt'), 'Primary text: The best pet insurance for busy families. Nothing to file, nothing to float on the card.\nHeadline: Summer, sorted, whatever the dog eats next\n');
   fs.writeFileSync(path.join(dir, 'DINK_PLANTPAYS_ST_v1_META.txt'), 'Primary text: Your fur baby deserves the good stuff.\nHeadline: Do the maths\n');
-  console.log(`Planted assets in ${dir}:\n${fs.readdirSync(dir).filter(n => !n.startsWith('_')).map(n => `  ${n}`).join('\n')}\nExpected: PLANTPAYS red (COMP_PAYS_FOR_ITSELF), PLANTDIRECT red (COMP_DIRECT_PAY), PLANTCLEAN no red.`);
+  console.log(`Planted assets in ${dir}:\n${fs.readdirSync(dir).filter(n => !n.startsWith('_')).map(n => `  ${n}`).join('\n')}\nExpected: PLANTPAYS red (COMP_PAYS_FOR_ITSELF), PLANTDIRECT red (COMP_DIRECT_PAY), PLANTCLEAN no red, PLANTVO red on the transcribed voice-over (COMP_PAID_SHARE).`);
 }
 
 main().catch(err => { console.error(err?.stack || err); process.exit(1); });

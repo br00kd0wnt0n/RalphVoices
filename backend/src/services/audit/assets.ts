@@ -5,6 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { parseStub } from './rules.js';
 import type { Asset, Frame } from './types.js';
+import { defaultTools, type Tools } from './tools.js';
 
 const IMAGE = /\.(png|jpe?g|webp|gif)$/i;
 const VIDEO = /\.(mp4|mov|m4v)$/i;
@@ -52,13 +53,25 @@ export function parseSidecar(text: string): { copy: Record<string, string>; labe
   return { copy, labels };
 }
 
-function hasBin(bin: string): boolean {
-  try { execFileSync('which', [bin], { stdio: 'ignore' }); return true; } catch { return false; }
+export function videoDuration(file: string, tools: Tools = defaultTools()): number {
+  if (!tools.ffprobe) return 0;
+  const out = execFileSync(tools.ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file], { encoding: 'utf8' });
+  return Number(out.trim()) || 0;
 }
 
-export function videoDuration(file: string): number {
-  const out = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file], { encoding: 'utf8' });
-  return Number(out.trim()) || 0;
+export function hasAudio(file: string, tools: Tools = defaultTools()): boolean {
+  if (!tools.ffprobe) return false;
+  try {
+    return execFileSync(tools.ffprobe, ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=index', '-of', 'csv=p=0', file], { encoding: 'utf8' }).trim().length > 0;
+  } catch { return false; }
+}
+
+/** The soundtrack as 16 kHz mono MP3 (small uploads; plenty for speech). */
+export function extractAudio(file: string, out: string, tools: Tools = defaultTools()): string {
+  if (!tools.ffmpeg) return file; // the transcription API takes mp4/mov directly (up to 25 MB)
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  execFileSync(tools.ffmpeg, ['-y', '-v', 'error', '-i', file, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '48k', out]);
+  return out;
 }
 
 /** Keyframe times: 0, 1.5 s (the hook), then every 3 s, plus the last frame; capped at 8. */
@@ -71,14 +84,15 @@ export function keyframeTimes(duration: number, cap = 8): Array<{ at: number; ro
   return out.slice(0, cap);
 }
 
-export function extractKeyframes(file: string, outDir: string, cap = 8): { frames: Frame[]; duration: number } {
+export function extractKeyframes(file: string, outDir: string, cap = 8, tools: Tools = defaultTools()): { frames: Frame[]; duration: number } {
+  if (!tools.ffmpeg || !tools.ffprobe) return { frames: [], duration: 0 };
   fs.mkdirSync(outDir, { recursive: true });
-  const duration = videoDuration(file);
+  const duration = videoDuration(file, tools);
   const frames: Frame[] = [];
   keyframeTimes(duration, cap).forEach((k, i) => {
     const p = path.join(outDir, `f${i}-${k.at.toFixed(1)}s.jpg`);
     // Longest side at most 1536 px: what vision reads at detail "high" anyway.
-    execFileSync('ffmpeg', ['-y', '-v', 'error', '-ss', String(k.at), '-i', file, '-frames:v', '1',
+    execFileSync(tools.ffmpeg!, ['-y', '-v', 'error', '-ss', String(k.at), '-i', file, '-frames:v', '1',
       '-vf', "scale='if(gt(iw,ih),min(1536,iw),-2)':'if(gt(iw,ih),-2,min(1536,ih))'", '-q:v', '3', p]);
     if (fs.existsSync(p)) frames.push({ label: k.label, path: p, at: k.at, role: k.role });
   });
@@ -86,10 +100,10 @@ export function extractKeyframes(file: string, outDir: string, cap = 8): { frame
 }
 
 /** tesseract's read of one image, as a cross-check on vision. Empty when tesseract isn't installed. */
-export function ocr(image: string): string {
-  if (!hasBin('tesseract')) return '';
+export function ocr(image: string, tools: Tools = defaultTools()): string {
+  if (!tools.tesseract) return '';
   try {
-    return execFileSync('tesseract', [image, '-', '--psm', '11'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    return execFileSync(tools.tesseract, [image, '-', '--psm', '11'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
       .replace(/[ \t]+/g, ' ').split('\n').map(s => s.trim()).filter(Boolean).join('\n');
   } catch { return ''; }
 }
@@ -130,7 +144,7 @@ export function discoverRound(roundDir: string, workDir: string, personas?: stri
       if (innerT) a.transcript = fs.readFileSync(path.join(full, innerT), 'utf8').trim();
     } else if (a.kind === 'video') {
       const { frames, duration } = extractKeyframes(full, path.join(workDir, 'frames', base));
-      a.frames = frames; a.duration = duration;
+      a.frames = frames; a.duration = duration; a.has_audio = hasAudio(full);
     } else {
       a.frames = [{ label: 'image', path: full, role: 'first' }];
     }
@@ -138,7 +152,9 @@ export function discoverRound(roundDir: string, workDir: string, personas?: stri
     if (sc) Object.assign(a, sidecarOf(path.join(roundDir, sc)));
     const tr = transcripts.get(base.toUpperCase());
     if (tr) a.transcript = fs.readFileSync(path.join(roundDir, tr), 'utf8').trim();
-    if (a.copy.transcript && !a.transcript) { a.transcript = a.copy.transcript; delete a.copy.transcript; }
+    if (a.copy.transcript && !a.transcript) a.transcript = a.copy.transcript;
+    delete a.copy.transcript;
+    if (a.transcript) a.transcript_source = 'sidecar';
     assets.push(a);
   }
   return assets;

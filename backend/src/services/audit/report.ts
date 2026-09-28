@@ -2,13 +2,15 @@
 // with red flags first), the features CSV B3's `weekly.ts features --file`
 // reads, and a flag sheet for the human agreement check. Never a score or a
 // ranking of assets.
-import type { AssetAudit, Flag, Rules } from './types.js';
+import { CONFIG } from './config.js';
+import type { AssetAudit, Flag, Rubric, Rules } from './types.js';
+import { featuresCsvFromReports, toReport } from './index.js';
 
 const ICON: Record<Flag['severity'], string> = { red: '🔴 red', amber: '🟠 amber', grey: '⚪ grey' };
 const esc = (s: string | undefined) => String(s ?? '').replace(/\|/g, '\\|').replace(/\n+/g, ' / ');
 const pct = (p: number | undefined | null) => (p === undefined || p === null ? '' : p.toFixed(2));
 
-export const FEATURE_THRESHOLD = 0.5;
+export const FEATURE_THRESHOLD = CONFIG.feature_threshold;
 
 export function taggedFeatures(a: AssetAudit): string[] {
   return Object.entries(a.features).filter(([, p]) => p >= FEATURE_THRESHOLD).map(([k]) => k).sort();
@@ -56,6 +58,10 @@ export function assetMarkdown(a: AssetAudit, rules: Rules, meta: { round: string
     if (f.description) L.push('', `Shows: ${f.description}`);
     if (f.ocr_only.length) L.push('', `tesseract also read: ${f.ocr_only.join(', ')} (check for missed or garbled words)`);
     L.push('');
+  }
+  if (a.transcript) {
+    const src = a.transcript.source === 'openai' ? 'transcribed by OpenAI' : a.transcript.source === 'sidecar' ? 'from the transcript sidecar' : a.transcript.source;
+    L.push(`**Voice-over** (${src})`, '', a.transcript.text.trim() ? '```\n' + a.transcript.text.trim() + '\n```' : '_(none)_', '');
   }
   const copy = Object.entries(a.copy).filter(([, v]) => v.trim());
   if (copy.length) {
@@ -107,21 +113,11 @@ function csvCell(v: unknown, guard = false): string {
 
 /**
  * Features for B3's `weekly.ts features --file` (joined by naming stub):
- * `stub`, `features` ("a; b") and `angle` (from the territory, so B3 tags
- * `angle:<id>`), plus the P(Yes) behind each tag and the flag counts for people.
+ * `stub`, `features` ("a; b") and `angle` (from the territory), plus the P(Yes)
+ * behind each tag and the flag counts. Same rows as the library's featuresRow.
  */
-export function featuresCsv(audits: AssetAudit[], rules: Rules & { territories?: Record<string, { angle?: string }> }): string {
-  const keys = Object.keys(rules.features.items);
-  const head = ['stub', 'features', 'angle', 'persona', 'asset', 'kind', 'red', 'amber', 'grey', ...keys.map(k => `p_${k}`)];
-  const rows = [head.join(',')];
-  for (const a of audits) {
-    if (!a.stub) continue;
-    const terr = a.stub.split('_').slice(0, -3).join('_');
-    const angle = rules.territories?.[terr]?.angle || '';
-    const n = (s: Flag['severity']) => a.flags.filter(f => f.severity === s).length;
-    rows.push([a.stub, taggedFeatures(a).join('; '), angle, a.persona, a.asset, a.kind, n('red'), n('amber'), n('grey'), ...keys.map(k => (a.features[k] === undefined ? '' : a.features[k].toFixed(3)))].map(v => csvCell(v)).join(','));
-  }
-  return rows.join('\n') + '\n';
+export function featuresCsv(audits: AssetAudit[], rules: Rules & { territories?: Record<string, { angle?: string }> }, rubric: Rubric = { version: '', system: '', items: [] }): string {
+  return featuresCsvFromReports(audits.map(a => toReport(a, rules, rubric)), Object.keys(rules.features.items));
 }
 
 /** One row per flag, for Brook to mark agree / disagree (the ≥90% acceptance check). */

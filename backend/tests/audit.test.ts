@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process';
 import { loadRules, loadRubric, parseStub } from '../src/services/audit/rules.js';
 import { parseSidecar, keyframeTimes, discoverRound } from '../src/services/audit/assets.js';
 import { copyFlags, ocrOnlyWords, type TextBlock } from '../src/services/audit/copyChecks.js';
-import { buildItems } from '../src/services/audit/checks.js';
+import { buildItems, genericWordings } from '../src/services/audit/checks.js';
 import { AuditApi, probabilityYes, imageTokens } from '../src/services/audit/api.js';
 import { auditAsset } from '../src/services/audit/engine.js';
 import { mockResponder } from '../src/services/audit/mock.js';
@@ -142,4 +142,34 @@ test('a mock static end to end: red flag, features, features CSV B3 can read, fl
   const md = assetMarkdown(r, rules, { round: 't', date: '2026-09-28', rubric: 'example-1' });
   assert.match(md, /## Flags: 1 red/);
   assert.doesNotMatch(md, /\bscore\b|\brank(ing)?\b/i);
+});
+
+test('v2.3 visual brand items: asked of the images with wordings from the rule text; never matched on words', () => {
+  const it = buildItems(rules, rubric).find(i => i.id === 'BR_COLLAR');
+  assert.equal(it?.kind, 'brand');
+  assert.deepEqual(it?.wordings, genericWordings('Never show pets outdoors without a collar.'));
+  assert.equal(flagsFor([img('A collar for every dog')]).find(x => x.rule === 'BR_COLLAR'), undefined);
+});
+
+test('spoken claims: a transcribed voice-over gets the copy and compliance checks', { skip: !hasFfmpeg && 'needs ffmpeg' }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-vo-'));
+  const round = path.join(dir, 'round');
+  fs.mkdirSync(round);
+  // 4 s of blue with a tone: a video that has an audio track.
+  execFileSync('ffmpeg', ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=320x320:d=4', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=4', '-shortest', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', path.join(round, 'FAM_TALK_VID_v1_META.mp4')]);
+  const [asset] = discoverRound(round, dir);
+  assert.equal(asset.has_audio, true);
+  assert.equal(asset.transcript, undefined);
+  const api = new AuditApi({ mock: mockResponder(() => ''), mockTranscribe: () => 'Honestly, they pay the whole vet bill.', capUsd: 1, spendPath: path.join(dir, 'spend.json') });
+  const r = await auditAsset(asset, { api, rules, rubric, workDir: dir, personas: {} });
+  const f = r.flags.find(x => x.rule === 'COMP_PAID_SHARE');
+  assert.equal(f?.severity, 'red');
+  assert.equal(f?.where, 'voice-over');
+  assert.equal(r.transcript?.source, 'mock');
+
+  // A transcript sidecar wins over transcription.
+  fs.writeFileSync(path.join(round, 'FAM_TALK_VID_v1_META.transcript.txt'), 'Nothing to file.');
+  const [again] = discoverRound(round, dir);
+  assert.equal(again.transcript_source, 'sidecar');
+  assert.equal(again.transcript, 'Nothing to file.');
 });

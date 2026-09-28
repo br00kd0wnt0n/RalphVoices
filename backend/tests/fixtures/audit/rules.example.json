@@ -1,50 +1,278 @@
 {
   "_note": "Made-up example rules for the B2 audit tests. Same shape as the Studio rules file; no client material.",
   "version": "example-1",
-  "sources": { "LEGAL": { "title": "Example legal guide" }, "BRAND": { "title": "Example brand book" }, "HOUSE": { "title": "House convention" }, "RB": { "title": "Example rubric" } },
+  "sources": {
+    "LEGAL": {
+      "title": "Example legal guide"
+    },
+    "BRAND": {
+      "title": "Example brand book"
+    },
+    "HOUSE": {
+      "title": "House convention"
+    },
+    "RB": {
+      "title": "Example rubric"
+    }
+  },
   "fields": {
-    "meta_primary": { "platform": "META", "label": "Meta primary text", "visible": 125, "max": 500, "source": "HOUSE primary" },
-    "meta_headline": { "platform": "META", "label": "Meta headline", "visible": 27, "max": 40, "source": "HOUSE headline" }
+    "meta_primary": {
+      "platform": "META",
+      "label": "Meta primary text",
+      "visible": 125,
+      "max": 500,
+      "source": "HOUSE primary"
+    },
+    "meta_headline": {
+      "platform": "META",
+      "label": "Meta headline",
+      "visible": 27,
+      "max": 40,
+      "source": "HOUSE headline"
+    }
   },
   "facts": [
-    { "id": "F_SURG", "text": "Surgery can cost $6,000", "numbers": ["$6,000", "6,000"], "source": "LEGAL §1" },
-    { "id": "F_CAT", "text": "40% of owners worry about bills", "numbers": ["40%"], "source": "LEGAL §2", "category": true }
+    {
+      "id": "F_SURG",
+      "text": "Surgery can cost $6,000",
+      "numbers": [
+        "$6,000",
+        "6,000"
+      ],
+      "source": "LEGAL \u00a71"
+    },
+    {
+      "id": "F_CAT",
+      "text": "40% of owners worry about bills",
+      "numbers": [
+        "40%"
+      ],
+      "source": "LEGAL \u00a72",
+      "category": true
+    }
   ],
-  "figure_rule": { "id": "FIG_UNSOURCED", "rule": "Every figure comes from the facts list.", "severity": "compliance", "source": "LEGAL §3",
-    "citation_rule": { "id": "FIG_CITATION", "rule": "Category stats need a citation.", "source": "LEGAL §3b" },
-    "attribution_rule": { "id": "FIG_ATTRIBUTION", "rule": "Figures attributed correctly.", "source": "LEGAL §3c" } },
+  "figure_rule": {
+    "id": "FIG_UNSOURCED",
+    "rule": "Every figure comes from the facts list.",
+    "severity": "compliance",
+    "source": "LEGAL \u00a73",
+    "citation_rule": {
+      "id": "FIG_CITATION",
+      "rule": "Category stats need a citation.",
+      "source": "LEGAL \u00a73b"
+    },
+    "attribution_rule": {
+      "id": "FIG_ATTRIBUTION",
+      "rule": "Figures attributed correctly.",
+      "source": "LEGAL \u00a73c"
+    }
+  },
   "compliance": [
-    { "id": "COMP_DIRECT_PAY", "rule": "Direct pay is always stated with its caveat.", "severity": "compliance", "check": "require",
-      "trigger_patterns": ["pa(y|ys|id)\\b[^.!?]{0,40}\\bvets?\\b[^.!?]{0,30}\\b(direct(ly)?|at checkout)"], "requires_patterns": ["participating (hospital|clinic)"],
-      "wordings": ["Does it claim direct pay without the caveat?", "Is direct pay promised without the caveat?"], "source": "LEGAL §4" },
-    { "id": "COMP_PAYS_FOR_ITSELF", "rule": "Never say it pays for itself.", "severity": "compliance", "check": "banned", "patterns": ["pa(y|ys|id) for (it|them)sel(f|ves)"],
-      "wordings": ["Does it say it pays for itself?", "Does it imply it saves more than it costs?"], "source": "LEGAL §5" },
-    { "id": "COMP_SUPERLATIVE", "rule": "Superlatives need substantiation.", "severity": "warn", "check": "banned", "patterns": [{ "re": "\\bbest\\b", "why": "Needs substantiation" }], "source": "LEGAL §6" },
-    { "id": "COMP_UGC_MEMBER", "rule": "Real-person testimony must be members.", "severity": "note", "check": "structure", "structures": ["testimony"], "source": "LEGAL §7" }
+    {
+      "id": "COMP_DIRECT_PAY",
+      "rule": "Direct pay is always stated with its caveat.",
+      "severity": "compliance",
+      "check": "require",
+      "trigger_patterns": [
+        "pa(y|ys|id)\\b[^.!?]{0,40}\\bvets?\\b[^.!?]{0,30}\\b(direct(ly)?|at checkout)"
+      ],
+      "requires_patterns": [
+        "participating (hospital|clinic)"
+      ],
+      "wordings": [
+        "Does it claim direct pay without the caveat?",
+        "Is direct pay promised without the caveat?"
+      ],
+      "source": "LEGAL \u00a74"
+    },
+    {
+      "id": "COMP_PAYS_FOR_ITSELF",
+      "rule": "Never say it pays for itself.",
+      "severity": "compliance",
+      "check": "banned",
+      "patterns": [
+        "pa(y|ys|id) for (it|them)sel(f|ves)"
+      ],
+      "wordings": [
+        "Does it say it pays for itself?",
+        "Does it imply it saves more than it costs?"
+      ],
+      "source": "LEGAL \u00a75"
+    },
+    {
+      "id": "COMP_PAID_SHARE",
+      "rule": "Never say it pays the whole bill.",
+      "severity": "compliance",
+      "check": "banned",
+      "patterns": [
+        "pays? (the|your) (whole|entire|full) (vet )?(bill|cost)"
+      ],
+      "wordings": [
+        "Does it say the whole bill is paid?",
+        "Would a reader think they pay nothing?"
+      ],
+      "source": "LEGAL \u00a74b"
+    },
+    {
+      "id": "COMP_SUPERLATIVE",
+      "rule": "Superlatives need substantiation.",
+      "severity": "warn",
+      "check": "banned",
+      "patterns": [
+        {
+          "re": "\\bbest\\b",
+          "why": "Needs substantiation"
+        }
+      ],
+      "source": "LEGAL \u00a76"
+    },
+    {
+      "id": "COMP_UGC_MEMBER",
+      "rule": "Real-person testimony must be members.",
+      "severity": "note",
+      "check": "structure",
+      "structures": [
+        "testimony"
+      ],
+      "source": "LEGAL \u00a77"
+    }
   ],
   "brand": [
-    { "id": "BR_NAMING", "rule": "Don't call it pet insurance.", "severity": "warn", "check": "banned", "patterns": ["\\bpet insurance\\b"], "status": "pending", "source": "BRAND p.6" },
-    { "id": "BR_SAD_PET", "rule": "Never show sad pets.", "severity": "warn", "check": "model", "source": "BRAND p.17" },
-    { "id": "BR_CASE", "rule": "Sentence case in copy fields.", "severity": "warn", "check": "case", "source": "BRAND p.12" }
+    {
+      "id": "BR_NAMING",
+      "rule": "Don't call it pet insurance.",
+      "severity": "warn",
+      "check": "banned",
+      "patterns": [
+        "\\bpet insurance\\b"
+      ],
+      "status": "pending",
+      "source": "BRAND p.6"
+    },
+    {
+      "id": "BR_SAD_PET",
+      "rule": "Never show sad pets.",
+      "severity": "warn",
+      "check": "model",
+      "source": "BRAND p.17"
+    },
+    {
+      "id": "BR_CASE",
+      "rule": "Sentence case in copy fields.",
+      "severity": "warn",
+      "check": "case",
+      "source": "BRAND p.12"
+    },
+    {
+      "id": "BR_COLLAR",
+      "rule": "Never show pets outdoors without a collar.",
+      "severity": "warn",
+      "check": "model",
+      "applies_to": "visual",
+      "patterns": [
+        "collar"
+      ],
+      "source": "BRAND p.18"
+    }
   ],
   "clarity": [
-    { "id": "CL_GLANCE", "rule": "Lands at a glance.", "severity": "warn", "check": "model", "source": "RB one_glance" },
-    { "id": "CL_PRODUCT", "rule": "Product clear.", "severity": "warn", "check": "model", "source": "RB clear_product" }
+    {
+      "id": "CL_GLANCE",
+      "rule": "Lands at a glance.",
+      "severity": "warn",
+      "check": "model",
+      "source": "RB one_glance"
+    },
+    {
+      "id": "CL_PRODUCT",
+      "rule": "Product clear.",
+      "severity": "warn",
+      "check": "model",
+      "source": "RB clear_product"
+    }
   ],
-  "features": { "source": "RB", "items": { "humour": "Built around a joke", "dollar_figure": "Contains a dollar amount", "real_people": "Real people" } },
-  "personas": {
-    "DINK": { "name": "Example couples", "triggers": [], "verbatims": [{ "id": "V1", "text": "the last thing I wanted to worry about was the money", "source": "QB" }],
-      "turn_offs": [
-        { "id": "DINK_T_PRACTICE", "rule": "Never practice for kids.", "check": "banned", "patterns": ["practice for"], "source": "TM 1" },
-        { "id": "DINK_T_BABY_CAREFUL", "rule": "Careful with fur baby.", "severity": "warn", "check": "banned", "patterns": ["fur ?bab(y|ies)"], "source": "TM 1 language" }
-      ] },
-    "CUR": { "name": "Example empty nesters", "triggers": [], "verbatims": [],
-      "turn_offs": [
-        { "id": "CUR_T_BABY", "rule": "No fur baby.", "check": "banned", "patterns": ["fur ?bab(y|ies)"], "source": "TM 2" },
-        { "id": "CUR_T_PITY", "rule": "No pity framing.", "check": "model", "source": "TM 2 watch-outs" }
-      ] },
-    "FAM": { "name": "Example families", "triggers": [], "verbatims": [],
-      "turn_offs": [{ "id": "FAM_T_SHAME", "rule": "Never shame the uninsured.", "check": "model", "source": "TM 3" }] }
+  "features": {
+    "source": "RB",
+    "items": {
+      "humour": "Built around a joke",
+      "dollar_figure": "Contains a dollar amount",
+      "real_people": "Real people"
+    }
   },
-  "territories": { "DINK_JOKE": { "persona": "DINK", "angle": "DINK_A5", "format": "STATIC" } }
+  "personas": {
+    "DINK": {
+      "name": "Example couples",
+      "triggers": [],
+      "verbatims": [
+        {
+          "id": "V1",
+          "text": "the last thing I wanted to worry about was the money",
+          "source": "QB"
+        }
+      ],
+      "turn_offs": [
+        {
+          "id": "DINK_T_PRACTICE",
+          "rule": "Never practice for kids.",
+          "check": "banned",
+          "patterns": [
+            "practice for"
+          ],
+          "source": "TM 1"
+        },
+        {
+          "id": "DINK_T_BABY_CAREFUL",
+          "rule": "Careful with fur baby.",
+          "severity": "warn",
+          "check": "banned",
+          "patterns": [
+            "fur ?bab(y|ies)"
+          ],
+          "source": "TM 1 language"
+        }
+      ]
+    },
+    "CUR": {
+      "name": "Example empty nesters",
+      "triggers": [],
+      "verbatims": [],
+      "turn_offs": [
+        {
+          "id": "CUR_T_BABY",
+          "rule": "No fur baby.",
+          "check": "banned",
+          "patterns": [
+            "fur ?bab(y|ies)"
+          ],
+          "source": "TM 2"
+        },
+        {
+          "id": "CUR_T_PITY",
+          "rule": "No pity framing.",
+          "check": "model",
+          "source": "TM 2 watch-outs"
+        }
+      ]
+    },
+    "FAM": {
+      "name": "Example families",
+      "triggers": [],
+      "verbatims": [],
+      "turn_offs": [
+        {
+          "id": "FAM_T_SHAME",
+          "rule": "Never shame the uninsured.",
+          "check": "model",
+          "source": "TM 3"
+        }
+      ]
+    }
+  },
+  "territories": {
+    "DINK_JOKE": {
+      "persona": "DINK",
+      "angle": "DINK_A5",
+      "format": "STATIC"
+    }
+  }
 }

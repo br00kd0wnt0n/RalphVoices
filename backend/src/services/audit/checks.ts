@@ -69,8 +69,17 @@ const VIDEO_WORDINGS: [string, string] = [
   'Does this frame make it clear what brand or product the ad is for (Trupanion, or insurance for pets)?',
 ];
 
+/** Two wordings for a brand item that brings none: does the ad break the rule as written? */
+export function genericWordings(rule: string): [string, string] {
+  const r = rule.trim().replace(/\.$/, '');
+  return [
+    `Does the ad go against this brand rule: "${r}"?`,
+    `Would a brand reviewer say the ad's images break the rule "${r}"?`,
+  ];
+}
+
 /** Every item for an asset. Rubric order first (it is the M3 table), then B2's own. */
-export function buildItems(rules: Rules, rubric: Rubric, opts: { video?: boolean } = {}): YesNoItem[] {
+export function buildItems(rules: Rules, rubric: Rubric, opts: { video?: boolean; visual?: boolean } = {}): YesNoItem[] {
   const items: YesNoItem[] = [];
   const featureIds = new Set(Object.keys(rules.features.items));
   const turnOffIds = new Set(Object.values(rules.personas).flatMap(p => p.turn_offs.map(t => t.id)));
@@ -89,6 +98,15 @@ export function buildItems(rules: Rules, rubric: Rubric, opts: { video?: boolean
     const persona = Object.entries(rules.personas).find(([, p]) => p.turn_offs.some(t => t.id === rule))?.[0];
     if (persona) items.push({ id: rule, kind: 'turnoff', rule, persona, wordings: w, wordingSource: 'B2', flagWhen: 'yes' });
     else if (brandIds.has(rule)) items.push({ id: rule, kind: 'brand', rule, wordings: w, wordingSource: 'B2', flagWhen: 'yes' });
+  }
+  // Brand items marked for the images (rules v2.3 `applies_to: "visual" | "both"`):
+  // their own wordings if the rules file gives them, else B2's, else two built from the rule text.
+  const have = new Set(items.map(i => i.rule).filter(Boolean));
+  for (const b of rules.brand) {
+    if (have.has(b.id) || (b.applies_to !== 'visual' && b.applies_to !== 'both')) continue;
+    if (b.applies_to === 'visual' && opts.visual === false) continue; // text-only asset: no photograph to judge
+    const w: [string, string] = b.wordings && b.wordings.length === 2 ? b.wordings : B2_WORDINGS[b.id] || genericWordings(b.rule);
+    items.push({ id: b.id, kind: 'brand', rule: b.id, wordings: w, wordingSource: b.wordings ? 'rules' : B2_WORDINGS[b.id] ? 'B2' : 'B2 (from the rule text)', flagWhen: 'yes' });
   }
   if (opts.video && clarityIds.has('CL_PRODUCT')) {
     items.push({ id: 'video_brand_hook', kind: 'video', rule: 'CL_PRODUCT', wordings: VIDEO_WORDINGS, wordingSource: 'B2', flagWhen: 'no', frame: 'hook' });

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { auditAsset, estimateAsset, type AuditContext, type Persona } from './engine.js';
 import { assetMarkdown, featuresCsv, flagSheetCsv, summaryMarkdown } from './report.js';
 import { CLIENT_DIR, parseStub, readJson } from './rules.js';
+import { toReport } from './index.js';
 import type { Asset, AssetAudit } from './types.js';
 
 export function loadPersonas(rules: AuditContext['rules']): Record<string, Persona> {
@@ -39,6 +40,7 @@ export async function runRound(assets: Asset[], ctx: AuditContext, o: { round: s
     prior[r.stub || r.asset] = r;
     fs.writeFileSync(jsonPath, JSON.stringify(prior, null, 2));
     fs.writeFileSync(path.join(reportDir, `${r.stub || r.asset}.md`), assetMarkdown(r, ctx.rules, { round: o.round, date, rubric: o.rubricVersion }));
+    fs.writeFileSync(path.join(reportDir, `${r.stub || r.asset}.json`), JSON.stringify(toReport(r, ctx.rules as any, ctx.rubric, { stub_error: a.stub_error }), null, 2));
     const c = (s: string) => r.flags.filter(f => f.severity === s).length;
     log(`  ${c('red')} red, ${c('amber')} amber, ${c('grey')} grey · $${r.usd.toFixed(3)} · ${r.seconds} s${r.errors.length ? ` · ${r.errors.length} errors` : ''}`);
   }
@@ -48,7 +50,7 @@ export async function runRound(assets: Asset[], ctx: AuditContext, o: { round: s
   const featuresPath = path.join(o.outDir, 'features.csv');
   const sheetPath = path.join(o.outDir, 'flag-sheet.csv');
   fs.writeFileSync(summaryPath, summaryMarkdown(all, ctx.rules, { round: o.round, date, reportDir, spent: ctx.api.spent() + (ctx.api.mock ? 0 : ctx.api.usd), cap: o.cap }));
-  fs.writeFileSync(featuresPath, featuresCsv(all, ctx.rules as any));
+  fs.writeFileSync(featuresPath, featuresCsv(all, ctx.rules as any, ctx.rubric));
   fs.writeFileSync(sheetPath, flagSheetCsv(all));
   return { audits, outDir: o.outDir, summaryPath, featuresPath, sheetPath };
 }

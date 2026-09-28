@@ -82,6 +82,7 @@ export function copyFlags(blocks: TextBlock[], rules: Rules, persona: string | n
     const personaItems = Object.entries(rules.personas).flatMap(([code, pr]) => pr.turn_offs.map(t => ({ ...t, persona: code })));
     const items: Array<RuleItem & { persona?: string }> = [...rules.compliance, ...rules.brand, ...personaItems];
     for (const it of items) {
+      if (it.applies_to === 'visual') continue; // judged on the images, not the words
       const own = !it.persona || it.persona === persona;
       const lower = (s: Severity): Severity => (own ? s : 'grey');
       if (it.check === 'banned' || it.check === 'price_lead') {

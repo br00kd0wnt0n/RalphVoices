@@ -20,6 +20,7 @@ export interface RuleItem {
   min_words?: number;
   status?: string;
   needs_confirmation?: boolean;
+  applies_to?: 'text' | 'visual' | 'both';   // v2.3: brand items judged on the images
   source: string;
 }
 
@@ -86,12 +87,15 @@ export interface Asset {
   name: string;        // file or folder name as dropped
   stub: Stub | null;
   stub_error?: string;
+  persona?: string;    // intended persona, when it overrides the stub's
   kind: AssetKind;
   source: string;      // path of the file or folder
   frames: Frame[];
   copy: Record<string, string>;  // sidecar fields keyed by rules field id (or a free label)
   copy_labels: Record<string, string>;
   transcript?: string;
+  transcript_source?: 'sidecar' | 'openai' | 'mock';
+  has_audio?: boolean;
   text_only?: string;  // text-only assets (concept cards): the whole ad description
   duration?: number;
 }
@@ -120,10 +124,14 @@ export interface AssetAudit {
   kind: AssetKind;
   frames: FrameText[];
   copy: Record<string, string>;
+  transcript: { text: string; source: string } | null;
   features: Record<string, number>;      // feature id -> averaged P(Yes)
   items: Record<string, YesNo>;          // every yes/no item asked
   flags: Flag[];
   set_aside: Array<{ rule: string; quote?: string; why: string }>;  // reads one layer raised and another contradicted
+  copy_match: Array<{ field: string; signed_off: string; found: string; similarity: number; status: string }>;
+  notes: string[];           // e.g. video frames unavailable (ffmpeg not installed)
+  timings: Record<string, number>;  // seconds per stage
   objection: string;
   text_load: { words: number; where: string } | null;
   usd: number;

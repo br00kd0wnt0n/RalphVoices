@@ -50,12 +50,23 @@ export function imageTokens(w: number, h: number, detail: 'low' | 'high'): numbe
   return 85 + 170 * Math.ceil(w / 512) * Math.ceil(h / 512);
 }
 
-export function imageSize(file: string): { w: number; h: number } {
-  try {
-    const out = execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0:s=x', file], { encoding: 'utf8' });
+export function imageSize(file: string, ffprobe: string | null = 'ffprobe'): { w: number; h: number } {
+  if (ffprobe) try {
+    const out = execFileSync(ffprobe, ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0:s=x', file], { encoding: 'utf8' });
     const [w, h] = out.trim().split('x').map(Number);
     if (w && h) return { w, h };
   } catch { /* fall through */ }
+  // Without ffprobe: PNG and JPEG headers carry the size.
+  try {
+    const b = fs.readFileSync(file);
+    if (b.readUInt32BE(0) === 0x89504e47) return { w: b.readUInt32BE(16), h: b.readUInt32BE(20) };
+    for (let i = 2; i < b.length - 9;) {
+      if (b[i] !== 0xff) break;
+      const m = b[i + 1], len = b.readUInt16BE(i + 2);
+      if (m >= 0xc0 && m <= 0xc3) return { w: b.readUInt16BE(i + 7), h: b.readUInt16BE(i + 5) };
+      i += 2 + len;
+    }
+  } catch { /* default */ }
   return { w: 1080, h: 1080 };
 }
 
@@ -76,11 +87,21 @@ export interface ChatRes { text: string; top: TopLogprob[]; usd: number; usage: 
 
 export type Responder = (req: ChatReq) => ChatRes | Promise<ChatRes>;
 
+/** The parts of the OpenAI SDK client the audit calls (so the Studio can pass its own, and tests a fake). */
+export interface OpenAILike {
+  chat: { completions: { create: (body: any, opts?: any) => Promise<any> } };
+  audio: { transcriptions: { create: (body: any, opts?: any) => Promise<any> } };
+}
+
 export interface ApiOptions {
+  client?: OpenAILike;            // an OpenAI client; the CLI makes one from the key file
   mock?: Responder;
+  mockTranscribe?: (file: string) => string;
+  transcribeUsdPerMinute?: number;
   tpm?: Record<string, number>;   // per-model token pace; 0 = off
-  capUsd: number;
-  spendPath: string;
+  capUsd?: number;                // hard cap for this API's own spend plus spendPath's total; default none
+  spendPath?: string;             // cumulative ledger (CLI only); the library writes none
+  ffprobe?: string | null;
   logPath?: string;              // calls.jsonl for this run
   concurrency?: number;
 }
@@ -88,7 +109,7 @@ export interface ApiOptions {
 const MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' };
 
 export class AuditApi {
-  private client: OpenAI | null = null;
+  private client: OpenAILike | null = null;
   private windows = new Map<string, Array<{ t: number; tokens: number }>>();
   private dataUrls = new Map<string, string>();
   private sizes = new Map<string, { w: number; h: number }>();
@@ -97,12 +118,14 @@ export class AuditApi {
   stopped: string | null = null;
 
   constructor(private o: ApiOptions) {
-    if (!o.mock) this.client = new OpenAI({ apiKey: loadKey(), maxRetries: 0 });
+    if (o.client) this.client = o.client;
+    else if (!o.mock) this.client = new OpenAI({ apiKey: loadKey(), maxRetries: 0 }) as unknown as OpenAILike;
   }
 
   get mock(): boolean { return !!this.o.mock; }
 
-  spent(): number { return readSpend(this.o.spendPath).total_usd; }
+  spent(): number { return this.o.spendPath ? readSpend(this.o.spendPath).total_usd : 0; }
+  private get cap(): number { return this.o.capUsd ?? Infinity; }
 
   estTokens(req: Pick<ChatReq, 'system' | 'content'>): number {
     let t = Math.ceil(req.system.length / 4) + 12;
@@ -114,7 +137,7 @@ export class AuditApi {
   }
 
   private size(p: string) {
-    if (!this.sizes.has(p)) this.sizes.set(p, imageSize(p));
+    if (!this.sizes.has(p)) this.sizes.set(p, imageSize(p, this.o.ffprobe === undefined ? 'ffprobe' : this.o.ffprobe));
     return this.sizes.get(p)!;
   }
 
@@ -139,8 +162,8 @@ export class AuditApi {
 
   async chat(req: ChatReq): Promise<ChatRes> {
     if (this.stopped) throw new FatalError(this.stopped);
-    if (!this.mock && this.spent() + this.usd > this.o.capUsd - 0.02) {
-      this.stopped = `spend cap of $${this.o.capUsd} reached`;
+    if (!this.mock && this.spent() + this.usd > this.cap - 0.02) {
+      this.stopped = `spend cap of $${this.cap} reached`;
       throw new FatalError(this.stopped);
     }
     await this.pace(req.model, this.estTokens(req) + req.max_tokens);
@@ -160,7 +183,7 @@ export class AuditApi {
         ],
         ...(req.logprobs ? { logprobs: true, top_logprobs: 10 } : {}),
         ...(req.json ? { response_format: { type: 'json_object' as const } } : {}),
-      }).catch((err: any) => {
+      }, { maxRetries: 0 }).catch((err: any) => {  // withRetry is the only retry layer, whoever's client it is
         // Out of credits or quota also comes back as a 429, but waiting won't fix it.
         if (FATAL_CODES.has(err?.code)) { err.status = 402; err.fatal = true; }
         throw err;
@@ -187,6 +210,28 @@ export class AuditApi {
     return res;
   }
 
+  /** Speech to text for a video's soundtrack. Priced per minute of audio. */
+  async transcribe(stage: string, model: string, file: string, seconds: number): Promise<string> {
+    if (this.stopped) throw new FatalError(this.stopped);
+    const usd = (seconds / 60) * (this.o.transcribeUsdPerMinute ?? 0.006);
+    if (!this.mock && this.spent() + this.usd + usd > this.cap - 0.02) {
+      this.stopped = `spend cap of $${this.cap} reached`;
+      throw new FatalError(this.stopped);
+    }
+    let text = '';
+    if (this.mock) text = this.o.mockTranscribe ? this.o.mockTranscribe(file) : '';
+    else {
+      const r: any = await withRetry(() => this.client!.audio.transcriptions.create({ file: fs.createReadStream(file), model, prompt: 'A social ad for Trupanion, medical insurance for cats and dogs.' }, { maxRetries: 0 })
+        .catch((err: any) => { if (FATAL_CODES.has(err?.code)) { err.status = 402; err.fatal = true; } throw err; }), stage, 4)
+        .catch((err: any) => { if (err?.fatal) { this.stopped = `${err.code}: ${String(err.message).slice(0, 120)}`; throw new FatalError(this.stopped); } throw err; });
+      text = String(r?.text || '').trim();
+      this.usd += usd;
+    }
+    this.calls++;
+    if (this.o.logPath) fs.appendFileSync(this.o.logPath, JSON.stringify({ at: new Date().toISOString(), stage, model, seconds, usd: this.mock ? 0 : Math.round(usd * 1e6) / 1e6, chars: text.length }) + '\n');
+    return text;
+  }
+
   /** One wording, P(Yes) from logprobs at temperature 0. */
   async yesNo(stage: string, model: string, system: string, content: Content): Promise<number | null> {
     const r = await this.chat({ stage, model, system, content, max_tokens: 1, temperature: 0, logprobs: true });
@@ -194,7 +239,7 @@ export class AuditApi {
   }
 
   record(entry: Record<string, unknown>) {
-    if (this.mock) return;
+    if (this.mock || !this.o.spendPath) return;
     writeSpend(this.o.spendPath, { ...entry, usd: Math.round(this.usd * 1e4) / 1e4, calls: this.calls, at: new Date().toISOString() });
   }
 }
