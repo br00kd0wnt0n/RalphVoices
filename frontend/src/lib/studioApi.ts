@@ -100,7 +100,7 @@ export interface PfFlag {
 export interface PfReport {
   stub: string; persona: string; territory: string; signoff_id: string; copy: SignedCopy[]; upload: PfUpload | null;
   history: Array<{ id: string; kind: string; uploaded_by: string; uploaded_at: string; files: number }>;
-  audit: null | { id: string; status: string; engine: string; rules_version?: string; usd: number; error?: string; started_by?: string; started_at: string; finished_at: string | null;
+  audit: null | { id: string; upload_id: string; status: string; engine: string; rules_version?: string; usd: number; error?: string; started_by?: string; started_at: string; finished_at: string | null;
     result: null | { text_found: string; transcript?: string; features: Record<string, number>; objection?: string; notes?: string[]; frames_unavailable?: boolean;
       report?: { copy_match?: Array<{ field: string; signed_off: string; found: string; similarity: number; status: string }>; tagged_features?: string[]; set_aside?: Array<{ rule: string; quote?: string; why: string }> } } };
   flags: PfFlag[]; status: PfStatus;

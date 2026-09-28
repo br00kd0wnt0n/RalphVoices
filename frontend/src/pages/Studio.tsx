@@ -5,16 +5,16 @@
 // Ready for production, is creative sign-off, never "approval".
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { HOSTED, getUser, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type CompareSet, type Flag, type Line, type Meta, type OwnLine, type RunSummary, type ShortRow, type StudioEvent, type Territory, type Tone, type EditRecord, type LineVersion, type Reveal, type ComplianceStatus, type ReadyView, type RulesVersion } from '@/lib/studioApi';
+import { HOSTED, getUser, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type CompareSet, type Flag, type Line, type Meta, type OwnLine, type RunSummary, type ShortRow, type StudioEvent, type Territory, type Tone, type EditRecord, type LineVersion, type Reveal, type ComplianceStatus, type ReadyView, type RulesVersion, type PfStub, type PfReport, type PfFlag } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
-import { ArrowLeft, ChevronRight, ScrollText, Shuffle } from 'lucide-react';
+import { ArrowLeft, ScrollText, Shuffle } from 'lucide-react';
 
 const PINK = '#D94D8F';
-type Tab = 'home' | 'territories' | 'brief' | 'review' | 'shortlist' | 'ready' | 'compare' | 'rules';
+type Tab = 'home' | 'territories' | 'brief' | 'review' | 'shortlist' | 'ready' | 'preflight' | 'compare' | 'rules';
 // The writing flow, in order. Blind compare sits apart from it; Live comes later (B3b).
-const FLOW: Array<[Tab, string]> = [['territories', 'Territories'], ['brief', 'Write & brief'], ['review', 'Review'], ['shortlist', 'Shortlist'], ['ready', 'Ready for production']];
+const FLOW: Array<[Tab, string]> = [['territories', 'Territories'], ['brief', 'Write & brief'], ['review', 'Review'], ['shortlist', 'Shortlist'], ['ready', 'Ready for production'], ['preflight', 'Pre-flight']];
 // Deep links for the demo: /studio?tab=review&batch=<id>&open=L07 (opens that line's first flag), &compare=<name>,
-// ?tab=ready&persona=<P>&territory=<T>.
+// ?tab=ready&persona=<P>&territory=<T>, ?tab=preflight&stub=<naming code>.
 const params = new URLSearchParams(window.location.search);
 
 // ---------- small building blocks ----------
@@ -205,24 +205,22 @@ export function Studio() {
       <header className="sticky top-0 z-20 flex h-16 flex-nowrap items-center gap-4 border-b border-[#272B34] bg-[#16181D] px-6">
         {HOSTED && <a href="/" title="Back to Voices" className="-mr-2 rounded-lg p-1.5 text-[#858B96] hover:bg-[#1C1F26] hover:text-[#ECEDEF]"><ArrowLeft className="h-4 w-4" aria-label="Back to Voices" /></a>}
         <Lockup onHome={() => setTab('home')} />
-        <nav className="flex min-w-0 flex-nowrap items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <nav className="flex min-w-0 flex-nowrap items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <GhostButton active={tab === 'home'} onClick={() => setTab('home')} className="whitespace-nowrap border-transparent px-3 py-1.5 text-sm">How it works</GhostButton>
           <span className="mx-1 h-5 w-px bg-[#343946]" aria-hidden />
           {FLOW.map(([t, label], i) => (
             <span key={t} className="flex items-center">
-              {i > 0 && <ChevronRight className="h-3.5 w-3.5 text-[#4A505D]" aria-hidden />}
-              <GhostButton active={tab === t} onClick={() => setTab(t)} className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-2 py-1.5 text-sm">
+              <GhostButton active={tab === t} onClick={() => setTab(t)} className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-1.5 py-1.5 text-sm">
                 <span className={cn('flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold', tab === t ? 'bg-[#0E0F12] text-white' : 'bg-[#272B34] text-[#A3A8B1]')}>{i + 1}</span>
                 {t === 'review' && batch ? `Review (${batch.lines.length})` : label}
               </GhostButton>
             </span>
           ))}
           <span className="flex items-center">
-            <ChevronRight className="h-3.5 w-3.5 text-[#343946]" aria-hidden />
             {/* B3b: live results next to each signed-off line. No route or API yet. */}
-            <span aria-disabled="true" title="Live results next to each signed-off line, from the first weeks in market"
-              className="flex cursor-not-allowed items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1.5 text-sm text-[#4A505D]">
-              Live <span className="rounded-full border border-[#343946] px-1.5 py-px text-[10px] uppercase tracking-wide">Coming soon</span>
+            <span aria-disabled="true" title="Coming soon: live results next to each signed-off line, from the first weeks in market"
+              className="flex cursor-not-allowed items-center gap-1 whitespace-nowrap rounded-lg px-1.5 py-1.5 text-sm text-[#4A505D]">
+              Live <span className="rounded-full border border-[#343946] px-1.5 py-px text-[10px] uppercase tracking-wide">soon</span>
             </span>
           </span>
         </nav>
@@ -257,6 +255,7 @@ export function Studio() {
         {meta && tab === 'review' && <Review meta={meta} batch={batch} setBatch={setBatch} status={status} running={running} onMore={more} onMoreRun={() => run({ into: batch })} onDecided={() => setRunsTick(t => t + 1)} />}
         {meta && tab === 'shortlist' && <Shortlist batch={batch} onReady={() => setTab('ready')} />}
         {meta && tab === 'ready' && <Ready meta={meta} batch={batch} user={user} />}
+        {meta && tab === 'preflight' && <Preflight meta={meta} />}
         {tab === 'rules' && (meta || admin) && <Rules admin={!!meta?.user?.admin || admin} onActivated={() => refreshMeta().then(() => setErr('')).catch(() => {})} />}
       </main>
     </div>
@@ -272,6 +271,7 @@ const STEPS: Array<{ title: string; what: string; you: string }> = [
   { title: 'Review', what: 'Length, flags with their sources, and a skeptic’s objection.', you: 'Keep, cut, edit, or ask for more like this.' },
   { title: 'Shortlist', what: 'Kept lines get naming codes. Runs are saved to continue later.', you: 'Curate in Sheets and import it back.' },
   { title: 'Ready for production', what: 'Red flags fixed or overridden with a reason, then the set is locked with your expectations.', you: 'Sign off, and hand over the pack.' },
+  { title: 'Pre-flight', what: 'The finished asset checked against the signed-off copy and the rules.', you: 'Upload, agree or disagree, mark Ready to traffic.' },
 ];
 
 function Home() {
@@ -286,7 +286,7 @@ function Home() {
 
       <section>
         <h2 className="mb-3 text-lg font-semibold">How Voices Studio works</h2>
-        <ol className="grid grid-cols-6 gap-3">
+        <ol className="grid grid-cols-7 gap-3">
           {STEPS.map((st, i) => (
             <li key={st.title}>
               <div className="flex h-full w-full flex-col rounded-xl border border-[#272B34] bg-[#16181D] p-4">
@@ -1332,5 +1332,359 @@ function Rules({ admin, onActivated }: { admin: boolean; onActivated: () => void
         </section>
       )}
     </div>
+  );
+}
+
+// ---------- 6. Pre-flight: the finished asset for each signed-off naming code ----------
+
+const SEV_ORDER = { red: 0, amber: 1, grey: 2 } as const;
+const COPY_STATUS: Record<string, { tone: 'grey' | 'amber' | 'red' | 'outline'; words: string }> = {
+  match: { tone: 'outline', words: 'matches' }, reworded: { tone: 'amber', words: 'reworded' },
+  'not on asset': { tone: 'red', words: 'not on the asset' }, 'not expected on asset': { tone: 'grey', words: 'not expected on the asset' },
+};
+
+/** An image or video the signed-in API serves (fetched with the token, shown from a blob URL). */
+function AuthMedia({ path, video, className, alt }: { path: string; video?: boolean; className?: string; alt?: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let u = '';
+    setUrl(null); setFailed(false);
+    studio.imageUrl(path).then(x => { u = x; setUrl(x); }).catch(() => setFailed(true));
+    return () => { if (u) URL.revokeObjectURL(u); };
+  }, [path]);
+  if (failed) return <div className={cn('flex items-center justify-center rounded-lg bg-[#101216] text-xs text-[#646A75]', className)}>not available</div>;
+  if (!url) return <div className={cn('animate-pulse rounded-lg bg-[#1C1F26]', className)} />;
+  return video ? <video src={url} controls className={cn('rounded-lg bg-black', className)} /> : <img src={url} alt={alt || ''} className={cn('rounded-lg object-contain bg-[#101216]', className)} />;
+}
+
+function stubState(s: PfStub): { words: string; tone: 'grey' | 'amber' | 'red' | 'outline'; className?: string } {
+  if (s.status.status === 'ready') return { words: 'Ready to traffic', tone: 'outline', className: 'border-emerald-500 text-emerald-300' };
+  if (!s.upload) return { words: 'not uploaded', tone: 'grey' };
+  if (!s.audit || s.audit.id && s.audit.status === 'queued') return { words: 'not audited', tone: 'grey' };
+  if (s.audit.status === 'running') return { words: 'auditing…', tone: 'amber' };
+  if (s.audit.status === 'failed') return { words: 'audit failed', tone: 'red' };
+  if (s.audit.open_red) return { words: `${s.audit.open_red} red to resolve`, tone: 'red' };
+  return { words: 'needs review', tone: 'amber' };
+}
+
+function Preflight({ meta }: { meta: Meta }) {
+  const enabled = !!meta.preflight?.enabled;
+  const canReady = !!meta.preflight?.can_set_ready;
+  const [stubs, setStubs] = useState<PfStub[]>([]);
+  const [sel, setSel] = useState<string | null>(params.get('stub'));
+  const [report, setReport] = useState<PfReport | null>(null);
+  const [agreement, setAgreement] = useState<{ marked: number; agree: number; rate: number | null } | null>(null);
+  const [error, setError] = useState('');
+  const [progress, setProgress] = useState('');
+  const [pending, setPending] = useState<{ upload_id: string; estimate: { usd: number; seconds: number } } | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const esRef = useRef<{ close: () => void } | null>(null);
+  useEffect(() => () => esRef.current?.close(), []);
+
+  const loadStubs = useCallback(() => studio.pfStubs().then(s => {
+    setStubs(s);
+    setSel(cur => (cur && s.some(x => x.stub === cur) ? cur : s[0]?.stub ?? null));
+  }), []);
+  const loadAgreement = useCallback(() => studio.pfAgreement().then(setAgreement).catch(() => {}), []);
+  const loadReport = useCallback((stub: string) => studio.pfReport(stub).then(setReport), []);
+  const refresh = useCallback(async () => {
+    try { await Promise.all([loadStubs(), loadAgreement(), sel ? loadReport(sel) : Promise.resolve()]); setError(''); }
+    catch (e: any) { setError(e.message); }
+  }, [loadStubs, loadAgreement, loadReport, sel]);
+  useEffect(() => { if (enabled) { loadStubs().catch(e => setError(e.message)); loadAgreement(); } }, [enabled, loadStubs, loadAgreement]);
+  useEffect(() => { setPending(null); setFiles([]); setReport(null); if (sel && enabled) loadReport(sel).catch(e => setError(e.message)); }, [sel, enabled, loadReport]);
+
+  if (!enabled) return <div className="max-w-3xl rounded-xl border border-[#272B34] bg-[#16181D] p-6 text-base text-[#A3A8B1]">Pre-flight needs the database: in <code>backend/</code>, run <code>npx tsx scripts/studio.ts serve --store pg --database-url …</code> (hosted Studio has it on).</div>;
+
+  async function upload() {
+    if (!sel || !files.length) return;
+    setError(''); setProgress('Uploading…');
+    try {
+      const r = await studio.pfUpload(sel, files);
+      setPending({ upload_id: r.upload_id, estimate: r.estimate });
+      setFiles([]); setProgress('');
+      await refresh();
+    } catch (e: any) { setProgress(''); setError(e.message); }
+  }
+  async function runAudit(uploadId: string) {
+    setError('');
+    try {
+      let r;
+      try { r = await studio.pfAudit(uploadId); }
+      catch (e: any) {
+        if (e.status !== 409) throw e;
+        if (!window.confirm(`This audit is estimated at $${e.body.estimate.toFixed(2)}, over the $${meta.ask_over} ask-first line. Run it?`)) return;
+        r = await studio.pfAudit(uploadId, true);
+      }
+      setPending(null);
+      setProgress('Starting the audit…');
+      await refresh();
+      esRef.current?.close();
+      esRef.current = studio.events(r.job, (e: StudioEvent) => {
+        if (e.type === 'status') setProgress(e.message);
+        if (e.type === 'error') { setProgress(''); setError(`The audit stopped: ${e.message}`); refresh(); }
+        if (e.type === 'done') { setProgress(''); refresh(); }
+      });
+    } catch (e: any) { setError(e.message); }
+  }
+
+  const groups = new Map<string, PfStub[]>();
+  for (const s of stubs) groups.set(`${s.persona}|${s.territory}`, [...(groups.get(`${s.persona}|${s.territory}`) || []), s]);
+  const rate = agreement?.rate;
+
+  return (
+    <div className="max-w-[1500px] space-y-5">
+      <div className="flex flex-wrap items-start gap-4 rounded-xl border border-[#272B34] bg-[#16181D] p-5">
+        <div className="mr-auto max-w-3xl">
+          <h1 className="text-2xl font-bold tracking-tight" style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>Pre-flight</h1>
+          <p className="mt-1 text-base text-[#A3A8B1]">The finished asset for each signed-off naming code, checked against the signed-off copy and the rules before it goes to Add3. Agree or disagree with each flag; red flags are fixed with a new upload or overridden with a reason, then the asset is marked Ready to traffic.</p>
+        </div>
+        <div className="min-w-[15rem] rounded-lg border border-[#272B34] bg-[#101216] px-4 py-3">
+          <Label>Agreement with the flags, this round</Label>
+          <div className="text-2xl font-bold">{rate === null || rate === undefined ? '–' : `${Math.round(rate * 100)}%`}<span className={cn('ml-2 text-sm font-medium', rate !== null && rate !== undefined && rate >= 0.9 ? 'text-emerald-300' : 'text-[#858B96]')}>target 90%</span></div>
+          <div className="text-sm text-[#858B96]">{agreement ? `${agreement.agree} of ${agreement.marked} flags marked agree` : ''}</div>
+        </div>
+        <div className="flex flex-col gap-2">
+          <GhostButton className="text-base" onClick={() => studio.download('/preflight/features.csv', 'preflight-features.csv')} title="For B3: weekly.ts features --file">Features CSV (for B3)</GhostButton>
+          <GhostButton className="text-base" onClick={() => studio.download('/preflight/handoff.csv', 'asset-handoff.csv')}>Asset handoff list</GhostButton>
+        </div>
+      </div>
+      {error && <div className="rounded-lg border-2 border-red-500/45 bg-red-500/10 p-3 text-base text-red-200">{error}</div>}
+      {!stubs.length && !error && <div className="text-base text-[#858B96]">Nothing signed off yet. Mark lines Ready for production first; each naming code then gets its asset here.</div>}
+
+      {stubs.length > 0 && (
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[360px_1fr]">
+          <aside className="space-y-4 lg:sticky lg:top-24 lg:max-h-[calc(100vh-8rem)] lg:self-start lg:overflow-y-auto">
+            {[...groups.entries()].map(([k, ss]) => (
+              <section key={k} className="rounded-xl border border-[#272B34] bg-[#16181D] p-3">
+                <div className="mb-2 px-1 text-sm font-semibold">{meta.personas[ss[0].persona]?.name || ss[0].persona} · {meta.territories[ss[0].territory]?.name || ss[0].territory}</div>
+                <ul className="space-y-1.5">
+                  {ss.map(s => {
+                    const st = stubState(s);
+                    return (
+                      <li key={s.stub}>
+                        <button onClick={() => setSel(s.stub)} className={cn('w-full rounded-lg border px-3 py-2 text-left transition', sel === s.stub ? 'border-[#D94D8F] bg-[#D94D8F]/10' : 'border-[#272B34] hover:border-[#4A505D]')}>
+                          <div className="flex items-center gap-2">
+                            <span className="truncate font-mono text-sm">{s.stub}</span>
+                            <Chip tone={st.tone} className={cn('ml-auto shrink-0 text-xs', st.className)}>{st.words}</Chip>
+                          </div>
+                          <div className="mt-1 truncate text-sm text-[#858B96]">{s.copy.map(c => c.text).join(' · ')}</div>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ))}
+          </aside>
+
+          <main className="min-w-0 space-y-4">
+            {!report && <div className="text-base text-[#858B96]">Loading…</div>}
+            {report && <PreflightReport meta={meta} report={report} canReady={canReady} progress={progress} pending={pending} files={files} setFiles={setFiles}
+              onUpload={upload} onAudit={runAudit} onChanged={refresh} onError={setError} />}
+          </main>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PreflightReport({ meta, report, canReady, progress, pending, files, setFiles, onUpload, onAudit, onChanged, onError }: {
+  meta: Meta; report: PfReport; canReady: boolean; progress: string;
+  pending: { upload_id: string; estimate: { usd: number; seconds: number } } | null;
+  files: File[]; setFiles: (f: File[]) => void; onUpload: () => void; onAudit: (uploadId: string) => void;
+  onChanged: () => Promise<void>; onError: (m: string) => void;
+}) {
+  const a = report.audit;
+  const res = a?.result || null;
+  const up = report.upload;
+  const current = !!(report.audit && report.upload && report.audit.upload_id === report.upload.id);
+  const main = (current ? report.flags : []).filter(f => !f.cross_persona).sort((x, y) => (x.check === 'copy_match' ? -1 : 0) - (y.check === 'copy_match' ? -1 : 0) || SEV_ORDER[x.severity] - SEV_ORDER[y.severity]);
+  const cross = (current ? report.flags : []).filter(f => f.cross_persona);
+  const openRed = main.filter(f => f.severity === 'red' && !f.override).length;
+  // The latest audit may be of an earlier upload: only findings for the current upload count.
+  const auditForLatest = !!(a && up && a.upload_id === up.id);
+  const auditedLatest = auditForLatest && a!.status === 'done';
+  const ready = report.status.status === 'ready';
+  const readyBlock = !up ? 'Upload the asset first.' : !auditForLatest ? 'Run the audit on this upload first.' : !a ? 'Run the audit first.' : a.status === 'running' || a.status === 'queued' ? 'The audit is still running.' : a.status === 'failed' ? 'The audit failed; run it again.' : openRed ? `${openRed} red flag${openRed === 1 ? '' : 's'} to fix (a new upload) or override.` : '';
+  const act = async (fn: () => Promise<unknown>) => { try { await fn(); await onChanged(); } catch (e: any) { onError(e.body?.blocking ? `${e.message}: ${e.body.blocking.map((b: any) => b.label || b.rule).join('; ')}` : e.message); } };
+  const copyRows = res?.report?.copy_match;
+  const secs = (n: number) => (n >= 90 ? `${Math.round(n / 60)} min` : `${Math.round(n)} s`);
+  const tagged = res ? Object.entries(res.features || {}).filter(([, p]) => p >= 0.5).sort((x, y) => y[1] - x[1]) : [];
+
+  return (
+    <>
+      <div className={cn('flex flex-wrap items-center gap-3 rounded-xl border-2 px-5 py-4', ready ? 'border-emerald-500/60 bg-emerald-500/10' : 'border-[#272B34] bg-[#16181D]')}>
+        <div className="mr-auto">
+          <div className="font-mono text-lg font-semibold">{report.stub}</div>
+          <div className="text-sm text-[#858B96]">{meta.personas[report.persona]?.name || report.persona} · {meta.territories[report.territory]?.name || report.territory} · signed off in {report.signoff_id}</div>
+        </div>
+        {ready
+          ? <span className="text-base text-emerald-100"><span className="font-semibold">Ready to traffic</span> · {report.status.ready_by}, {when(report.status.ready_at)}</span>
+          : <span className="text-sm text-[#A3A8B1]">{readyBlock || (canReady ? 'Reviewed and nothing red left open.' : '')}</span>}
+        {canReady && (ready
+          ? <GhostButton className="text-base" onClick={() => act(() => studio.pfReady(report.stub, false))}>Take back</GhostButton>
+          : <PinkButton className="px-4 py-2 text-base" disabled={!!readyBlock} onClick={() => act(() => studio.pfReady(report.stub, true))}>Mark Ready to traffic</PinkButton>)}
+        {!canReady && !ready && <span className="text-xs text-[#646A75]">Set by the creative lead or an admin</span>}
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+        <div className="space-y-4">
+          <section className="rounded-xl border border-[#272B34] bg-[#16181D] p-4">
+            <Label>Signed-off copy</Label>
+            <ul className="space-y-2">
+              {report.copy.map(c => <li key={c.line_id}><div className="text-xs text-[#858B96]">{c.label} · v{c.version}</div><div className="text-base leading-snug text-[#F2F3F5]">{c.text}</div></li>)}
+            </ul>
+          </section>
+
+          <section className="rounded-xl border border-[#272B34] bg-[#16181D] p-4">
+            <Label>The asset</Label>
+            {up ? (
+              <>
+                <div className={cn('grid gap-2', up.kind === 'carousel' ? 'grid-cols-3' : 'grid-cols-1')}>
+                  {up.files.map(f => (
+                    <div key={f.position}>
+                      <AuthMedia path={studio.pfFile(up.id, f.position)} video={up.kind === 'video'} alt={f.filename} className={up.kind === 'carousel' ? 'aspect-square w-full' : 'max-h-80 w-full'} />
+                      {up.kind === 'carousel' && <div className="mt-0.5 text-center text-xs text-[#858B96]">card {f.position + 1}</div>}
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2 text-sm text-[#858B96]">{up.kind} · {up.files.map(f => f.filename).join(', ')} · {up.uploaded_by}, {when(up.uploaded_at)}</div>
+              </>
+            ) : <p className="text-sm text-[#858B96]">Nothing uploaded yet.</p>}
+            <div className="mt-3 space-y-2 border-t border-[#272B34] pt-3">
+              <input key={up?.id || 'none'} type="file" multiple accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime" onChange={e => setFiles([...(e.target.files || [])])} className="text-sm" />
+              <p className="text-xs text-[#646A75]">One image (static), several images (carousel cards, in order), or one video (MP4, MOV). A new upload replaces the asset and reopens it for review.</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <PinkButton className="px-4 py-1.5 text-base" disabled={!files.length || !!progress} onClick={onUpload}>{up ? 'Upload a new version' : 'Upload'}</PinkButton>
+                {files.length > 0 && <span className="text-sm text-[#858B96]">{files.length} file{files.length === 1 ? '' : 's'}</span>}
+              </div>
+              {(pending || (up && !auditForLatest)) && !progress && (
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[#343946] bg-[#101216] px-3 py-2 text-sm">
+                  <span>{pending ? `About $${pending.estimate.usd.toFixed(2)} and ${secs(pending.estimate.seconds)} to audit.` : 'Not audited yet.'}</span>
+                  <PinkButton className="ml-auto px-3 py-1 text-sm" disabled={!!progress} onClick={() => onAudit(pending?.upload_id || up!.id)}>Run the audit</PinkButton>
+                </div>
+              )}
+              {a && up && auditForLatest && a.status === 'failed' && !progress && (
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-red-500/45 bg-red-500/10 px-3 py-2 text-sm text-red-100">
+                  <span className="min-w-0 flex-1">The audit failed: {a.error}</span>
+                  <PinkButton className="px-3 py-1 text-sm" onClick={() => onAudit(up.id)}>Run again</PinkButton>
+                </div>
+              )}
+              {a && up && auditedLatest && !progress && (
+                <button className="text-xs text-[#858B96] underline-offset-2 hover:text-[#ECEDEF] hover:underline" onClick={() => onAudit(up.id)} title="Run the checks again on this upload (e.g. after a rules change)">Audit again</button>
+              )}
+              {progress && <div className="flex items-center gap-2 text-sm font-medium" style={{ color: PINK }}><span className="animate-pulse">●</span> {progress}</div>}
+            </div>
+            {report.history.length > 1 && (
+              <details className="mt-3 text-sm text-[#858B96]"><summary className="cursor-pointer">Earlier uploads ({report.history.length - 1})</summary>
+                <ul className="mt-1 space-y-0.5">{report.history.slice(1).map(h => <li key={h.id}>{h.kind}, {h.files} file{h.files === 1 ? '' : 's'} · {h.uploaded_by}, {when(h.uploaded_at)}</li>)}</ul>
+              </details>
+            )}
+          </section>
+
+          {res && auditForLatest && (
+            <section className="space-y-3 rounded-xl border border-[#272B34] bg-[#16181D] p-4 text-sm">
+              <div><Label>Text found on the asset</Label><pre className="whitespace-pre-wrap font-sans text-base text-[#C9CCD2]">{res.text_found || '(none)'}</pre></div>
+              {res.transcript !== undefined && res.transcript !== null && <div><Label>Transcript</Label><p className="text-base text-[#C9CCD2]">{res.transcript || '(no speech)'}</p></div>}
+              <div><Label>Features</Label>
+                <div className="flex flex-wrap gap-1.5">{tagged.length ? tagged.map(([k, p]) => <Chip key={k} tone="outline" title={`P(yes) ${p.toFixed(2)}`}>{k.replace(/_/g, ' ')}</Chip>) : <span className="text-[#858B96]">none tagged</span>}</div>
+              </div>
+              {res.objection && <p className="border-l-4 border-[#343946] pl-3 text-base italic text-[#A3A8B1]">Skeptic: {res.objection}</p>}
+              {!!res.notes?.length && <ul className="list-disc space-y-0.5 pl-5 text-[#858B96]">{res.notes.map((n, i) => <li key={i}>{n}</li>)}</ul>}
+              <div className="text-xs text-[#646A75]">{a?.engine}{a?.rules_version ? ` · rules ${a.rules_version}` : ''} · ${a?.usd.toFixed(3)} · {a?.started_by}, {when(a?.finished_at || a?.started_at)}</div>
+            </section>
+          )}
+        </div>
+
+        <div className="space-y-4">
+          <section className="rounded-xl border-2 bg-[#16181D] p-4" style={{ borderColor: PINK }}>
+            <h2 className="mb-2 text-lg font-semibold">Copy match</h2>
+            <p className="mb-3 text-sm text-[#A3A8B1]">Does the asset carry the signed-off wording? A missing caveat is red.</p>
+            {!auditedLatest && <p className="text-sm text-[#858B96]">Run the audit to check.</p>}
+            {auditedLatest && copyRows && copyRows.length > 0 && (
+              <table className="w-full text-left text-sm">
+                <thead><tr className="text-xs uppercase text-[#858B96]"><th className="pb-1 pr-3">Field</th><th className="pb-1 pr-3">Signed off</th><th className="pb-1 pr-3">On the asset</th><th className="pb-1">Result</th></tr></thead>
+                <tbody>{copyRows.map((r, i) => (
+                  <tr key={i} className="border-t border-[#272B34] align-top">
+                    <td className="py-1.5 pr-3 text-[#858B96]">{r.field}</td>
+                    <td className="py-1.5 pr-3">{r.signed_off}</td>
+                    <td className="py-1.5 pr-3 text-[#C9CCD2]">{r.found || '–'}</td>
+                    <td className="py-1.5"><Chip tone={COPY_STATUS[r.status]?.tone || 'grey'} className="text-xs">{COPY_STATUS[r.status]?.words || r.status}</Chip></td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            )}
+            {auditedLatest && !copyRows && (main.some(f => f.check === 'copy_match')
+              ? <p className="text-sm text-red-200">See the copy-match flag{main.filter(f => f.check === 'copy_match').length === 1 ? '' : 's'} below.</p>
+              : <p className="text-sm text-emerald-200">The signed-off wording is on the asset.</p>)}
+          </section>
+
+          <section className="rounded-xl border border-[#272B34] bg-[#16181D] p-4">
+            <h2 className="mb-2 text-lg font-semibold">Flags <span className="text-sm font-normal text-[#858B96]">{auditedLatest ? `${main.filter(f => f.severity === 'red').length} red · ${main.filter(f => f.severity === 'amber').length} amber · ${main.filter(f => f.severity === 'grey').length} grey` : ''}</span></h2>
+            {!auditedLatest && <p className="text-sm text-[#858B96]">No finished audit for this upload yet.</p>}
+            {auditedLatest && !main.length && <p className="text-sm text-emerald-200">No flags.</p>}
+            <ul className="space-y-3">{main.map(f => <PfFlagRow key={f.id} flag={f} canOverride={canReady} onChanged={onChanged} onError={onError} />)}</ul>
+          </section>
+
+          {cross.length > 0 && (
+            <section className="rounded-xl border border-[#272B34] bg-[#16181D] p-4">
+              <h2 className="mb-1 text-lg font-semibold">How it travels</h2>
+              <p className="mb-2 text-sm text-[#A3A8B1]">Other personas’ turn-offs, as grey notes. They don’t block anything.</p>
+              <ul className="space-y-3">{cross.map(f => <PfFlagRow key={f.id} flag={f} canOverride={false} onChanged={onChanged} onError={onError} />)}</ul>
+            </section>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+function PfFlagRow({ flag, canOverride, onChanged, onError }: { flag: PfFlag; canOverride: boolean; onChanged: () => Promise<void>; onError: (m: string) => void }) {
+  const [overriding, setOverriding] = useState(false);
+  const [why, setWhy] = useState('');
+  const act = async (fn: () => Promise<unknown>) => { try { await fn(); await onChanged(); } catch (e: any) { onError(e.message); } };
+  const agree = flag.agreements.filter(x => x.agree).length, disagree = flag.agreements.length - agree;
+  const tone = flag.severity === 'red' ? 'red' : flag.severity === 'amber' ? 'amber' : 'grey';
+  return (
+    <li className={cn('rounded-lg border p-3', flag.severity === 'red' && !flag.override ? 'border-red-500/45 bg-red-500/5' : 'border-[#272B34]')}>
+      <div className="flex gap-3">
+        {flag.frame?.upload_id && flag.frame.position !== undefined && (
+          <AuthMedia path={studio.pfFile(flag.frame.upload_id, flag.frame.position)} className="h-20 w-20 shrink-0 object-cover" alt={flag.frame.label} />
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <Chip tone={tone}>{flag.check === 'copy_match' ? 'copy match' : chipName(flag.rule)}</Chip>
+            <span className="text-base text-[#ECEDEF]">{flag.label}</span>
+            {flag.persona && flag.cross_persona && <span className="text-xs text-[#858B96]">({flag.persona})</span>}
+          </div>
+          {flag.quote && (flag.check === 'copy_match'
+            ? <div className="mt-1 text-sm">{/signed off:/i.test(flag.quote) ? '' : 'Missing from the asset: '}<mark className="bg-amber-400/30 px-1 text-amber-50">{flag.quote}</mark></div>
+            : <div className="mt-1 text-sm">On the asset: <mark className="bg-amber-400/30 px-1 text-amber-50">{flag.quote}</mark></div>)}
+          {flag.why && <div className="mt-0.5 text-sm text-[#A3A8B1]">{flag.why}</div>}
+          <div className="mt-0.5 text-xs text-[#858B96]">{[flag.where, flag.frame?.label && !flag.frame.upload_id ? `frame ${flag.frame.label}${flag.frame.description ? `: ${flag.frame.description}` : ''}` : '', `Source: ${flag.source}`].filter(Boolean).join(' · ')}</div>
+          {flag.override && <div className="mt-2 rounded border border-red-500/30 bg-red-500/5 px-2 py-1 text-sm text-red-100"><span className="font-semibold">Overridden</span> by {flag.override.by}, {when(flag.override.at)}: “{flag.override.reason}”</div>}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <GhostButton active={flag.mine === true} className="px-2 py-0.5 text-xs" onClick={() => act(() => studio.pfAgree(flag.id, true))}>Agree</GhostButton>
+            <GhostButton active={flag.mine === false} className="px-2 py-0.5 text-xs" onClick={() => {
+              const note = flag.mine === false ? undefined : window.prompt('Why not? (optional, helps tune the checks)') ?? undefined;
+              act(() => studio.pfAgree(flag.id, false, note || undefined));
+            }}>Disagree</GhostButton>
+            {flag.agreements.length > 0 && <span className="text-xs text-[#858B96]" title={flag.agreements.map(x => `${x.by}: ${x.agree ? 'agree' : 'disagree'}${x.note ? ` (${x.note})` : ''}`).join('\n')}>{agree} agree · {disagree} disagree</span>}
+            {flag.severity === 'red' && !flag.override && canOverride && !overriding && <GhostButton className="ml-auto px-2 py-0.5 text-xs" onClick={() => setOverriding(true)}>Override with a reason…</GhostButton>}
+          </div>
+          {overriding && (
+            <div className="mt-2 space-y-2">
+              <textarea rows={2} autoFocus className="w-full rounded-lg border-2 border-red-500/45 px-3 py-2 text-sm" placeholder="Why this asset can run as it is (recorded with your name, and shown here)" value={why} onChange={e => setWhy(e.target.value)} />
+              <div className="flex gap-2">
+                <PinkButton className="px-3 py-1 text-sm" disabled={why.trim().length < 5} onClick={() => act(async () => { await studio.pfOverride(flag.id, why); setOverriding(false); setWhy(''); })}>Save override</PinkButton>
+                <GhostButton className="text-sm" onClick={() => setOverriding(false)}>Cancel</GhostButton>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </li>
   );
 }

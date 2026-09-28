@@ -250,7 +250,7 @@ export class Preflight {
          FROM studio_asset_uploads u WHERE u.stub = $1 ORDER BY u.uploaded_at DESC`, [stub])).rows.map(x => ({ ...x, files: Number(x.files), uploaded_at: new Date(x.uploaded_at).toISOString() }));
     return {
       stub, persona: signoff.persona, territory: signoff.territory, signoff_id: signoff.id, copy, upload, history,
-      audit: a ? { id: a.id, status: a.status, engine: a.engine, rules_version: a.rules_version, usd: Number(a.usd), error: a.error, started_by: a.started_by, started_at: new Date(a.started_at).toISOString(), finished_at: a.finished_at ? new Date(a.finished_at).toISOString() : null, result: a.result } : null,
+      audit: a ? { id: a.id, upload_id: a.upload_id, status: a.status, engine: a.engine, rules_version: a.rules_version, usd: Number(a.usd), error: a.error, started_by: a.started_by, started_at: new Date(a.started_at).toISOString(), finished_at: a.finished_at ? new Date(a.finished_at).toISOString() : null, result: a.result } : null,
       flags, status: await this.status(stub),
     };
   }

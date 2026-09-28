@@ -81,14 +81,21 @@ export function copyMatchFlags(copy: SignedCopy[], found: string): AuditFlag[] {
   for (const c of copy) {
     if (onAsset.includes(norm(c.text))) continue;
     const sentences = c.text.split(/(?<=[.!?])\s+/).filter(Boolean);
-    const missing = sentences.filter(s => !onAsset.includes(norm(s)));
+    let missing = sentences.filter(s => !onAsset.includes(norm(s)));
+    // One sentence cut short (a dropped caveat at the end): quote just the words that didn't make it.
+    if (missing.length === 1) {
+      const words = missing[0].split(/\s+/);
+      let keep = 0;
+      while (keep < words.length && onAsset.includes(norm(words.slice(0, keep + 1).join(' ')))) keep++;
+      if (keep > 0 && keep < words.length) missing = [words.slice(keep).join(' ')];
+    }
     flags.push({
       rule: 'COPY_MATCH', severity: 'red', check: 'copy_match', where: c.label,
       label: 'The asset must carry the signed-off wording',
       source: `Ready for production, ${c.label} v${c.version}`,
-      quote: (missing.length && missing.length < sentences.length ? missing : [c.text]).join(' '),
-      why: missing.length && missing.length < sentences.length
-        ? `Missing from the asset: “${missing.join(' ')}”`
+      quote: (missing.length ? missing : [c.text]).join(' '),
+      why: missing.length && missing.join(' ') !== c.text
+        ? 'The asset carries part of the signed-off line, not all of it'
         : 'This signed-off line isn’t on the asset as written',
     });
   }
