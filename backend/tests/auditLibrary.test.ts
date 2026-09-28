@@ -139,3 +139,18 @@ test('estimateAudit: calls, cost and time before any call; video counts keyframe
   assert.ok(vid.usd > still.usd);
   assert.equal(fs.readdirSync(work).filter(n => n.startsWith('voices-audit-est-')).length, 0);
 });
+
+test('an outage stops the audit after a few failed calls instead of backing off on every call', { skip: !hasFfmpeg && 'needs ffmpeg' }, async () => {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-lib-down-'));
+  let n = 0;
+  const down = {
+    chat: { completions: { create: async () => { n++; throw Object.assign(new Error('Bad gateway config'), { status: 400 }); } } },
+    audio: { transcriptions: { create: async () => ({ text: '' }) } },
+  };
+  await assert.rejects(
+    runAudit({ stub: 'CUR_X_ST_v1_META', files: [{ name: 'a.png', mime: 'image/png', data: png(work, 'a.png') }] }, { rules, rubric, openai: down, tmpDir: work }),
+    /OpenAI unreachable: \d+ calls in a row failed/,
+  );
+  assert.ok(n <= 6, `stopped after ${n} calls`);
+  assert.equal(fs.readdirSync(work).filter(x => x.startsWith('voices-audit-')).length, 0, 'temp files removed on failure too');
+});

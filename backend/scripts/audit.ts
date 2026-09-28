@@ -11,7 +11,7 @@
 // Usage (from backend/):
 //   npx tsx scripts/audit.ts estimate --round month1                 (cost and time, no calls)
 //   npx tsx scripts/audit.ts run      --round month1 [--only STUB,STUB] [--yes]
-//   npx tsx scripts/audit.ts concepts [--yes]                         (acceptance: nine concept cards, text only, against the spike's M3 table)
+//   npx tsx scripts/audit.ts concepts [--only CODE] [--compare-only] [--yes]                       (acceptance: nine concept cards, text only, against the spike's M3 table)
 //   npx tsx scripts/audit.ts plant                                    (acceptance: make the planted test images in assets/planted/)
 //   npx tsx scripts/audit.ts agree    --file flag-sheet.csv           (agreement from a sheet Brook has marked agree/disagree)
 //   npx tsx scripts/audit.ts status                                   (spend so far)
@@ -108,13 +108,17 @@ async function main() {
     case 'concepts': {
       const out = path.join(AUDIT_DIR, MOCK ? 'concepts-r1-mock' : 'concepts-r1');
       fs.mkdirSync(out, { recursive: true });
-      const assets = conceptAssets();
-      const api = makeApi(path.join(out, 'calls.jsonl'));
-      const est = estimateRound(assets, { api, rules, rubric });
-      if (!gate(est)) return;
-      const res = await go(assets, api, 'concepts-r1', out);
+      const onlyC = opt('only') ? opt('only').toUpperCase().split(',') : null;
+      const assets = conceptAssets().filter(x => !onlyC || onlyC.includes(x.name) || onlyC.includes(x.stub?.stub.toUpperCase() || ''));
+      if (!flag('compare-only')) {
+        const api = makeApi(path.join(out, 'calls.jsonl'));
+        const est = estimateRound(assets, { api, rules, rubric });
+        if (!gate(est)) return;
+        await go(assets, api, 'concepts-r1', out);
+      }
+      // Every card audited so far (a --only re-run keeps the others), against the spike.
       const m3 = readJson(path.join(CLIENT_DIR, 'sm-spike', 'full', 'results.json')).m3_features as Record<string, Record<string, number>>;
-      const rows = compareM3(res.audits, m3);
+      const rows = compareM3(Object.values(readJson(path.join(out, 'audit.json'))), m3);
       const L = ['# Concept cards against the spike\'s M3 table', '', `${new Date().toISOString().slice(0, 10)} · nine round-one cards run as text-only assets through the B2 audit (same rubric wordings, gpt-4o, temperature 0, P(Yes) from logprobs, both wordings averaged).`, '',
         '| Item | Cards | Same side of 0.5 | Mean abs. difference | Max abs. difference | Over 0.3 |', '|---|---|---|---|---|---|'];
       for (const r of rows) L.push(`| ${r.item} | ${r.n} | ${r.sameSide}/${r.n} | ${r.meanAbs.toFixed(3)} | ${r.maxAbs.toFixed(3)} | ${r.over.map(o => `${o.code} (B2 ${o.ours.toFixed(2)}, spike ${o.spike.toFixed(2)})`).join('; ')} |`);
