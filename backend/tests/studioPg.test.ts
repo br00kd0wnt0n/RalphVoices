@@ -94,11 +94,10 @@ test('territory edits, compares with a hidden key, and spend live in the databas
   assert.equal(await monthly.loadSpent(), 0.25);
 });
 
-test('reference documents and the client logo are served from the database', { skip }, async () => {
-  assert.equal((await S.referenceDocs()).find(d => d.id === 'readout')!.available, false);
-  await store.putAsset('doc:readout', { contentType: 'text/markdown', data: Buffer.from('# Readout'), filename: 'readout.md' });
-  assert.equal((await S.referenceDocs()).find(d => d.id === 'readout')!.available, true);
-  assert.equal((await S.referenceDoc('readout')).asset.data.toString(), '# Readout');
+test('the client logo is served from the database when one exists (production has none: the page shows the wordmark)', { skip }, async () => {
+  await assert.rejects(() => S.brandAsset('client-logo'), /isn't available/);
+  await store.putAsset('brand:client-logo', { contentType: 'image/png', data: Buffer.from('png'), filename: 'logo.png' });
+  assert.equal((await S.brandAsset('client-logo')).data.toString(), 'png');
 });
 
 test('hosted rules endpoints: anyone lists, only admins upload or activate, versions are never overwritten', { skip }, async () => {

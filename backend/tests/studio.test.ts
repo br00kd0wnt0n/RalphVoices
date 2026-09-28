@@ -146,11 +146,11 @@ test('the creative director writes first: own lines are tagged, checked, and Stu
   assert.deepEqual(history[0].after, { decision: 'keep', edited_text: '', note: '' });
 });
 
-test('reference documents are only served from the configured list', async () => {
-  await assert.rejects(() => S.referenceDoc('../../etc/passwd'), /No reference document/);
+test('only the local client logo is served; no reference documents', async () => {
   await assert.rejects(() => S.brandAsset('../secrets'), /No brand asset/);
-  assert.ok((await S.referenceDocs()).some(d => d.id === 'readout'));
-  assert.ok(Object.keys(S.localAssets()).includes('brand:client-logo'));
+  // Reference documents and the readout are not in the tool (decision 10): only the local logo is an asset.
+  assert.deepEqual(Object.keys(S.localAssets()), ['brand:client-logo']);
+  assert.equal('referenceDoc' in S, false);
 });
 
 test('resuming a run checks only the lines left unchecked', async () => {

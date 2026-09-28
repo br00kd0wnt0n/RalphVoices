@@ -63,7 +63,6 @@ export interface Meta {
   /** Hosted: the signed-in person. */
   user?: { email: string; name: string | null; admin: boolean } | null;
 }
-export interface RefDoc { id: string; title: string; kind: 'md' | 'file'; available: boolean }
 export interface ShortRow { stub: string; id: string; persona: string; territory: string; field: string; platform: string; format: string; text: string; angle: string; structure: string; note: string; flags: string; compliance_flags: string[]; warn_flags: string[] }
 export interface CompareLine { id: string; label: string; field: string; text: string; chars: number; angle: string; structure: string; favourite?: boolean; note?: string; stars?: Record<string, boolean> }
 export interface CompareSet { name: string; brief: Brief; n_per_model: number; lines: CompareLine[]; created: string; revealed?: boolean; revealed_by?: string; revealed_at?: string }
@@ -180,8 +179,6 @@ export const studio = {
     req<{ job: string }>(`${lineUrl(batch, line)}/more`, { method: 'POST', body: JSON.stringify({ note, k }) }),
   saveTerritory: (code: string | null, territory: Partial<Territory>, note: string) =>
     req<{ code: string; territory: Territory }>(code ? `/territories/${enc(code)}` : '/territories', { method: code ? 'PUT' : 'POST', body: JSON.stringify({ territory, note }) }),
-  docs: () => req<RefDoc[]>('/docs'),
-  docText: async (id: string) => (await raw(`/docs/${enc(id)}`)).text(),
   /** An object URL for an image the server sends (the client logo). */
   imageUrl: async (path: string) => URL.createObjectURL(await (await raw(path)).blob()),
   shortlist: () => req<ShortRow[]>('/shortlist'),

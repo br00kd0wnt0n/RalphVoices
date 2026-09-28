@@ -5,13 +5,13 @@
 // Ready for production, is creative sign-off, never "approval".
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { HOSTED, getUser, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type CompareSet, type Flag, type Line, type Meta, type OwnLine, type RefDoc, type RunSummary, type ShortRow, type StudioEvent, type Territory, type Tone, type EditRecord, type LineVersion, type Reveal, type ComplianceStatus, type ReadyView, type RulesVersion } from '@/lib/studioApi';
+import { HOSTED, getUser, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type CompareSet, type Flag, type Line, type Meta, type OwnLine, type RunSummary, type ShortRow, type StudioEvent, type Territory, type Tone, type EditRecord, type LineVersion, type Reveal, type ComplianceStatus, type ReadyView, type RulesVersion } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
-import { ArrowLeft, BookOpen, ChevronRight, ScrollText, Shuffle } from 'lucide-react';
+import { ArrowLeft, ChevronRight, ScrollText, Shuffle } from 'lucide-react';
 
 const PINK = '#D94D8F';
-type Tab = 'home' | 'territories' | 'brief' | 'review' | 'shortlist' | 'ready' | 'compare' | 'readout' | 'rules';
-// The writing flow, in order. Readout and Blind compare sit apart from it.
+type Tab = 'home' | 'territories' | 'brief' | 'review' | 'shortlist' | 'ready' | 'compare' | 'rules';
+// The writing flow, in order. Blind compare sits apart from it; Live comes later (B3b).
 const FLOW: Array<[Tab, string]> = [['territories', 'Territories'], ['brief', 'Write & brief'], ['review', 'Review'], ['shortlist', 'Shortlist'], ['ready', 'Ready for production']];
 // Deep links for the demo: /studio?tab=review&batch=<id>&open=L07 (opens that line's first flag), &compare=<name>,
 // ?tab=ready&persona=<P>&territory=<T>.
@@ -58,12 +58,11 @@ function Lockup({ onHome, small }: { onHome?: () => void; small?: boolean }) {
       <span className={cn('font-light leading-none text-[#ECEDEF]', small ? 'text-lg' : 'text-xl')} style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>
         Voices <span className="font-medium" style={{ color: PINK }}>Studio</span>
       </span>
-      {clientLogo && (
-        <>
-          <span className={cn('text-[#646A75]', small ? 'text-sm' : 'text-base')} aria-hidden>×</span>
-          <img src={clientLogo} alt="Trupanion" onError={() => setClientLogo(null)} className={cn('w-auto object-contain opacity-95', small ? 'h-4' : 'h-5')} />
-        </>
-      )}
+      <span className={cn('text-[#646A75]', small ? 'text-sm' : 'text-base')} aria-hidden>×</span>
+      {clientLogo
+        ? <img src={clientLogo} alt="Trupanion" onError={() => setClientLogo(null)} className={cn('w-auto object-contain opacity-95', small ? 'h-4' : 'h-5')} />
+        // No logo asset (production, Brook 28 Sep): the client's name as a wordmark.
+        : <span className={cn('font-semibold tracking-tight text-[#ECEDEF]', small ? 'text-base' : 'text-lg')} style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>Trupanion</span>}
     </button>
   );
 }
@@ -218,12 +217,17 @@ export function Studio() {
               </GhostButton>
             </span>
           ))}
+          <span className="flex items-center">
+            <ChevronRight className="h-3.5 w-3.5 text-[#343946]" aria-hidden />
+            {/* B3b: live results next to each signed-off line. No route or API yet. */}
+            <span aria-disabled="true" title="Live results next to each signed-off line, from the first weeks in market"
+              className="flex cursor-not-allowed items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1.5 text-sm text-[#4A505D]">
+              Live <span className="rounded-full border border-[#343946] px-1.5 py-px text-[10px] uppercase tracking-wide">Coming soon</span>
+            </span>
+          </span>
         </nav>
         <div className="ml-auto flex shrink-0 flex-nowrap items-center gap-2.5 text-sm text-[#858B96]">
           <span className="mr-1 h-5 w-px bg-[#343946]" aria-hidden />
-          <button onClick={() => setTab('readout')} title="Readout: the persona intelligence readout (reference)" aria-label="Readout" className={cn('flex items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 py-1.5 text-sm font-medium transition', tab === 'readout' ? 'border-teal-300 bg-teal-300 text-[#0E0F12]' : 'border-teal-500/50 bg-teal-500/10 text-teal-200 hover:border-teal-300')}>
-            <BookOpen className="h-4 w-4" aria-hidden /> <span className="hidden min-[1800px]:inline">Readout</span>
-          </button>
           <button onClick={() => setTab('compare')} title="Blind compare: a separate exercise, outside the writing flow" aria-label="Blind compare" className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-dashed border-[#4B55A8] bg-[#1B2150] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#232A5C]">
             <Shuffle className="h-4 w-4" aria-hidden /> <span className="hidden min-[1800px]:inline">Blind compare</span>
           </button>
@@ -251,7 +255,6 @@ export function Studio() {
           setBrief={b => { if (attached && b.territory !== brief.territory) setAttached(null); setBrief(b); }}
           attachedRun={attached && batch?.id === attached ? batch : null} onNewRun={() => setAttached(null)} />}
         {meta && tab === 'review' && <Review meta={meta} batch={batch} setBatch={setBatch} status={status} running={running} onMore={more} onMoreRun={() => run({ into: batch })} onDecided={() => setRunsTick(t => t + 1)} />}
-        {tab === 'readout' && <Readout persona={brief.persona} meta={meta} />}
         {meta && tab === 'shortlist' && <Shortlist batch={batch} onReady={() => setTab('ready')} />}
         {meta && tab === 'ready' && <Ready meta={meta} batch={batch} user={user} />}
         {tab === 'rules' && (meta || admin) && <Rules admin={!!meta?.user?.admin || admin} onActivated={() => refreshMeta().then(() => setErr('')).catch(() => {})} />}
@@ -633,126 +636,6 @@ function TerritoryEditor({ meta, code, territory, persona, onDone }: { meta: Met
         <PinkButton className="px-4 py-2 text-base" disabled={!d.name.trim()} onClick={save}>{code ? 'Save changes' : 'Add territory'}</PinkButton>
         <GhostButton onClick={() => onDone(false)}>Cancel</GhostButton>
       </div>
-    </div>
-  );
-}
-
-// ---------- readout: the persona intelligence readout, to review in the tool ----------
-
-function Readout({ persona, meta }: { persona: string; meta: Meta | null }) {
-  const [docs, setDocs] = useState<RefDoc[]>([]);
-  const [text, setText] = useState('');
-  const [error, setError] = useState('');
-  useEffect(() => {
-    studio.docs().then(setDocs).catch(() => {});
-    studio.docText('readout').then(setText).catch(e => setError(e.message));
-  }, []);
-  const blocks = useMemo(() => parseMarkdown(text), [text]);
-  const toc = blocks.filter(b => b.type === 'h' && b.level <= 3) as Array<{ type: 'h'; level: number; text: string; id: string }>;
-  // Jump to the section for the persona being briefed.
-  const personaName = meta?.personas[persona]?.name.split(/[ (]/)[0].toUpperCase();
-  useEffect(() => {
-    if (!personaName || !toc.length) return;
-    const target = toc.find(h => h.level === 3 && h.text.toUpperCase().includes(personaName));
-    if (target) setTimeout(() => document.getElementById(target.id)?.scrollIntoView({ block: 'start' }), 50);
-  }, [toc.length]); // eslint-disable-line react-hooks/exhaustive-deps
-  const deck = docs.find(d => d.id === 'readout-deck' && d.available);
-  return (
-    <div className="max-w-7xl space-y-5">
-    <div className="flex items-center gap-3 rounded-xl border border-teal-500/40 bg-teal-500/10 px-4 py-2.5 text-sm text-teal-100">
-      <BookOpen className="h-4 w-4" aria-hidden /> <span className="font-semibold uppercase tracking-wider text-teal-200">Reference</span>
-      <span>The persona intelligence readout: background for the writing, outside the flow.</span>
-    </div>
-    <div className="grid grid-cols-1 gap-8 lg:grid-cols-[260px_1fr]">
-      <aside className="lg:sticky lg:top-24 lg:self-start">
-        <Label>Contents</Label>
-        <nav className="max-h-[70vh] space-y-1 overflow-y-auto text-sm">
-          {toc.map(h => <a key={h.id} href={`#${h.id}`} className={cn('block rounded px-2 py-1 hover:bg-[#1C1F26]', h.level === 3 ? 'pl-5 text-[#858B96]' : 'font-semibold')}>{h.text}</a>)}
-        </nav>
-        {deck && <button onClick={() => studio.download('/docs/readout-deck', 'readout.pptx')} className="mt-4 block w-full rounded-lg border-2 border-[#343946] px-3 py-2 text-center text-sm font-medium">Download the deck (.pptx)</button>}
-      </aside>
-      <article className="max-w-4xl rounded-xl border border-[#272B34] bg-[#16181D] p-8">
-        {error && <p className="text-base text-red-300">{error}</p>}
-        {!error && !text && <p className="text-[#858B96]">Loading…</p>}
-        <Markdown blocks={blocks} />
-      </article>
-    </div>
-    </div>
-  );
-}
-
-// A small, safe Markdown renderer for the readout: headings, paragraphs,
-// lists, quotes, tables, rules, bold, italic, code and links. No raw HTML.
-type MdBlock =
-  | { type: 'h'; level: number; text: string; id: string }
-  | { type: 'p'; text: string }
-  | { type: 'ul'; items: string[] }
-  | { type: 'ol'; items: string[] }
-  | { type: 'quote'; text: string }
-  | { type: 'table'; head: string[]; rows: string[][] }
-  | { type: 'hr' };
-function parseMarkdown(src: string): MdBlock[] {
-  const lines = src.replace(/\r/g, '').split('\n');
-  const out: MdBlock[] = [];
-  const slug = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  const cells = (l: string) => l.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
-  for (let i = 0; i < lines.length;) {
-    const l = lines[i];
-    if (!l.trim()) { i++; continue; }
-    const h = /^(#{1,6})\s+(.*)$/.exec(l);
-    if (h) { out.push({ type: 'h', level: h[1].length, text: h[2].trim(), id: slug(h[2]) || `h${i}` }); i++; continue; }
-    if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(l)) { out.push({ type: 'hr' }); i++; continue; }
-    if (l.trim().startsWith('|') && lines[i + 1] && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
-      const head = cells(l); const rows: string[][] = []; i += 2;
-      while (i < lines.length && lines[i].trim().startsWith('|')) { rows.push(cells(lines[i])); i++; }
-      out.push({ type: 'table', head, rows }); continue;
-    }
-    if (/^\s*>/.test(l)) { const q: string[] = []; while (i < lines.length && /^\s*>/.test(lines[i])) { q.push(lines[i].replace(/^\s*>\s?/, '')); i++; } out.push({ type: 'quote', text: q.join(' ') }); continue; }
-    if (/^\s*[-*+]\s+/.test(l)) { const items: string[] = []; while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*[-*+]\s+/, '')); i++; } out.push({ type: 'ul', items }); continue; }
-    if (/^\s*\d+[.)]\s+/.test(l)) { const items: string[] = []; while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*\d+[.)]\s+/, '')); i++; } out.push({ type: 'ol', items }); continue; }
-    const para: string[] = [];
-    while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|\s*[-*+]\s|\s*\d+[.)]\s|\s*>|\s*\|)/.test(lines[i])) { para.push(lines[i].trim()); i++; }
-    out.push({ type: 'p', text: para.join(' ') });
-  }
-  return out;
-}
-function Inline({ text }: { text: string }) {
-  const parts: React.ReactNode[] = [];
-  const re = /(\*\*([^*]+)\*\*|\*([^*]+)\*|_([^_]+)_|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\))/g;
-  let last = 0, m: RegExpExecArray | null, k = 0;
-  while ((m = re.exec(text))) {
-    if (m.index > last) parts.push(text.slice(last, m.index));
-    if (m[2]) parts.push(<strong key={k++}>{m[2]}</strong>);
-    else if (m[3] || m[4]) parts.push(<em key={k++}>{m[3] || m[4]}</em>);
-    else if (m[5]) parts.push(<code key={k++} className="rounded bg-[#1C1F26] px-1 text-[0.9em]">{m[5]}</code>);
-    else if (m[6]) parts.push(<a key={k++} href={m[7]} target="_blank" rel="noreferrer" className="text-[#D94D8F] underline">{m[6]}</a>);
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) parts.push(text.slice(last));
-  return <>{parts}</>;
-}
-function Markdown({ blocks }: { blocks: MdBlock[] }) {
-  return (
-    <div className="space-y-4 text-base leading-relaxed text-[#C9CCD2]">
-      {blocks.map((b, i) => {
-        if (b.type === 'h') {
-          const cls = ['', 'text-3xl font-bold', 'mt-10 text-2xl font-bold', 'mt-8 text-xl font-semibold', 'mt-6 text-lg font-semibold', 'font-semibold', 'font-semibold'][b.level];
-          return <div key={i} id={b.id} className={cn('scroll-mt-28 text-[#ECEDEF]', cls)} style={b.level <= 2 ? { fontFamily: '"Space Grotesk", system-ui, sans-serif' } : undefined}><Inline text={b.text} /></div>;
-        }
-        if (b.type === 'p') return <p key={i}><Inline text={b.text} /></p>;
-        if (b.type === 'ul') return <ul key={i} className="list-disc space-y-1 pl-6">{b.items.map((x, k) => <li key={k}><Inline text={x} /></li>)}</ul>;
-        if (b.type === 'ol') return <ol key={i} className="list-decimal space-y-1 pl-6">{b.items.map((x, k) => <li key={k}><Inline text={x} /></li>)}</ol>;
-        if (b.type === 'quote') return <blockquote key={i} className="border-l-4 pl-4 italic text-[#A3A8B1]" style={{ borderColor: PINK }}><Inline text={b.text} /></blockquote>;
-        if (b.type === 'hr') return <hr key={i} className="border-[#272B34]" />;
-        return (
-          <div key={i} className="overflow-x-auto">
-            <table className="w-full border-collapse text-base">
-              <thead><tr>{b.head.map((h, k) => <th key={k} className="border-b-2 border-[#343946] px-2 py-1 text-left font-semibold"><Inline text={h} /></th>)}</tr></thead>
-              <tbody>{b.rows.map((r, k) => <tr key={k} className="border-b border-[#272B34] align-top">{r.map((c, j) => <td key={j} className="px-2 py-1"><Inline text={c} /></td>)}</tr>)}</tbody>
-            </table>
-          </div>
-        );
-      })}
     </div>
   );
 }

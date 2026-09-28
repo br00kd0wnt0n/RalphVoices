@@ -1651,36 +1651,18 @@ export async function meta() {
   };
 }
 
-// ---------- reference documents and the client logo ----------
+// ---------- the client logo (local only) ----------
 
-// Client material: never committed. Locally the files come from the Claude
-// outputs and studio folders; hosted, from the database (studio_assets, loaded
-// by `studio.ts db-import`). Only listed names are served, never arbitrary paths.
-// Buyer verbatims (the quote bank) stay analyst-only and aren't listed.
-export interface RefDoc { id: string; title: string; kind: 'md' | 'file'; path: string; contentType: string }
-const OUTPUTS = path.dirname(INPUTS);
-export const REFERENCE_DOCS: RefDoc[] = [
-  { id: 'readout', title: 'Persona intelligence readout (v1.2, team version)', kind: 'md', path: 'intelligence-readout-v1-team.md', contentType: 'text/markdown; charset=utf-8' },
-  { id: 'readout-deck', title: 'Persona intelligence readout (v1.2 deck, .pptx)', kind: 'file', path: 'Trupanion_Persona_Intelligence_Readout_v1.2.pptx', contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' },
-];
+// Locally the header shows the client logo from the studio folder (client
+// material, never committed). Hosted, there's no logo asset (Brook, 28 Sep),
+// so the page shows the text wordmark. Reference documents and the readout
+// are not in the tool (decision 10).
 const BRAND_ASSETS: Record<string, { path: string; contentType: string }> = { 'client-logo': { path: 'brand/trupanion-logo-white.png', contentType: 'image/png' } };
 /** Asset names and where FileStore finds them on this machine. */
 export function localAssets(): Record<string, { path: string; contentType: string }> {
   const out: Record<string, { path: string; contentType: string }> = {};
-  for (const d of REFERENCE_DOCS) out[`doc:${d.id}`] = { path: path.join(OUTPUTS, d.path), contentType: d.contentType };
   for (const [k, v] of Object.entries(BRAND_ASSETS)) out[`brand:${k}`] = { path: path.join(STUDIO, v.path), contentType: v.contentType };
   return out;
-}
-export async function referenceDocs(): Promise<Array<{ id: string; title: string; kind: 'md' | 'file'; available: boolean }>> {
-  const st = getStore();
-  return Promise.all(REFERENCE_DOCS.map(async d => ({ id: d.id, title: d.title, kind: d.kind, available: await st.hasAsset(`doc:${d.id}`) })));
-}
-export async function referenceDoc(id: string) {
-  const doc = REFERENCE_DOCS.find(d => d.id === id);
-  if (!doc) throw new Error(`No reference document ${id}`);
-  const asset = await getStore().getAsset(`doc:${id}`);
-  if (!asset) throw new Error(`${doc.title} isn't available`);
-  return { doc, asset };
 }
 export async function brandAsset(name: string) {
   if (!BRAND_ASSETS[name]) throw new Error(`No brand asset ${name}`);

@@ -5,7 +5,6 @@
 // database connection.
 
 import express, { type Request, type Response, type Router } from 'express';
-import path from 'node:path';
 import * as S from './engine.js';
 import type { PgStore } from './pgStore.js';
 import * as R from './ready.js';
@@ -189,14 +188,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   r.patch('/compare/:name/lines/:id', wrap(async (req, res) => res.json(await S.markCompareLine(req.params.name, req.params.id, req.body || {}, o.who(req)))));
   r.post('/compare/:name/reveal', wrap(async (req, res) => res.json(await S.revealCompare(req.params.name, o.who(req)))));
 
-  // ----- reference documents and the client logo -----
-  r.get('/docs', wrap(async (_req, res) => res.json(await S.referenceDocs())));
-  r.get('/docs/:id', wrap(async (req, res) => {
-    const { doc, asset } = await S.referenceDoc(req.params.id);
-    if (doc.kind === 'file') return download(res, asset.contentType, asset.filename || path.basename(doc.path), asset.data);
-    res.setHeader('Content-Type', asset.contentType);
-    res.send(asset.data);
-  }));
+  // ----- the client logo (local only; hosted shows the text wordmark) -----
   r.get('/brand/:name', async (req, res) => {
     try {
       const a = await S.brandAsset(req.params.name);
