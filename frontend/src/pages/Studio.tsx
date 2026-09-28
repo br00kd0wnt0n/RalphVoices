@@ -1341,7 +1341,16 @@ function ReadyCard({ meta, item, included, lead, onInclude, onLead, onChanged, o
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[#272B34] pt-3">
         <span className="text-sm font-semibold uppercase tracking-wider text-[#858B96]">Compliance</span>
         {(Object.keys(COMPLIANCE_WORDS) as ComplianceStatus[]).map(st => (
-          <button key={st} onClick={() => act(() => studio.compliance(line.batch, line.id, st, note))}
+          <button key={st} onClick={() => {
+            // A line that went through with an overridden red flag can only be cleared with a note.
+            let n = note;
+            if (st === 'cleared' && line.overrides?.length && !n.trim()) {
+              n = window.prompt('This line went through with an overridden red flag. Who at Trupanion cleared it?')?.trim() || '';
+              if (!n) return;
+              setNote(n);
+            }
+            act(() => studio.compliance(line.batch, line.id, st, n));
+          }}
             className={cn('rounded-full border px-3 py-0.5 text-sm font-medium', compliance.status === st ? COMPLIANCE_TONE[st] : 'border-[#272B34] text-[#646A75] hover:text-[#C9CCD2]')}>{COMPLIANCE_WORDS[st]}</button>
         ))}
         <input className="min-w-[10rem] flex-1 rounded-lg border-2 border-[#272B34] px-3 py-1 text-sm" placeholder="Compliance note" value={note} onChange={e => setNote(e.target.value)}

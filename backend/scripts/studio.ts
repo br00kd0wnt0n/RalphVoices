@@ -29,7 +29,9 @@
 //   --studio DIR             output folder (default: the client folder above)
 //   --store pg --database-url URL   use Postgres (migration 015) instead of files; local hosts only unless --allow-remote
 //   rules-push [--file F] [--activate]   upload a rules file to the database as a version
-//   db-import [--from DIR] [--with-spend]   copy a studio folder into the database (re-runnable)
+//   db-import [--from DIR] [--since YYYY-MM-DD | --runs a,b] [--compares] [--with-spend] [--dry-run]
+//                                         copy a studio folder into the database (re-runnable); the agreed
+//                                         carry-over is --since 2026-09-28 --with-spend
 //   --yes                    needed for any run estimated over $2
 
 import fs from 'node:fs';
@@ -257,36 +259,65 @@ async function main() {
       return;
     }
     case 'db-import': {
-      // Copy everything in a studio folder into the database. Safe to re-run: every write is an upsert.
-      if (!pgStore) throw new Error('db-import needs --store pg');
+      // Copy a studio folder into the database. Safe to re-run: every write is an upsert.
+      // Carry-over (Brook, 28 Sep): --since 2026-09-28 (or --runs a,b) picks the runs; their briefs,
+      // decision history and taste examples follow; planted-line checks never come across;
+      // blind compares only with --compares. --dry-run prints the plan and writes nothing.
+      const { planImport, describePlan, attributeDecisions } = await import('../src/services/studio/importPlan.js');
       const src = new FileStore(opt('from', S.studioDir()), { rulesPath: opt('rules') || undefined, inputsDir: S.INPUTS, assets: S.localAssets() });
-      const rules = await src.getRules();
-      await pgStore.putRules(rules.version || 'imported', rules, { activate: true, by: opt('user', 'import'), notes: `Imported from ${src.dir}` });
-      for (const key of ['personas', 'voices'] as const) { const v = await src.getInput(key); if (v) await pgStore.putInput(key, v); }
-      const edits = await src.getTerritoryEdits();
-      for (const [code, t] of Object.entries(edits)) await pgStore.saveTerritoryEdit(code, t);
+      const editsFile = path.join(src.dir, 'edits.jsonl');
+      const allHistory = fs.existsSync(editsFile) ? fs.readFileSync(editsFile, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)) : [];
       const briefsDir = path.join(src.dir, 'briefs');
-      let briefs = 0;
-      if (fs.existsSync(briefsDir)) for (const f of fs.readdirSync(briefsDir).filter(x => x.endsWith('.json'))) { await pgStore.saveBrief(JSON.parse(fs.readFileSync(path.join(briefsDir, f), 'utf8'))); briefs++; }
-      const ids = await src.listBatchIds();
+      const briefFiles = fs.existsSync(briefsDir) ? fs.readdirSync(briefsDir).filter(x => x.endsWith('.json')) : [];
+      const plan = await planImport(src, { since: opt('since') || undefined, runs: list(opt('runs')), compares: flag('compares') }, allHistory, briefFiles);
+      const rules = await src.getRules();
+      const edits = await src.getTerritoryEdits();
+      const assetNames = [];
+      for (const name of Object.keys(S.localAssets())) if (await src.hasAsset(name)) assetNames.push(name);
+      const spend = await src.listSpend();
+      let attributed = 0, unnamed = 0;
+      for (const r of plan.runs) {
+        const b = await src.getBatch(r.id);
+        unnamed += b.lines.filter((l: any) => l.decision && !l.decided_by).length;
+        attributed += attributeDecisions(b, plan.history).length;
+      }
+      console.log(`From ${src.dir}\nRules: ${rules.version} (becomes the active version)\nTerritory edits: ${Object.keys(edits).length}\nAssets: ${assetNames.join(', ') || 'none'}\n${describePlan(plan)}\nSpend: ${flag('with-spend') ? `${spend.length} records, $${spend.reduce((t, e) => t + (e.usd || 0), 0).toFixed(3)}` : 'not imported (add --with-spend)'}`);
+      if (unnamed) console.log(`Decisions with no name or time: ${unnamed}, attributed to the run's author at the run's last save.`);
+      if (attributed) console.log(`Decisions with no history: ${attributed}, each given one history record marked imported.`);
+      if (!opt('since') && !opt('runs')) console.log('Note: no --since or --runs, so every run except planted-line checks is included. The agreed carry-over is --since 2026-09-28.');
+      if (flag('dry-run')) { console.log('Dry run: nothing written.'); return; }
+      if (!pgStore) throw new Error('db-import needs --store pg (or --dry-run)');
+      await pgStore.putRules(rules.version || 'imported', rules, { activate: true, by: opt('user', 'import'), notes: 'Imported from the local studio folder' });
+      for (const key of ['personas', 'voices'] as const) { const v = await src.getInput(key); if (v) await pgStore.putInput(key, v); }
+      for (const [code, t] of Object.entries(edits)) await pgStore.saveTerritoryEdit(code, t);
+      for (const f of plan.briefs) await pgStore.saveBrief(JSON.parse(fs.readFileSync(path.join(briefsDir, f), 'utf8')));
       let lines = 0;
-      for (const id of ids) {
-        const b = await src.getBatch(id);
+      for (const r of plan.runs) {
+        const b = await src.getBatch(r.id);
+        const made = attributeDecisions(b, plan.history);
         await pgStore.saveBatch(b);
-        await pgStore.saveEmbeddings(id, await src.getEmbeddings(id));
+        // History is append-only: on a re-run, skip lines the database already has history for.
+        for (const e of made) if (!(await pgStore.listEdits(e.line_id)).length) await pgStore.recordEdit(e);
+        await pgStore.saveEmbeddings(r.id, await src.getEmbeddings(r.id));
         lines += b.lines.length;
       }
-      const editsFile = path.join(src.dir, 'edits.jsonl');
-      let history = 0;
-      if (fs.existsSync(editsFile)) for (const l of fs.readFileSync(editsFile, 'utf8').split('\n').filter(Boolean)) { await pgStore.recordEdit(JSON.parse(l)); history++; }
-      await pgStore.saveTaste(await src.getTaste());
-      const compares = await src.listCompares();
-      for (const name of compares) { await pgStore.saveCompare(await src.getCompare(name)); await pgStore.saveCompareKey(name, await src.getCompareKey(name)); }
-      let assets = 0;
-      for (const name of Object.keys(S.localAssets())) { const x = await src.getAsset(name); if (x) { await pgStore.putAsset(name, x); assets++; } }
-      const spend = await src.listSpend();
-      if (flag('with-spend')) for (const e of spend) await pgStore.addSpend({ ...e, label: e.label || (e as any).tag || 'imported', at: e.at || new Date().toISOString() });
-      console.log(`Imported from ${src.dir}: rules ${rules.version} (active), ${Object.keys(edits).length} territory edits, ${briefs} briefs, ${ids.length} runs (${lines} lines), ${history} decision-history records, ${(await src.getTaste()).length} taste examples, ${compares.length} compares, ${assets} assets${flag('with-spend') ? `, ${spend.length} spend records` : ' (spend not imported; add --with-spend)'}.`);
+      const seen = async (e: { line_id: string; at: string; by: string }) => (await pgStore!.listEdits(e.line_id)).some(x => x.at === e.at && x.by === e.by);
+      for (const e of plan.history) if (!(await seen(e))) await pgStore.recordEdit(e);
+      await pgStore.saveTaste(plan.taste);
+      for (const name of plan.compares) { await pgStore.saveCompare(await src.getCompare(name)); await pgStore.saveCompareKey(name, await src.getCompareKey(name)); }
+      for (const name of assetNames) await pgStore.putAsset(name, (await src.getAsset(name))!);
+      let spendAdded = 0;
+      if (flag('with-spend')) {
+        // Spend is append-only too: skip entries already in the database (same label, time and amount).
+        const have = new Set((await pgStore.listSpend()).map(x => `${x.label}|${new Date(x.at).toISOString()}|${Number(x.usd).toFixed(4)}`));
+        for (const e of spend) {
+          const row = { ...e, label: e.label || (e as any).tag || 'imported', at: e.at || new Date().toISOString() };
+          if (have.has(`${row.label}|${new Date(row.at).toISOString()}|${Number(row.usd).toFixed(4)}`)) continue;
+          await pgStore.addSpend(row);
+          spendAdded++;
+        }
+      }
+      console.log(`Imported: ${plan.runs.length} runs (${lines} lines), ${plan.briefs.length} briefs, ${plan.history.length + attributed} decision-history records (${attributed} marked imported), ${plan.taste.length} taste examples, ${plan.compares.length} compares, ${assetNames.length} assets${flag('with-spend') ? `, ${spendAdded} of ${spend.length} spend records (the rest were already there)` : ''}.`);
       return;
     }
     case 'serve': { await serve(); return; }

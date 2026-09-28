@@ -68,7 +68,12 @@ export async function scenario() {
 
   // Compliance status: set by anyone on the list, doesn't block, shows in the handoff.
   await assert.rejects(() => R.setCompliance(run.id, risky.id, 'approved', '', 'vivan'), /one of/);
-  await R.setCompliance(run.id, risky.id, 'cleared', 'Checked against LEGAL §4', 'vivan');
+  // A line with an overridden red flag can't be cleared without a note.
+  await assert.rejects(() => R.setCompliance(run.id, risky.id, 'cleared', '', 'vivan'), /add a note/);
+  await assert.rejects(() => R.setCompliance(run.id, risky.id, 'cleared', '   ', 'vivan'), /add a note/);
+  await R.setCompliance(run.id, risky.id, 'changes_requested', undefined, 'vivan');  // other statuses need no note
+  await R.setCompliance(run.id, risky.id, 'cleared', 'Cleared by Trupanion legal (J. Doe), 28 Sep', 'vivan');
+  await R.setCompliance(run.id, clean.id, 'cleared', undefined, 'vivan');  // no override: no note needed
 
   // 5. The handoff pack: CSV that parses cleanly, Markdown, and a clean compliance sheet.
   const pack = await R.handoffPack();
@@ -78,14 +83,26 @@ export async function scenario() {
   assert.deepEqual(rows[0].slice(0, 3), ['Naming code', 'Persona', 'Territory']);
   const byText = new Map(rows.slice(1).map(r => [r[6], r]));
   assert.ok(byText.has(v1Text), 'the handoff carries the signed-off wording (v1), not the later edit');
-  assert.equal(byText.get(v1Text)![13], 'yes: a newer version exists');
+  assert.equal(byText.get(v1Text)![14], 'yes: a newer version exists');
+  // Compliance was given on the later wording, so the signed-off v1 row says so rather than claiming it's cleared.
+  assert.equal(byText.get(v1Text)![9], 'Pending');
+  assert.equal(byText.get(v1Text)![10], 'Reviewed on a different wording');
   assert.equal(byText.get('Honestly, the policy pays for itself.')![9], 'Cleared');
+  // The internal handoff shows the override next to the status.
+  assert.equal(rows[0][11], 'Red flag overridden');
+  assert.match(byText.get('Honestly, the policy pays for itself.')![11], /pays for itself.*overridden by nick.*Legal cleared this claim/);
+  assert.equal(byText.get(v1Text)![11], '');
+  assert.match(pack.md, /Red flag overridden: .*overridden by nick/);
   assert.match(pack.md, /Expected to lead/);
   assert.match(pack.md, /not compliance clearance/);
   const sheet = S.parseCsv(pack.complianceCsv);
-  assert.deepEqual(sheet[0], ['Naming code', 'Field', 'Platform', 'Final text', 'Characters']);
+  assert.deepEqual(sheet[0], ['Naming code', 'Field', 'Platform', 'Final text', 'Characters', 'Please check']);
+  // The overridden line tells the reviewer which rule to look at, in the rule's plain words; clean lines say nothing.
+  const riskyRow = sheet.find(r => r[3] === 'Honestly, the policy pays for itself.')!;
+  assert.equal(riskyRow[5], 'Please check specifically: Never say it pays for itself');
+  assert.equal(sheet.find(r => r[3] === v1Text)![5], '');
   const all = pack.complianceCsv.toLowerCase();
-  for (const internal of ['comp_pays_for_itself', 'legal cleared', 'skeptic', 'override', 'nick']) assert.equal(all.includes(internal), false, `compliance sheet leaks "${internal}"`);
+  for (const internal of ['comp_pays_for_itself', 'legal cleared', 'skeptic', 'override', 'nick', 'vivan', 'j. doe', 'legal §4', 'owners told us']) assert.equal(all.includes(internal), false, `compliance sheet leaks "${internal}"`);
   // Never "approved" (the compliance status "cleared" is the one exception).
   assert.equal(/approved/i.test(pack.csv + pack.md + pack.complianceCsv), false);
 
@@ -97,5 +114,5 @@ export async function scenario() {
   // Compliance was reviewed on the same wording for the risky line; the clean line is pending.
   const pack2 = S.parseCsv((await R.handoffPack()).csv);
   assert.equal(pack2.find(r => r[6] === 'Honestly, the policy pays for itself.')![9], 'Cleared');
-  assert.equal(pack2.find(r => r[6].endsWith('Every time.'))![9], 'Pending');
+  assert.equal(pack2.find(r => r[6].endsWith('Every time.'))![9], 'Cleared', 'cleared on the wording that is now signed off');
 }

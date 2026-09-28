@@ -17,7 +17,7 @@ export type Severity = 'compliance' | 'warn' | 'note';
 export interface Tone { dry_warm: number; playful_plain: number; short_long: number }
 export interface Flag { rule: string; severity: Severity; label: string; source: string; quote: string; why?: string; by: string[]; p?: number }
 export type ComplianceStatus = 'pending' | 'cleared' | 'changes_requested';
-export interface Override { rule: string; reason: string; by: string; at: string }
+export interface Override { rule: string; label?: string; reason: string; by: string; at: string }
 export interface ReadyMark { signoff_id: string; version: number; sha256: string; ready_by: string; ready_at: string; stub: string; changed_since?: boolean }
 export interface Line {
   id: string; batch: string; persona: string; territory: string; field: string; text: string; chars: number;

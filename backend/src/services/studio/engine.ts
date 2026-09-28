@@ -116,7 +116,8 @@ export interface Line {
   /** When the final wording was last fully re-checked (after an edit). */
   rechecked_at?: string;
 }
-export interface Override { rule: string; reason: string; by: string; at: string }
+/** `label` is the rule in plain words, from the rules file (shown to Trupanion's reviewers; the reason and name never are). */
+export interface Override { rule: string; label?: string; reason: string; by: string; at: string }
 export type ComplianceStatus = 'pending' | 'cleared' | 'changes_requested';
 /** One wording of a line as it stood at a sign-off or after one. Never rewritten. */
 export interface LineVersion { line_id: string; batch_id: string; version: number; field: string; text: string; sha256: string; created_by: string; created_at: string; signoff_id?: string;

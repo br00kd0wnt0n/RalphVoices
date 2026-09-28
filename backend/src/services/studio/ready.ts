@@ -56,9 +56,10 @@ export async function overrideFlag(batchId: string, lineId: string, rule: string
   const why = String(reason || '').trim();
   if (why.length < 5) throw new Error('An override needs a written reason');
   const { line } = await lineAt(batchId, lineId);
-  if (!line.flags.some(f => f.rule === rule && f.severity === 'compliance')) throw new Error(`${rule} isn't a red flag on this line`);
+  const flag = line.flags.find(f => f.rule === rule && f.severity === 'compliance');
+  if (!flag) throw new Error(`${rule} isn't a red flag on this line`);
   const before = { overrides: line.overrides || [] };
-  line.overrides = [...(line.overrides || []).filter(o => o.rule !== rule), { rule, reason: why, by: user || 'unknown', at: new Date().toISOString() }];
+  line.overrides = [...(line.overrides || []).filter(o => o.rule !== rule), { rule, label: flag.label, reason: why, by: user || 'unknown', at: new Date().toISOString() }];
   return write(batchId, line, before, { overrides: line.overrides }, user);
 }
 
@@ -66,6 +67,10 @@ export async function overrideFlag(batchId: string, lineId: string, rule: string
 export async function setCompliance(batchId: string, lineId: string, status: string, note: string | undefined, user?: string): Promise<Line> {
   if (!COMPLIANCE.includes(status as ComplianceStatus)) throw new Error(`Compliance status must be one of ${COMPLIANCE.join(', ')}`);
   const { line } = await lineAt(batchId, lineId);
+  // A line that went through with an overridden red flag can only be cleared with a note saying who cleared it.
+  if (status === 'cleared' && line.overrides?.length && !String(note || '').trim()) {
+    throw new Error('This line has an overridden red flag: add a note to clear it (e.g. who at Trupanion cleared it)');
+  }
   const before = { compliance: line.compliance || { status: 'pending' } };
   line.compliance = { status: status as ComplianceStatus, note: note ? String(note) : undefined, by: user, at: new Date().toISOString(), sha256: lineHash(line) };
   return write(batchId, line, before, { compliance: line.compliance }, user);
@@ -186,7 +191,12 @@ export async function signOff(input: { persona: string; territory: string; line_
 
 export interface HandoffRow {
   line_id: string; stub: string; persona: string; territory: string; field: string; placement: string; platform: string; format: string;
-  text: string; chars: number; version: number; compliance: string; compliance_note: string; ready_by: string; ready_at: string; changed_since: string;
+  text: string; chars: number; version: number; compliance: string; compliance_note: string;
+  /** Internal: each overridden red flag with its reason and who (handoff only). */
+  overrides: string;
+  /** For Trupanion's reviewers: the rules to look at on this line, in plain words (no reasons or names). */
+  check_specifically: string;
+  ready_by: string; ready_at: string; changed_since: string;
 }
 
 /** The latest sign-off per persona × territory, one row per line, with the signed-off wording. */
@@ -206,6 +216,8 @@ export async function handoffRows(filter: { persona?: string; territory?: string
       let current: Line | undefined;
       try { current = (await loadBatch(x.batch_id)).lines.find(l => l.id === x.line_id); } catch { /* run removed; keep the signed record */ }
       const c = current?.compliance;
+      const labelOf = (o: { rule: string; label?: string }) => o.label || current?.flags.find(f => f.rule === o.rule)?.label || o.rule;
+      const ovs = x.overrides || [];
       const reviewedOther = c?.sha256 && c.sha256 !== x.sha256;
       rows.push({
         line_id: x.line_id, stub: x.stub, persona: s.persona, territory: s.territory, field: x.field,
@@ -213,6 +225,8 @@ export async function handoffRows(filter: { persona?: string; territory?: string
         format: r.territories[s.territory]?.format || '', text: x.text, chars: x.chars, version: x.version,
         compliance: reviewedOther ? 'pending' : (c?.status || 'pending'),
         compliance_note: reviewedOther ? 'Reviewed on a different wording' : (c?.note || ''),
+        overrides: ovs.map(o => `${labelOf(o)}: overridden by ${o.by}, “${o.reason}”`).join(' | '),
+        check_specifically: ovs.length ? `Please check specifically: ${ovs.map(o => labelOf(o).replace(/\.$/, '')).join('; ')}` : '',
         ready_by: s.ready_by, ready_at: s.ready_at,
         changed_since: current?.ready?.signoff_id === s.id && current.ready.changed_since ? 'yes: a newer version exists' : '',
       });
@@ -227,7 +241,7 @@ export async function handoffPack(filter: { persona?: string; territory?: string
   const rows = await handoffRows(filter);
   const cols: Array<[keyof HandoffRow, string]> = [
     ['stub', 'Naming code'], ['persona', 'Persona'], ['territory', 'Territory'], ['placement', 'Field'], ['platform', 'Platform'], ['format', 'Format'],
-    ['text', 'Final text'], ['chars', 'Characters'], ['version', 'Version'], ['compliance', 'Compliance status'], ['compliance_note', 'Compliance note'],
+    ['text', 'Final text'], ['chars', 'Characters'], ['version', 'Version'], ['compliance', 'Compliance status'], ['compliance_note', 'Compliance note'], ['overrides', 'Red flag overridden'],
     ['ready_by', 'Ready for production by'], ['ready_at', 'Ready for production at'], ['changed_since', 'Changed since sign-off'],
   ];
   const csv = toCsv([cols.map(c => c[1]), ...rows.map(x => cols.map(([k]) => k === 'compliance' ? STATUS_WORDS[x.compliance] || x.compliance : String(x[k])))]);
@@ -243,10 +257,11 @@ export async function handoffPack(filter: { persona?: string; territory?: string
       const e = expectations.filter(y => y.persona === x.persona && y.territory === x.territory).pop();
       if (e) md.push(`**Expected to lead:** ${e.line_ids.map(id => `\`${rows.find(r => r.line_id === id)?.stub || id}\``).join(', ')}. ${e.reason.replace(/\s*\n\s*/g, ' ')}`, '');
     }
-    md.push(`- \`${x.stub}\` (${x.placement}, ${x.chars} chars, v${x.version}): ${x.text.replace(/\s*\n\s*/g, ' ')}  \n  Compliance: ${STATUS_WORDS[x.compliance] || x.compliance}${x.compliance_note ? ` (${x.compliance_note})` : ''}${x.changed_since ? ` · ${x.changed_since}` : ''}`);
+    md.push(`- \`${x.stub}\` (${x.placement}, ${x.chars} chars, v${x.version}): ${x.text.replace(/\s*\n\s*/g, ' ')}  \n  Compliance: ${STATUS_WORDS[x.compliance] || x.compliance}${x.compliance_note ? ` (${x.compliance_note})` : ''}${x.overrides ? ` · Red flag overridden: ${x.overrides}` : ''}${x.changed_since ? ` · ${x.changed_since}` : ''}`);
   }
 
   // For Trupanion's compliance team: the words only, nothing internal.
-  const complianceCsv = toCsv([['Naming code', 'Field', 'Platform', 'Final text', 'Characters'], ...rows.map(x => [x.stub, x.placement, x.platform, x.text, String(x.chars)])]);
+  // A line that went through with an overridden red flag says which rule to look at, in plain words; never the reason or who.
+  const complianceCsv = toCsv([['Naming code', 'Field', 'Platform', 'Final text', 'Characters', 'Please check'], ...rows.map(x => [x.stub, x.placement, x.platform, x.text, String(x.chars), x.check_specifically])]);
   return { count: rows.length, csv, md: md.join('\n') + '\n', complianceCsv };
 }
