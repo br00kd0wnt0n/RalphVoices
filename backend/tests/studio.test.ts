@@ -187,3 +187,29 @@ test('territories are editable, with history; the pitch version is untouched', a
   assert.throws(() => S.makeBrief({ territory: 'OWN_NOTHING_TO_FILE' }), /retired/);
   await S.saveTerritory('OWN_CALM', { premise: before.premise, angle: before.angle }, 'revert for other tests', 'test');
 });
+
+test('blind compare stars are per person, hidden from each other until the reveal', async () => {
+  const api = new S.Api({ mock: true });
+  const set = await S.compare(S.makeBrief({ territory: 'OWN_CALM', name: 'stars' }), ['writer-a', 'writer-b'], 2, api);
+  const [a, b] = set.lines;
+  await S.markCompareLine(set.name, a.id, { favourite: true }, 'Nick');
+  await S.markCompareLine(set.name, b.id, { favourite: true }, 'vivan');
+  const nick = S.viewCompare(await S.loadCompare(set.name), 'nick');
+  assert.equal(nick.lines.find(l => l.id === a.id)!.favourite, true);
+  assert.equal(nick.lines.find(l => l.id === b.id)!.favourite, false, "vivan's star isn't Nick's");
+  assert.equal(nick.lines.some(l => 'stars' in l), false, 'other people\'s stars stay hidden before the reveal');
+  const r = await S.revealCompare(set.name, 'brook');
+  assert.equal(Object.values(r.tally).reduce((x, y) => x + y, 0), 2);
+  assert.deepEqual(Object.keys(r.by_person).sort(), ['nick', 'vivan']);
+  const after = await S.loadCompare(set.name);
+  assert.equal(after.revealed_by, 'brook');
+});
+
+test('two runs started in the same second get different ids', async () => {
+  const [x, y] = await Promise.all([S.newBatchId('OWN_CALM'), S.newBatchId('OWN_CALM')]);
+  assert.notEqual(x, y);
+  const api = new S.Api({ mock: true });
+  const [r1, r2] = await Promise.all([1, 2].map(() => S.generate(S.makeBrief({ territory: 'OWN_CALM', n: 2, name: 'same-second' }), api, () => {}, { check: false })));
+  assert.notEqual(r1.id, r2.id);
+  assert.equal((await S.loadBatch(r1.id)).lines.length, r1.lines.length);
+});

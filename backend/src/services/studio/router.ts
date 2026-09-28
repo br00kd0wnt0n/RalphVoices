@@ -97,7 +97,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     if (!o.mock && so + e.usd > o.cap) return res.status(402).json({ error: `This would take spend past ${capText()} ($${so.toFixed(2)} spent).` });
     await S.saveBrief(b);
     // Continue an existing run, or start a new one.
-    const id = req.body.batch ? String(req.body.batch) : `${b.territory}-${new Date().toISOString().replace(/[-:T]/g, '').slice(2, 14)}`;
+    const id = req.body.batch ? String(req.body.batch) : await S.newBatchId(b.territory);
     const api = o.api(req);
     const job = startJob(`${id}~${Date.now()}`, emit => S.generate(b, api, emit, { batchId: id, ownOnly, user: o.who(req) }));
     res.json({ batch: id, job, estimate: e.usd });
@@ -151,17 +151,9 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     const api = o.api(req);
     res.json({ job: startJob(`compare~${Date.now()}`, emit => S.compare(b, models, n, api, emit)) });
   }));
-  r.get('/compare/:name', wrap(async (req, res) => res.json(await S.loadCompare(req.params.name))));
-  r.patch('/compare/:name/lines/:id', wrap(async (req, res) => {
-    const s = await S.loadCompare(req.params.name);
-    const l = s.lines.find(x => x.id === req.params.id);
-    if (!l) throw new Error('No such line');
-    if (req.body.favourite !== undefined) l.favourite = !!req.body.favourite;
-    if (req.body.note !== undefined) l.note = String(req.body.note);
-    await S.saveCompare(s);
-    res.json(l);
-  }));
-  r.post('/compare/:name/reveal', wrap(async (req, res) => res.json(await S.revealCompare(req.params.name))));
+  r.get('/compare/:name', wrap(async (req, res) => res.json(S.viewCompare(await S.loadCompare(req.params.name), o.who(req)))));
+  r.patch('/compare/:name/lines/:id', wrap(async (req, res) => res.json(await S.markCompareLine(req.params.name, req.params.id, req.body || {}, o.who(req)))));
+  r.post('/compare/:name/reveal', wrap(async (req, res) => res.json(await S.revealCompare(req.params.name, o.who(req)))));
 
   // ----- reference documents and the client logo -----
   r.get('/docs', wrap(async (_req, res) => res.json(await S.referenceDocs())));

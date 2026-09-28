@@ -32,6 +32,8 @@ function requireStudioAccess(req: AuthRequest, res: Response, next: NextFunction
 }
 
 const router = express.Router();
+// Cheap check for the nav: may this person use the Studio? (404 when ENABLE_STUDIO is off, because nothing is mounted.)
+router.get('/access', authMiddleware as any, (req: AuthRequest, res: Response) => res.json(studioAccess(req.user?.email)));
 router.use(authMiddleware, requireStudioAccess as any);
 router.use(createStudioRouter({
   who: req => displayName(req as AuthRequest),

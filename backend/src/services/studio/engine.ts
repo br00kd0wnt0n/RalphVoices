@@ -835,10 +835,24 @@ Return JSON: {"tags":[{"i":<line number>,"angle":"<angle id>","structure":"<stru
  * an existing batch, new lines are added to it ("Generate around these").
  * With opts.ownOnly, only the creative director's lines are checked.
  */
+// Ids handed out by this process, so two runs started in the same second never share one.
+const reservedIds = new Set<string>();
+/** A new run id, `TERRITORY-yymmdd-hhmmss`, with -2, -3… when that second is taken. */
+export async function newBatchId(territory: string): Promise<string> {
+  const base = `${territory}-${stamp()}`;
+  for (let n = 1; ; n++) {
+    const id = n === 1 ? base : `${base}-${n}`;
+    if (reservedIds.has(id)) continue;
+    reservedIds.add(id); // before the await, so a concurrent call skips it
+    if (reservedIds.size > 1000) reservedIds.delete(reservedIds.values().next().value!);
+    if (!(await batchExists(id))) return id;
+  }
+}
+
 export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: { check?: boolean; batchId?: string; ownOnly?: boolean; user?: string } = {}): Promise<Batch> {
   const r = loadRules();
   const existing = opts.batchId && (await batchExists(opts.batchId)) ? await loadBatch(opts.batchId) : null;
-  const id = existing?.id || opts.batchId || `${b.territory}-${stamp()}`;
+  const id = existing?.id || opts.batchId || (await newBatchId(b.territory));
   const started = Date.now();
   const batch: Batch = existing || { id, brief: b, created: new Date().toISOString(), lines: [], dropped: [], stats: { generated: 0, near_duplicates_removed: 0, similar_flagged: 0, timings_ms: {}, usd: {}, calls: {}, tokens: {}, usd_total: 0 } };
   if (existing) batch.brief = { ...b, own_lines: [...(existing.brief.own_lines || []), ...(b.own_lines || []).filter(o => !(existing.brief.own_lines || []).some(x => x.text === o.text))] };
@@ -1487,8 +1501,13 @@ export async function writeShortlist(): Promise<{ count: number; path: string; m
 
 // ---------- compare ----------
 
-export interface CompareLine { id: string; label: string; field: string; text: string; chars: number; angle: string; structure: string; favourite?: boolean; note?: string }
-export interface CompareSet { name: string; brief: Brief; n_per_model: number; lines: CompareLine[]; created: string; revealed?: boolean; usd?: number; timings_ms?: number }
+export interface CompareLine { id: string; label: string; field: string; text: string; chars: number; angle: string; structure: string;
+  /** The viewer's own star (filled in per request by viewCompare); stored per person in `stars`. */
+  favourite?: boolean; note?: string;
+  /** Stars by person (hosted: email; local: the name the page asked for). */
+  stars?: Record<string, boolean>;
+}
+export interface CompareSet { name: string; brief: Brief; n_per_model: number; lines: CompareLine[]; created: string; revealed?: boolean; revealed_by?: string; revealed_at?: string; usd?: number; timings_ms?: number }
 
 export async function compare(b: Brief, models: string[], nPer: number, api: Api, emit: Emit = () => {}): Promise<CompareSet> {
   if (models.length < 2 || models.length > 4) throw new Error('Compare takes 2 to 4 models');
@@ -1520,14 +1539,52 @@ export async function compare(b: Brief, models: string[], nPer: number, api: Api
 export async function listCompares(): Promise<string[]> { return getStore().listCompares(); }
 export async function loadCompare(name: string): Promise<CompareSet> { return getStore().getCompare(name); }
 export async function saveCompare(set: CompareSet): Promise<void> { await getStore().saveCompare(set); }
-export async function revealCompare(name: string): Promise<{ labels: Record<string, string>; tally: Record<string, number> }> {
+/** Who starred a line: per-person stars, plus the single unnamed star from before stars were per person. */
+function starrers(l: CompareLine): string[] {
+  const out = Object.entries(l.stars || {}).filter(([, v]) => v).map(([k]) => k);
+  if (l.favourite && !l.stars) out.push('');
+  return out;
+}
+/** The set as one person sees it: `favourite` is their own star, and other people's stars stay hidden until the reveal. */
+export function viewCompare(set: CompareSet, user?: string): CompareSet & { stars_total?: Record<string, number> } {
+  const who = (user || '').toLowerCase();
+  return {
+    ...set,
+    lines: set.lines.map(l => {
+      const { stars, ...rest } = l;
+      return { ...rest, favourite: who ? !!stars?.[who] : starrers(l).length > 0, ...(set.revealed ? { stars } : {}) };
+    }),
+  };
+}
+/** Star or unstar a line for one person, or set the note. */
+export async function markCompareLine(name: string, id: string, patch: { favourite?: boolean; note?: string }, user?: string): Promise<CompareLine> {
   const set = await loadCompare(name);
-  set.revealed = true;
+  const l = set.lines.find(x => x.id === id);
+  if (!l) throw new Error('No such line');
+  const who = (user || '').toLowerCase();
+  if (patch.favourite !== undefined) {
+    if (who) { l.stars = { ...(l.stars || {}), [who]: !!patch.favourite }; if (l.favourite && !Object.keys(l.stars).includes('')) delete l.favourite; }
+    else l.favourite = !!patch.favourite;
+  }
+  if (patch.note !== undefined) l.note = String(patch.note);
   await saveCompare(set);
+  return viewCompare({ ...set, lines: [l] }, user).lines[0];
+}
+export async function revealCompare(name: string, user?: string): Promise<{ labels: Record<string, string>; tally: Record<string, number>; by_person: Record<string, Record<string, number>> }> {
+  const set = await loadCompare(name);
+  if (!set.revealed) { set.revealed = true; set.revealed_by = user; set.revealed_at = new Date().toISOString(); await saveCompare(set); }
   const labels = await getStore().getCompareKey(name);
   const tally: Record<string, number> = Object.fromEntries(Object.keys(labels).map(k => [k, 0]));
-  for (const l of set.lines) if (l.favourite) tally[l.label] = (tally[l.label] || 0) + 1;
-  return { labels, tally };
+  const by_person: Record<string, Record<string, number>> = {};
+  for (const l of set.lines) {
+    for (const p of starrers(l)) {
+      tally[l.label] = (tally[l.label] || 0) + 1;
+      const k = p || 'unnamed';
+      by_person[k] = by_person[k] || Object.fromEntries(Object.keys(labels).map(x => [x, 0]));
+      by_person[k][l.label] = (by_person[k][l.label] || 0) + 1;
+    }
+  }
+  return { labels, tally, by_person };
 }
 
 // ---------- meta for the UI ----------
