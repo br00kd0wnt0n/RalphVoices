@@ -92,7 +92,7 @@ Line to land: *the twins sharpen before spend; the market decides.* Studio write
 
 ## Screenshots (28 Sep, 1920×1080, live data)
 
-In `Claude outputs/voices-r1/studio/screens/` (client material, not in the repo): `0-landing`, `1-territories`, `2-write`, `3-review` (Brook's run `DINK_NEVER-260928145053`, one flag opened), `4-shortlist` (Brook's five kept lines), `5-readout`, `6-compare` (Brook's 4-writer set, key unopened). The 25 Sep set is in `screens/archive-25sep/`. `3-review` shows Brook's own note on one card and `5-readout` shows internal readout text; check before using either in a client-facing deck.
+In `Claude outputs/voices-r1/studio/screens/` (client material, not in the repo): `0-landing`, `1-territories`, `2-write`, `3-review` (Brook's run `DINK_NEVER-260928145053`, one flag opened), `4-shortlist` (Brook's five kept lines), `5-readout`, `6-compare` (Brook's 4-writer set, key unopened). Phase 4 (hosted page): `7-ready-gate` and `8-ready-signed`, the Ready for production step (see `docs/build-log/B1-studio-p4.md`; test lines on the local database, not for a client deck). The 25 Sep set is in `screens/archive-25sep/`. `3-review` shows Brook's own note on one card and `5-readout` shows internal readout text; check before using either in a client-facing deck.
 
 ## Acceptance (live runs, 25 Sep)
 
