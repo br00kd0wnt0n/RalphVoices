@@ -17,7 +17,7 @@
 //   npx tsx scripts/studio.ts export   --batch ID                      (CSV for Sheets + Markdown view)
 //   npx tsx scripts/studio.ts ingest   --csv PATH                      (curated sheet back in: taste examples + shortlist)
 //   npx tsx scripts/studio.ts shortlist
-//   npx tsx scripts/studio.ts compare  --brief NAME --models gpt-4o,gpt-4.1,gpt-5.5,claude-opus-5 [--n 10] [--yes]   (2-4 writers; claude-* needs ~/.config/voices/anthropic.key)
+//   npx tsx scripts/studio.ts compare  --brief NAME --models gpt-4o,gpt-4.1,gpt-5.5,claude-opus-5-5 [--n 10] [--yes]   (2-4 writers; claude-* needs ~/.config/voices/anthropic.key)
 //   npx tsx scripts/studio.ts reveal   --compare NAME
 //   npx tsx scripts/studio.ts status
 //   npx tsx scripts/studio.ts limits   [--models gpt-4o,gpt-4.1]       (models on the account and their TPM limits; 1-token calls)
@@ -126,6 +126,9 @@ const PLANTED: Array<{ text: string; field: string; expect: string; severity?: S
   { text: 'Checkups covered. Vaccines covered. Relax.', field: 'meta_primary', expect: 'COMP_ROUTINE' },
   { text: 'Every claim paid in seconds.', field: 'meta_headline', expect: 'COMP_CLAIM_SPEED' },
   { text: 'Cheap pet insurance can cost you more when it matters most.', field: 'meta_primary', expect: 'COMP_CHEAP_LOCKED', severity: 'warn' },
+  // Rules v2.2: trust claims and superlatives need substantiation (two lines kept on 28 Sep only got 'truncated').
+  { text: 'Trupanion: trusted by pet parents across the country', field: 'meta_primary', expect: 'COMP_SUPERLATIVE', severity: 'warn' },
+  { text: 'Is pet insurance the ultimate adulting?', field: 'meta_headline', expect: 'COMP_SUPERLATIVE', severity: 'warn' },
 ];
 
 async function main() {

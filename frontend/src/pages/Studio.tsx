@@ -425,7 +425,7 @@ function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onCon
                   <div>
                     <Label>Writing model</Label>
                     <input list="studio-models" className="w-full rounded-lg border-2 border-[#343946] px-3 py-2 text-base bg-[#101216] text-[#ECEDEF] placeholder:text-[#646A75]" value={brief.model} onChange={e => set({ model: e.target.value })} />
-                    <datalist id="studio-models">{['gpt-4o', 'gpt-4.1', 'gpt-5.5', 'claude-opus-5', 'gpt-5-mini'].map(m => <option key={m} value={m} />)}</datalist>
+                    <datalist id="studio-models">{['gpt-4o', 'gpt-4.1', 'gpt-5.5', 'claude-opus-5-5', 'claude-opus-5', 'gpt-5-mini'].map(m => <option key={m} value={m} />)}</datalist>
                   </div>
                 </div>
               </div>
@@ -922,7 +922,7 @@ function Shortlist({ batch }: { batch: Batch | null }) {
 function Compare({ meta, brief }: { meta: Meta; brief: Brief }) {
   const [names, setNames] = useState<string[]>([]);
   const [set, setSet] = useState<CompareSet | null>(null);
-  const [models, setModels] = useState('gpt-4o, gpt-4.1, gpt-5.5, claude-opus-5');
+  const [models, setModels] = useState('gpt-4o, gpt-4.1, gpt-5.5, claude-opus-5-5');
   const [n, setN] = useState(8);
   const [status, setStatus] = useState('');
   const [key, setKey] = useState<{ labels: Record<string, string>; tally: Record<string, number> } | null>(null);

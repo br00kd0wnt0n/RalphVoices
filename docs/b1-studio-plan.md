@@ -127,16 +127,19 @@ Testing:
 
 Phases 1–2 can start straight away. Phase 6 waits for Brook.
 
-## Decisions (Brook, 28 Sep 2026)
+## Decisions (28 Sep, Brook)
 
-1. **Rules in production:** yes. The Trupanion rules file can be stored in Ralph's production database (uploaded through `rules-push`, versioned, one active).
-2. **Access:** Brook and the creative director for the first release. The `STUDIO_EMAILS` value needs the creative director's email (pending).
-3. **Carry over:** yes. On the first deploy, today's runs, decisions, territory edits, taste examples, compares and spend are imported with `db-import --with-spend`.
+All seven open questions are answered (relayed by the coordination session; Brook approved them on 28 Sep):
+
+1. **Access (`STUDIO_EMAILS`):** Brook, the creative director, and Vivan (producer: naming and export) for the first release. Gareth isn't on it yet. The creative director's and Vivan's sign-in emails are still needed.
+2. **Shared decisions:** the latest decision stands, attributed, with the full history kept. This is what phase 1 built (`saveLine`, `studio_edits`).
+3. **Rules in production:** yes, the Trupanion rules go in the production database, which already holds the Trupanion personas and tests. Only Brook can upload and activate rules versions (he's on `ADMIN_EMAILS`).
 4. **Monthly spend cap:** $50 (`STUDIO_MONTHLY_CAP_USD=50`).
+5. **Comments and sharing:** not in the first version; notes on lines are enough.
+6. **Carry-over:** import the 28 Sep kickoff runs (Brook's DINK_NEVER run and any runs by the creative director) with their decisions and taste examples. Everything else starts clean; the 25 Sep test batches aren't imported. `db-import` needs a run filter for this (phase 6).
+7. **Anthropic key:** a fresh key for Railway, separate from the laptop key. Brook creates it and never pastes it into chat. The key pasted into the session on 28 Sep should be revoked, if it hasn't been.
 
-Still open from the original list: comments and sharing (question 5; notes on lines for now), shared-decision behaviour (question 2; plan: latest decision stands, attributed, with history, as built in phase 1), and a separate Anthropic key for production (question 7; to create at deploy).
-
-## Open questions for Brook
+## Open questions for Brook (answered 28 Sep; see Decisions above)
 
 1. **Access:** who goes on `STUDIO_EMAILS` for the first release? Brook and the creative director; anyone else (Gareth, Vivan)?
 2. **Shared decisions:** when two people decide on the same line, should the latest decision stand, attributed with history kept? (Recommended.) Or should each person keep their own decisions?
