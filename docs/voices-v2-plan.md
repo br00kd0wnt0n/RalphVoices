@@ -1,0 +1,360 @@
+# VOICES v2: plan for the Trupanion engagement
+
+Internal. **Approved by Brook, 25 Sep 2026.** Once approved, this plan replaces the build order in
+`docs/trupanion-build-plan.md` and sessions S2–S9 in `docs/build-sessions.md`.
+Ground rules 1–9 in `docs/build-sessions.md` still apply.
+
+## 1. Why the plan changes
+
+The original plan made VOICES a predictor. The twins would rank concepts per
+persona, the ranking would be locked as a prediction of record, and live
+results would score it. Round one tested that and it didn't hold up:
+
+- **Pass 1:** 1–10 scores bunched at 7–9. Only Curators ranked consistently.
+- **Pass 2:** the intent probes saturated at 0.9–1.0 for every twin,
+  skeptics included, because they were asked after the model's own review.
+  Pass 2 stopped at the smoke gate.
+- **SM spike (partial):** asked cold, the reads are stable across independent
+  panels (Curators split-panel ρ 0.99) and they pass the known-weak check. But
+  blind controls fail on clicks (Curators 1 of 4). Stable is not the same as
+  right.
+
+There are structural reasons too:
+
+- The twins read a written description of the ad, not the ad.
+- Much of live performance is delivery, audience and execution, which no
+  pre-test can see.
+- About 30 assets over three months is too few to score per-persona
+  predictions statistically.
+
+The client-facing framing has already moved (Persona Intelligence Readout,
+slide 5, edited by Brook on 25 Sep). The twins are a writing partner and a
+stress test. We record dated expectations per persona and check them against
+live results: expected versus actual. The footer now reads "The twins sharpen
+before spend; the market decides." v2 builds that.
+
+## 2. Principles
+
+1. **Live results decide.** VOICES shapes what goes into market and reads what
+   comes back. It doesn't claim to know the result in advance.
+2. **Use AI where it's reliable:** writing options, checking facts about an ad
+   (does it show a dollar figure?), voicing objections, and structuring and
+   explaining results. Not forecasting behaviour.
+3. **Every flag cites its source,** whether that's an evidence-pack item, a
+   compliance rule, a brand guideline or a live result.
+4. **Humans sign off.** Nothing reaches Add3 without the creative director's
+   approval and Trupanion compliance clearance.
+5. **Be honest about confidence.** Every live number has a range. "Too early
+   to call" is a valid weekly result.
+6. **Build in proportion to what's billed.** Scripts and document templates
+   come first. The app gets a UI only where someone outside the build team
+   works in it: the Copy Studio.
+7. **Learn by feature, not by ad.** Every line and asset is tagged with the
+   same features (angle, tone, structure, content), so what we learn carries
+   into the next batch.
+
+## 3. What's been sold, and what delivers it
+
+These are the Intelligence & Testing items in Plan B (flat monthly, three
+months, billed via Add3). Month 1 items are included at Ralph's cost.
+
+| Sold item | When | v2 delivers it with | Build |
+|---|---|---|---|
+| Testing architecture | Month 1 | The naming convention (proposed to Add3 on 24 Sep); one ad set per persona; equal-budget or A/B cells for learning tests | none (agreement) |
+| Persona intelligence readout | Month 1 full, then a monthly refresh | Evidence pack → persona codex with sources; the monthly refresh adds live learnings from B4 | B4 feeds it |
+| Audience twins setup | Month 1 | The three Trupanion personas (seed v3, lived voices), used as a writing partner and stress test | done |
+| Pre-testing (~20 copy and tone options per persona per batch) | Months 1–3 | Copy Studio (B1) and pre-flight audit (B2) | B1, B2 |
+| Weekly performance reads | Months 2–3 | Ingestion and weekly read (B3) | B3 |
+| Round-close report and next-round brief | Months 2–3 | Expectations record, round close and learning ledger (B4) | B4 |
+
+Not built by VOICES:
+
+- **Social listening** is sold under the persona readout. VOICES simulates;
+  it doesn't observe. It needs a named owner and a source, whether human or
+  another tool.
+- **Asset production and campaign management.**
+
+## 4. The builds
+
+### B1. Copy Studio (build 1)
+
+The creative director and AI write the ~20 options per persona together, and
+each line is stress-tested as it's written. This delivers the pre-testing line
+item.
+
+**The flow**
+
+1. **Brief.** Territory, persona and format, plus the fields to fill (Meta
+   primary text, headline and description; TikTok hook, on-screen text and
+   caption), each with its character limit. The creative director sets:
+   - tone controls (dry to warm, playful to plain, short to long)
+   - ideas that are off limits
+   - two or three reference lines in the voice they want
+
+   Pulled in automatically:
+   - the persona codex (triggers, turn-offs, language, each with its source)
+   - the compliance rules and brand rules
+   - live learnings, once B4 exists
+2. **Generate a varied set.** A grid of angle (trigger) × structure (question,
+   stat, testimony, scenario, joke) × tone, with each cell filled. Duplicates
+   are removed by similarity.
+3. **Check each line as it's written.** Each line shows:
+   - persona turn-offs hit
+   - compliance risk
+   - over the character limit
+   - not readable at a glance
+   - a near-duplicate of another line
+   - the skeptic's objection, in that persona's voice
+
+   Every flag carries its source. These are flags, not scores.
+4. **Curate.** Keep, cut, edit, or "more like this", each with a note. Edits
+   and reasons are saved and used as examples of the creative director's taste
+   in the next generation.
+5. **Shortlist and export.** About 3 lines per persona and territory, tagged
+   with features and naming codes. Exports:
+   - a compliance sheet for Trupanion
+   - a hand-off CSV for Add3
+   - the flagged but promising lines, kept as a reserve bench
+
+**Data (migration 015)**
+
+- `studio_briefs`
+- `studio_lines`: text, field, persona, territory, the grid cell, features,
+  flags with sources, status, and the model and prompt version
+- `studio_edits`: before, after, note, who, when
+
+The persona codex needs sourced items. Build the slim version of S2's
+`persona_evidence`: kind, claim, quote, source and visibility, imported from
+the evidence pack and reviewed by Brook. No evidence UI beyond a read-only
+list. Buyer verbatims stay analyst-only.
+
+**The writing model** is chosen with the creative director in a blind side by
+side (two or three models, unlabelled). Choosing it is a config setting, not a
+code change.
+
+**UI:** one page, `/studio`, with the brief panel, the grid of lines with
+flags, keep/cut/edit, and export. Sign-in is the existing SSO, and the page
+works inside the tools.ralph.world iframe.
+
+**Acceptance:** one real batch on a round-one territory, run with Brook
+driving:
+
+- 20+ lines per persona across at least 4 angles and 3 structures, with fewer
+  than 10% near-duplicates
+- every flag carries a source
+- a planted non-compliant line ("pays for itself") is flagged
+- the export opens cleanly in Sheets
+
+### B2. Pre-flight audit (build 2)
+
+The spike's M3 rubric (`Claude outputs/voices-r1/rubric.json`, draft 2),
+extended to finished assets. It's used on production assets before launch, and
+for the Month 1 Tier 1 pre-test on the concepts.
+
+- Input: the actual statics, carousel cards, and video keyframes plus the
+  transcript. Vision, with `image_detail: high`.
+- For each asset and persona, factual yes/no items:
+  - content features (humour, real people, member testimony, dollar figure,
+    vet authority and so on)
+  - persona turn-offs (from the codex)
+  - compliance and brand rules
+  - clarity at a glance, and product clarity
+
+  Each item is asked in two wordings, and the P(Yes) of the two is averaged.
+- Output: a short report per asset. Features double as the tags B3 and B4
+  learn from.
+- No overall score.
+- A script plus a Markdown/PDF report. It needs no UI.
+
+**Acceptance:** re-run on the nine round-one concept cards and match the
+spike's M3 feature table. On three real statics, a human check agrees on at
+least 90% of items.
+
+### B3. Ingestion and weekly read (build 3; critical path)
+
+This has to work before Month 1 creative goes live (mid-October on slide 6,
+still to be confirmed with Add3).
+
+**Ingest** Add3 exports and SuperAds (CSV first, API later if Add3 offers
+one):
+
+- Parse ad names by the naming convention:
+  `PERSONA_TERRITORY_FORMAT_v#_PLATFORM_YYMMDD`
+- Flag and quarantine anything that doesn't parse.
+- Prospecting only, for creative reads.
+- Metrics:
+  - hook rate: 3-second views / impressions
+  - link CTR
+  - cost per quote, and quotes per 1,000 impressions
+  - cost per enrollment, reported but never used for a creative call
+
+**Model**
+
+- Beta-binomial for rates.
+- Pools across ads through territory, format and feature effects, with a
+  persona layer.
+- Outputs, for each ad: P(best in its cell), a 90% range, and a call of scale,
+  cut or keep testing, with thresholds written down in advance.
+- A pure module with unit tests on simulated data where the true answers are
+  known.
+
+**Weekly note:** a generated draft (per persona: what moved, how sure we are,
+three actions) that Brook edits before the Wednesday read.
+
+**Storage (migration 016):** `live_ads` (the parsed name, asset link, features
+from B2 or B1) and `live_metrics` (a daily or weekly row per ad).
+
+**Acceptance:**
+
+- run end to end on Add3's historic export
+- the model recovers planted effects in simulation
+- a thin week produces "too early to call", not a false winner
+
+### B3b. Live tab in the Studio (added 28 Sep, Brook)
+
+Where B3's weekly read shows up in the tool. B3 itself runs from the command
+line and produces a Markdown note and a CSV. The first one or two weekly reads
+stay documents that Brook edits and presents. After that, the read moves into
+the hosted Studio, so the people who write the lines see what happened to them.
+
+- **A read-only "Live" tab in the hosted Studio.** Same sign-in and STUDIO_EMAILS
+  list.
+- **Per line marked Ready for production:** the live read for its ad(s), joined by
+  naming stub:
+  - ahead, behind, tied, too early to call or keep testing, with the 90% range
+  - the call, and the week it was made
+  - the expectation recorded at sign-off, shown next to it, so expected versus
+    actual is visible line by line
+- **Per persona:** the week's one-screen summary (B3's note, after Brook's edits).
+- **No new statistics.** It reads B3's stored results. Same wording rules (no
+  scores, no "predict", no "winner" inside a tie).
+- **Build:** an API route over B3's data behind `authMiddleware` and STUDIO_EMAILS,
+  plus one screen. About 1-2 days.
+- **Timing:** after the hosted Studio deploy and the first live week, so it's
+  designed around real data. Migration 016 ships in the same deliberate deploy
+  with Brook.
+- **It needs:** B1's signed-off lines to keep their naming stub (they do), and
+  B3 to expose a per-stub read of its latest results.
+
+### B4. Expectations, round close and learning ledger (build 4)
+
+- **Expectations record.** Before each flight, for each persona: which lines
+  or assets we expect to lead and why (features, evidence, what the stress
+  test flagged). It's dated, hashed with SHA-256, and can't be edited. A
+  change creates a new version. This reuses the `prediction_locks` design from
+  `docs/trupanion-readout-spec.md`, renamed `expectation_records`.
+- **Round close:**
+  - expected versus actual per persona
+  - what won and why
+  - feature effects with ranges
+  - updated message maps
+  - the next batch's brief drafted from the evidence
+- **Learning ledger:** feature × persona effects accumulated across rounds.
+  It feeds the Studio brief and the monthly persona refresh.
+- **Internal forecast, not client-facing:** the ledger's forecast for each
+  new batch, scored against live results. It only goes to the client once it
+  has a track record.
+
+### Decision gate: back-test on historic data
+
+This runs when Add3's historic export arrives (follow-up sent 25 Sep). It
+isn't a build. The rules are written down before any data is looked at.
+
+- **Ads:** 15–20 historic prospecting ads with real volume, run as real image
+  files.
+- **Question 1:** do B2 features predict hook rate, CTR or cost per quote on
+  Trupanion's history? That tells the ledger what to start from.
+- **Question 2:** do cold synthetic reads (M1 or M2 from the spike) rank
+  those ads above chance?
+  - If ρ ≥ 0.4 on at least one metric, synthetic reads may enter the internal
+    forecast, weighted by their track record.
+  - If not, the synthetic ranking track closes.
+- Either way, B1–B4 go ahead. None of them depends on this gate.
+
+## 5. What happens to the current build
+
+| Current item | v2 decision |
+|---|---|
+| SM Phase A spike | Let it finish; write `SM-spike.md`; its results feed the decision gate. Cost cap $25 |
+| SM Phase B (pairwise type, sweeps, ledger CSV, readout view) | **Parked.** The readout spec is reused later for the live read if a UI is needed; its lock design moves to B4 |
+| S2 evidence layer | **Slimmed into B1** (sourced persona codex, analyst-only buyer verbatims). No full evidence UI |
+| S3 twin calibration | **Parked** |
+| S4 copy-set backend | **Replaced** by B1. Synthetic copy scoring is not built |
+| S5 copy-set UI and compliance | Compliance rules move into B1 and B2 |
+| S6 format and head-to-head | **Parked.** Format effects come from live data (B3) |
+| S7 round report | **Becomes B4** |
+| S8 performance ingestion | **Becomes B3, moved to the critical path** |
+| S9 governance | Minimal: provenance and audit trail in B1 and B4 |
+| Probes, realism, `vector_constraints` flags | Stay in the code, default off. No further work |
+| RalphScore | Stays on the per-test page. Not used in anything Trupanion sees |
+| Insights chat | Folded into B1 as "ask the skeptic" per persona |
+
+Migration numbers: 015 is B1 Studio (it was reserved for SM, which is now parked),
+016 is B3 and 017 is B4. Status on 28 Sep: B1-lite shipped (PRs #6–#9); B1 Studio (hosted) and B3
+are in progress. 009–014 stay unused.
+
+## 6. Timeline (estimates; to confirm with Brook and Add3)
+
+| When | Work | Milestone |
+|---|---|---|
+| Fri 25 – Sun 27 Sep | **B1-lite** (script-only Copy Studio) built; Brook reviews the rules file | Demo-ready Mon 9am |
+| Mon 28 Sep | Creative director kickoff (Brook in the room): brief, framework read, B1-lite demo, blind model comparison. Concept board to the client, stress-tested, not ranked | Writing model chosen |
+| Date TBC (after the creative lead is up to speed) | First copy session on B1-lite: about 20 lines per persona → 2–3 per visual; expectations recorded | Month 1 pre-test delivered |
+| Early October | Full **B1 Studio** build, shaped by the creative lead's feedback on the demo and the first session | |
+| Week of 5 Oct | **B3** ingestion and model on Add3's historic export (parallel session). **B2** on the first production assets. Decision gate if the data has arrived | |
+| Week of 12 Oct | B3 ready before go-live. Month 1 expectations locked (B4 record) | Month 1 creative live (mid-Oct target) |
+| Week of 19 Oct | First B3 weekly note (a document Brook edits); the second read also a document | First Wednesday read |
+| Late Oct | **B3b Live tab** in the hosted Studio, built on the first real weeks; deployed with migration 016 | Nick sees live results next to his signed-off lines |
+| From 26 Oct | B4 round close and ledger. Month 2 batch through the full B1 Studio and B2 | Month 1 round close; Month 2 pre-test |
+
+Rough effort, before review: B1 about 5–6 days, B2 about 2, B3 about 4–5,
+B4 about 3. B1 and B3 can run in parallel sessions after the first week.
+
+## 7. Open questions for Brook
+
+Answered on 25 Sep:
+
+- **Assets per round.** Month 1: 6 statics (2 per persona), 3 hero videos, 2
+  TikTok-native builds, 3 carousels, 1 creator UGC capture. Months 2 and 3: 3
+  statics (1 per persona), 3 hero videos, 1 TikTok, 1 carousel. Ramp-up is
+  possible if early results show success. See section 7a.
+- **The readout is still internal.** Slide 5 can simply ship with the new
+  wording; no client-facing note about the change is needed.
+
+Still open:
+
+1. **The go-live date** for Month 1 creative (Brook is checking). It's the
+   hard deadline for B3.
+2. **Media spend per month** (Brook is checking). It decides how confident B3
+   can be.
+3. **Copy cells (new; for Add3):** can Add3 run 2–3 copy lines per asset as
+   separate ads in each persona ad set, reported per ad? And can they use
+   equal budgets or A/B cells where we most want to learn?
+4. **How does the creative director prefer to work?** Live sessions, or
+   reviewing on their own? That decides whether B1 needs comments or sharing
+   in its first version.
+5. **Trupanion's compliance format and turnaround** (asked on 24 Sep).
+6. **Who owns social listening** for the monthly persona refresh?
+
+## 7a. What the asset volume means for the reads
+
+- Per persona that's about 4–5 assets in Month 1 and 2–3 a month after that,
+  across four formats. There are rarely two same-format ads for the same
+  persona, so ad-by-ad and format-by-persona reads will be thin within a
+  month.
+- **Copy is the lever.** Two or three shortlisted B1 lines per visual, run as
+  separate ads on the same asset, turn 8 assets into 20+ learning cells at
+  almost no production cost. The same line across visuals separates message
+  from execution. So B1's shortlist feeds B3's design directly, and B3's
+  features-first model pools across all of them.
+- Format effects are read across personas and months, not within one persona
+  in one month. The weekly note says so.
+- Ramp-up: B3's "scale" calls with ranges are the evidence for asking the
+  client for more volume.
+
+## 8. Next steps once approved
+
+1. Mark S2–S9 and SM Phase B as superseded in `docs/build-sessions.md`, and
+   add session prompts for B1–B4 (same ground rules).
+2. Spin up the B1 session.
+3. Stop or finish the spike, and write its handoff.

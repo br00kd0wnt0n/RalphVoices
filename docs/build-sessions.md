@@ -2,6 +2,8 @@
 
 Coordination and oversight happen in one standing session. Building happens in the dedicated sessions below, each in its own worktree and branch. The plan they build against is `docs/trupanion-build-plan.md`.
 
+> **VOICES v2 approved by Brook (25 Sep 2026).** `docs/voices-v2-plan.md` replaces SM Phase B and S2–S9 with builds B1–B4. Status on 28 Sep: B1-lite has shipped (PRs #6–#9). The hosted B1 Studio is in progress on `voices/b1-studio` (plan: `docs/b1-studio-plan.md` on that branch; migration 015). B3 (ingestion and weekly read; migration 016) starts now and is the critical path before the mid-October go-live. B2 starts when first drafts land. The SM spike is stopped. The older prompts below are kept for reference; don't start them.
+
 ## Ground rules (every build session)
 
 1. **Never touch the Railway databases.** Both `.env` and `backend/.env` point at Railway. **`yamanote` (the pgvector database) is production**; `yamabiko` is legacy (corrected by Brook, 23 Sep; an earlier note had these the wrong way round). Touch neither. Run everything against a local database by setting the variable explicitly, e.g. `DATABASE_URL=postgresql://postgres@127.0.0.1:54329/voices_dev npm run dev:backend`. dotenv doesn't override a variable that's already set. Migration 004 needs **pgvector** locally (`brew install pgvector`, or the `pgvector/pgvector:pg16` Docker image); ask Brook before installing anything.
@@ -23,6 +25,10 @@ Coordination and oversight happen in one standing session. Building happens in t
 | # | Session | Plan section | Branch | Migration | Start | Depends on | Can run in parallel with |
 |---|---|---|---|---|---|---|---|
 | S1 | Finish Phase 0 | Phase 0 | `voices/trupanion-phase0` (existing) | none new (007 done) | now | — | — |
+| B1-lite | Copy Studio as a script (v2) | voices-v2-plan.md B1 | `voices/b1-lite` | none | Fri 25 Sep | — | done (PRs #6–#9) |
+| B1 Studio | Hosted Copy Studio (v2) | voices-v2-plan.md B1; b1-studio-plan.md | `voices/b1-studio` | 015 | 28 Sep | B1-lite | B3 |
+| B3 | Ingestion and weekly read (v2) | voices-v2-plan.md B3 | `voices/b3-weekly-read` | 016 | 28 Sep | — | B1 Studio |
+| B3b | Live tab in the hosted Studio (v2) | voices-v2-plan.md B3b | `voices/b3b-live-tab` | none (reads 015 + 016) | after the first live week | B1 Studio deployed, B3 | — |
 | SM | Measurement: feasibility spike (gate), then pairwise or cold probes, blind controls, sweep statistics | R1 note, ranked list #1, #6, #7 | `voices/measurement` | 015 | ~30 Sep, after Monday's prediction of record | S1, twin fixes | — |
 | S2 | Evidence layer + Month-1 predicted-vs-actual | Phase 1, §4 008 (now 014) | `voices/evidence-layer` | 014 | after SM merged | SM | — |
 | S3 | Twin seeding, drift check, noise floor | Phase 1 (content and calibration) | `voices/twin-calibration` | none | ~7 Oct | S2 deployed | S4 (backend only) |
@@ -42,6 +48,117 @@ Migration numbers are reserved as above so parallel sessions never collide. **00
 - Dates after S2 shift by roughly a week; re-plan them when SM merges.
 
 ## Prompt starters
+
+### B3: Ingestion and weekly read (from 28 Sep; the critical path)
+
+```
+Build session B3 of VOICES v2 (Trupanion). Create branch voices/b3-weekly-read from an up-to-date origin/main.
+
+Deadline: working end to end by Fri 9 Oct, before Month 1 creative goes live (mid-October target; the date is still being confirmed with Add3). The weekly read is a billed deliverable: weekly performance reads to the client from Month 2. This is the build that can't slip.
+
+Read first:
+- CLAUDE.md, and the ground rules in docs/build-sessions.md (follow them exactly: never touch the Railway databases; local Postgres on :54329 only; no push, merge or deploy without Brook's say-so; commits end with Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>).
+- docs/voices-v2-plan.md: sections 1-2, B3, B4, 7 and 7a.
+- docs/trupanion-readout-spec.md: its statistics ideas (ranges, tie groups, "not enough data") carry over, but read it as background; its prediction lock belongs to B4.
+- Client material, outside the repo; read by absolute path, never commit:
+  - /Users/BD/ralph-voices/Claude outputs/add3-tagging-email.md: the naming convention and ad set structure agreed with Add3
+  - /Users/BD/Downloads/Trupanion Creative Report May 2026 (1).pdf: Add3's report; shows the metrics they track (spend, impressions, clicks, CTR, CPC, quotes, CPQ, enrollments, CPE) and their shape
+  - /Users/BD/ralph-voices/Claude outputs/voices-r1/studio/studio-rules.json: the feature vocabulary (the `features` block) that Studio and the audit tag lines with
+
+Context:
+- Asset volume: Month 1 has 6 statics, 3 hero videos, 2 TikTok builds, 3 carousels and 1 UGC capture. Months 2 and 3 have 3 statics, 3 hero videos, 1 TikTok and 1 carousel each. Per persona that's about 4-5 assets a month, then 2-3.
+- So ad-by-ad reads are thin. Copy lines per visual (2-3 per asset, as separate ads) are the learning lever. So is pooling by feature: "member testimony" learns from every ad that has it.
+- Naming convention: PERSONA_TERRITORY_FORMAT_v#_PLATFORM_YYMMDD, e.g. FAM_SUMMER_ST_v2_META_261013. Persona is DINK, CUR or FAM. Format is ST, VID, CAR, TT or UGC. Platform is META or TT. One ad set per persona per platform.
+- No live data exists yet. Add3's historic export has been requested but hasn't arrived, and its exact columns are unknown. Build against the standard Meta Ads Manager ad-level export and keep the column mapping in config.
+
+Scope (migration 016 only; CLI and pure modules first; no UI in this session):
+1. Ingest. `backend/scripts/weekly.ts ingest --file <csv> --platform meta|tiktok`:
+   - Parse ad names by the convention. Anything that doesn't parse is quarantined and listed, never silently dropped.
+   - The column mapping is config (Meta Ads Manager defaults: ad name, campaign, ad set, day or reporting period, spend, impressions, reach, frequency, 3-second video plays, ThruPlays, link clicks, landing page views, and the quote and enrollment conversion columns, whose names Add3 will confirm).
+   - Prospecting versus retargeting is decided by a configurable rule on campaign or ad set name. Creative reads use prospecting only.
+   - Features for each ad: join from a Studio shortlist or audit export if present, keyed by the naming stub; otherwise none.
+   - Store in live_ads and live_metrics (a row per ad per day or period). Re-ingesting the same file is idempotent.
+2. Model. A pure module with unit tests; no new heavy dependencies (ask before any package):
+   - Rates: hook rate (3-second plays / impressions, video only), link CTR, and quotes per 1,000 impressions, each read as a binomial rate. Cost per quote is derived. Cost per enrollment is reported but never used for a call.
+   - Partial pooling: shrink each ad towards its persona × format mean (empirical Bayes beta-binomial is fine to start). Report each ad's rate with a 90% range.
+   - Feature effects: a pooled estimate per feature (and per persona × feature where the data allows), with ranges. It's fine to say "not enough data" and leave it out.
+   - P(best in cell) by Monte Carlo from the posteriors, seeded.
+   - Calls: scale, cut or keep testing, with thresholds written down in config before any data arrives (e.g. minimum impressions per ad; P(best) ≥ 0.8 to scale; P(worse than the cell median) ≥ 0.9 to cut). Below the minimum, the call is "too early to call".
+   - Cost benchmarks: if Trupanion's allowable acquisition cost (PAC) by state arrives, compare cost per quote against it. Until then, leave it out, and say so.
+3. Weekly note. `weekly.ts note --week <date>` drafts Markdown per persona: what moved, how sure we are, and three recommended actions (scale, cut, keep testing, with the reason), plus a CSV ledger. All numbers are computed deterministically. If an LLM is used for prose, it gets the computed numbers and may not introduce any new number (check that). Wording rules: every number has its range nearby; never "predict", "winner" inside a tie, or scores; "too early to call" is a valid headline. Brook edits the draft before the Wednesday read.
+4. Simulation. `weekly.ts simulate` writes a synthetic Meta export with known true effects per persona, format and feature, at realistic volumes (the asset counts above; impressions in the tens of thousands per ad per week; CTR around 1-2%; quotes a fraction of clicks). The model must recover the planted effects when the data allows, and must say "too early" when it doesn't.
+5. When Add3's historic export lands in /Users/BD/ralph-voices/Claude outputs/ (Brook will say where), run ingest and read on it. Report which columns mapped, what was quarantined, and what the read says. This also feeds the v2 plan's decision gate (back-test).
+
+Acceptance (show Brook output, not claims):
+- A simulation at Month-1 volumes: planted large effects are recovered with ranges that cover the truth; small effects come back as "too early" or tied.
+- A thin week (a few thousand impressions per ad) produces "too early to call", not a false winner.
+- The parser handles convention variants (case, stray spaces, extra suffixes) and quarantines bad names with the reason.
+- Migration 016 runs twice on the local database. Type checks and tests pass.
+- A sample weekly note from simulated data. Brook reviews the wording.
+
+Cost: about $5 of OpenAI at most (only for optional prose). Ask before installing packages.
+
+Handoff: docs/build-log/B3-weekly-read.md. Cover what shipped, the config thresholds and why, how to run a week (copy-paste commands), the column mapping and the open items for Add3 (conversion column names, SuperAds export shape, TikTok export), known gaps, and what B4 needs from here. Summary numbers only; no client data in the repo.
+```
+
+---
+
+
+### B1-lite: Copy Studio as a script (Fri 25 – Mon 28 Sep)
+
+```
+Build session B1-lite of VOICES v2 (Trupanion). Create branch voices/b1-lite from an up-to-date origin/main.
+
+Deadline: demo-ready by Monday 28 Sep, 9am. Brook shows it at the creative director kickoff that day. The first live copy session (about 20 lines per persona, shortlisted to 2-3 per visual) is date TBC, once the creative lead is up to speed. A rough tool that works beats a polished one that doesn't.
+
+Read first:
+- CLAUDE.md, and the ground rules in docs/build-sessions.md (follow them exactly: never touch the Railway databases; no push, merge or deploy without Brook's say-so; commits end with Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>).
+- The v2 plan, from the unmerged PR #5 branch: `git show origin/voices/r1-pass2-smoke-halt:docs/voices-v2-plan.md`. Read sections 2, B1, B2 and 7a. This session is a script-only slice of B1.
+- The spike code on the local branch voices/measurement-spike (backend/scripts/measurement-spike.ts). Reuse its OpenAI plumbing: pacing under the account's tokens-per-minute limit (currently about 15,000 TPM), the spend log and cost cap, the clean stop when credits run out, and the logprob yes/no reading.
+- Client material, outside the repo; read by absolute path, never commit:
+  - /Users/BD/ralph-voices/Claude outputs/trupanion-trigger-maps-v1.md: triggers, language and watch-outs per persona
+  - trupanion-evidence-pack-v1.md and trupanion-quote-bank.md
+  - voices-r1/personas.json (seed v3)
+  - voices-r1/concept-cards.md: the nine territories
+  - voices-r1/rubric.json: the spike's M3 checklist
+  - creative-lead-brief-2026-09-28.md
+  - /Users/BD/Downloads/Trupanion-Brand-Guidelines.pdf
+
+What to build: backend/scripts/studio.ts (run with tsx), a CLI with no database and no UI. Load only OPENAI_API_KEY from backend/.env; its DATABASE_URL points at production, so import nothing from src/db or src/routes. Write all outputs to /Users/BD/ralph-voices/Claude outputs/voices-r1/studio/.
+
+1. Rules file: Claude outputs/voices-r1/studio/studio-rules.json. It's client material; the repo gets a schema and an example with made-up content. Build it from the trigger maps, evidence pack and brand guidelines, and give every item a source reference. It holds:
+   - per persona: triggers, turn-offs (the "never" lists), language markers, and the verbatims marked "inspiration only"
+   - compliance rules: direct pay always with "at participating hospitals"; never "pays for itself"; no cheap or locked premiums; no price lead; coverage claims must be caveat-clean; real-person UGC means Trupanion members; the "medical insurance for pets" naming rule is pending
+   - brand rules from the PDF
+   - field limits: Meta primary text, headline and description; TikTok hook/on-screen text and caption. Check the current visible-before-truncation lengths and record the source.
+
+   Brook reviews this file on Sunday or Monday. Put anything you're unsure of under "needs_review", not in the rules.
+2. `brief`: writes a brief JSON with persona, territory code, fields, tone controls (dry–warm, playful–plain, short–long), banned words and ideas, 2-3 reference lines, n (default 20) and the model.
+3. `generate`: a deliberately varied grid, angle (the persona's triggers) × structure (question, stat, testimony, scenario, joke, plain promise) × tone, with each cell filled. It removes near-duplicates by embedding similarity, and every line is tagged with its angle, structure, tone and the rubric's content features. If the brief carries kept or edited lines from `ingest`, use them as few-shot examples of the creative director's taste.
+4. `check`: runs on every line and must be fast enough to use live. Target: 20 lines for one persona generated and checked in under 5 minutes at 15,000 TPM. So:
+   - deterministic checks first: character limits, required caveat phrases, banned phrases, near-duplicates
+   - then one structured JSON call per line for the persona turn-offs, compliance risks, "readable at a glance" and product clarity, each returned with a quote from the line and the rules-file source id
+   - two-wording logprob checks only for the compliance items
+   - one short in-persona "skeptic's objection" per line
+
+   Flags, never scores. If the 5-minute target can't be met at 15,000 TPM, say so early and tell Brook what a higher usage tier would buy.
+5. `export`: a CSV that imports cleanly into Google Sheets. Columns: id, persona, territory, field, text, chars, angle, structure, tone, features, flags (with sources), objection, decision (keep/cut/edit), edited_text, note. Plus a Markdown view for screen-sharing, grouped by persona and angle.
+6. `ingest`: reads the curated sheet back and stores the kept and edited lines with their notes as taste examples for the next `generate`. It also writes a shortlist file tagged with naming-convention stubs: PERSONA_TERRITORY_FORMAT_v#_PLATFORM.
+7. `compare`: a blind model side by side. The same brief goes to 2-3 models, the lines are shuffled into one sheet with neutral labels, and the key goes in a separate file, so the creative director picks the writing model on Monday. Use the OpenAI models available on this account. Add another provider only if its key is present and Brook agrees.
+
+Acceptance (show Brook the output, not claims):
+- A batch for DINKs on DINK_NEVER and one for Curators on CUR_DAYONE: 20+ lines each, at least 4 angles and 3 structures, under 10% near-duplicates, and every flag has a source.
+- A planted line saying the policy "pays for itself" is flagged. So is a planted direct-pay claim without "at participating hospitals".
+- The CSV round-trips: export, edit in Sheets, ingest.
+- Timing and cost per batch are reported.
+
+Cost: cap $15 for the whole session. Print an estimate and ask before any single run over $2. Ask before installing packages.
+
+Handoff: docs/build-log/B1-lite.md. Cover how to run a batch (copy-paste commands for Brook), the Monday demo script (5 minutes), timings, cost, known gaps, and what the full B1 Studio should change based on this. Summary numbers only; no client copy in the repo. Commit on the branch. Don't push until Brook says so.
+```
+
+---
+
 
 Paste one into a new Code session in the `ralph-voices` repo. Start S1 on the existing branch; the rest start from an up-to-date `main`.
 
