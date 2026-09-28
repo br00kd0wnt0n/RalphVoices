@@ -1,16 +1,22 @@
+import { useEffect, useState } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { RalphLogo } from '@/components/RalphLogo';
-import { Users, TestTube, LayoutDashboard, FolderOpen, Settings, BookOpen, Shield } from 'lucide-react';
+import { Users, TestTube, LayoutDashboard, FolderOpen, Settings, BookOpen, Shield, PenLine } from 'lucide-react';
+import { studioAccess } from '@/lib/studioApi';
 import { motion } from 'framer-motion';
 
 export function Layout() {
   const location = useLocation();
+  // Copy Studio shows only for people on its access list (and only where it's switched on).
+  const [studio, setStudio] = useState(false);
+  useEffect(() => { studioAccess().then(a => setStudio(a.allowed)); }, []);
 
   const navItems = [
     { path: '/', label: 'Dashboard', icon: LayoutDashboard },
     { path: '/projects', label: 'Projects', icon: FolderOpen },
     { path: '/personas', label: 'Personas', icon: Users },
     { path: '/tests', label: 'Tests', icon: TestTube },
+    ...(studio ? [{ path: '/studio', label: 'Studio', icon: PenLine }] : []),
   ];
 
   const rightNavItems = [

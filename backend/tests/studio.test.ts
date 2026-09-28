@@ -1,17 +1,18 @@
 // B1-lite Copy Studio: deterministic checks, grid, CSV round trip and a mock
 // batch end to end. Uses the made-up example rules (scripts/studio/rules.example.json)
 // and a temp studio folder, so it needs no client material, key or network.
-import { test } from 'node:test';
+import { before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import * as S from '../scripts/studio/engine.js';
+import * as S from '../src/services/studio/engine.js';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-test-'));
 S.setStudioDir(dir);
 S.setRulesPath(path.join(__dirname, '../scripts/studio/rules.example.json'));
-const rules = S.loadRules();
+let rules: S.Rules;
+before(async () => { rules = await S.refreshRules(); });
 const det = (text: string, field = 'meta_primary', structure = 'plain_promise') =>
   S.deterministicFlags({ text, field, structure, persona: 'OWN' }, rules, { banned_words: ['hassle-free'] }).flags;
 const find = (flags: S.Flag[], rule: string) => flags.find(f => f.rule === rule);
@@ -96,20 +97,20 @@ test('mock batch: generate, check, export, ingest round trip', async () => {
   assert.ok(batch.lines.length >= 6);
   assert.ok(batch.lines.every(l => l.status === 'checked'));
   assert.ok(batch.lines.flatMap(l => l.flags).every(f => f.source), 'every flag has a source');
-  const { csv } = S.exportBatch(batch.id);
+  const { csv } = await S.exportBatch(batch.id);
   const rows = S.parseCsv(csv);
   const h = rows[0];
   rows[1][h.indexOf('decision')] = 'keep';
   rows[2][h.indexOf('decision')] = 'edit';
   rows[2][h.indexOf('edited_text')] = 'Calm at the counter, at partner clinics.';
   rows[2][h.indexOf('note')] = 'plainer';
-  const r = S.ingest(rows.map(x => x.map(c => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c)).join(',')).join('\n'));
+  const r = await S.ingest(rows.map(x => x.map(c => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c)).join(',')).join('\n'));
   assert.equal(r.kept, 1);
   assert.equal(r.edited, 1);
   assert.equal(r.shortlist, 2);
-  const sl = S.shortlist();
+  const sl = await S.shortlist();
   assert.match(sl[0].stub, /^OWN_CALM_UGC_v\d_META$/);
-  assert.equal(S.loadTaste().length, 2);
+  assert.equal((await S.loadTaste()).length, 2);
 });
 
 test('the creative director writes first: own lines are tagged, checked, and Studio writes around them', async () => {
@@ -136,30 +137,100 @@ test('the creative director writes first: own lines are tagged, checked, and Stu
   const cells = S.planCells(b, 6, 0, '', covered);
   assert.ok(cells.every(c => !covered.has(`${c.angle}|${c.structure}`)));
   // Runs are listed by person, and decisions are attributed.
-  assert.equal(S.listBatches('brook').filter(x => x.id === first.id).length, 1);
-  assert.equal(S.listBatches('nobody').length, 0);
-  const l = S.setDecision(first.id, more.lines[0].id, { decision: 'keep' }, 'Brook');
+  assert.equal((await S.listBatches('brook')).filter(x => x.id === first.id).length, 1);
+  assert.equal((await S.listBatches('nobody')).length, 0);
+  const l = await S.setDecision(first.id, more.lines[0].id, { decision: 'keep' }, 'Brook');
   assert.equal(l.decided_by, 'Brook');
+  const history = await S.lineHistory(l.id);
+  assert.equal(history.length, 1);
+  assert.deepEqual(history[0].after, { decision: 'keep', edited_text: '', note: '' });
 });
 
-test('reference documents are only served from the configured list', () => {
-  assert.throws(() => S.referenceDocPath('../../etc/passwd'), /No reference document/);
-  assert.ok(S.referenceDocs().some(d => d.id === 'readout'));
+test('reference documents are only served from the configured list', async () => {
+  await assert.rejects(() => S.referenceDoc('../../etc/passwd'), /No reference document/);
+  await assert.rejects(() => S.brandAsset('../secrets'), /No brand asset/);
+  assert.ok((await S.referenceDocs()).some(d => d.id === 'readout'));
+  assert.ok(Object.keys(S.localAssets()).includes('brand:client-logo'));
 });
 
-test('territories are editable, with history; the pitch version is untouched', () => {
+test('resuming a run checks only the lines left unchecked', async () => {
+  const api = new S.Api({ mock: true });
+  const b = S.makeBrief({ territory: 'OWN_CALM', n: 4, name: 'resume-test' });
+  const run = await S.generate(b, api, () => {}, { check: false });
+  assert.ok(run.lines.every(l => l.status !== 'checked'));
+  assert.equal((await S.listBatches()).find(x => x.id === run.id)!.unchecked, run.lines.length);
+  const done = await S.resumeChecks(run.id, api);
+  assert.ok(done.lines.every(l => l.status === 'checked'));
+  assert.ok(done.stats.timings_ms.resume >= 0);
+  assert.equal((await S.listBatches()).find(x => x.id === run.id)!.unchecked, 0);
+});
+
+test('a monthly cap counts only this month\'s spend', async () => {
+  const api = new S.Api({ mock: true, cap: 50, capWindow: 'month' });
+  assert.equal(api.capWindow, 'month');
+  assert.equal(await api.loadSpent(), 0);
+});
+
+test('territories are editable, with history; the pitch version is untouched', async () => {
   const before = S.loadRules().territories.OWN_CALM;
   assert.equal(before.origin, 'pitch');
-  const e = S.saveTerritory('OWN_CALM', { premise: 'Calmer, per client feedback.', angle: 'OWN_A2' }, 'client feedback 28 Sep', 'Brook');
+  const e = await S.saveTerritory('OWN_CALM', { premise: 'Calmer, per client feedback.', angle: 'OWN_A2' }, 'client feedback 28 Sep', 'Brook');
   assert.equal(e.territory.origin, 'edited');
   assert.equal(e.territory.history!.length, 1);
   assert.equal(e.territory.history![0].before!.premise, before.premise);
   assert.equal(S.loadRules().territories.OWN_CALM.premise, 'Calmer, per client feedback.');
-  const added = S.saveTerritory(null, { persona: 'OWN', name: 'Nothing to File', angle: 'OWN_A2', format: 'STATIC', premise: 'The admin that never happens.' }, 'CD idea', 'Brook');
+  const added = await S.saveTerritory(null, { persona: 'OWN', name: 'Nothing to File', angle: 'OWN_A2', format: 'STATIC', premise: 'The admin that never happens.' }, 'CD idea', 'Brook');
   assert.equal(added.code, 'OWN_NOTHING_TO_FILE');
   assert.equal(added.territory.origin, 'new');
-  assert.throws(() => S.saveTerritory(null, { persona: 'OWN', name: 'Bad', angle: 'DINK_A1', format: 'STATIC' }, '', 'Brook'), /isn't one of/);
-  S.saveTerritory('OWN_NOTHING_TO_FILE', { status: 'retired' }, 'dropped after kickoff', 'Brook');
+  await assert.rejects(() => S.saveTerritory(null, { persona: 'OWN', name: 'Bad', angle: 'DINK_A1', format: 'STATIC' }, '', 'Brook'), /isn't one of/);
+  await S.saveTerritory('OWN_NOTHING_TO_FILE', { status: 'retired' }, 'dropped after kickoff', 'Brook');
   assert.throws(() => S.makeBrief({ territory: 'OWN_NOTHING_TO_FILE' }), /retired/);
-  S.saveTerritory('OWN_CALM', { premise: before.premise, angle: before.angle }, 'revert for other tests', 'test');
+  await S.saveTerritory('OWN_CALM', { premise: before.premise, angle: before.angle }, 'revert for other tests', 'test');
+});
+
+test('blind compare stars are per person, hidden from each other until the reveal', async () => {
+  const api = new S.Api({ mock: true });
+  const set = await S.compare(S.makeBrief({ territory: 'OWN_CALM', name: 'stars' }), ['writer-a', 'writer-b'], 2, api);
+  const [a, b] = set.lines;
+  await S.markCompareLine(set.name, a.id, { favourite: true }, 'Nick');
+  await S.markCompareLine(set.name, b.id, { favourite: true }, 'vivan');
+  const nick = S.viewCompare(await S.loadCompare(set.name), 'nick');
+  assert.equal(nick.lines.find(l => l.id === a.id)!.favourite, true);
+  assert.equal(nick.lines.find(l => l.id === b.id)!.favourite, false, "vivan's star isn't Nick's");
+  assert.equal(nick.lines.some(l => 'stars' in l), false, 'other people\'s stars stay hidden before the reveal');
+  const r = await S.revealCompare(set.name, 'brook');
+  assert.equal(Object.values(r.tally).reduce((x, y) => x + y, 0), 2);
+  assert.deepEqual(Object.keys(r.by_person).sort(), ['nick', 'vivan']);
+  const after = await S.loadCompare(set.name);
+  assert.equal(after.revealed_by, 'brook');
+});
+
+test('two runs started in the same second get different ids', async () => {
+  const [x, y] = await Promise.all([S.newBatchId('OWN_CALM'), S.newBatchId('OWN_CALM')]);
+  assert.notEqual(x, y);
+  const api = new S.Api({ mock: true });
+  const [r1, r2] = await Promise.all([1, 2].map(() => S.generate(S.makeBrief({ territory: 'OWN_CALM', n: 2, name: 'same-second' }), api, () => {}, { check: false })));
+  assert.notEqual(r1.id, r2.id);
+  assert.equal((await S.loadBatch(r1.id)).lines.length, r1.lines.length);
+});
+
+test("'price leads' is only red when the line has a price; a model hit without one stays amber", () => {
+  const mk = (text: string, flag: Partial<S.Flag>) => ({ text, field: 'meta_primary', decision: '', flags: [{ rule: 'COMP_PRICE_LEAD', severity: 'compliance', label: 'price', source: 'LEGAL', quote: '', by: ['model', 'logprob'], ...flag }] } as any as S.Line);
+  const noPrice = mk('Cheap cover can cost you more when it matters most.', { p: 0.41 });
+  S.reconcile(noPrice, rules);
+  assert.equal(noPrice.flags[0].severity, 'warn');
+  assert.match(noPrice.flags[0].why!, /no price/);
+  const priced = mk('Peace of mind, and only $30 a month.', { p: 0.41 });
+  S.reconcile(priced, rules);
+  assert.equal(priced.flags[0].severity, 'compliance', 'with a price, model and yes/no agreeing still makes it red');
+});
+
+test("rules for images only (applies_to: 'visual') never reach Studio's text checks", async () => {
+  const stored = JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8'));
+  assert.ok(stored.brand.some((b: any) => b.id === 'BR_VIS_EXAMPLE' && b.applies_to === 'visual'), 'the example keeps a visual-only rule for B2');
+  const loaded = S.loadRules();
+  assert.equal(loaded.brand.some(b => b.id === 'BR_VIS_EXAMPLE'), false);
+  assert.ok(loaded.brand.some(b => b.id === 'BR_CASE'), 'text rules stay');
+  const d = S.deterministicFlags({ text: 'Any line at all.', field: 'meta_primary', structure: 'plain_promise', persona: 'OWN' }, loaded, { banned_words: [] });
+  assert.equal(d.flags.some(f => f.rule === 'BR_VIS_EXAMPLE'), false);
 });
