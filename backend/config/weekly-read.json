@@ -1,0 +1,131 @@
+{
+  "_note": "B3 weekly read (VOICES v2, Trupanion). Written 28 Sep 2026, before any live data. Change a threshold only with a dated entry in `changes` and a reason; the weekly note prints the config version it ran with.",
+  "version": 1,
+  "changes": [
+    { "date": "2026-09-28", "version": 1, "by": "B3 build", "what": "First version, set before Month 1 goes live." }
+  ],
+
+  "naming": {
+    "_why": "PERSONA_TERRITORY_FORMAT_v#_PLATFORM_YYMMDD, agreed with Add3 (tagging email, Sep 2026). Aliases absorb Studio's long format names (STATIC, CAROUSEL) and common slips; anything else is quarantined with a reason.",
+    "personas": ["DINK", "CUR", "FAM"],
+    "formats": { "ST": ["ST", "STATIC"], "VID": ["VID", "VIDEO"], "CAR": ["CAR", "CAROUSEL"], "TT": ["TT", "TIKTOK"], "UGC": ["UGC"] },
+    "platforms": { "META": ["META", "FB", "IG"], "TT": ["TT", "TIKTOK"] },
+    "video_formats": ["VID", "TT", "UGC"],
+    "territories": [],
+    "_territories": "Optional list of known territory codes (without the persona prefix). Empty = accept any; an unknown code is a warning, not a quarantine, because new territories arrive every month."
+  },
+
+  "audience": {
+    "_why": "Creative reads use prospecting only; retargeting audiences have already met the brand and convert at several times the prospecting rate (Add3's May report). Rows that match neither pattern are 'unknown' and left out of the read, and listed, so a new campaign name can't slip retargeting into a creative call.",
+    "retargeting_pattern": "retarget|remarket|\\bRT\\b|\\bRTG\\b|\\bRMKT?\\b|\\bwarm\\b|\\bBOF\\b",
+    "prospecting_pattern": "prospect|\\bPRO\\b|\\bPROS\\b|\\bTOF\\b|\\bcold\\b|\\bacq",
+    "match_on": ["campaign", "ad_set"],
+    "_match": "Underscores and hyphens are read as spaces before matching, so RT in Trupanion_RT_Meta counts as a word. Retargeting wins if both patterns match.",
+    "default": "unknown"
+  },
+
+  "columns": {
+    "_why": "Header aliases per field, matched case-insensitively ignoring punctuation and spacing. A trailing * is a prefix match (e.g. 'Amount spent (USD)'). The quote and enrollment names are guesses until Add3 confirms them; if none match, the read runs without quotes and says so.",
+    "meta": {
+      "ad_name": ["Ad name"],
+      "ad_id": ["Ad ID"],
+      "campaign": ["Campaign name"],
+      "ad_set": ["Ad set name"],
+      "day": ["Day", "Date"],
+      "period_start": ["Reporting starts"],
+      "period_end": ["Reporting ends"],
+      "spend": ["Amount spent*", "Spend", "Cost"],
+      "impressions": ["Impressions"],
+      "reach": ["Reach"],
+      "frequency": ["Frequency"],
+      "video_3s": ["3-second video plays", "3 second video plays", "Video plays at 3 seconds", "3-second video views"],
+      "thruplays": ["ThruPlays", "ThruPlay"],
+      "link_clicks": ["Link clicks"],
+      "landing_page_views": ["Landing page views", "Website landing page views"],
+      "quotes": ["Quotes", "Quote starts", "Website quotes", "Get quote", "Custom conversions: quote*", "Quote*"],
+      "enrollments": ["Enrollments", "Enrolments", "Website enrollments", "Custom conversions: enroll*", "Enroll*"]
+    },
+    "tiktok": {
+      "_note": "Unconfirmed: Add3 hasn't said what TikTok export they can give. These are TikTok Ads Manager's standard names. TikTok's closest hook metric is 2-second views, which is not the same as Meta's 3-second plays; it's read as hook rate but never pooled with Meta's.",
+      "ad_name": ["Ad name"],
+      "ad_id": ["Ad ID"],
+      "campaign": ["Campaign name"],
+      "ad_set": ["Ad group name"],
+      "day": ["Date", "By Day", "Day"],
+      "period_start": ["Reporting starts", "Start date"],
+      "period_end": ["Reporting ends", "End date"],
+      "spend": ["Cost", "Spend", "Total cost"],
+      "impressions": ["Impressions", "Impression"],
+      "reach": ["Reach"],
+      "frequency": ["Frequency"],
+      "video_3s": ["2-second video views", "Video views at 2s", "3-second video views"],
+      "thruplays": ["6-second video views", "Video views at 100%"],
+      "link_clicks": ["Clicks (destination)", "Clicks"],
+      "landing_page_views": ["Landing page views", "Landing page view"],
+      "quotes": ["Quotes", "Quote*", "Complete registration"],
+      "enrollments": ["Enrollments", "Enroll*", "Complete payment"]
+    }
+  },
+
+  "model": {
+    "interval": 0.9,
+    "_interval": "90% ranges throughout (the plan and the readout spec).",
+    "mc_draws": 4000,
+    "seed": 20261009,
+    "_seed": "Fixed so the same data gives the same P(best) every time the note is drafted.",
+    "between_ad_cv": { "default": 0.25, "min": 0.05, "max": 0.8, "min_ads_to_estimate": 6 },
+    "_between_ad_cv": "How much ads' true rates differ within a persona x format group, as a coefficient of variation. Estimated from the data once there are 6+ ads with enough impressions; before that 0.25 (a typical spread between creatives in the same ad set). It sets how hard each ad is pulled towards its group mean.",
+    "group_prior_ads": 2,
+    "_group_prior_ads": "Each persona x format mean is pulled towards its persona mean as if the persona mean were worth 2 more ads; each persona mean towards the overall mean the same way. With 1-2 ads in a group (the Month-1 norm) the group mean leans on the persona.",
+    "pool_by": ["persona", "platform", "format"],
+    "cell_by": ["persona", "platform"],
+    "_cell_by": "A cell is what Add3 can act on: one ad set per persona per platform. P(best) and the cell median are computed within it."
+  },
+
+  "metrics": {
+    "hook_rate": { "label": "hook rate", "events": "video_3s", "per": "impressions", "video_only": true, "min_impressions": 2000, "scale": "pct" },
+    "link_ctr": { "label": "link CTR", "events": "link_clicks", "per": "impressions", "min_impressions": 8000, "scale": "pct" },
+    "quotes_per_1k": { "label": "quotes per 1,000 impressions", "events": "quotes", "per": "impressions", "min_impressions": 20000, "scale": "per1k" },
+    "_min_impressions": "Below these an ad is 'too early to call' on that metric. At a 1.4% CTR, 8,000 impressions is about 110 clicks (roughly +/-15% on the rate). At about 0.6 quotes per 1,000, 20,000 impressions is about 12 quotes (roughly +/-30%). A thin week of a few thousand impressions per ad is below both."
+  },
+
+  "calls": {
+    "primary_metric": "quotes_per_1k",
+    "fallback_metric": "link_ctr",
+    "fallback_can_scale": false,
+    "fallback_can_cut": true,
+    "_metrics": "Calls are made on quotes per 1,000 impressions, the closest read to cost per quote. While quotes are too thin, link CTR can support a cut (an ad that clearly can't earn clicks can't earn quotes) but never a scale. Hook rate is diagnostic only. Cost per enrollment is reported and never used for a call.",
+    "min_days_live": 4,
+    "_min_days_live": "Meta's learning phase: the first days' delivery skews to cheap impressions.",
+    "min_ads_in_cell": 2,
+    "p_best_scale": 0.8,
+    "max_tied_scale": 2,
+    "p_beat_median_tied_scale": 0.9,
+    "_scale": "Scale when P(best in cell) >= 0.8. If no single ad reaches it but the top two together do and each beats the cell median with P >= 0.9, both are 'scale (tied)': never 'the winner'.",
+    "p_worse_than_median_cut": 0.9,
+    "_cut": "Cut when P(worse than the cell median) >= 0.9.",
+    "otherwise": "keep testing"
+  },
+
+  "features": {
+    "min_ads_with": 3,
+    "min_ads_without": 3,
+    "strata": ["persona", "platform"],
+    "_strata": "Ads with a feature are compared with ads without it in the same persona and platform, in one weighted regression on the log rate that also adjusts for format and for the other features, so a feature that only ever appears in video doesn't take credit for video, and two features that travel together don't take each other's credit. Ads whose features are unknown (no Studio or audit record) are left out, not counted as 'without'. 'Clear' needs the range to exclude no effect after a Bonferroni allowance for the number of features checked together (about 1 false 'clear' a week otherwise, at 90% ranges and a dozen features); the range printed is the plain 90% one.",
+    "include_tags": ["angle", "structure"],
+    "_include_tags": "Besides the content features, angle and structure from the Studio shortlist are tagged as 'angle:<id>' and 'structure:<name>'.",
+    "persona_min_ads_with": 3,
+    "min_residual_df": 4,
+    "_min_residual_df": "The regression needs at least 4 more ads than terms it fits, so it can check its own fit. If ads scatter more than the between-ad spread allows (a standout ad, say), every range is widened by that factor. A persona with 10 ads and 5 features doesn't qualify: it would pin a standout ad's success on whatever features that ad happened to carry."
+  },
+
+  "cost_benchmarks": {
+    "cost_per_quote": null,
+    "_note": "Trupanion's allowable acquisition cost (PAC) by state hasn't arrived. Ad names don't carry state, so a by-state comparison needs a state breakdown from Add3 too. Until then cost per quote is reported without a target, and the note says so."
+  },
+
+  "wording": {
+    "banned": ["predict", "prediction", "predicted", "winner", "winning", "score", "scores", "guarantee", "certain", "proves", "proven"],
+    "_banned": "The read reports what live results show, with ranges. Never forecasts, never a winner inside a tie, never scores."
+  }
+}

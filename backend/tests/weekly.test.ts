@@ -1,0 +1,343 @@
+// B3 weekly read: naming, ingest, model and note. Pure modules only (no
+// database, no network); the simulation supplies data with known answers.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { loadConfig } from '../src/services/weekly/config.js';
+import { parseAdName, normalizeStub } from '../src/services/weekly/naming.js';
+import { parseCsv, toCsv } from '../src/services/weekly/csv.js';
+import { mapColumns, parseExport, classifyAudience, loadFeatureCsv, parseNumber, parseDay } from '../src/services/weekly/ingest.js';
+import { aggregate, fromIngest, weekOf, addDays, type MetricRow } from '../src/services/weekly/window.js';
+import { readWeek, type AdData, type Read } from '../src/services/weekly/model.js';
+import { simulate, checkRecovery } from '../src/services/weekly/simulate.js';
+import { draftNote, lintNote, newNumbers } from '../src/services/weekly/note.js';
+import { rng, beta } from '../src/services/weekly/stats.js';
+
+const cfg = loadConfig();
+const N = cfg.naming;
+
+// ---------- naming ----------
+
+test('the canonical name parses to its parts and stub', () => {
+  const r = parseAdName('FAM_SUMMER_ST_v2_META_261013', N);
+  assert.ok(r.ok);
+  assert.deepEqual({ p: r.persona, t: r.territory, f: r.format, v: r.version, pl: r.platform, d: r.date, stub: r.stub, asset: r.asset },
+    { p: 'FAM', t: 'SUMMER', f: 'ST', v: 2, pl: 'META', d: '2026-10-13', stub: 'FAM_SUMMER_ST_v2_META', asset: 'FAM_SUMMER_ST' });
+  assert.deepEqual(r.warnings, []);
+});
+
+test('case, stray spaces, long format names, suffixes and Meta copies all parse to the same stub', () => {
+  const variants = [
+    'fam_summer_st_v2_meta_261013',
+    '  FAM_SUMMER_ST_v2_META_261013 ',
+    'FAM _ SUMMER_ST_v2 _META_261013',
+    'FAM SUMMER ST v2 META 261013',
+    'FAM_SUMMER_STATIC_V2_META_261013',
+    'FAM_SUMMER_ST_v2_META_261013_L2',
+    'FAM_SUMMER_ST_v2_META_261013 - Copy',
+    'FAM_SUMMER_ST_v2_META_261013 – Copy 2',
+    'FAM_SUMMER_ST_v2_META_20261013',
+    'FAM_FAM_SUMMER_ST_v2_META_261013',
+    'FAM__SUMMER_ST_v2_META_261013',
+  ];
+  for (const v of variants) {
+    const r = parseAdName(v, N);
+    assert.ok(r.ok, `${v}: ${!r.ok && r.reason}`);
+    assert.equal(r.stub, 'FAM_SUMMER_ST_v2_META', v);
+  }
+  const suf = parseAdName('FAM_SUMMER_ST_v2_META_261013_L2', N);
+  assert.ok(suf.ok && suf.suffix.join() === 'L2' && suf.warnings.some(w => w.includes('extra suffix')));
+  const copy = parseAdName('FAM_SUMMER_ST_v2_META_261013 - Copy', N);
+  assert.ok(copy.ok && copy.suffix.includes('COPY') && copy.warnings.some(w => w.includes('Copy')));
+});
+
+test('territories may contain underscores; TT is read as format or platform by position', () => {
+  const r = parseAdName('CUR_ASK_YOUR_VET_TT_v1_TT_261020', N);
+  assert.ok(r.ok);
+  assert.equal(r.territory, 'ASK_YOUR_VET');
+  assert.equal(r.format, 'TT');
+  assert.equal(r.platform, 'TT');
+  const t = parseAdName('DINK_IDIOT_VID_v3_TIKTOK_261020', N);
+  assert.ok(t.ok && t.platform === 'TT' && t.warnings.includes('platform written as TIKTOK'));
+});
+
+test('a missing date parses with a warning; everything else wrong is quarantined with a reason', () => {
+  const nd = parseAdName('DINK_IDIOT_ST_v1_META', N);
+  assert.ok(nd.ok && nd.date === null && nd.warnings.includes('no delivery date (YYMMDD)'));
+  const bad: Array<[string, RegExp]> = [
+    ['DOG_SUMMER_ST_v1_META_261013', /persona "DOG"/],
+    ['FAM_SUMMER_GIF_v1_META_261013', /format "GIF"/],
+    ['FAM_SUMMER_ST_v1_YT_261013', /platform "YT"/],
+    ['FAM_SUMMER_ST_v1_META_261341', /date "261341"/],
+    ['FAM_SUMMER_ST_META_261013', /no version/],
+    ['FAM_ST_v1_META_261013', /no territory/],
+    ['Trupanion_Static_Summer_v1', /only 4 parts/],
+    ['', /empty/],
+  ];
+  for (const [name, re] of bad) {
+    const r = parseAdName(name, N);
+    assert.equal(r.ok, false, name);
+    assert.match((r as any).reason, re, name);
+  }
+});
+
+test('Studio stubs (STATIC, CAROUSEL) normalise to the ad-name stub', () => {
+  assert.equal(normalizeStub('DINK_IDIOT_STATIC_v1_META', N), 'DINK_IDIOT_ST_v1_META');
+  assert.equal(normalizeStub('DINK_UNEXPECTED_CAROUSEL_v3_META', N), 'DINK_UNEXPECTED_CAR_v3_META');
+  assert.equal(normalizeStub('nonsense', N), null);
+});
+
+// ---------- CSV and ingest ----------
+
+test('CSV reader handles quotes, commas, newlines, BOM and CRLF; writer round-trips', () => {
+  const rows = parseCsv('﻿a,b,c\r\n"x, y","say ""hi""","line\nbreak"\r\n,,\r\n1,2,3\n');
+  assert.deepEqual(rows, [['a', 'b', 'c'], ['x, y', 'say "hi"', 'line\nbreak'], ['1', '2', '3']]);
+  assert.deepEqual(parseCsv(toCsv(['a', 'b'], [['x, y', 'q"q']])), [['a', 'b'], ['x, y', 'q"q']]);
+});
+
+test('column mapping: aliases, currency suffix prefix match, exact before prefix, missing reported', () => {
+  const m = mapColumns(['Ad Name', 'Amount spent (USD)', 'Impressions', 'Quote starts', 'Quote start rate', 'Cost per quote', 'Link clicks', 'Weird'], cfg.columns.meta);
+  assert.equal(m.mapped.ad_name, 'Ad Name');
+  assert.equal(m.mapped.spend, 'Amount spent (USD)');
+  assert.equal(m.mapped.quotes, 'Quote starts');
+  assert.ok(m.missing.includes('enrollments'));
+  assert.ok(m.unmapped_headers.includes('Weird') && m.unmapped_headers.includes('Cost per quote'));
+});
+
+test('numbers and dates in export formats', () => {
+  assert.equal(parseNumber('$1,234.50'), 1234.5);
+  assert.equal(parseNumber('1.2%'), 1.2);
+  assert.equal(parseNumber(''), null);
+  assert.equal(parseNumber('—'), null);
+  assert.equal(parseDay('2026-10-13'), '2026-10-13');
+  assert.equal(parseDay('10/13/2026'), '2026-10-13');
+  assert.equal(parseDay('13/13/2026'), null);
+});
+
+test('audience rule: retargeting wins, prospecting by pattern, otherwise unknown', () => {
+  const a = cfg.audience;
+  assert.equal(classifyAudience('Trupanion_Ralph_Prospecting_META', 'FAM_META', a), 'prospecting');
+  assert.equal(classifyAudience('Trupanion_RT_META', 'FAM', a), 'retargeting');
+  assert.equal(classifyAudience('Trupanion Prospecting', 'FAM retargeting', a), 'retargeting');
+  assert.equal(classifyAudience('Trupanion Q4', 'FAM', a), 'unknown');
+  assert.equal(classifyAudience('Trupanion Q4', 'ARTS_DEPT', a), 'unknown', 'RT inside a word is not a match');
+});
+
+const HEAD = ['Day', 'Campaign name', 'Ad set name', 'Ad name', 'Amount spent (USD)', 'Impressions', 'Link clicks', 'Quotes'];
+test('ingest quarantines bad names and wrong platforms, skips totals, sums breakdown rows, joins features', () => {
+  const csv = toCsv(HEAD, [
+    ['2026-10-13', 'Ralph Prospecting', 'FAM_META', 'FAM_SUMMER_ST_v1_META_261013', '10.00', '1000', '12', '1'],
+    ['2026-10-13', 'Ralph Prospecting', 'FAM_META', 'FAM_SUMMER_ST_v1_META_261013', '5.00', '500', '3', '0'],
+    ['2026-10-13', 'Ralph Prospecting', 'FAM_META', 'FAM_SUMMER_ST_v1_TT_261013', '5.00', '500', '3', '0'],
+    ['2026-10-13', 'Ralph Prospecting', 'FAM_META', 'Summer static', '5.00', '700', '3', '0'],
+    ['', '', '', '', '25.00', '2700', '', ''],
+  ]);
+  const feats = loadFeatureCsv(toCsv(['stub', 'features', 'angle'], [['FAM_SUMMER_STATIC_v1_META', 'humour; dollar_figure', 'FAM_A1 The label']]), 'shortlist', cfg).map;
+  const r = parseExport(csv, 'meta', cfg, feats);
+  assert.equal(r.skipped.length, 1);
+  assert.equal(r.rows.length, 3);
+  const ok = r.rows.find(x => x.ad_name === 'FAM_SUMMER_ST_v1_META_261013')!;
+  assert.equal(ok.impressions, 1500, 'breakdown rows for the same ad and day are summed');
+  assert.equal(ok.link_clicks, 15);
+  assert.deepEqual(ok.features, ['angle:FAM_A1', 'dollar_figure', 'humour']);
+  assert.ok(r.warnings[0].includes('summed'));
+  assert.deepEqual(r.quarantine.map(q => q.ad_name).sort(), ['FAM_SUMMER_ST_v1_TT_261013', 'Summer static']);
+  assert.match(r.quarantine.find(q => q.ad_name === 'FAM_SUMMER_ST_v1_TT_261013')!.reason, /doesn't match this meta export/);
+  assert.equal(r.quotes_available, true);
+  // Same input, same output (the database layer upserts on the same keys).
+  assert.deepEqual(parseExport(csv, 'meta', cfg, feats).rows.map(x => [x.ad_name, x.impressions]), r.rows.map(x => [x.ad_name, x.impressions]));
+});
+
+test('an export without a quote column reads, and says quotes are unavailable', () => {
+  const csv = toCsv(HEAD.slice(0, 7), [['2026-10-13', 'Ralph Prospecting', 'FAM_META', 'FAM_SUMMER_ST_v1_META_261013', '10.00', '1000', '12']]);
+  const r = parseExport(csv, 'meta', cfg);
+  assert.equal(r.quotes_available, false);
+  assert.equal(r.rows[0].quotes, null);
+  assert.equal(r.rows[0].features, null, 'no feature record means unknown, not empty');
+});
+
+// ---------- window ----------
+
+test('weeks run Monday to Sunday; overlapping coarser rows are dropped', () => {
+  assert.deepEqual(weekOf('2026-10-14'), { start: '2026-10-12', end: '2026-10-18' });
+  assert.deepEqual(weekOf('2026-10-18'), { start: '2026-10-12', end: '2026-10-18' });
+  const base: Omit<MetricRow, 'period_start' | 'period_end' | 'impressions'> = {
+    key: 'k', ad_name: 'FAM_SUMMER_ST_v1_META_261013', audience: 'prospecting', quarantine_reason: null, features: [],
+    parsed: { stub: 'FAM_SUMMER_ST_v1_META', asset: 'FAM_SUMMER_ST', persona: 'FAM', territory: 'SUMMER', format: 'ST', platform: 'META', version: 1 },
+    spend: 1, video_3s: null, link_clicks: 1, landing_page_views: null, quotes: 0, enrollments: 0,
+  };
+  const rows: MetricRow[] = [
+    ...[0, 1, 2, 3, 4, 5, 6].map(i => ({ ...base, period_start: addDays('2026-10-12', i), period_end: addDays('2026-10-12', i), impressions: 100 })),
+    { ...base, period_start: '2026-10-12', period_end: '2026-10-18', impressions: 700 },
+  ];
+  const w = aggregate(rows, '2026-10-12', '2026-10-18');
+  assert.equal(w.ads[0].impressions, 700);
+  assert.equal(w.overlaps_dropped, 1);
+  assert.equal(w.ads[0].days_live, 7);
+});
+
+// ---------- stats ----------
+
+test('seeded draws repeat exactly; beta draws have the right mean', () => {
+  const a = rng(1), b = rng(1);
+  for (let i = 0; i < 5; i++) assert.equal(a(), b());
+  const r = rng(9);
+  let s = 0;
+  for (let i = 0; i < 4000; i++) s += beta(r, 30, 70);
+  assert.ok(Math.abs(s / 4000 - 0.3) < 0.005);
+});
+
+// ---------- model on simulated data ----------
+
+function simRead(scenario: 'month1' | 'thin' | 'null', seed: number, quotes = true): { read: Read; sim: ReturnType<typeof simulate> } {
+  const sim = simulate(scenario, seed);
+  const fm = loadFeatureCsv(sim.features_csv, 'sim', cfg).map;
+  let meta = sim.meta_csv, tt = sim.tiktok_csv;
+  if (!quotes) { meta = meta.replace(',Quotes,', ',Q_dropped,'); tt = tt.replace(',Quotes,', ',Q_dropped,'); }
+  const exp = [parseExport(meta, 'meta', cfg, fm), parseExport(tt, 'tiktok', cfg, fm)];
+  const to = addDays(sim.truth.start, sim.truth.days - 1);
+  const w = aggregate([...exp[0].rows, ...exp[1].rows].map(fromIngest), sim.truth.start, to);
+  return { read: readWeek(w.ads, cfg, { from: sim.truth.start, to, quotesAvailable: exp[0].quotes_available }), sim };
+}
+
+test('simulation plumbing: planted bad names are quarantined, cosmetic variants parse, retargeting is left out', () => {
+  const sim = simulate('month1', 3);
+  const fm = loadFeatureCsv(sim.features_csv, 'sim', cfg).map;
+  const r = parseExport(sim.meta_csv, 'meta', cfg, fm);
+  assert.deepEqual(r.quarantine.map(q => q.ad_name).sort(), sim.truth.planted_bad_names.map(b => b.ad_name).sort());
+  for (const c of sim.truth.cosmetic_names) {
+    const row = r.rows.find(x => x.ad_name === c.ad_name.trim())!;
+    assert.ok(row.name.ok && row.name.stub === c.stub, c.ad_name);
+    assert.ok(row.features, `features join for ${c.ad_name}`);
+  }
+  const w = aggregate(r.rows.map(fromIngest), sim.truth.start, addDays(sim.truth.start, 27));
+  assert.equal(w.left_out.retargeting.ads, 3);
+  assert.equal(w.left_out.quarantined.ads, 4);
+});
+
+test('same data, same read (seeded Monte Carlo)', () => {
+  const a = simRead('month1', 5).read, b = simRead('month1', 5).read;
+  assert.deepEqual(a.ads.map(x => [x.stub, x.headline.call, x.metrics.link_ctr?.p_best]), b.ads.map(x => [x.stub, x.headline.call, x.metrics.link_ctr?.p_best]));
+});
+
+test('P(best) sums to 1 within each ad set', () => {
+  const { read } = simRead('month1', 11);
+  for (const c of read.cells) {
+    const s = read.ads.filter(a => a.cell === c.cell && a.metrics.link_ctr?.p_best != null).reduce((t, a) => t + a.metrics.link_ctr!.p_best!, 0);
+    if (s) assert.ok(Math.abs(s - 1) < 1e-9, `${c.cell}: ${s}`);
+  }
+});
+
+test('Month-1 volumes: large planted effects recovered with ranges covering the truth; no false clear calls', () => {
+  const { read, sim } = simRead('month1', 42);
+  const rec = checkRecovery(read, sim.truth);
+  const get = (what: string, m: string) => rec.rows.find(r => r.what === what && r.metric === m)!;
+  assert.equal(get('feature dollar_figure', 'link_ctr').status, 'recovered');
+  assert.equal(get('feature member_testimony', 'quotes_per_1k').status, 'recovered');
+  assert.equal(get('format UGC vs ST', 'link_ctr').status, 'not enough data', 'one UGC asset cannot show a format effect');
+  for (const r of rec.rows.filter(r => r.size === 'none')) assert.equal(r.status, 'correctly not called', `${r.what} ${r.metric}`);
+  for (const r of rec.rows.filter(r => r.size === 'small')) assert.ok(r.status !== 'CLEAR BUT RANGE MISSES TRUTH', `${r.what} ${r.metric}`);
+  assert.equal(rec.rows.filter(r => !r.ok).length, 0, rec.summary.join('\n'));
+  // The planted standout ad is called scale.
+  assert.equal(read.ads.find(a => a.stub === sim.truth.standout!.stub)!.headline.call, 'scale');
+});
+
+test('over many seeds: scale calls go to a true top-two ad and false clear effects stay rare', () => {
+  let scale = 0, top2 = 0, falseClear = 0, cut = 0, cutBottom = 0;
+  for (let s = 1; s <= 8; s++) {
+    const { read, sim } = simRead('month1', 1000 + s);
+    const rec = checkRecovery(read, sim.truth);
+    for (const c of rec.calls) {
+      if (c.call.startsWith('scale')) { scale++; if (c.true_rank <= 2) top2++; }
+      if (c.call === 'cut') { cut++; if (c.true_rank > c.cell_size / 2) cutBottom++; }
+    }
+    falseClear += rec.rows.filter(r => !r.ok).length;
+  }
+  assert.ok(top2 / scale >= 0.85, `${top2}/${scale} scale calls in the true top two`);
+  assert.ok(cutBottom / cut >= 0.9, `${cutBottom}/${cut} cuts in the true bottom half`);
+  assert.ok(falseClear <= 2, `${falseClear} false clear effects in 8 reads`);
+});
+
+test('a thin week (a few thousand impressions per ad) is too early to call, with no clear effects', () => {
+  const { read } = simRead('thin', 7);
+  assert.ok(read.ads.every(a => a.impressions < 10000));
+  assert.ok(read.ads.every(a => a.headline.call === 'too early to call'), read.ads.map(a => a.headline.call).join());
+  assert.ok([...read.features, ...read.formats, ...read.persona_features].every(e => !e.verdict.startsWith('clear')));
+});
+
+test('no true differences: no clear effects and almost no calls', () => {
+  let calls = 0, clear = 0, ads = 0;
+  for (let s = 1; s <= 5; s++) {
+    const { read } = simRead('null', 500 + s);
+    ads += read.ads.length;
+    calls += read.ads.filter(a => a.headline.call !== 'keep testing' && a.headline.call !== 'too early to call').length;
+    clear += [...read.features, ...read.formats].filter(e => e.verdict.startsWith('clear')).length;
+  }
+  assert.ok(calls <= 3, `${calls} calls in ${ads} ad reads`);
+  assert.ok(clear <= 1, `${clear} clear effects`);
+});
+
+test('without a quote column, clicks can support a cut but never a scale', () => {
+  const { read } = simRead('month1', 42, false);
+  assert.equal(read.metrics_available.quotes_per_1k, false);
+  assert.ok(read.notes.some(n => n.includes('No quote column')));
+  assert.ok(read.ads.every(a => !a.headline.call.startsWith('scale')));
+  assert.ok(read.ads.some(a => a.headline.call === 'cut' && a.headline.metric === 'link_ctr'));
+  assert.ok(read.ads.some(a => /scaling waits for quotes/.test(a.headline.reason)));
+});
+
+test('a cell with one readable ad has nothing to compare: keep testing, not scale', () => {
+  const ad = (k: string, imps: number, clicks: number, quotes: number): AdData => ({
+    key: k, ad_name: k, stub: k, asset: k, persona: 'DINK', territory: 'X', format: 'ST', platform: 'META', version: 1, features: null,
+    first_day: '2026-10-12', last_day: '2026-10-25', days_live: 14, live_now: true, spend: imps / 100, impressions: imps, video_3s: 0,
+    link_clicks: clicks, landing_page_views: 0, quotes, enrollments: 0,
+  });
+  const read = readWeek([ad('A', 60000, 900, 60), ad('B', 3000, 45, 2)], cfg, { from: '2026-10-12', to: '2026-10-25', quotesAvailable: true });
+  const a = read.ads.find(x => x.key === 'A')!, b = read.ads.find(x => x.key === 'B')!;
+  assert.equal(a.headline.call, 'keep testing');
+  assert.match(a.headline.reason, /no other readable ad/);
+  assert.equal(b.headline.call, 'too early to call');
+});
+
+// ---------- note ----------
+
+test('the drafted note passes its own wording rules and covers every persona', () => {
+  const { read } = simRead('month1', 42);
+  const sim = simulate('month1', 42);
+  const w = aggregate([...parseExport(sim.meta_csv, 'meta', cfg).rows].map(fromIngest), '2026-10-12', '2026-11-08');
+  const { markdown, ledger } = draftNote(read, { week: { start: '2026-11-02', end: '2026-11-08' }, since: '2026-10-12', window: w, prev: null, week_impressions: new Map(), sources: ['sim'] }, cfg);
+  assert.deepEqual(lintNote(markdown, cfg), []);
+  for (const p of cfg.naming.personas) assert.ok(markdown.includes(`## ${p}`));
+  assert.ok(markdown.includes('### Recommended actions'));
+  assert.ok(markdown.includes('No cost benchmark yet'));
+  assert.ok(ledger.split('\n')[0].startsWith('week_start,week_end'));
+  assert.ok(ledger.split('\n').length > read.ads.length * 2);
+});
+
+test('wording lint catches banned words (and their forms) and rates without ranges', () => {
+  const md = ['The winner is FAM_SUMMER.', 'CTR was 1.4% this week.', 'CTR 1.4% (range 1.2%–1.6%).', 'P(best) 86% and P(worse than median) 3%.', 'Our model predicts growth.', 'Effect +34% (range +13% to +60%).'].join('\n');
+  assert.deepEqual(lintNote(md, cfg).map(i => [i.line, i.rule]), [[1, 'banned word "winner"'], [2, 'rate without a range'], [5, 'banned word "predicts"']]);
+});
+
+test('the prose guard rejects any number, or number word, not in the source', () => {
+  const src = 'FAM_SUMMER_ST_v2_META: link CTR 2.80% (range 2.73%–2.88%); P(best in ad set) 100%; 127,509 impressions.';
+  assert.deepEqual(newNumbers('FAM_SUMMER leads on link CTR at 2.80% (range 2.73%–2.88%) from 127509 impressions.', src), []);
+  assert.deepEqual(newNumbers('Link CTR is 2.8%, about 3% higher than last week.', src), ['3']);
+  assert.deepEqual(newNumbers('CTR doubled to 2.80%.', src), ['doubled']);
+  assert.deepEqual(newNumbers('Twice as many clicks.', src), ['twice']);
+});
+
+test('historic mode keeps ads outside the convention for the back-test, and joins audit features by ad name', () => {
+  const csv = toCsv([...HEAD, '3-second video plays'], [
+    ['2026-03-10', 'Trupanion Prospecting US', 'Broad', 'Zoomie Wipeouts', '50.00', '20000', '300', '12', ''],
+    ['2026-03-10', 'Trupanion Prospecting US', 'Broad', 'Vet Bills UGC', '50.00', '15000', '260', '9', '4000'],
+  ]);
+  const feats = loadFeatureCsv(toCsv(['ad_name', 'features'], [['Zoomie Wipeouts', 'humour; dollar_figure']]), 'audit', cfg).map;
+  const r = parseExport(csv, 'meta', cfg, feats);
+  assert.equal(r.quarantine.length, 2, 'still quarantined by the weekly rules');
+  assert.deepEqual(r.rows.find(x => x.ad_name === 'Zoomie Wipeouts')!.features, ['dollar_figure', 'humour']);
+  const rows = r.rows.map(fromIngest);
+  assert.equal(aggregate(rows, '2026-03-01', '2026-03-31').ads.length, 0);
+  const h = aggregate(rows, '2026-03-01', '2026-03-31', { historic: true });
+  assert.deepEqual(h.ads.map(a => [a.persona, a.format, a.stub]).sort(), [['HIST', 'ST', 'Zoomie Wipeouts'], ['HIST', 'VID', 'Vet Bills UGC']]);
+  assert.equal(rows[0].parsed, null, 'input rows are not modified');
+});

@@ -331,6 +331,10 @@ VOICES v2 build 1 as a script: `backend/scripts/studio.ts` (CLI and `serve`) ove
 - UI: `/studio` in the frontend, dev-only (routed when `import.meta.env.DEV` or `VITE_STUDIO_API` is set), talking to `npx tsx scripts/studio.ts serve` on 127.0.0.1:4100 (`frontend/src/lib/studioApi.ts`, not `api.ts`). `--mock` runs everything with no key and no cost.
 - Run instructions, timings and gaps: `docs/build-log/B1-lite.md`.
 
+## Weekly read, B3 (live ad performance)
+
+VOICES v2 build 3 as a CLI: `backend/scripts/weekly.ts` over pure modules in `backend/src/services/weekly/` (naming, ingest, window, model, note, simulate, stats; `store.ts` is the only database code). Tables `live_ingests`, `live_ads` and `live_metrics` (migration 016). Thresholds, column mapping, the prospecting/retargeting rule and wording rules live in `backend/config/weekly-read.json` (versioned; change with a dated entry). Local database only: the CLI refuses non-local hosts and never loads `backend/.env`. Notes, ledgers and simulated exports are written to `Claude outputs/voices-r1/weekly/` (client material, never committed). Features join to Studio and B2 by naming stub, as text, never as a foreign key to `studio_*`. Run instructions, thresholds and open items for Add3: `docs/build-log/B3-weekly-read.md`.
+
 ## Roadmap
 
 The Trupanion engagement build plan (evidence layer, copy-set tests, format dimension, reports, live-performance anchors, governance) is in `docs/trupanion-build-plan.md`. Phase 0 safeguards have shipped on `voices/trupanion-phase0`.
@@ -347,7 +351,7 @@ DATABASE_URL=postgresql://postgres@127.0.0.1:54329/voices_dev JWT_SECRET=local-d
 ## Tests
 
 ```bash
-cd backend && npm test   # node:test via tsx; RalphScore parity fixtures, concept-response score parsing, retry
+cd backend && npm test   # node:test via tsx; RalphScore parity fixtures, concept-response score parsing, retry, weekly read
 ```
 
 ## Type Checking
