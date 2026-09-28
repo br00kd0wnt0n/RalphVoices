@@ -1529,3 +1529,16 @@ export function referenceDocPath(id: string): { doc: RefDoc; file: string } {
   if (!file.startsWith(OUTPUTS + path.sep) || !fs.existsSync(file)) throw new Error(`${doc.title} isn't available on this machine`);
   return { doc, file };
 }
+
+// ---------- brand assets (client logo) ----------
+
+// Client trademarks stay out of the repo: the page asks the API for them by
+// name and they're read from the studio folder. Only listed names are served.
+const BRAND_ASSETS: Record<string, string> = { 'client-logo': 'brand/trupanion-logo-white.png' };
+export function brandAssetPath(name: string): string {
+  const rel = BRAND_ASSETS[name];
+  if (!rel) throw new Error(`No brand asset ${name}`);
+  const file = P(rel);
+  if (!fs.existsSync(file)) throw new Error(`${name} isn't available on this machine`);
+  return file;
+}

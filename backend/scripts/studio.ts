@@ -365,6 +365,9 @@ async function serve() {
 
   app.post(`${base}/territories`, wrap((req, res) => res.json(S.saveTerritory(null, req.body?.territory || {}, String(req.body?.note || ''), who(req)))));
   app.put(`${base}/territories/:code`, wrap((req, res) => res.json(S.saveTerritory(req.params.code, req.body?.territory || {}, String(req.body?.note || ''), who(req)))));
+  app.get(`${base}/brand/:name`, (req: any, res: any) => {
+    try { res.setHeader('Cache-Control', 'max-age=3600'); res.sendFile(S.brandAssetPath(req.params.name)); } catch { res.sendStatus(404); }
+  });
   app.get(`${base}/docs`, wrap((_req, res) => res.json(S.referenceDocs())));
   app.get(`${base}/docs/:id`, wrap((req, res) => {
     const { doc, file } = S.referenceDocPath(req.params.id);
