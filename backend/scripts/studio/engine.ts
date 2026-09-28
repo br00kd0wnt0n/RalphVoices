@@ -38,6 +38,8 @@ export type Structure = 'question' | 'stat' | 'testimony' | 'scenario' | 'joke' 
 export const STRUCTURES: Structure[] = ['question', 'stat', 'testimony', 'scenario', 'joke', 'plain_promise'];
 
 export interface Tone { dry_warm: number; playful_plain: number; short_long: number }
+/** A line the creative director wrote, and the field it's for. */
+export interface OwnLine { text: string; field: string }
 export interface Brief {
   name: string;
   persona: string;
@@ -47,6 +49,7 @@ export interface Brief {
   banned_words: string[];
   banned_ideas: string[];
   reference_lines: string[];
+  own_lines?: OwnLine[];  // the creative director's own lines, written first
   n: number;
   model: string;
   checker_model?: string;
@@ -91,11 +94,15 @@ export interface Line {
   decision?: '' | 'keep' | 'cut' | 'edit';
   edited_text?: string;
   note?: string;
+  decided_by?: string;
+  decided_at?: string;
 }
 export interface Batch {
   id: string;
   brief: Brief;
   created: string;
+  created_by?: string;   // who started the run (local: the name the page asks for; hosted: the signed-in user)
+  updated?: string;
   lines: Line[];
   dropped: Array<{ text: string; cell: string; dup_of: string; similarity: number }>;
   stats: RunStats;
@@ -133,7 +140,7 @@ export interface Rules {
   clarity: RuleItem[];
   features: { source: string; items: Record<string, string> };
   personas: Record<string, PersonaRules>;
-  territories: Record<string, { persona: string; name: string; angle: string; format: string; premise: string; status?: string; source: string }>;
+  territories: Record<string, Territory>;
   needs_review: any[];
 }
 /** A pattern is a regex string, or one with its own severity and reason (e.g. a word that is only a warning). */
@@ -149,6 +156,14 @@ export interface Fact {
   own?: boolean; category?: boolean; illustrative?: boolean; check_hint?: string; misattribution_patterns?: string[];
 }
 const pat = (p: Pat) => (typeof p === 'string' ? { re: p } : p);
+export interface Territory {
+  persona: string; name: string; angle: string; format: string; premise: string; source: string;
+  status?: string;            // 'springboard' | 'retired' | undefined (active)
+  origin?: 'pitch' | 'edited' | 'new';
+  note?: string; updated_by?: string; updated_at?: string;
+  history?: Array<{ at: string; by: string; note: string; before: Partial<Territory> | null }>;
+}
+export const FORMATS = ['STATIC', 'UGC', 'VIDEO', 'CAROUSEL'];
 export interface PersonaRules {
   name: string; platforms: string[]; default_fields: string[];
   triggers: Array<{ id: string; label: string; detail: string; source: string }>;
@@ -162,7 +177,63 @@ export function setRulesPath(p: string) { rulesPath = p; }
 export function loadRules(): Rules {
   const p = rulesPath || P('studio-rules.json');
   if (!fs.existsSync(p)) throw new Error(`No rules file at ${p}`);
-  return readJson<Rules>(p);
+  const r = readJson<Rules>(p);
+  // Territory edits (the creative director's, from client feedback or taste)
+  // sit on top of the pitch versions in the rules file.
+  for (const t of Object.values(r.territories)) t.origin = 'pitch';
+  const edits = loadTerritoryEdits();
+  for (const [code, t] of Object.entries(edits)) r.territories[code] = { ...(r.territories[code] || {}), ...t };
+  return r;
+}
+
+// ---------- territories: editable, with history ----------
+
+function territoryEditsPath() { return P('territories.json'); }
+function loadTerritoryEdits(): Record<string, Territory> {
+  const p = territoryEditsPath();
+  return fs.existsSync(p) ? readJson(p).territories || {} : {};
+}
+
+/**
+ * Edit a territory, add a new one (no code), or retire/restore one
+ * (patch.status). Every change records who made it, when and why; the pitch
+ * version in the rules file is never changed.
+ */
+export function saveTerritory(code: string | null, patch: Partial<Pick<Territory, 'persona' | 'name' | 'angle' | 'format' | 'premise' | 'status'>>, note: string, user?: string): { code: string; territory: Territory } {
+  const r = loadRules();
+  const current = code ? r.territories[code] : undefined;
+  if (code && !current) throw new Error(`No territory ${code}`);
+  const persona = patch.persona || current?.persona || '';
+  const pr = r.personas[persona];
+  if (!pr) throw new Error(`Unknown persona ${persona}`);
+  const next: Territory = {
+    ...(current || { source: '', premise: '', name: '', angle: pr.triggers[0].id, format: 'STATIC' }),
+    ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)),
+    persona,
+  } as Territory;
+  if (!next.name.trim()) throw new Error('A territory needs a name');
+  if (!pr.triggers.some(t => t.id === next.angle)) throw new Error(`Angle ${next.angle} isn't one of ${persona}'s triggers`);
+  if (!FORMATS.includes(next.format)) throw new Error(`Format must be one of ${FORMATS.join(', ')}`);
+  if (patch.status === 'active' as any) delete next.status;
+  const at = new Date().toISOString();
+  const by = user || 'unknown';
+  let newCode = code;
+  if (!newCode) {
+    const slug = next.name.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '').split('_').slice(0, 3).join('_') || 'NEW';
+    newCode = `${persona}_${slug}`;
+    for (let k = 2; r.territories[newCode]; k++) newCode = `${persona}_${slug}_${k}`;
+  }
+  const { history: _h, origin: _o, ...before } = current || ({} as Territory);
+  next.origin = current ? (current.origin === 'new' ? 'new' : 'edited') : 'new';
+  next.note = note.trim();
+  next.updated_by = by;
+  next.updated_at = at;
+  next.source = current ? current.source : `Added in Studio by ${by}, ${at.slice(0, 10)}${note.trim() ? `: ${note.trim()}` : ''}`;
+  next.history = [...(current?.history || []), { at, by, note: note.trim(), before: current ? before : null }];
+  const all = loadTerritoryEdits();
+  all[newCode] = next;
+  writeJson(territoryEditsPath(), { _note: 'Territory edits made in Studio (client feedback, creative director preference). They override the pitch versions in studio-rules.json, which stay unchanged.', territories: all });
+  return { code: newCode, territory: next };
 }
 
 /** Every rule id the checks can cite, with its words, severity and source. */
@@ -454,6 +525,7 @@ export function makeBrief(input: Partial<Brief>): Brief {
   const territory = String(input.territory || '');
   const t = r.territories[territory];
   if (!t) throw new Error(`Unknown territory ${territory}. Known: ${Object.keys(r.territories).join(', ')}`);
+  if (t.status === 'retired' && !input.created) throw new Error(`${t.name} is retired; restore it on the Territories screen to brief it`);
   const persona = String(input.persona || t.persona);
   const pr = r.personas[persona];
   if (!pr) throw new Error(`Unknown persona ${persona}`);
@@ -467,6 +539,9 @@ export function makeBrief(input: Partial<Brief>): Brief {
     banned_words: (input.banned_words || []).map(s => s.trim()).filter(Boolean),
     banned_ideas: (input.banned_ideas || []).map(s => s.trim()).filter(Boolean),
     reference_lines: (input.reference_lines || []).map(s => s.trim()).filter(Boolean).slice(0, 3),
+    own_lines: (input.own_lines || [])
+      .map(o => ({ text: String(o?.text || '').trim(), field: r.fields[o?.field] ? o.field : fields[0] }))
+      .filter(o => o.text).slice(0, 40),
     n: Math.max(1, Math.min(60, Number(input.n) || 20)),
     model: input.model || 'gpt-4o',
     checker_model: input.checker_model || 'gpt-4o',
@@ -493,7 +568,7 @@ export interface Cell { cell: string; angle: string; structure: Structure; tone:
  * step warmer/drier and a step more playful/plainer. Fields are dealt from a
  * seeded shuffle so no angle is stuck with one field.
  */
-export function planCells(b: Brief, count: number, offset = 0, seedExtra = ''): Cell[] {
+export function planCells(b: Brief, count: number, offset = 0, seedExtra = '', skip: Set<string> = new Set()): Cell[] {
   const r = loadRules();
   const pr = r.personas[b.persona];
   const home = r.territories[b.territory]?.angle;
@@ -506,20 +581,22 @@ export function planCells(b: Brief, count: number, offset = 0, seedExtra = ''): 
     { ...b.tone, playful_plain: flip(b.tone.playful_plain, 2) },
   ];
   const rnd = mulberry32(hashStr(`${b.name}|fields|${seedExtra}`));
-  const total = offset + count;
-  const fieldDeck = shuffle(Array.from({ length: total }, (_, i) => b.fields[i % b.fields.length]), rnd);
+  // Cells whose angle × structure the creative director already wrote are
+  // skipped (once each), so Studio's lines spread out from theirs.
+  const pending = new Set(skip);
+  const limit = offset + count * 4;
+  const fieldDeck = shuffle(Array.from({ length: limit }, (_, i) => b.fields[i % b.fields.length]), rnd);
   const cells: Cell[] = [];
-  for (let i = offset; i < total; i++) {
-    cells.push({
-      cell: `c${String(i + 1).padStart(2, '0')}`,
-      angle: angles[i % A],
-      structure: STRUCTURES[((i % A) + Math.floor(i / A)) % S],
-      tone: tones[Math.floor(i / A) % tones.length],
-      field: fieldDeck[i],
-    });
+  for (let i = offset; i < limit && cells.length < count; i++) {
+    const angle = angles[i % A];
+    const structure = STRUCTURES[((i % A) + Math.floor(i / A)) % S];
+    if (pending.delete(`${angle}|${structure}`)) continue;
+    cells.push({ cell: `c${String(i + 1).padStart(2, '0')}`, angle, structure, tone: tones[Math.floor(i / A) % tones.length], field: fieldDeck[i] });
   }
   return cells;
 }
+/** Index after the last planned cell, to continue the grid in the next round. */
+const nextOffset = (cells: Cell[], fallback: number) => (cells.length ? Number(cells[cells.length - 1].cell.slice(1)) : fallback);
 
 // ---------- taste (from ingest) ----------
 
@@ -531,7 +608,7 @@ export function loadTaste(): TasteExample[] { const p = P('taste.json'); return 
 
 // ---------- writer prompt ----------
 
-function writerSystem(b: Brief, r: Rules): string {
+function writerSystem(b: Brief, r: Rules, own: string[] = []): string {
   const pr = r.personas[b.persona];
   const t = r.territories[b.territory];
   const seed = personaSeed(b.persona);
@@ -567,7 +644,7 @@ ${Object.entries(r.structures).map(([k, v]) => `- ${k}: ${v}`).join('\n')}
 
 FIELDS (stay within the visible length):
 ${b.fields.map(f => `- ${f}: ${r.fields[f].label}, ${r.fields[f].visible} characters visible`).join('\n')}
-${b.banned_words.length ? `\nBANNED WORDS (the creative director's): ${b.banned_words.join(', ')}` : ''}${b.banned_ideas.length ? `\nIDEAS THAT ARE OFF LIMITS: ${b.banned_ideas.join('; ')}` : ''}${b.reference_lines.length ? `\nREFERENCE LINES in the voice the creative director wants (match the voice, don't copy):\n${b.reference_lines.map(x => `- ${x}`).join('\n')}` : ''}${keeps.length ? `\nTHE CREATIVE DIRECTOR'S TASTE: lines they kept or rewrote, with their notes. Learn from the edits and notes:\n${keeps.map(x => `- [${x.field}, ${x.structure}] ${x.original && x.original !== x.text ? `"${x.original}" → rewritten as "${x.text}"` : `"${x.text}"`}${x.note ? ` (note: ${x.note})` : ''}`).join('\n')}` : ''}${cuts.length ? `\nLINES THEY CUT, and why (avoid these moves):\n${cuts.map(x => `- "${x.text}" (note: ${x.note})`).join('\n')}` : ''}
+${b.banned_words.length ? `\nBANNED WORDS (the creative director's): ${b.banned_words.join(', ')}` : ''}${b.banned_ideas.length ? `\nIDEAS THAT ARE OFF LIMITS: ${b.banned_ideas.join('; ')}` : ''}${own.length ? `\nTHE CREATIVE DIRECTOR'S OWN LINES for this brief. This is the voice to match most closely. Build around them: never repeat or paraphrase them, and take the angles and structures they haven't used:\n${own.map(x => `- ${x}`).join('\n')}` : ''}${b.reference_lines.length ? `\nREFERENCE LINES in the voice the creative director wants (match the voice, don't copy):\n${b.reference_lines.map(x => `- ${x}`).join('\n')}` : ''}${keeps.length ? `\nTHE CREATIVE DIRECTOR'S TASTE: lines they kept or rewrote, with their notes. Learn from the edits and notes:\n${keeps.map(x => `- [${x.field}, ${x.structure}] ${x.original && x.original !== x.text ? `"${x.original}" → rewritten as "${x.text}"` : `"${x.text}"`}${x.note ? ` (note: ${x.note})` : ''}`).join('\n')}` : ''}${cuts.length ? `\nLINES THEY CUT, and why (avoid these moves):\n${cuts.map(x => `- "${x.text}" (note: ${x.note})`).join('\n')}` : ''}
 
 Write exactly one line per cell you are given, fitting its angle, structure, tone and field. Make lines in the same request differ from each other in wording, rhythm and idea. Plain text only: no hashtags, no emoji, no quotation marks around the line, no labels. Return JSON: {"lines":[{"cell":"<cell id>","text":"<the line>"}]}`;
 }
@@ -592,43 +669,59 @@ function parseLines(text: string): Array<{ cell: string; text: string }> {
 
 export function batchPath(id: string) { return P('batches', id, 'batch.json'); }
 export function loadBatch(id: string): Batch { return readJson<Batch>(batchPath(id)); }
-export function saveBatch(b: Batch) { writeJson(batchPath(b.id), b); }
-export function listBatches(): Array<{ id: string; persona: string; territory: string; lines: number; created: string; usd: number }> {
+export function saveBatch(b: Batch) { b.updated = new Date().toISOString(); writeJson(batchPath(b.id), b); }
+export interface RunSummary {
+  id: string; name: string; persona: string; territory: string; created: string; updated: string; created_by: string;
+  lines: number; yours: number; kept: number; undecided: number; usd: number;
+}
+/** Saved runs, newest activity first; pass a name to list one person's runs. */
+export function listBatches(user?: string): RunSummary[] {
   const d = P('batches');
   if (!fs.existsSync(d)) return [];
   return fs.readdirSync(d).filter(x => fs.existsSync(batchPath(x))).map(x => {
     const b = loadBatch(x);
-    return { id: b.id, persona: b.brief.persona, territory: b.brief.territory, lines: b.lines.length, created: b.created, usd: b.stats.usd_total };
-  }).sort((a, b) => b.created.localeCompare(a.created));
+    return {
+      id: b.id, name: b.brief.name, persona: b.brief.persona, territory: b.brief.territory,
+      created: b.created, updated: b.updated || b.created, created_by: b.created_by || '',
+      lines: b.lines.length, yours: b.lines.filter(l => l.model === 'human').length,
+      kept: b.lines.filter(l => l.decision === 'keep' || l.decision === 'edit').length,
+      undecided: b.lines.filter(l => !l.decision).length, usd: b.stats.usd_total,
+    };
+  }).filter(r => !user || r.created_by.toLowerCase() === user.toLowerCase())
+    .sort((a, b) => b.updated.localeCompare(a.updated));
 }
 function embPath(id: string) { return P('batches', id, 'embeddings.json'); }
 
 // ---------- estimate ----------
 
 /** Rough cost of generating and checking a batch of n lines (no cache discount). */
-export function estimate(b: Brief): { usd: number; calls: number; tokens: Record<string, number>; minutes_at_budget: Record<string, number> } {
+export function estimate(b: Brief, opts: { ownOnly?: boolean } = {}): { usd: number; calls: number; tokens: Record<string, number>; minutes_at_budget: Record<string, number> } {
   const r = loadRules();
-  const n = Math.ceil(b.n * 1.25);
-  const wsys = estTokens(writerSystem(b, r));
-  const angles = r.personas[b.persona].triggers.length + 1;
+  const own = (b.own_lines || []).length;
+  const g = opts.ownOnly ? 0 : b.n;          // lines Studio writes
+  const m = g + own;                         // lines checked
+  const n = Math.ceil(g * 1.25);
+  const wsys = estTokens(writerSystem(b, r, (b.own_lines || []).map(o => o.text)));
+  const angles = g ? r.personas[b.persona].triggers.length + 1 : 0;
   const gen = { calls: angles, inTok: angles * (wsys + 200), outTok: n * 60 };
+  const tag = { calls: own ? 1 : 0, inTok: own ? 700 + own * 30 : 0, outTok: own * 25 };
   const probeItems = r.compliance.filter(c => c.wordings).length;
-  const chk = { calls: b.n, inTok: b.n * 1300, outTok: b.n * 150 };
-  const prb = { calls: b.n * probeItems * 2, inTok: b.n * probeItems * 2 * 120, outTok: b.n * probeItems * 2 };
-  const obj = { calls: b.n, inTok: b.n * 500, outTok: b.n * 45 };
+  const chk = { calls: m, inTok: m * 1300, outTok: m * 150 };
+  const prb = { calls: m * probeItems * 2, inTok: m * probeItems * 2 * 120, outTok: m * probeItems * 2 };
+  const obj = { calls: m, inTok: m * 500, outTok: m * 45 };
   const usd = [
-    [b.model, gen], [b.checker_model!, chk], [b.probe_model!, prb], [b.objection_model!, obj],
-  ].reduce((t, [m, x]: any) => t + costOf(m, { prompt_tokens: x.inTok, completion_tokens: x.outTok }), 0);
+    [b.model, gen], [b.checker_model!, tag], [b.checker_model!, chk], [b.probe_model!, prb], [b.objection_model!, obj],
+  ].reduce((t, [mm, x]: any) => t + costOf(mm, { prompt_tokens: x.inTok, completion_tokens: x.outTok }), 0);
   // Tokens counted against each model's TPM (prompt + max output).
   const tokens: Record<string, number> = {};
-  const addT = (m: string, v: number) => { tokens[m] = (tokens[m] || 0) + v; };
+  const addT = (mm: string, v: number) => { if (v) tokens[mm] = (tokens[mm] || 0) + v; };
   addT(b.model, gen.inTok + angles * 1800);
-  addT(b.checker_model!, chk.inTok + b.n * 350);
+  addT(b.checker_model!, tag.inTok + chk.inTok + m * 350);
   addT(b.probe_model!, prb.inTok + prb.calls);
-  addT(b.objection_model!, obj.inTok + b.n * 70);
+  addT(b.objection_model!, obj.inTok + m * 70);
   const minutes: Record<string, number> = {};
-  for (const [m, t] of Object.entries(tokens)) minutes[m] = round(t / (m.includes('mini') ? 180000 : 27000), 2); // tier-1 limits at 90%
-  return { usd: round(usd, 3), calls: gen.calls + chk.calls + prb.calls + obj.calls + 1, tokens, minutes_at_budget: minutes };
+  for (const [mm, t] of Object.entries(tokens)) minutes[mm] = round(t / (mm.includes('mini') ? 180000 : 27000), 2); // tier-1 limits at 90%
+  return { usd: round(usd, 3), calls: gen.calls + tag.calls + chk.calls + prb.calls + obj.calls + (m ? 1 : 0), tokens, minutes_at_budget: minutes };
 }
 
 // ---------- generate ----------
@@ -636,8 +729,8 @@ export function estimate(b: Brief): { usd: number; calls: number; tokens: Record
 const DUP = Number(process.env.STUDIO_DUP ?? 0.9);
 const SIMILAR = Number(process.env.STUDIO_SIMILAR ?? 0.85);
 
-async function writeCells(api: Api, r: Rules, b: Brief, cells: Cell[], model: string, stage: string, extra?: { guidance?: string; sibling?: string }): Promise<Array<{ cell: Cell; text: string }>> {
-  const system = writerSystem(b, r);
+async function writeCells(api: Api, r: Rules, b: Brief, cells: Cell[], model: string, stage: string, extra?: { guidance?: string; sibling?: string; own?: string[] }): Promise<Array<{ cell: Cell; text: string }>> {
+  const system = writerSystem(b, r, extra?.own);
   const byAngle = new Map<string, Cell[]>();
   for (const c of cells) byAngle.set(c.angle, [...(byAngle.get(c.angle) || []), c]);
   const out: Array<{ cell: Cell; text: string }> = [];
@@ -673,42 +766,115 @@ function newLine(b: Brief, r: Rules, batchId: string, idx: number, cell: Cell, t
   };
 }
 
-export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: { check?: boolean; batchId?: string } = {}): Promise<Batch> {
-  const r = loadRules();
-  const id = opts.batchId || `${b.territory}-${stamp()}`;
-  const started = Date.now();
-  const batch: Batch = { id, brief: b, created: new Date().toISOString(), lines: [], dropped: [], stats: { generated: 0, near_duplicates_removed: 0, similar_flagged: 0, timings_ms: {}, usd: {}, calls: {}, tokens: {}, usd_total: 0 } };
-  api.resetRun();
-  emit({ type: 'status', message: `Writing ${b.n} lines (${Math.ceil(b.n * 1.25)} cells) with ${b.model}` });
+/**
+ * Tag the creative director's lines with the angle and structure each one
+ * mainly uses (one JSON call), so they sit in the grid like Studio's lines.
+ */
+async function tagOwn(api: Api, r: Rules, b: Brief, own: OwnLine[]): Promise<Array<{ angle: string; structure: Structure }>> {
+  const pr = r.personas[b.persona];
+  const fallback = { angle: r.territories[b.territory]?.angle || pr.triggers[0].id, structure: 'plain_promise' as Structure };
+  const res = await api.chat({
+    stage: 'tag', model: b.checker_model || 'gpt-4o', json: true, max_tokens: 40 * own.length + 60,
+    system: `You classify lines of ad copy for Trupanion (medical insurance for cats and dogs) written for one audience: ${pr.name}. For each line, pick the one angle it mainly plays on and the one structure it uses.
 
-  const kept: Array<{ cell: Cell; text: string; emb: number[] }> = [];
-  let offset = 0;
-  for (let round_ = 0; round_ < 3 && kept.length < b.n; round_++) {
-    const want = round_ === 0 ? Math.ceil(b.n * 1.25) : Math.max(3, Math.ceil((b.n - kept.length) * 1.5));
-    const cells = planCells(b, want, offset);
-    offset += want;
-    const written = await writeCells(api, r, b, cells, b.model, 'generate');
-    batch.stats.generated += written.length;
-    const embs = await api.embed(written.map(w => w.text));
-    written.forEach((w, i) => {
-      let best = 0, bestIdx = -1;
-      kept.forEach((k, j) => { const s = cosine(embs[i], k.emb); if (s > best) { best = s; bestIdx = j; } });
-      if (best >= DUP) batch.dropped.push({ text: w.text, cell: w.cell.cell, dup_of: kept[bestIdx].cell.cell, similarity: round(best) });
-      else if (kept.length < b.n) kept.push({ ...w, emb: embs[i] });
+ANGLES:
+${pr.triggers.map(t => `${t.id}: ${t.label}. ${t.detail}`).join('\n')}
+
+STRUCTURES:
+${Object.entries(r.structures).map(([k, v]) => `${k}: ${v}`).join('\n')}
+
+Return JSON: {"tags":[{"i":<line number>,"angle":"<angle id>","structure":"<structure id>"}]}`,
+    user: own.map((o, i) => `${i + 1}. ${o.text}`).join('\n'),
+  });
+  let tags: any[] = [];
+  try { tags = JSON.parse(res.text).tags || []; } catch { /* fall back below */ }
+  return own.map((_, i) => {
+    const t = tags.find(x => Number(x?.i) === i + 1) || {};
+    return {
+      angle: pr.triggers.some(x => x.id === t.angle) ? t.angle : fallback.angle,
+      structure: (STRUCTURES as string[]).includes(t.structure) ? t.structure : fallback.structure,
+    };
+  });
+}
+
+/**
+ * Write and check a batch. The creative director's own lines (brief.own_lines)
+ * go in first, tagged and checked like any other line; Studio then writes
+ * brief.n lines around them, skipping the angle × structure cells they
+ * covered and dropping anything too close to their lines. With opts.batchId of
+ * an existing batch, new lines are added to it ("Generate around these").
+ * With opts.ownOnly, only the creative director's lines are checked.
+ */
+export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: { check?: boolean; batchId?: string; ownOnly?: boolean; user?: string } = {}): Promise<Batch> {
+  const r = loadRules();
+  const existing = opts.batchId && fs.existsSync(batchPath(opts.batchId)) ? loadBatch(opts.batchId) : null;
+  const id = existing?.id || opts.batchId || `${b.territory}-${stamp()}`;
+  const started = Date.now();
+  const batch: Batch = existing || { id, brief: b, created: new Date().toISOString(), lines: [], dropped: [], stats: { generated: 0, near_duplicates_removed: 0, similar_flagged: 0, timings_ms: {}, usd: {}, calls: {}, tokens: {}, usd_total: 0 } };
+  if (existing) batch.brief = { ...b, own_lines: [...(existing.brief.own_lines || []), ...(b.own_lines || []).filter(o => !(existing.brief.own_lines || []).some(x => x.text === o.text))] };
+  if (!batch.created_by && opts.user) batch.created_by = opts.user;
+  const embStore: Record<string, number[]> = existing && fs.existsSync(embPath(id)) ? readJson(embPath(id)) : {};
+  const firstNew = batch.lines.length;
+  api.resetRun();
+
+  // 1. The creative director's lines.
+  const already = new Set(batch.lines.filter(l => l.model === 'human').map(l => l.text));
+  const own = (b.own_lines || []).filter(o => !already.has(o.text));
+  if (own.length) {
+    emit({ type: 'status', message: `Reading your ${own.length} line${own.length === 1 ? '' : 's'}` });
+    const [tags, embs] = await Promise.all([tagOwn(api, r, b, own), api.embed(own.map(o => o.text))]);
+    own.forEach((o, i) => {
+      const l = newLine(b, r, id, batch.lines.length + 1, { cell: `y${String(i + 1).padStart(2, '0')}`, angle: tags[i].angle, structure: tags[i].structure, tone: b.tone, field: o.field }, o.text, 'human');
+      batch.lines.push(l);
+      embStore[l.id] = embs[i];
+      emit({ type: 'line', line: l });
     });
   }
-  batch.stats.near_duplicates_removed = batch.dropped.length;
-  batch.lines = kept.map((k, i) => newLine(b, r, id, i + 1, k.cell, k.text, b.model));
-  writeJson(embPath(id), Object.fromEntries(batch.lines.map((l, i) => [l.id, kept[i].emb])));
-  batch.stats.timings_ms.generate = Date.now() - started;
-  saveBatch(batch);
-  for (const l of batch.lines) emit({ type: 'line', line: l });
-  emit({ type: 'status', message: `${batch.lines.length} lines written (${batch.dropped.length} near-duplicates removed). Checking…` });
+  const humans = batch.lines.filter(l => l.model === 'human');
 
-  if (opts.check !== false) await checkBatch(batch, api, emit);
-  finishStats(batch, api, started);
+  // 2. Studio's lines, around theirs.
+  if (!opts.ownOnly && b.n > 0) {
+    emit({ type: 'status', message: `Writing ${b.n} lines with ${b.model}${humans.length ? ' around yours' : ''}` });
+    const covered = new Set(humans.map(l => `${l.angle}|${l.structure}`));
+    const pool = Object.entries(embStore).map(([lid, emb]) => ({ id: lid, emb }));
+    const kept: Array<{ cell: Cell; text: string; emb: number[] }> = [];
+    const gen0 = batch.lines.filter(l => l.model !== 'human').length;
+    let offset = gen0 ? Math.ceil(gen0 * 1.25) : 0;
+    for (let round_ = 0; round_ < 3 && kept.length < b.n; round_++) {
+      const want = round_ === 0 ? Math.ceil(b.n * 1.25) : Math.max(3, Math.ceil((b.n - kept.length) * 1.5));
+      const cells = planCells(b, want, offset, '', round_ === 0 ? covered : new Set());
+      offset = nextOffset(cells, offset + want);
+      const written = await writeCells(api, r, b, cells, b.model, 'generate', { own: humans.map(l => l.text) });
+      batch.stats.generated += written.length;
+      const embs = await api.embed(written.map(w => w.text));
+      written.forEach((w, i) => {
+        let best = 0, bestId = '';
+        for (const p of pool) { const s = cosine(embs[i], p.emb); if (s > best) { best = s; bestId = p.id; } }
+        kept.forEach(k => { const s = cosine(embs[i], k.emb); if (s > best) { best = s; bestId = k.cell.cell; } });
+        if (best >= DUP) batch.dropped.push({ text: w.text, cell: w.cell.cell, dup_of: bestId, similarity: round(best) });
+        else if (kept.length < b.n) kept.push({ ...w, emb: embs[i] });
+      });
+    }
+    for (const k of kept) {
+      const l = newLine(b, r, id, batch.lines.length + 1, k.cell, k.text, b.model);
+      batch.lines.push(l);
+      embStore[l.id] = k.emb;
+    }
+    batch.stats.near_duplicates_removed = batch.dropped.length;
+  }
+  writeJson(embPath(id), embStore);
+  batch.stats.timings_ms.generate = (batch.stats.timings_ms.generate || 0) + (Date.now() - started);
   saveBatch(batch);
-  api.commit(`generate ${id}`);
+  const fresh = batch.lines.slice(firstNew);
+  for (const l of fresh) emit({ type: 'line', line: l });
+  emit({ type: 'status', message: `${fresh.length} lines ready${batch.dropped.length ? ` (${batch.dropped.length} near-duplicates removed)` : ''}. Checking…` });
+
+  if (opts.check !== false) await checkBatch(batch, api, emit, fresh.map(l => l.id));
+  const prevTotal = existing ? (batch.stats.timings_ms.total || 0) : 0;
+  finishStats(batch, api, started);
+  batch.stats.timings_ms.total += prevTotal;
+  saveBatch(batch);
+  api.commit(`${opts.ownOnly ? 'check-own' : 'generate'} ${id}`);
   emit({ type: 'stats', stats: batch.stats });
   emit({ type: 'done', batch: id });
   return batch;
@@ -737,7 +903,7 @@ export async function moreLikeThis(batchId: string, lineId: string, guidance: st
     cell: `m${String(base + i + 1).padStart(2, '0')}`, angle: src.angle, field: src.field, tone: src.tone,
     structure: i === 0 ? src.structure : others[(hashStr(lineId) + i) % others.length],
   }));
-  const written = await writeCells(api, r, batch.brief, cells, batch.brief.model, 'more', { guidance, sibling: src.edited_text || src.text });
+  const written = await writeCells(api, r, batch.brief, cells, batch.brief.model, 'more', { guidance, sibling: src.edited_text || src.text, own: batch.lines.filter(l => l.model === 'human').map(l => l.text) });
   const embs = await api.embed(written.map(w => w.text));
   const embStore = fs.existsSync(embPath(batchId)) ? readJson<Record<string, number[]>>(embPath(batchId)) : {};
   const added: Line[] = [];
@@ -1203,13 +1369,15 @@ function applyTaste(store: Map<string, TasteExample>, l: Line) {
 function saveTaste(ex: TasteExample[]) { writeJson(P('taste.json'), { _note: 'Kept, edited and cut-with-note lines from the creative director; used as few-shot taste examples by generate.', examples: ex }); }
 
 /** Decision from the UI (keep / cut / edit, note). Updates the batch and the taste store. */
-export function setDecision(batchId: string, lineId: string, patch: { decision?: Line['decision']; edited_text?: string; note?: string }): Line {
+export function setDecision(batchId: string, lineId: string, patch: { decision?: Line['decision']; edited_text?: string; note?: string }, user?: string): Line {
   const batch = loadBatch(batchId);
   const l = batch.lines.find(x => x.id === lineId);
   if (!l) throw new Error(`No line ${lineId}`);
   if (patch.decision !== undefined) l.decision = patch.decision;
   if (patch.edited_text !== undefined) l.edited_text = patch.edited_text;
   if (patch.note !== undefined) l.note = patch.note;
+  if (user) l.decided_by = user;
+  l.decided_at = new Date().toISOString();
   if (l.decision === 'edit' && l.edited_text) {
     // Re-run the instant checks on the edited words.
     const r = loadRules();
@@ -1324,6 +1492,7 @@ export function meta() {
   return {
     personas: Object.fromEntries(Object.entries(r.personas).map(([k, v]) => [k, { name: v.name, default_fields: v.default_fields, triggers: v.triggers.map(t => ({ id: t.id, label: t.label })) }])),
     territories: r.territories,
+    formats: FORMATS,
     fields: r.fields,
     structures: r.structures,
     tone_controls: r.tone_controls,
@@ -1331,4 +1500,32 @@ export function meta() {
     spend: readSpend().total_usd,
     studio_dir: STUDIO,
   };
+}
+
+// ---------- reference documents (the intelligence readout) ----------
+
+// Client material, read from the Claude outputs folder and never committed.
+// studio/docs.json can override the list: [{ id, title, kind: 'md' | 'file', path }]
+// with paths relative to Claude outputs. Buyer verbatims (the quote bank) stay
+// analyst-only and aren't listed.
+export interface RefDoc { id: string; title: string; kind: 'md' | 'file'; path: string; note?: string }
+const OUTPUTS = path.dirname(INPUTS);
+const DEFAULT_DOCS: RefDoc[] = [
+  { id: 'readout', title: 'Persona intelligence readout (v1.2, team version)', kind: 'md', path: 'intelligence-readout-v1-team.md' },
+  { id: 'readout-deck', title: 'Persona intelligence readout (v1.2 deck, .pptx)', kind: 'file', path: 'Trupanion_Persona_Intelligence_Readout_v1.2.pptx' },
+];
+export function referenceDocs(): Array<Omit<RefDoc, 'path'> & { available: boolean }> {
+  return docsList().map(({ path: pth, ...d }) => ({ ...d, available: fs.existsSync(path.join(OUTPUTS, pth)) }));
+}
+function docsList(): RefDoc[] {
+  const p = P('docs.json');
+  return fs.existsSync(p) ? readJson<RefDoc[]>(p) : DEFAULT_DOCS;
+}
+/** The document's absolute path, only for ids on the list (no arbitrary paths). */
+export function referenceDocPath(id: string): { doc: RefDoc; file: string } {
+  const doc = docsList().find(d => d.id === id);
+  if (!doc) throw new Error(`No reference document ${id}`);
+  const file = path.resolve(OUTPUTS, doc.path);
+  if (!file.startsWith(OUTPUTS + path.sep) || !fs.existsSync(file)) throw new Error(`${doc.title} isn't available on this machine`);
+  return { doc, file };
 }

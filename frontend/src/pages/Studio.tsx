@@ -5,11 +5,12 @@
 // here is a score.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { studio, type Batch, type Brief, type CompareSet, type Flag, type Line, type Meta, type ShortRow, type StudioEvent, type Tone } from '@/lib/studioApi';
+import { getUser, setUser, studio, type Batch, type Brief, type CompareSet, type Flag, type Line, type Meta, type OwnLine, type RefDoc, type RunSummary, type ShortRow, type StudioEvent, type Territory, type Tone } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 
 const PINK = '#D94D8F';
-type Tab = 'home' | 'brief' | 'review' | 'shortlist' | 'compare';
+type Tab = 'home' | 'territories' | 'brief' | 'review' | 'shortlist' | 'compare' | 'readout';
+const TABS: Array<[Tab, string]> = [['home', 'How it works'], ['territories', 'Territories'], ['brief', 'Write & brief'], ['review', 'Review'], ['shortlist', 'Shortlist'], ['compare', 'Blind compare'], ['readout', 'Readout']];
 // Deep links for the demo: /studio?tab=review&batch=<id>&open=L07 (opens that line's first flag), &compare=<name>.
 const params = new URLSearchParams(window.location.search);
 
@@ -39,20 +40,6 @@ const CHIP: Record<string, string> = {
 const chipName = (rule: string) => CHIP[rule] || (rule.startsWith('BRIEF_BANNED:') ? `banned: ${rule.slice(13)}` : /^[A-Z]+_T_/.test(rule) ? `turn-off: ${rule.replace(/^[A-Z]+_T_/, '').replace(/_/g, ' ').toLowerCase()}` : rule.replace(/_/g, ' ').toLowerCase());
 const sevTone = (s: Flag['severity']) => (s === 'compliance' ? 'red' : s === 'warn' ? 'amber' : 'grey') as 'red' | 'amber' | 'grey';
 
-function Slider({ label, left, right, value, onChange }: { label: string; left: string; right: string; value: number; onChange: (v: number) => void }) {
-  return (
-    <div>
-      <Label>{label}</Label>
-      <div className="flex items-center gap-3 text-base">
-        <span className="w-20 text-right text-neutral-600">{left}</span>
-        <input type="range" min={1} max={5} step={1} value={value} onChange={e => onChange(Number(e.target.value))} className="flex-1 accent-[#D94D8F]" />
-        <span className="w-20 text-neutral-600">{right}</span>
-        <span className="w-6 text-center font-mono font-semibold">{value}</span>
-      </div>
-    </div>
-  );
-}
-
 // ---------- page ----------
 
 export function Studio() {
@@ -63,6 +50,9 @@ export function Studio() {
   const [batch, setBatch] = useState<Batch | null>(null);
   const [status, setStatus] = useState('');
   const [running, setRunning] = useState(false);
+  const [user, setUserState] = useState(getUser());
+  const [runsTick, setRunsTick] = useState(0); // refreshes the runs list after a run or a decision
+  const [attached, setAttached] = useState<string | null>(null); // the run new lines go into, if any
   const esRef = useRef<EventSource | null>(null);
 
   const refreshMeta = useCallback(() => studio.meta().then(m => { setMeta(m); setErr(''); return m; }), []);
@@ -94,26 +84,45 @@ export function Studio() {
         setRunning(false);
         studio.batch(batchId).then(setBatch).catch(() => {});
         refreshMeta().catch(() => {});
+        setRunsTick(t => t + 1);
         setStatus('Done');
       }
     });
   }, [upsertLine, refreshMeta]);
 
-  async function runGenerate() {
+  /**
+   * Start a run, or add to the current one. ownOnly checks the creative
+   * director's lines without Studio writing more; into = continue that run.
+   */
+  async function run(opts: { ownOnly?: boolean; into?: Batch | null } = {}) {
     setErr('');
+    if (!getUser()) { setErr('Add your name (top right) first, so your runs are saved under it.'); return; }
+    const into = opts.into || (attached && batch?.id === attached ? batch : null);
+    const b: Brief = into ? { ...into.brief, ...brief, persona: into.brief.persona, territory: into.brief.territory } : brief;
     try {
       let r;
-      try { r = await studio.generate(brief); }
+      try { r = await studio.generate(b, { batch: into?.id, ownOnly: opts.ownOnly }); }
       catch (e: any) {
         if (e.status !== 409) throw e;
-        if (!window.confirm(`This batch is estimated at $${e.body.estimate.toFixed(2)}, over the $2 ask-first line. Run it?`)) return;
-        r = await studio.generate(brief, true);
+        if (!window.confirm(`This run is estimated at $${e.body.estimate.toFixed(2)}, over the $2 ask-first line. Run it?`)) return;
+        r = await studio.generate(b, { batch: into?.id, ownOnly: opts.ownOnly, confirm: true });
       }
-      setBatch({ id: r.batch, brief, created: new Date().toISOString(), lines: [], stats: { generated: 0, near_duplicates_removed: 0, similar_flagged: 0, timings_ms: {}, usd: {}, usd_total: 0 } });
-      setStatus('Writing…');
+      setAttached(r.batch);
+      if (!into) setBatch({ id: r.batch, brief: b, created: new Date().toISOString(), created_by: getUser(), lines: [], stats: { generated: 0, near_duplicates_removed: 0, similar_flagged: 0, timings_ms: {}, usd: {}, usd_total: 0 } });
+      setBrief(cur => ({ ...cur, own_lines: [] })); // the lines now live in the run
+      setStatus(opts.ownOnly ? 'Checking your lines…' : 'Writing…');
       setTab('review');
-      follow(r.batch, r.batch);
+      follow(r.job, r.batch);
     } catch (e: any) { setErr(e.message); }
+  }
+
+  /** Reopen a saved run: its lines in Review, its brief in the brief tab, new lines go into it. */
+  async function continueRun(id: string) {
+    const b = await studio.batch(id);
+    setBatch(b);
+    setBrief({ ...b.brief, own_lines: [] });
+    setAttached(b.id);
+    setTab('review');
   }
 
   async function more(line: Line, note: string) {
@@ -129,24 +138,28 @@ export function Studio() {
         <button onClick={() => setTab('home')} className="text-3xl font-bold tracking-tight" style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }} aria-label="How Voices Studio works">
           VOICES <span style={{ color: PINK }}>Studio</span>
         </button>
-        <nav className="ml-6 flex gap-2">
-          {(['home', 'brief', 'review', 'shortlist', 'compare'] as Tab[]).map(t => (
-            <GhostButton key={t} active={tab === t} onClick={() => setTab(t)} className="px-4 py-2 text-lg capitalize">
-              {t === 'home' ? 'How it works' : t === 'review' && batch ? `Review (${batch.lines.length})` : t === 'compare' ? 'Blind compare' : t}
+        <nav className="ml-4 flex flex-wrap gap-2">
+          {TABS.map(([t, label]) => (
+            <GhostButton key={t} active={tab === t} onClick={() => setTab(t)} className="px-3 py-2 text-base">
+              {t === 'review' && batch ? `Review (${batch.lines.length})` : label}
             </GhostButton>
           ))}
         </nav>
         <div className="ml-auto flex items-center gap-3 text-base text-neutral-600">
+          <UserBadge user={user} onChange={n => { setUser(n); setUserState(n); setRunsTick(t => t + 1); }} />
           {running && <span className="animate-pulse font-medium" style={{ color: PINK }}>● {status}</span>}
           {meta?.mock && <Chip tone="amber">mock: no cost</Chip>}
-          {meta && <span>Spend ${meta.spend.toFixed(2)} of ${meta.cap}</span>}
         </div>
       </header>
       {err && <div className="mx-8 mt-4 rounded-lg border-2 border-red-300 bg-red-50 p-4 text-lg text-red-900">{err}</div>}
       <main className="px-8 py-6">
         {tab === 'home' && <Home go={setTab} />}
-        {meta && tab === 'brief' && <BriefPanel meta={meta} brief={brief} setBrief={setBrief} onGenerate={runGenerate} running={running} />}
-        {meta && tab === 'review' && <Review meta={meta} batch={batch} setBatch={setBatch} status={status} running={running} onMore={more} />}
+        {meta && tab === 'territories' && <Territories meta={meta} onSaved={() => refreshMeta()} onBrief={code => { const t = meta.territories[code]; setBrief(b => ({ ...b, persona: t.persona, territory: code, fields: b.persona === t.persona && b.fields.length ? b.fields : meta.personas[t.persona].default_fields })); setTab('brief'); }} />}
+        {meta && tab === 'brief' && <BriefPanel meta={meta} brief={brief} run={run} running={running} user={user} runsTick={runsTick} onContinue={continueRun} go={setTab}
+          setBrief={b => { if (attached && b.territory !== brief.territory) setAttached(null); setBrief(b); }}
+          attachedRun={attached && batch?.id === attached ? batch : null} onNewRun={() => setAttached(null)} />}
+        {meta && tab === 'review' && <Review meta={meta} batch={batch} setBatch={setBatch} status={status} running={running} onMore={more} onMoreRun={() => run({ into: batch })} onDecided={() => setRunsTick(t => t + 1)} />}
+        {tab === 'readout' && <Readout persona={brief.persona} meta={meta} />}
         {meta && tab === 'shortlist' && <Shortlist batch={batch} />}
         {meta && tab === 'compare' && <Compare meta={meta} brief={brief} />}
       </main>
@@ -157,10 +170,11 @@ export function Studio() {
 // ---------- 0. landing: how Voices Studio works ----------
 
 const STEPS: Array<{ tab: Tab; title: string; what: string; you: string }> = [
-  { tab: 'brief', title: 'Brief', what: 'Choose the persona, territory, fields and tone: dry–warm, playful–plain, short–long.', you: 'Add banned words, off-limits ideas and 2–3 lines in the voice you want.' },
-  { tab: 'review', title: 'Generate', what: 'About 20 lines across the persona’s triggers, six structures and your tone, with near-duplicates dropped. Takes about a minute.', you: 'Watch the lines arrive, already checked.' },
-  { tab: 'review', title: 'Review', what: 'Each line shows its length against the field, its flags and a skeptic’s objection. Click a flag for the words and the source.', you: 'Keep, cut or edit. Add a note, or ask for more like this.' },
-  { tab: 'shortlist', title: 'Shortlist', what: 'Kept lines get naming codes, ready for production.', you: 'Curate in Sheets with the team, then import it back. Your edits teach the next batch.' },
+  { tab: 'territories', title: 'Territories', what: 'The territories start from the pitch. Edit them as client feedback and your taste come in.', you: 'Rename, rewrite the premise, change the lead angle or format, add new ones, retire old ones.' },
+  { tab: 'brief', title: 'Write', what: 'Your lines come first. Studio checks them in seconds, with the same flags as its own.', you: 'Write a few lines, pick the fields and tone, then check them.' },
+  { tab: 'brief', title: 'Generate', what: 'About 20 lines around yours: the angles and structures you haven’t used, in your voice, never repeating you.', you: 'Watch the lines arrive, already checked.' },
+  { tab: 'review', title: 'Review', what: 'Each line shows its length, its flags and a skeptic’s objection. Click a flag for the words and the source.', you: 'Keep, cut or edit. Add a note, or ask for more like this.' },
+  { tab: 'shortlist', title: 'Shortlist', what: 'Kept lines get naming codes, ready for production. Runs are saved under your name.', you: 'Curate in Sheets, import it back, or continue a run later.' },
   { tab: 'compare', title: 'Blind compare', what: 'One brief, several writing models, lines shuffled and unlabelled.', you: 'Star the lines you’d use, then reveal. Your pick becomes the writer.' },
 ];
 
@@ -174,19 +188,22 @@ function Home({ go }: { go: (t: Tab) => void }) {
         <p className="max-w-3xl text-2xl leading-snug text-neutral-700">
           You bring the taste. Studio brings range, the rules, and the audience’s pushback. The market decides what wins.
         </p>
-        <PinkButton onClick={() => go('brief')} className="mt-2 px-7 py-4 text-xl">Start a brief</PinkButton>
+        <div className="flex flex-wrap items-center gap-4 pt-2">
+          <PinkButton onClick={() => go('brief')} className="px-7 py-4 text-xl">Start writing</PinkButton>
+          <GhostButton onClick={() => go('territories')} className="px-5 py-3 text-lg">Review territories</GhostButton>
+          <GhostButton onClick={() => go('readout')} className="px-5 py-3 text-lg">Read the persona readout</GhostButton>
+        </div>
       </section>
 
       <section>
         <h2 className="mb-5 text-3xl font-bold tracking-tight" style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>How Voices Studio works</h2>
-        <ol className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <ol className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {STEPS.map((s, i) => (
             <li key={s.title}>
               <button onClick={() => go(s.tab)} className="group flex h-full w-full flex-col rounded-xl border-2 border-neutral-200 bg-white p-5 text-left transition hover:border-[#D94D8F]">
                 <div className="mb-3 flex items-center gap-3">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-lg font-bold text-white" style={{ background: PINK }}>{i + 1}</span>
                   <span className="text-xl font-bold leading-tight">{s.title}</span>
-                  {i < STEPS.length - 1 && <span className="ml-auto hidden text-2xl text-neutral-300 xl:inline" aria-hidden>→</span>}
                 </div>
                 <p className="mb-3 text-base leading-snug text-neutral-700">{s.what}</p>
                 <p className="mt-auto border-t border-neutral-100 pt-3 text-base font-medium leading-snug text-neutral-900"><span style={{ color: PINK }}>You:</span> {s.you}</p>
@@ -222,115 +239,433 @@ function Home({ go }: { go: (t: Tab) => void }) {
 
 // ---------- 1. brief ----------
 
-function BriefPanel({ meta, brief, setBrief, onGenerate, running }: { meta: Meta; brief: Brief; setBrief: (b: Brief) => void; onGenerate: () => void; running: boolean }) {
-  const [est, setEst] = useState<{ usd: number; minutes: string } | null>(null);
-  const territories = Object.entries(meta.territories).filter(([, t]) => t.persona === brief.persona);
+function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onContinue, go, attachedRun, onNewRun }: {
+  meta: Meta; brief: Brief; setBrief: (b: Brief) => void; run: (o?: { ownOnly?: boolean }) => void; running: boolean;
+  user: string; runsTick: number; onContinue: (id: string) => void; go: (t: Tab) => void;
+  attachedRun: Batch | null; onNewRun: () => void;
+}) {
+  const [more, setMore] = useState(false);
+  const territories = Object.entries(meta.territories).filter(([, x]) => x.persona === brief.persona && x.status !== 'retired');
   const t = meta.territories[brief.territory];
   const set = (patch: Partial<Brief>) => setBrief({ ...brief, ...patch });
   const setTone = (k: keyof Tone, v: number) => set({ tone: { ...brief.tone, [k]: v } });
+  const own: OwnLine[] = brief.own_lines?.length ? brief.own_lines : [{ text: '', field: brief.fields[0] || 'meta_primary' }];
+  const written = own.filter(o => o.text.trim());
+  const setOwn = (next: OwnLine[]) => set({ own_lines: next });
+  const setRow = (i: number, patch: Partial<OwnLine>) => setOwn(own.map((o, k) => (k === i ? { ...o, ...patch } : o)));
+  // Enter adds a row below and moves the cursor into it.
+  const rowRefs = useRef<Array<HTMLTextAreaElement | null>>([]);
+  const [focusRow, setFocusRow] = useState<number | null>(null);
+  useEffect(() => { if (focusRow !== null) { rowRefs.current[focusRow]?.focus(); setFocusRow(null); } }, [focusRow, own.length]);
 
-  useEffect(() => {
-    const h = setTimeout(() => {
-      studio.estimate(brief).then(e => setEst({ usd: e.usd, minutes: Object.entries(e.minutes_at_budget).map(([m, v]) => `${m} ${v} min`).join(' · ') })).catch(() => setEst(null));
-    }, 300);
-    return () => clearTimeout(h);
-  }, [brief]);
+
+  // Paste several lines at once: split them into rows.
+  function onPaste(i: number, e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const parts = e.clipboardData.getData('text').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+    if (parts.length < 2) return;
+    e.preventDefault();
+    const field = own[i].field;
+    setOwn([...own.slice(0, i), ...parts.map(text => ({ text, field })), ...own.slice(i + 1)].filter((o, k, a) => o.text || k === a.length - 1));
+  }
 
   return (
-    <div className="grid max-w-7xl grid-cols-1 gap-8 lg:grid-cols-[1.1fr_1fr]">
-      <section className="space-y-6 rounded-xl border border-neutral-200 bg-white p-6">
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <Label>Persona</Label>
-            <select className="w-full rounded-lg border-2 border-neutral-300 bg-white px-3 py-2.5 text-lg" value={brief.persona}
-              onChange={e => { const p = e.target.value; const first = Object.entries(meta.territories).find(([, x]) => x.persona === p)?.[0] || ''; set({ persona: p, territory: first, fields: meta.personas[p].default_fields }); }}>
-              {Object.entries(meta.personas).map(([k, p]) => <option key={k} value={k}>{p.name}</option>)}
-            </select>
-          </div>
-          <div>
-            <Label>Territory</Label>
-            <select className="w-full rounded-lg border-2 border-neutral-300 bg-white px-3 py-2.5 text-lg" value={brief.territory} onChange={e => set({ territory: e.target.value })}>
-              {territories.map(([k, x]) => <option key={k} value={k}>{x.name}{x.status ? ' (springboard)' : ''}</option>)}
-            </select>
-          </div>
+    <div className="max-w-7xl space-y-5">
+      {attachedRun && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border-2 px-4 py-3 text-base" style={{ borderColor: PINK, background: '#fdf2f8' }}>
+          <span>Adding to your run <b>{meta.territories[attachedRun.brief.territory]?.name}</b> ({attachedRun.lines.length} lines). New lines go into it.</span>
+          <GhostButton className="ml-auto px-3 py-1 text-sm" onClick={onNewRun}>Start a new run</GhostButton>
         </div>
-        {t && <p className="rounded-lg bg-neutral-50 p-3 text-base text-neutral-700"><span className="font-semibold">{t.format}.</span> {t.premise}</p>}
+      )}
+      {/* Setup, in one row */}
+      <section className="flex flex-wrap items-end gap-4 rounded-xl border border-neutral-200 bg-white p-4">
         <div>
-          <Label>Angles in the grid (the persona's triggers × 6 structures × tone)</Label>
-          <div className="flex flex-wrap gap-1.5">
-            {meta.personas[brief.persona]?.triggers.map(tr => (
-              <Chip key={tr.id} tone={tr.id === t?.angle ? 'outline' : 'grey'} className={tr.id === t?.angle ? 'border-2 border-neutral-800' : ''}>{tr.label}</Chip>
-            ))}
-          </div>
+          <Label>Persona</Label>
+          <select className="rounded-lg border-2 border-neutral-300 bg-white px-3 py-2 text-lg" value={brief.persona}
+            onChange={e => { const p = e.target.value; const first = Object.entries(meta.territories).find(([, x]) => x.persona === p && x.status !== 'retired')?.[0] || ''; set({ persona: p, territory: first, fields: meta.personas[p].default_fields, own_lines: own.map(o => ({ ...o, field: meta.personas[p].default_fields[0] })) }); }}>
+            {Object.entries(meta.personas).map(([k, p]) => <option key={k} value={k}>{p.name}</option>)}
+          </select>
         </div>
-
+        <div>
+          <Label>Territory <button className="ml-2 normal-case text-[#D94D8F] underline" onClick={() => go('territories')}>edit</button></Label>
+          <select className="rounded-lg border-2 border-neutral-300 bg-white px-3 py-2 text-lg" value={brief.territory} onChange={e => set({ territory: e.target.value })}>
+            {territories.map(([k, x]) => <option key={k} value={k}>{x.name}{x.origin === 'new' ? ' (new)' : x.origin === 'edited' ? ' (edited)' : ''}</option>)}
+          </select>
+        </div>
         <div>
           <Label>Fields</Label>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-1.5">
             {Object.entries(meta.fields).map(([k, f]) => {
               const on = brief.fields.includes(k);
-              return (
-                <GhostButton key={k} active={on} onClick={() => set({ fields: on ? brief.fields.filter(x => x !== k) : [...brief.fields, k] })}>
-                  {f.label} <span className="opacity-70">· {f.visible}</span>
-                </GhostButton>
-              );
+              return <GhostButton key={k} active={on} className="px-2.5 py-1.5 text-sm" onClick={() => set({ fields: on ? brief.fields.filter(x => x !== k) : [...brief.fields, k] })}>{f.label} · {f.visible}</GhostButton>;
             })}
           </div>
         </div>
-
-        <div className="space-y-4">
-          <Slider label="Dry – warm" left="dry" right="warm" value={brief.tone.dry_warm} onChange={v => setTone('dry_warm', v)} />
-          <Slider label="Playful – plain" left="playful" right="plain" value={brief.tone.playful_plain} onChange={v => setTone('playful_plain', v)} />
-          <Slider label="Short – long" left="short" right="long" value={brief.tone.short_long} onChange={v => setTone('short_long', v)} />
+        <div className="flex gap-4">
+          {([['dry_warm', 'dry', 'warm'], ['playful_plain', 'playful', 'plain'], ['short_long', 'short', 'long']] as const).map(([k, l, r]) => (
+            <div key={k} className="w-36">
+              <Label>{l}–{r} <span className="font-mono text-neutral-800">{brief.tone[k]}</span></Label>
+              <input type="range" min={1} max={5} value={brief.tone[k]} onChange={e => setTone(k, Number(e.target.value))} className="w-full accent-[#D94D8F]" />
+            </div>
+          ))}
         </div>
       </section>
+      {t && <p className="px-1 text-base text-neutral-700"><span className="font-semibold">{t.name}</span> · {t.format} · leads on “{meta.personas[t.persona]?.triggers.find(x => x.id === t.angle)?.label}”. {t.premise}</p>}
 
-      <section className="space-y-6 rounded-xl border border-neutral-200 bg-white p-6">
-        <div>
-          <Label>Banned words (comma-separated)</Label>
-          <input className="w-full rounded-lg border-2 border-neutral-300 px-3 py-2.5 text-lg" value={brief.banned_words.join(', ')}
-            onChange={e => set({ banned_words: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })} placeholder="e.g. furbaby, hassle-free" />
-        </div>
-        <div>
-          <Label>Off-limits ideas (one per line)</Label>
-          <textarea rows={3} className="w-full rounded-lg border-2 border-neutral-300 px-3 py-2.5 text-lg" value={brief.banned_ideas.join('\n')}
-            onChange={e => set({ banned_ideas: e.target.value.split('\n') })} placeholder="e.g. no sick pets on screen" />
-        </div>
-        <div>
-          <Label>Reference lines, 2-3 in the voice you want</Label>
-          <textarea rows={3} className="w-full rounded-lg border-2 border-neutral-300 px-3 py-2.5 text-lg" value={brief.reference_lines.join('\n')}
-            onChange={e => set({ reference_lines: e.target.value.split('\n') })} placeholder="One per line" />
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <Label>Lines (n)</Label>
-            <input type="number" min={4} max={60} className="w-full rounded-lg border-2 border-neutral-300 px-3 py-2.5 text-lg" value={brief.n} onChange={e => set({ n: Number(e.target.value) })} />
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1.6fr_1fr]">
+        {/* Your lines: the first action */}
+        <section className="rounded-xl border-2 bg-white p-5" style={{ borderColor: PINK }}>
+          <div className="mb-3 flex items-baseline gap-3">
+            <h2 className="shrink-0 whitespace-nowrap text-2xl font-bold">Your lines</h2>
+            <span className="text-base text-neutral-600">Write first. One line per row; paste several at once. Studio checks them, then writes around them.</span>
           </div>
-          <div>
-            <Label>Writing model</Label>
-            <input list="studio-models" className="w-full rounded-lg border-2 border-neutral-300 px-3 py-2.5 text-lg" value={brief.model} onChange={e => set({ model: e.target.value })} />
-            <datalist id="studio-models">{['gpt-4o', 'gpt-4.1', 'gpt-5.5', 'claude-opus-5', 'gpt-5-mini'].map(m => <option key={m} value={m} />)}</datalist>
+          <div className="space-y-2">
+            {own.map((o, i) => {
+              const f = meta.fields[o.field];
+              const n = [...o.text].length;
+              return (
+                <div key={i} className="flex items-start gap-2">
+                  <textarea ref={el => { rowRefs.current[i] = el; }} rows={Math.min(4, Math.max(1, Math.ceil(n / 48)))} value={o.text} placeholder={i === 0 ? 'Write a line…' : ''}
+                    onChange={e => setRow(i, { text: e.target.value.replace(/\n/g, ' ') })}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); setOwn([...own.slice(0, i + 1), { text: '', field: o.field }, ...own.slice(i + 1)]); setFocusRow(i + 1); } }}
+                    onPaste={e => onPaste(i, e)}
+                    className="flex-1 resize-none rounded-lg border-2 border-neutral-300 px-3 py-2 text-xl leading-snug focus:border-neutral-700 focus:outline-none" />
+                  <select value={o.field} onChange={e => setRow(i, { field: e.target.value })} className="w-44 rounded-lg border-2 border-neutral-300 bg-white px-2 py-2 text-sm">
+                    {Object.entries(meta.fields).map(([k, ff]) => <option key={k} value={k}>{ff.label}</option>)}
+                  </select>
+                  <span className={cn('w-16 pt-2.5 text-right font-mono text-sm', f && n > f.visible ? 'font-bold text-amber-700' : 'text-neutral-500')}>{n}/{f?.visible}</span>
+                  <button aria-label="Remove line" onClick={() => setOwn(own.length > 1 ? own.filter((_, k) => k !== i) : [{ text: '', field: o.field }])} className="pt-2 text-xl text-neutral-400 hover:text-neutral-800">×</button>
+                </div>
+              );
+            })}
           </div>
+          <button onClick={() => { setOwn([...own, { text: '', field: own[own.length - 1]?.field || brief.fields[0] }]); setFocusRow(own.length); }} className="mt-2 text-base font-medium text-neutral-600 hover:text-neutral-900">+ Add a line</button>
+
+          <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-neutral-200 pt-4">
+            <PinkButton disabled={running || !written.length} onClick={() => run({ ownOnly: true })}>Check my lines{written.length ? ` (${written.length})` : ''}</PinkButton>
+            <GhostButton disabled={running || !brief.fields.length} onClick={() => run()} className="px-4 py-3 text-lg">
+              {written.length ? `Check mine + generate ${brief.n} around them` : `Generate ${brief.n} lines`}
+            </GhostButton>
+          </div>
+        </section>
+
+        <div className="space-y-5">
+          <RunsList user={user} tick={runsTick} meta={meta} onContinue={onContinue} />
+          <section className="rounded-xl border border-neutral-200 bg-white p-4">
+            <button className="flex w-full items-center justify-between text-lg font-semibold" onClick={() => setMore(!more)}>
+              More options <span className="text-neutral-400">{more ? '−' : '+'}</span>
+            </button>
+            {more && (
+              <div className="mt-4 space-y-4">
+                <div>
+                  <Label>Banned words (comma-separated)</Label>
+                  <input className="w-full rounded-lg border-2 border-neutral-300 px-3 py-2 text-base" value={brief.banned_words.join(', ')}
+                    onChange={e => set({ banned_words: e.target.value.split(',').map(x => x.trim()).filter(Boolean) })} placeholder="e.g. furbaby, hassle-free" />
+                </div>
+                <div>
+                  <Label>Off-limits ideas (one per line)</Label>
+                  <textarea rows={2} className="w-full rounded-lg border-2 border-neutral-300 px-3 py-2 text-base" value={brief.banned_ideas.join('\n')} onChange={e => set({ banned_ideas: e.target.value.split('\n') })} />
+                </div>
+                <div>
+                  <Label>Reference lines (a voice to match, not checked)</Label>
+                  <textarea rows={2} className="w-full rounded-lg border-2 border-neutral-300 px-3 py-2 text-base" value={brief.reference_lines.join('\n')} onChange={e => set({ reference_lines: e.target.value.split('\n') })} />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label>Studio writes</Label>
+                    <input type="number" min={4} max={60} className="w-full rounded-lg border-2 border-neutral-300 px-3 py-2 text-base" value={brief.n} onChange={e => set({ n: Number(e.target.value) })} />
+                  </div>
+                  <div>
+                    <Label>Writing model</Label>
+                    <input list="studio-models" className="w-full rounded-lg border-2 border-neutral-300 px-3 py-2 text-base" value={brief.model} onChange={e => set({ model: e.target.value })} />
+                    <datalist id="studio-models">{['gpt-4o', 'gpt-4.1', 'gpt-5.5', 'claude-opus-5', 'gpt-5-mini'].map(m => <option key={m} value={m} />)}</datalist>
+                  </div>
+                </div>
+              </div>
+            )}
+          </section>
+          <p className="text-sm text-neutral-500">Every line, yours or Studio’s, gets the same checks: limits, compliance and brand rules, persona turn-offs, glance and product clarity, near-duplicates, and a skeptic’s objection. Flags, not scores.</p>
         </div>
-        <div className="flex items-center gap-4 border-t border-neutral-200 pt-5">
-          <PinkButton onClick={onGenerate} disabled={running || !brief.fields.length}>{running ? 'Running…' : 'Generate and check'}</PinkButton>
-          {est && <div className="text-base text-neutral-600">~${est.usd.toFixed(2)} · {est.minutes}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ---------- runs: saved by person, continue any time ----------
+
+function RunsList({ user, tick, meta, onContinue }: { user: string; tick: number; meta: Meta; onContinue: (id: string) => void }) {
+  const [mine, setMine] = useState(true);
+  const [runs, setRuns] = useState<RunSummary[]>([]);
+  useEffect(() => { studio.batches(mine && user ? user : undefined).then(setRuns).catch(() => setRuns([])); }, [user, mine, tick]);
+  return (
+    <section className="rounded-xl border border-neutral-200 bg-white p-4">
+      <div className="mb-3 flex items-center gap-2">
+        <h3 className="mr-auto text-lg font-semibold">{mine && user ? 'Your runs' : 'All runs'}</h3>
+        <GhostButton active={mine} className="px-2 py-1 text-sm" onClick={() => setMine(true)}>Mine</GhostButton>
+        <GhostButton active={!mine} className="px-2 py-1 text-sm" onClick={() => setMine(false)}>All</GhostButton>
+      </div>
+      {!runs.length && <p className="text-base text-neutral-500">{user ? 'No runs yet. Check your lines or generate to start one.' : 'Add your name (top right) to see your runs.'}</p>}
+      <ul className="max-h-80 space-y-2 overflow-y-auto">
+        {runs.slice(0, 30).map(r => (
+          <li key={r.id} className="flex items-center gap-3 rounded-lg border border-neutral-100 px-3 py-2">
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-base font-medium">{meta.territories[r.territory]?.name || r.territory}</div>
+              <div className="text-sm text-neutral-500">
+                {new Date(r.updated).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · {r.lines} lines{r.yours ? ` (${r.yours} yours)` : ''} · {r.kept} kept{!mine && r.created_by ? ` · ${r.created_by}` : ''}
+              </div>
+            </div>
+            <GhostButton className="px-3 py-1 text-sm" onClick={() => onContinue(r.id)}>Continue</GhostButton>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function UserBadge({ user, onChange }: { user: string; onChange: (n: string) => void }) {
+  const [editing, setEditing] = useState(!user);
+  const [draft, setDraft] = useState(user);
+  if (editing) {
+    return (
+      <form className="flex items-center gap-2" onSubmit={e => { e.preventDefault(); if (draft.trim()) { onChange(draft.trim()); setEditing(false); } }}>
+        <input autoFocus value={draft} onChange={e => setDraft(e.target.value)} placeholder="Your name" className="w-36 rounded-lg border-2 px-2 py-1 text-base" style={{ borderColor: PINK }} />
+        <button className="rounded-lg px-3 py-1 text-sm font-semibold text-white" style={{ background: PINK }}>Save</button>
+      </form>
+    );
+  }
+  return <button onClick={() => setEditing(true)} className="rounded-full border border-neutral-300 px-3 py-1 text-base text-neutral-800 hover:border-neutral-500" title="Runs are saved under this name">{user} ✎</button>;
+}
+
+// ---------- territories: editable, with history ----------
+
+function Territories({ meta, onSaved, onBrief }: { meta: Meta; onSaved: () => void; onBrief: (code: string) => void }) {
+  const [editing, setEditing] = useState<string | null>(null); // code, or 'new:<persona>'
+  const [showRetired, setShowRetired] = useState(false);
+  return (
+    <div className="max-w-7xl space-y-8">
+      <div className="flex flex-wrap items-end gap-4">
+        <div className="mr-auto">
+          <h1 className="text-3xl font-bold tracking-tight" style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>Territories</h1>
+          <p className="max-w-3xl text-lg text-neutral-700">These start from the pitch. Edit them as client feedback and your preferences come in: every change keeps who made it and why, and the pitch version stays on record.</p>
         </div>
-        <p className="text-sm text-neutral-500">Checks run on every line as it's written: character limits, compliance and brand rules, persona turn-offs, readable at a glance, product clarity, near-duplicates and a skeptic's objection. Every flag names its source. Flags, not scores. {meta.needs_review ? `${meta.needs_review} rules-file items still open for review.` : ''}</p>
-      </section>
+        <GhostButton active={showRetired} onClick={() => setShowRetired(!showRetired)}>Show retired</GhostButton>
+      </div>
+      {Object.entries(meta.personas).map(([pk, p]) => {
+        const list = Object.entries(meta.territories).filter(([, x]) => x.persona === pk && (showRetired || x.status !== 'retired'));
+        return (
+          <section key={pk}>
+            <div className="mb-3 flex items-center gap-3">
+              <h2 className="text-2xl font-bold">{p.name}</h2>
+              <GhostButton className="px-3 py-1 text-sm" onClick={() => setEditing(`new:${pk}`)}>+ New territory</GhostButton>
+            </div>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
+              {editing === `new:${pk}` && <TerritoryEditor meta={meta} persona={pk} onDone={saved => { setEditing(null); if (saved) onSaved(); }} />}
+              {list.map(([code, t]) => editing === code
+                ? <TerritoryEditor key={code} meta={meta} code={code} territory={t} persona={pk} onDone={saved => { setEditing(null); if (saved) onSaved(); }} />
+                : <TerritoryCard key={code} meta={meta} code={code} t={t} onEdit={() => setEditing(code)} onBrief={() => onBrief(code)} onSaved={onSaved} />)}
+            </div>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function TerritoryCard({ meta, code, t, onEdit, onBrief, onSaved }: { meta: Meta; code: string; t: Territory; onEdit: () => void; onBrief: () => void; onSaved: () => void }) {
+  const [history, setHistory] = useState(false);
+  const retired = t.status === 'retired';
+  const angle = meta.personas[t.persona]?.triggers.find(x => x.id === t.angle)?.label || t.angle;
+  async function toggleRetire() {
+    const note = window.prompt(retired ? 'Why restore it?' : 'Why retire it? (e.g. client feedback, 28 Sep)') ?? null;
+    if (note === null) return;
+    await studio.saveTerritory(code, { status: retired ? 'active' : 'retired' }, note);
+    onSaved();
+  }
+  return (
+    <div className={cn('flex flex-col rounded-xl border-2 bg-white p-5', retired ? 'border-neutral-200 opacity-60' : 'border-neutral-200')}>
+      <div className="mb-1 flex flex-wrap items-center gap-2">
+        <h3 className="text-xl font-bold">{t.name}</h3>
+        <Chip tone={t.origin === 'pitch' ? 'grey' : 'outline'} className={t.origin !== 'pitch' ? 'border-[#D94D8F] text-[#D94D8F]' : ''}>{t.origin === 'new' ? 'new' : t.origin === 'edited' ? 'edited' : 'from the pitch'}</Chip>
+        {retired && <Chip tone="grey">retired</Chip>}
+        {t.status === 'springboard' && <Chip tone="grey">springboard</Chip>}
+      </div>
+      <div className="mb-2 text-sm text-neutral-600">{t.format} · leads on “{angle}”</div>
+      <p className="mb-3 text-base leading-snug text-neutral-800">{t.premise}</p>
+      {t.updated_by && <p className="mb-3 text-sm text-neutral-600">Changed by {t.updated_by}, {t.updated_at?.slice(0, 10)}{t.note ? `: ${t.note}` : ''}</p>}
+      {history && t.history?.length ? (
+        <ul className="mb-3 space-y-1 border-l-2 border-neutral-200 pl-3 text-sm text-neutral-600">
+          {[...t.history].reverse().map((h, i) => (
+            <li key={i}>{h.at.slice(0, 10)} · {h.by}{h.note ? `: ${h.note}` : ''}{h.before ? ` (was “${h.before.name}”: ${h.before.premise?.slice(0, 90)}${(h.before.premise?.length || 0) > 90 ? '…' : ''})` : ' (added)'}</li>
+          ))}
+        </ul>
+      ) : null}
+      <div className="mt-auto flex flex-wrap gap-2">
+        {!retired && <PinkButton className="px-3 py-1.5 text-base" onClick={onBrief}>Write for this</PinkButton>}
+        <GhostButton onClick={onEdit}>Edit</GhostButton>
+        <GhostButton onClick={toggleRetire}>{retired ? 'Restore' : 'Retire'}</GhostButton>
+        {t.history?.length ? <GhostButton onClick={() => setHistory(!history)}>History ({t.history.length})</GhostButton> : null}
+      </div>
+    </div>
+  );
+}
+
+function TerritoryEditor({ meta, code, territory, persona, onDone }: { meta: Meta; code?: string; territory?: Territory; persona: string; onDone: (saved: boolean) => void }) {
+  const p = meta.personas[persona];
+  const [d, setD] = useState({ name: territory?.name || '', premise: territory?.premise || '', angle: territory?.angle || p.triggers[0].id, format: territory?.format || 'STATIC' });
+  const [note, setNote] = useState('');
+  const [error, setError] = useState('');
+  async function save() {
+    try { await studio.saveTerritory(code || null, { ...d, persona }, note); onDone(true); } catch (e: any) { setError(e.message); }
+  }
+  return (
+    <div className="space-y-3 rounded-xl border-2 bg-white p-5" style={{ borderColor: PINK }}>
+      <div><Label>Name</Label><input className="w-full rounded-lg border-2 border-neutral-300 px-3 py-2 text-lg" value={d.name} onChange={e => setD({ ...d, name: e.target.value })} /></div>
+      <div><Label>Premise</Label><textarea rows={3} className="w-full rounded-lg border-2 border-neutral-300 px-3 py-2 text-base" value={d.premise} onChange={e => setD({ ...d, premise: e.target.value })} /></div>
+      <div className="grid grid-cols-2 gap-3">
+        <div><Label>Leads on</Label>
+          <select className="w-full rounded-lg border-2 border-neutral-300 bg-white px-2 py-2 text-base" value={d.angle} onChange={e => setD({ ...d, angle: e.target.value })}>
+            {p.triggers.map(tr => <option key={tr.id} value={tr.id}>{tr.label}</option>)}
+          </select>
+        </div>
+        <div><Label>Format</Label>
+          <select className="w-full rounded-lg border-2 border-neutral-300 bg-white px-2 py-2 text-base" value={d.format} onChange={e => setD({ ...d, format: e.target.value })}>
+            {(meta.formats || ['STATIC', 'UGC', 'VIDEO', 'CAROUSEL']).map(f => <option key={f}>{f}</option>)}
+          </select>
+        </div>
+      </div>
+      <div><Label>Why the change</Label><input className="w-full rounded-lg border-2 border-neutral-300 px-3 py-2 text-base" value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. client feedback 28 Sep; CD preference" /></div>
+      {error && <p className="text-base text-red-700">{error}</p>}
+      <div className="flex gap-2">
+        <PinkButton className="px-4 py-2 text-base" disabled={!d.name.trim()} onClick={save}>{code ? 'Save changes' : 'Add territory'}</PinkButton>
+        <GhostButton onClick={() => onDone(false)}>Cancel</GhostButton>
+      </div>
+    </div>
+  );
+}
+
+// ---------- readout: the persona intelligence readout, to review in the tool ----------
+
+function Readout({ persona, meta }: { persona: string; meta: Meta | null }) {
+  const [docs, setDocs] = useState<RefDoc[]>([]);
+  const [text, setText] = useState('');
+  const [error, setError] = useState('');
+  useEffect(() => {
+    studio.docs().then(setDocs).catch(() => {});
+    studio.docText('readout').then(setText).catch(e => setError(e.message));
+  }, []);
+  const blocks = useMemo(() => parseMarkdown(text), [text]);
+  const toc = blocks.filter(b => b.type === 'h' && b.level <= 3) as Array<{ type: 'h'; level: number; text: string; id: string }>;
+  // Jump to the section for the persona being briefed.
+  const personaName = meta?.personas[persona]?.name.split(/[ (]/)[0].toUpperCase();
+  useEffect(() => {
+    if (!personaName || !toc.length) return;
+    const target = toc.find(h => h.level === 3 && h.text.toUpperCase().includes(personaName));
+    if (target) setTimeout(() => document.getElementById(target.id)?.scrollIntoView({ block: 'start' }), 50);
+  }, [toc.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  const deck = docs.find(d => d.id === 'readout-deck' && d.available);
+  return (
+    <div className="grid max-w-7xl grid-cols-1 gap-8 lg:grid-cols-[260px_1fr]">
+      <aside className="lg:sticky lg:top-28 lg:self-start">
+        <Label>Contents</Label>
+        <nav className="max-h-[70vh] space-y-1 overflow-y-auto text-sm">
+          {toc.map(h => <a key={h.id} href={`#${h.id}`} className={cn('block rounded px-2 py-1 hover:bg-neutral-100', h.level === 3 ? 'pl-5 text-neutral-600' : 'font-semibold')}>{h.text}</a>)}
+        </nav>
+        {deck && <a href={studio.url('/docs/readout-deck')} className="mt-4 block rounded-lg border-2 border-neutral-300 px-3 py-2 text-center text-sm font-medium">Download the deck (.pptx)</a>}
+      </aside>
+      <article className="max-w-4xl rounded-xl border border-neutral-200 bg-white p-8">
+        {error && <p className="text-lg text-red-700">{error}</p>}
+        {!error && !text && <p className="text-neutral-500">Loading…</p>}
+        <Markdown blocks={blocks} />
+      </article>
+    </div>
+  );
+}
+
+// A small, safe Markdown renderer for the readout: headings, paragraphs,
+// lists, quotes, tables, rules, bold, italic, code and links. No raw HTML.
+type MdBlock =
+  | { type: 'h'; level: number; text: string; id: string }
+  | { type: 'p'; text: string }
+  | { type: 'ul'; items: string[] }
+  | { type: 'ol'; items: string[] }
+  | { type: 'quote'; text: string }
+  | { type: 'table'; head: string[]; rows: string[][] }
+  | { type: 'hr' };
+function parseMarkdown(src: string): MdBlock[] {
+  const lines = src.replace(/\r/g, '').split('\n');
+  const out: MdBlock[] = [];
+  const slug = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const cells = (l: string) => l.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+  for (let i = 0; i < lines.length;) {
+    const l = lines[i];
+    if (!l.trim()) { i++; continue; }
+    const h = /^(#{1,6})\s+(.*)$/.exec(l);
+    if (h) { out.push({ type: 'h', level: h[1].length, text: h[2].trim(), id: slug(h[2]) || `h${i}` }); i++; continue; }
+    if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(l)) { out.push({ type: 'hr' }); i++; continue; }
+    if (l.trim().startsWith('|') && lines[i + 1] && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
+      const head = cells(l); const rows: string[][] = []; i += 2;
+      while (i < lines.length && lines[i].trim().startsWith('|')) { rows.push(cells(lines[i])); i++; }
+      out.push({ type: 'table', head, rows }); continue;
+    }
+    if (/^\s*>/.test(l)) { const q: string[] = []; while (i < lines.length && /^\s*>/.test(lines[i])) { q.push(lines[i].replace(/^\s*>\s?/, '')); i++; } out.push({ type: 'quote', text: q.join(' ') }); continue; }
+    if (/^\s*[-*+]\s+/.test(l)) { const items: string[] = []; while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*[-*+]\s+/, '')); i++; } out.push({ type: 'ul', items }); continue; }
+    if (/^\s*\d+[.)]\s+/.test(l)) { const items: string[] = []; while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*\d+[.)]\s+/, '')); i++; } out.push({ type: 'ol', items }); continue; }
+    const para: string[] = [];
+    while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|\s*[-*+]\s|\s*\d+[.)]\s|\s*>|\s*\|)/.test(lines[i])) { para.push(lines[i].trim()); i++; }
+    out.push({ type: 'p', text: para.join(' ') });
+  }
+  return out;
+}
+function Inline({ text }: { text: string }) {
+  const parts: React.ReactNode[] = [];
+  const re = /(\*\*([^*]+)\*\*|\*([^*]+)\*|_([^_]+)_|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\))/g;
+  let last = 0, m: RegExpExecArray | null, k = 0;
+  while ((m = re.exec(text))) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    if (m[2]) parts.push(<strong key={k++}>{m[2]}</strong>);
+    else if (m[3] || m[4]) parts.push(<em key={k++}>{m[3] || m[4]}</em>);
+    else if (m[5]) parts.push(<code key={k++} className="rounded bg-neutral-100 px-1 text-[0.9em]">{m[5]}</code>);
+    else if (m[6]) parts.push(<a key={k++} href={m[7]} target="_blank" rel="noreferrer" className="text-[#D94D8F] underline">{m[6]}</a>);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return <>{parts}</>;
+}
+function Markdown({ blocks }: { blocks: MdBlock[] }) {
+  return (
+    <div className="space-y-4 text-lg leading-relaxed text-neutral-800">
+      {blocks.map((b, i) => {
+        if (b.type === 'h') {
+          const cls = ['', 'text-4xl font-bold', 'mt-8 text-2xl font-bold', 'mt-6 text-xl font-bold', 'mt-4 text-lg font-semibold', 'font-semibold', 'font-semibold'][b.level];
+          return <div key={i} id={b.id} className={cn('scroll-mt-28 text-neutral-900', cls)} style={b.level <= 2 ? { fontFamily: '"Space Grotesk", system-ui, sans-serif' } : undefined}><Inline text={b.text} /></div>;
+        }
+        if (b.type === 'p') return <p key={i}><Inline text={b.text} /></p>;
+        if (b.type === 'ul') return <ul key={i} className="list-disc space-y-1 pl-6">{b.items.map((x, k) => <li key={k}><Inline text={x} /></li>)}</ul>;
+        if (b.type === 'ol') return <ol key={i} className="list-decimal space-y-1 pl-6">{b.items.map((x, k) => <li key={k}><Inline text={x} /></li>)}</ol>;
+        if (b.type === 'quote') return <blockquote key={i} className="border-l-4 pl-4 italic text-neutral-700" style={{ borderColor: PINK }}><Inline text={b.text} /></blockquote>;
+        if (b.type === 'hr') return <hr key={i} className="border-neutral-200" />;
+        return (
+          <div key={i} className="overflow-x-auto">
+            <table className="w-full border-collapse text-base">
+              <thead><tr>{b.head.map((h, k) => <th key={k} className="border-b-2 border-neutral-300 px-2 py-1 text-left font-semibold"><Inline text={h} /></th>)}</tr></thead>
+              <tbody>{b.rows.map((r, k) => <tr key={k} className="border-b border-neutral-100 align-top">{r.map((c, j) => <td key={j} className="px-2 py-1"><Inline text={c} /></td>)}</tr>)}</tbody>
+            </table>
+          </div>
+        );
+      })}
     </div>
   );
 }
 
 // ---------- 2. review grid ----------
 
-function Review({ meta, batch, setBatch, status, running, onMore }: { meta: Meta; batch: Batch | null; setBatch: React.Dispatch<React.SetStateAction<Batch | null>>; status: string; running: boolean; onMore: (l: Line, note: string) => void }) {
+function Review({ meta, batch, setBatch, status, running, onMore, onMoreRun, onDecided }: { meta: Meta; batch: Batch | null; setBatch: React.Dispatch<React.SetStateAction<Batch | null>>; status: string; running: boolean; onMore: (l: Line, note: string) => void; onMoreRun: () => void; onDecided: () => void }) {
   const [group, setGroup] = useState<'angle' | 'structure'>('angle');
   const [filter, setFilter] = useState<'all' | 'compliance' | 'open' | 'kept'>('all');
-  const [batches, setBatches] = useState<Array<{ id: string; lines: number }>>([]);
+  const [batches, setBatches] = useState<RunSummary[]>([]);
   useEffect(() => { studio.batches().then(setBatches).catch(() => {}); }, [batch?.id, running]);
 
-  if (!batch) return <div className="text-xl text-neutral-600">No batch yet. Write a brief and press Generate.</div>;
+  if (!batch) return <div className="text-xl text-neutral-600">No run open yet. Write your lines on the brief tab, or continue a saved run.</div>;
+  const yours = batch.lines.filter(l => l.model === 'human').length;
   const checked = batch.lines.filter(l => l.status === 'checked').length;
   const shown = batch.lines.filter(l =>
     filter === 'all' ? true : filter === 'compliance' ? l.flags.some(f => f.severity === 'compliance') : filter === 'open' ? !l.decision : l.decision === 'keep' || l.decision === 'edit');
@@ -348,14 +683,15 @@ function Review({ meta, batch, setBatch, status, running, onMore }: { meta: Meta
         <div className="mr-4">
           <div className="text-2xl font-bold">{meta.personas[batch.brief.persona]?.name} · {t?.name}</div>
           <div className="text-base text-neutral-600">
-            {checked} of {batch.lines.length} checked · writer {batch.brief.model}
+            {checked} of {batch.lines.length} checked{yours ? ` · ${yours} yours` : ''} · writer {batch.brief.model}{batch.created_by ? ` · run by ${batch.created_by}` : ''}
             {batch.stats.near_duplicates_removed ? ` · ${batch.stats.near_duplicates_removed} near-duplicates removed` : ''}
-            {batch.stats.timings_ms.total ? ` · ${(batch.stats.timings_ms.total / 1000).toFixed(0)}s · $${batch.stats.usd_total.toFixed(2)}` : ''}
+            {batch.stats.timings_ms.total ? ` · ${(batch.stats.timings_ms.total / 1000).toFixed(0)}s` : ''}
           </div>
         </div>
         <select className="rounded-lg border-2 border-neutral-300 bg-white px-3 py-1.5 text-base" value={batch.id} onChange={e => studio.batch(e.target.value).then(setBatch)}>
           {[...batches.map(b => b.id), ...(batches.some(b => b.id === batch.id) ? [] : [batch.id])].map(id => <option key={id} value={id}>{id}</option>)}
         </select>
+        <PinkButton className="px-4 py-2 text-base" disabled={running} onClick={onMoreRun}>{yours ? 'Generate around your lines' : 'Generate more in this run'}</PinkButton>
         <div className="ml-auto flex flex-wrap gap-2">
           <span className="self-center text-sm font-semibold uppercase text-neutral-500">Group</span>
           <GhostButton active={group === 'angle'} onClick={() => setGroup('angle')}>Angle</GhostButton>
@@ -374,7 +710,7 @@ function Review({ meta, batch, setBatch, status, running, onMore }: { meta: Meta
         <section key={g}>
           <h2 className="mb-3 mt-2 text-xl font-bold capitalize">{g} <span className="font-normal text-neutral-500">({ls.length})</span></h2>
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            {ls.map(l => <LineCard key={l.id} meta={meta} line={l} onChange={replace} onMore={onMore} />)}
+            {ls.map(l => <LineCard key={l.id} meta={meta} line={l} onChange={x => { replace(x); onDecided(); }} onMore={onMore} />)}
           </div>
         </section>
       ))}
@@ -394,18 +730,20 @@ function LineCard({ meta, line, onChange, onMore }: { meta: Meta; line: Line; on
   const over = f && chars > f.visible;
   const openFlag = line.flags.find(x => x.rule === open);
   const decide = async (patch: Partial<Pick<Line, 'decision' | 'edited_text' | 'note'>>) => onChange(await studio.decide(line.batch, line.id, patch));
-  const border = line.decision === 'keep' || line.decision === 'edit' ? 'border-emerald-500' : line.decision === 'cut' ? 'border-neutral-300 opacity-50' : 'border-neutral-200';
+  const border = line.decision === 'keep' || line.decision === 'edit' ? 'border-emerald-500' : line.decision === 'cut' ? 'border-neutral-300 opacity-50' : line.model === 'human' ? 'border-[#D94D8F]/50' : 'border-neutral-200';
 
   return (
     <div className={cn('rounded-xl border-2 bg-white p-5', border)}>
       <div className="mb-2 flex flex-wrap items-center gap-2 text-sm text-neutral-600">
         <span className="font-mono font-semibold text-neutral-900">{line.id.split('-').pop()}</span>
+        {line.model === 'human' && <Chip tone="outline" className="border-[#D94D8F] font-semibold text-[#D94D8F]">yours</Chip>}
         <span>{f?.label || line.field}</span>
         <span className={cn('font-mono', over ? 'font-bold text-amber-700' : '')}>{chars}/{f?.visible}</span>
         <span>· {line.structure.replace('_', ' ')}</span>
         <span>· {line.tone_label}</span>
         {line.parent && <Chip tone="outline">more like {line.parent.split('-').pop()}</Chip>}
         {line.status !== 'checked' && <span className="animate-pulse" style={{ color: PINK }}>checking…</span>}
+        {line.decided_by && line.decision && <span className="ml-auto text-xs text-neutral-500">{line.decision} · {line.decided_by}</span>}
       </div>
 
       {editing ? (
