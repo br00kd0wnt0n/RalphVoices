@@ -135,6 +135,9 @@ const PLANTED: Array<{ text: string; field: string; expect: string; severity?: S
   { text: 'With Trupanion, your vet can be paid directly at checkout at participating hospitals.', field: 'meta_primary', expect: 'COMP_DIRECT_PAY', absent: true },
   { text: 'We pay the whole bill.', field: 'meta_headline', expect: 'COMP_PAID_SHARE' },
   { text: 'Even pre-existing conditions are covered from day one.', field: 'meta_primary', expect: 'COMP_PREEXISTING' },
+  // Rules v2.3: only claims that pre-existing conditions are covered; the honest CUR_VET caveat must pass.
+  { text: 'Even pre-existing conditions are covered', field: 'meta_headline', expect: 'COMP_PREEXISTING' },
+  { text: 'Conditions that appear before coverage begins may be considered pre-existing.', field: 'meta_primary', expect: 'COMP_PREEXISTING', absent: true },
   { text: 'Checkups covered. Vaccines covered. Relax.', field: 'meta_primary', expect: 'COMP_ROUTINE' },
   { text: 'Every claim paid in seconds.', field: 'meta_headline', expect: 'COMP_CLAIM_SPEED' },
   { text: 'Cheap pet insurance can cost you more when it matters most.', field: 'meta_primary', expect: 'COMP_CHEAP_LOCKED', severity: 'warn' },

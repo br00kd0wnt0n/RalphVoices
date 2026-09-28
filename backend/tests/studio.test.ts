@@ -224,3 +224,13 @@ test("'price leads' is only red when the line has a price; a model hit without o
   S.reconcile(priced, rules);
   assert.equal(priced.flags[0].severity, 'compliance', 'with a price, model and yes/no agreeing still makes it red');
 });
+
+test("rules for images only (applies_to: 'visual') never reach Studio's text checks", async () => {
+  const stored = JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8'));
+  assert.ok(stored.brand.some((b: any) => b.id === 'BR_VIS_EXAMPLE' && b.applies_to === 'visual'), 'the example keeps a visual-only rule for B2');
+  const loaded = S.loadRules();
+  assert.equal(loaded.brand.some(b => b.id === 'BR_VIS_EXAMPLE'), false);
+  assert.ok(loaded.brand.some(b => b.id === 'BR_CASE'), 'text rules stay');
+  const d = S.deterministicFlags({ text: 'Any line at all.', field: 'meta_primary', structure: 'plain_promise', persona: 'OWN' }, loaded, { banned_words: [] });
+  assert.equal(d.flags.some(f => f.rule === 'BR_VIS_EXAMPLE'), false);
+});

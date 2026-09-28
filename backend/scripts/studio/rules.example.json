@@ -45,7 +45,8 @@
   ],
   "brand": [
     { "id": "BR_NAMING", "rule": "Don't call it 'pet cover'.", "severity": "warn", "check": "banned", "patterns": ["\\bpet cover\\b"], "status": "pending", "source": "GUIDE p.4" },
-    { "id": "BR_CASE", "rule": "Sentence case in copy.", "severity": "warn", "check": "case", "source": "GUIDE p.5" }
+    { "id": "BR_CASE", "rule": "Sentence case in copy.", "severity": "warn", "check": "case", "source": "GUIDE p.5" },
+    { "id": "BR_VIS_EXAMPLE", "rule": "Photography to avoid: an example visual-only rule.", "severity": "warn", "check": "model", "applies_to": "visual", "source": "GUIDE p.9" }
   ],
   "clarity": [
     { "id": "CL_GLANCE", "rule": "Readable at a glance.", "severity": "warn", "check": "model", "source": "HOUSE" },
