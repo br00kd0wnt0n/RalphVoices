@@ -140,9 +140,12 @@ export class Preflight {
   async estimate(uploadId: string): Promise<{ usd: number; seconds: number }> {
     const u = (await this.db.query(`SELECT * FROM studio_asset_uploads WHERE id = $1`, [uploadId])).rows[0];
     if (!u) throw new Error('No such upload');
-    const files = (await this.db.query(`SELECT filename, content_type FROM studio_upload_files WHERE upload_id = $1 AND role = 'asset' ORDER BY position`, [uploadId])).rows;
+    const rows = (await this.db.query(`SELECT position, filename, content_type FROM studio_upload_files WHERE upload_id = $1 AND role = 'asset' ORDER BY position`, [uploadId])).rows;
+    const files = [];
+    for (const f of rows) files.push({ path: '', filename: f.filename, contentType: f.content_type, data: this.engine.name === 'mock' ? undefined : (await this.file(uploadId, f.position)).data });
     const { copy } = await this.findStub(u.stub);
-    return this.engine.estimate({ stub: u.stub, persona: u.persona, territory: u.territory, kind: u.kind, copy, files: files.map(f => ({ path: '', filename: f.filename, contentType: f.content_type })) });
+    const st = S.getStore();
+    return this.engine.estimate({ stub: u.stub, persona: u.persona, territory: u.territory, kind: u.kind, copy, files, rules: await st.getRules(), rubric: await st.getInput('rubric') });
   }
 
   async createAudit(uploadId: string, user?: string): Promise<string> {
@@ -169,19 +172,22 @@ export class Preflight {
       }
       const { copy } = await this.findStub(a.stub);
       const rules = await S.getStore().getRules();   // the full file: B2 uses the visual-only items Studio's text checks skip
+      const rubric = await S.getStore().getInput('rubric');
       emit({ type: 'status', message: `Auditing ${a.stub} (${a.kind})` });
-      const result = await this.engine.run({ stub: a.stub, persona: a.persona, territory: a.territory, kind: a.kind, files, copy, rules }, message => emit({ type: 'status', message }));
+      const result = await this.engine.run({ stub: a.stub, persona: a.persona, territory: a.territory, kind: a.kind, files, copy, rules, rubric }, message => emit({ type: 'status', message }));
       // Frames the flags rest on are kept as thumbnails next to the upload.
       let framePos = 1000;
       const flags = [];
       for (const f of result.flags) {
         const { frame, ...rest } = f;
-        let frameRef: { upload_id: string; position: number; label?: string } | undefined;
+        let frameRef: { upload_id?: string; position?: number; label?: string; description?: string } | undefined;
         if (frame?.path && fs.existsSync(frame.path)) {
           const pos = framePos++;
           await this.putFile(a.upload_id, a.stub, pos, { buffer: fs.readFileSync(frame.path), filename: path.basename(frame.path), contentType: /\.png$/i.test(frame.path) ? 'image/png' : 'image/jpeg' }, 'frame');
           frameRef = { upload_id: a.upload_id, position: pos, label: frame.label };
-        }
+        } else if (frame && frame.asset_position !== undefined && frame.asset_position < rows.length) {
+          frameRef = { upload_id: a.upload_id, position: rows[frame.asset_position].position, label: frame.label };
+        } else if (frame) frameRef = { label: frame.label, description: frame.description };
         flags.push({ ...rest, frame: frameRef });
       }
       await this.db.query(`DELETE FROM studio_audit_flags WHERE audit_id = $1`, [auditId]);
@@ -326,13 +332,21 @@ export class Preflight {
   async featuresCsv(threshold = 0.5): Promise<string> {
     const r = S.loadRules();
     const keys = Object.keys(r.features?.items || {});
-    const rows = [['stub', 'features', 'angle', 'persona', 'asset', 'kind', 'red', 'amber', 'grey', ...keys.map(k => `p_${k}`)]];
+    // B2's own row when the audit came from B2 (same columns either way).
+    const head = ['stub', 'features', 'angle', 'persona', 'kind', 'red', 'amber', 'grey', ...keys.map(k => `p_${k}`)];
+    const rows = [head];
+    const { b2FeaturesRow } = await import('./preflightB2.js');
     for (const s of await this.stubs()) {
       if (s.audit?.status !== 'done') continue;
       const a = (await this.db.query(`SELECT result FROM studio_audits WHERE id = $1`, [s.audit.id])).rows[0];
+      if (a?.result?.report) {
+        const row = b2FeaturesRow({ ...a.result.report, stub: s.stub }, keys);
+        rows.push(head.map(h => String(row[h] ?? '')));
+        continue;
+      }
       const feats: Record<string, number> = a?.result?.features || {};
       rows.push([s.stub, keys.filter(k => (feats[k] ?? 0) >= threshold).join('; '), r.territories[s.territory]?.angle || '', s.persona,
-        s.upload?.files.map(f => f.filename).join(' | ') || '', s.upload?.kind || '', String(s.audit.red), String(s.audit.amber), String(s.audit.grey),
+        s.upload?.kind || '', String(s.audit.red), String(s.audit.amber), String(s.audit.grey),
         ...keys.map(k => (feats[k] === undefined ? '' : Number(feats[k]).toFixed(3)))]);
     }
     return S.toCsv(rows);

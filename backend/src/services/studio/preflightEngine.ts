@@ -13,11 +13,13 @@ export interface SignedCopy { line_id: string; field: string; label: string; tex
 
 export interface AuditInput {
   stub: string; persona: string; territory: string; kind: AssetKind;
-  /** Local temp copies of the uploaded files, in card order. */
-  files: Array<{ path: string; filename: string; contentType: string }>;
+  /** Local temp copies of the uploaded files, in card order (estimate gets the bytes instead of a path). */
+  files: Array<{ path: string; filename: string; contentType: string; data?: Buffer }>;
   /** The signed-off wording for this stub (Ready for production). */
   copy: SignedCopy[];
   rules: any;
+  /** The M3 rubric (B2's feature wordings), when the engine needs it. */
+  rubric?: any;
 }
 
 export interface AuditFlag {
@@ -29,8 +31,14 @@ export interface AuditFlag {
   why?: string;
   /** Where on the asset: 'card 2', '1.5 s (hook)', 'caption'. */
   where?: string;
-  /** A frame the flag rests on: a local image path the service stores as a thumbnail. */
-  frame?: { path: string; label?: string };
+  /**
+   * Where on the asset the flag rests: an uploaded card (asset_position, for
+   * statics and carousels), a thumbnail file the service stores (path), or a
+   * video frame described in words (label, description).
+   */
+  frame?: { path?: string; asset_position?: number; label?: string; description?: string };
+  /** Another persona's turn-off (a grey note on how the asset travels). */
+  cross_persona?: boolean;
   /** 'copy_match' for the headline check. */
   check?: string;
   /** Cross-persona grey notes name the persona they come from. */
@@ -48,11 +56,13 @@ export interface AuditResult {
   notes?: string[];
   frames_unavailable?: boolean;
   usd: number;
+  /** The engine's full report (B2's AuditReport), kept for exports. */
+  report?: any;
 }
 
 export interface AuditEngine {
   name: string;
-  estimate(input: Omit<AuditInput, 'rules'> & { rules?: any }): { usd: number; seconds: number };
+  estimate(input: AuditInput): { usd: number; seconds: number };
   run(input: AuditInput, progress: (message: string) => void): Promise<AuditResult>;
 }
 
@@ -104,7 +114,8 @@ export const mockEngine: AuditEngine = {
     const flags = copyMatchFlags(i.copy, found);
     if (/pays? for itself/i.test(found)) flags.push({ rule: 'COMP_PAYS_FOR_ITSELF', severity: 'red', label: 'Never say or imply the policy pays for itself.', source: 'rules', quote: 'pays for itself', where: 'on the asset' });
     if (i.kind === 'video') flags.push({ rule: 'FRAMES_UNAVAILABLE', severity: 'grey', label: 'Video frames unavailable (no ffmpeg); judged on the transcript and caption only', source: 'engine' });
-    flags.push({ rule: 'CROSS_PERSONA', severity: 'grey', label: 'How another persona might read it', source: 'engine', persona: 'OWN', why: 'Owners may read this as a price message.' });
+    flags.push({ rule: 'CROSS_PERSONA', severity: 'grey', label: 'How another persona might read it', source: 'engine', persona: 'OWN', cross_persona: true, why: 'Owners may read this as a price message.' });
+    if (i.kind !== 'video' && flags.length) flags[0].frame = { asset_position: 0, label: 'card 1' };
     return {
       engine: 'mock', flags, text_found: found, transcript: i.kind === 'video' ? found : undefined,
       features: { humour: 0.1, direct_vet_pay: /paid directly|pays your vet/i.test(found) ? 0.9 : 0.05, dollar_figure: /\$\d/.test(found) ? 0.95 : 0.02 },

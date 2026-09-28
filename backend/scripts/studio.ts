@@ -42,6 +42,7 @@ import { FileStore } from '../src/services/studio/store.js';
 import { PgStore } from '../src/services/studio/pgStore.js';
 import { Preflight } from '../src/services/studio/preflight.js';
 import { mockEngine } from '../src/services/studio/preflightEngine.js';
+import { b2Engine } from '../src/services/studio/preflightB2.js';
 
 const argv = process.argv.slice(2);
 const command = argv[0];
@@ -315,7 +316,8 @@ async function main() {
       if (flag('dry-run')) { console.log('Dry run: nothing written.'); return; }
       if (!pgStore) throw new Error('db-import needs --store pg (or --dry-run)');
       if (flag('with-rules')) await pgStore.putRules(rules.version || 'imported', rules, { activate: true, by: opt('user', 'import'), notes: 'Imported from the local studio folder' });
-      for (const key of ['personas', 'voices'] as const) { const v = await src.getInput(key); if (v) await pgStore.putInput(key, v); }
+      // Inputs: persona seeds, lived voices, and the M3 rubric (Pre-flight's audit engine needs it).
+      for (const key of ['personas', 'voices', 'rubric'] as const) { const v = await src.getInput(key); if (v) await pgStore.putInput(key, v); }
       for (const [code, t] of Object.entries(edits)) await pgStore.saveTerritoryEdit(code, t);
       for (const f of plan.briefs) await pgStore.saveBrief(JSON.parse(fs.readFileSync(path.join(briefsDir, f), 'utf8')));
       let lines = 0;
@@ -389,8 +391,8 @@ async function serve() {
     capWindow: 'all',
     askOver: ASK_OVER,
     // Pre-flight needs the database: `serve --store pg`. Locally, files stay in Postgres unless R2 is configured.
-    // The mock audit engine until B2's library is in (it swaps in here and in routes/studio.ts).
-    preflight: pgStore ? { service: new Preflight(pgStore.pool as any, mockEngine), canSetReady: () => true } : undefined,
+    // B2's audit engine (the mock with --mock).
+    preflight: pgStore ? { service: new Preflight(pgStore.pool as any, MOCK ? mockEngine : b2Engine({ capUsd: async () => Math.max(0, CAP - (await S.readSpend()).total_usd) })), canSetReady: () => true } : undefined,
   }));
 
   app.listen(port, '127.0.0.1', () => {

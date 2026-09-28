@@ -241,7 +241,7 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
 
   // 5. Exports: the features CSV in B2's format for B3, and the handoff list.
   const feats = S.parseCsv(await pf.featuresCsv());
-  assert.deepEqual(feats[0].slice(0, 9), ['stub', 'features', 'angle', 'persona', 'asset', 'kind', 'red', 'amber', 'grey']);
+  assert.deepEqual(feats[0].slice(0, 8), ['stub', 'features', 'angle', 'persona', 'kind', 'red', 'amber', 'grey']);
   assert.equal(feats[1][0], stub);
   assert.equal(feats[1][1], 'direct_vet_pay');
   const hand = S.parseCsv(await pf.handoffCsv());

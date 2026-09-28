@@ -3,7 +3,7 @@
 // imports src/db (which loads .env), so it can't reach a database by accident.
 
 import pg from 'pg';
-import type { Asset, EditRecord, SpendEntry, StudioStore } from './store.js';
+import type { Asset, EditRecord, InputKey, SpendEntry, StudioStore } from './store.js';
 
 type Queryable = Pick<pg.Pool, 'query' | 'connect'>;
 
@@ -54,7 +54,7 @@ export class PgStore implements StudioStore {
   }
   async listRules() { return (await this.db.query(`SELECT version, status, notes, created_by, created_at FROM studio_rules ORDER BY created_at DESC`)).rows; }
 
-  async getInput(key: 'personas' | 'voices') {
+  async getInput(key: InputKey) {
     const r = await this.db.query(`SELECT value FROM studio_inputs WHERE key = $1`, [key]);
     return r.rows[0]?.value ?? null;
   }
