@@ -210,6 +210,32 @@ from B2 or B1) and `live_metrics` (a daily or weekly row per ad).
 - the model recovers planted effects in simulation
 - a thin week produces "too early to call", not a false winner
 
+### B3b. Live tab in the Studio (added 28 Sep, Brook)
+
+Where B3's weekly read shows up in the tool. B3 itself runs from the command
+line and produces a Markdown note and a CSV. The first one or two weekly reads
+stay documents that Brook edits and presents. After that, the read moves into
+the hosted Studio, so the people who write the lines see what happened to them.
+
+- **A read-only "Live" tab in the hosted Studio.** Same sign-in and STUDIO_EMAILS
+  list.
+- **Per line marked Ready for production:** the live read for its ad(s), joined by
+  naming stub:
+  - ahead, behind, tied, too early to call or keep testing, with the 90% range
+  - the call, and the week it was made
+  - the expectation recorded at sign-off, shown next to it, so expected versus
+    actual is visible line by line
+- **Per persona:** the week's one-screen summary (B3's note, after Brook's edits).
+- **No new statistics.** It reads B3's stored results. Same wording rules (no
+  scores, no "predict", no "winner" inside a tie).
+- **Build:** an API route over B3's data behind `authMiddleware` and STUDIO_EMAILS,
+  plus one screen. About 1-2 days.
+- **Timing:** after the hosted Studio deploy and the first live week, so it's
+  designed around real data. Migration 016 ships in the same deliberate deploy
+  with Brook.
+- **It needs:** B1's signed-off lines to keep their naming stub (they do), and
+  B3 to expose a per-stub read of its latest results.
+
 ### B4. Expectations, round close and learning ledger (build 4)
 
 - **Expectations record.** Before each flight, for each persona: which lines
@@ -277,7 +303,8 @@ are in progress. 009–014 stay unused.
 | Early October | Full **B1 Studio** build, shaped by the creative lead's feedback on the demo and the first session | |
 | Week of 5 Oct | **B3** ingestion and model on Add3's historic export (parallel session). **B2** on the first production assets. Decision gate if the data has arrived | |
 | Week of 12 Oct | B3 ready before go-live. Month 1 expectations locked (B4 record) | Month 1 creative live (mid-Oct target) |
-| Week of 19 Oct | First B3 weekly note | First Wednesday read |
+| Week of 19 Oct | First B3 weekly note (a document Brook edits); the second read also a document | First Wednesday read |
+| Late Oct | **B3b Live tab** in the hosted Studio, built on the first real weeks; deployed with migration 016 | Nick sees live results next to his signed-off lines |
 | From 26 Oct | B4 round close and ledger. Month 2 batch through the full B1 Studio and B2 | Month 1 round close; Month 2 pre-test |
 
 Rough effort, before review: B1 about 5–6 days, B2 about 2, B3 about 4–5,

@@ -28,6 +28,7 @@ Coordination and oversight happen in one standing session. Building happens in t
 | B1-lite | Copy Studio as a script (v2) | voices-v2-plan.md B1 | `voices/b1-lite` | none | Fri 25 Sep | — | done (PRs #6–#9) |
 | B1 Studio | Hosted Copy Studio (v2) | voices-v2-plan.md B1; b1-studio-plan.md | `voices/b1-studio` | 015 | 28 Sep | B1-lite | B3 |
 | B3 | Ingestion and weekly read (v2) | voices-v2-plan.md B3 | `voices/b3-weekly-read` | 016 | 28 Sep | — | B1 Studio |
+| B3b | Live tab in the hosted Studio (v2) | voices-v2-plan.md B3b | `voices/b3b-live-tab` | none (reads 015 + 016) | after the first live week | B1 Studio deployed, B3 | — |
 | SM | Measurement: feasibility spike (gate), then pairwise or cold probes, blind controls, sweep statistics | R1 note, ranked list #1, #6, #7 | `voices/measurement` | 015 | ~30 Sep, after Monday's prediction of record | S1, twin fixes | — |
 | S2 | Evidence layer + Month-1 predicted-vs-actual | Phase 1, §4 008 (now 014) | `voices/evidence-layer` | 014 | after SM merged | SM | — |
 | S3 | Twin seeding, drift check, noise floor | Phase 1 (content and calibration) | `voices/twin-calibration` | none | ~7 Oct | S2 deployed | S4 (backend only) |
