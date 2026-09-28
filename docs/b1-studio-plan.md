@@ -113,7 +113,7 @@ The name is **Ready for production**, never "Approved": creative sign-off isn't 
   - `studio_expectations`: persona, territory, signoff id, line ids, reason, created_by, created_at and sha256.
   - Overrides (rule, reason, by, at) and compliance status (status, note, by, at, and the hash of the wording it was reviewed on) live on the line in `studio_lines.body`, like decisions. Every change is also recorded in `studio_edits`.
   - If compliance reviewed a different wording from the one signed off, the handoff shows the line as pending.
-- **Backend: built 28 Sep** (`services/studio/ready.ts`). Acceptance tests: `tests/helpers/readyScenario.ts`, run on files and Postgres. The page (the Ready for production tab) comes with the rest of phase 4's frontend.
+- **Built 28 Sep:** backend `services/studio/ready.ts` (acceptance tests `tests/helpers/readyScenario.ts`, files and Postgres) and the page's Ready for production tab. The naming stub is stored on every line version and expectations record, and the nav leaves room for B3b's read-only "Live" tab after Ready for production.
 
 ### 5. Moving today's material across
 
@@ -141,8 +141,8 @@ Testing:
 | 1 | Move the engine into `src/services/studio`; `StudioStore` with `FileStore`; CLI unchanged; tests green | 0.5 day |
 | 2 | Migration 015 and `PgStore`; tests against the local database | 1 day |
 | 3 | `/api/studio` routes: auth, access list, database-backed jobs with reconnect, rules endpoints, monthly cap (**done 28 Sep**; `docs/build-log/B1-studio-p3.md`) | 1 day |
-| 4 | Frontend: production route and nav, signed-in client, attribution and history, per-user stars, rules view, iframe check | 1 day |
-| 4a | **Ready for production** (added 28 Sep): sign-off with versions and hashes, red-flag gate with overrides, expectations record, compliance status, handoff pack and compliance sheet; backend, tests and page | **+1 day** |
+| 4 | Frontend: production route and nav, signed-in client, attribution and history, per-user stars, rules view, iframe check (**done 28 Sep**; `docs/build-log/B1-studio-p4.md`) | 1 day |
+| 4a | **Ready for production** (added 28 Sep): sign-off with versions and hashes, red-flag gate with overrides, expectations record, compliance status, handoff pack and compliance sheet; backend, tests and page (**done 28 Sep**) | **+1 day** |
 | 5 | Import script, handoff, and staging-style check on the local database with real keys | 0.5 day |
 | 6 | Deploy with Brook: env vars, migration, rules upload, production smoke test | 0.5 day |
 | | **Total** | **about 6 days** (was 5; +1 day for Ready for production. v2 plan estimate: 5–6) |

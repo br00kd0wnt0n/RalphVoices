@@ -27,7 +27,7 @@ export interface Signoff {
   lines: Array<{ line_id: string; batch_id: string; version: number; sha256: string; stub: string; field: string; text: string; chars: number; overrides: Line['overrides'] }>;
   expectation_id: string;
 }
-export interface Expectation { id: string; persona: string; territory: string; signoff_id: string; line_ids: string[]; reason: string; created_by: string; created_at: string; sha256: string }
+export interface Expectation { id: string; persona: string; territory: string; signoff_id: string; line_ids: string[]; stubs: string[]; reason: string; created_by: string; created_at: string; sha256: string }
 
 const COMPLIANCE: ComplianceStatus[] = ['pending', 'cleared', 'changes_requested'];
 
@@ -106,15 +106,19 @@ export async function readyView(persona: string, territory: string) {
   }
   const signoffs = ((await st.listSignoffs()) as Signoff[]).filter(s => s.persona === persona && s.territory === territory).sort((a, b) => a.version - b.version);
   const expectations = ((await st.listExpectations()) as Expectation[]).filter(e => e.persona === persona && e.territory === territory);
+  const stubs = new Map((await shortlist()).map(r => [r.id, r.stub]));
   const out = [];
   for (const l of lines) {
     out.push({
       line: l, final_text: finalText(l), sha256: lineHash(l),
+      // The naming code it was signed off under, or the one it would get now.
+      stub: l.ready?.stub || stubs.get(l.id) || l.id,
       red: unresolvedRed(l),
       compliance: l.compliance || { status: 'pending' as const },
       versions: (await st.listLineVersions(l.id)) as LineVersion[],
     });
   }
+  out.sort((a, b) => a.stub.localeCompare(b.stub, undefined, { numeric: true }));
   return { persona, territory, lines: out, signoffs, expectations, latest: signoffs[signoffs.length - 1] || null };
 }
 
@@ -151,18 +155,20 @@ export async function signOff(input: { persona: string; territory: string; line_
   for (const lineId of ids) {
     const { line: l } = byId.get(lineId)!;
     const h = lineHash(l);
+    const stub = l.ready?.stub || stubs.get(l.id) || l.id;
     const versions = (await st.listLineVersions(l.id)) as LineVersion[];
     let v = versions.find(x => x.sha256 === h);
     if (!v) {
-      v = { line_id: l.id, batch_id: l.batch, version: Math.max(0, ...versions.map(x => x.version)) + 1, field: l.field, text: finalText(l), sha256: h, created_by: by, created_at: now, signoff_id: id };
+      v = { line_id: l.id, batch_id: l.batch, version: Math.max(0, ...versions.map(x => x.version)) + 1, field: l.field, text: finalText(l), sha256: h, created_by: by, created_at: now, signoff_id: id, stub };
       await st.saveLineVersion(v);
     }
-    signed.push({ line_id: l.id, batch_id: l.batch, version: v.version, sha256: h, stub: l.ready?.stub || stubs.get(l.id) || l.id, field: l.field, text: v.text, chars: [...v.text].length, overrides: l.overrides || [] });
+    signed.push({ line_id: l.id, batch_id: l.batch, version: v.version, sha256: h, stub, field: l.field, text: v.text, chars: [...v.text].length, overrides: l.overrides || [] });
   }
   signed.sort((a, b) => a.stub.localeCompare(b.stub));
   const setHash = sha256(JSON.stringify(signed.map(x => [x.line_id, x.version, x.sha256])));
-  const expectation: Expectation = { id: `${id}-expectation`, persona, territory, signoff_id: id, line_ids: expIds, reason, created_by: by, created_at: now, sha256: '' };
-  expectation.sha256 = sha256(JSON.stringify({ persona, territory, signoff_id: id, signoff_sha256: setHash, line_ids: expIds, reason, created_by: by, created_at: now }));
+  const expStubs = expIds.map(x => signed.find(y => y.line_id === x)!.stub);
+  const expectation: Expectation = { id: `${id}-expectation`, persona, territory, signoff_id: id, line_ids: expIds, stubs: expStubs, reason, created_by: by, created_at: now, sha256: '' };
+  expectation.sha256 = sha256(JSON.stringify({ persona, territory, signoff_id: id, signoff_sha256: setHash, line_ids: expIds, stubs: expStubs, reason, created_by: by, created_at: now }));
   const signoff: Signoff = { id, persona, territory, version, ready_by: by, ready_at: now, sha256: setHash, lines: signed, expectation_id: expectation.id };
   await st.saveSignoff(signoff);
   await st.saveExpectation(expectation);

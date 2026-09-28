@@ -119,7 +119,9 @@ export interface Line {
 export interface Override { rule: string; reason: string; by: string; at: string }
 export type ComplianceStatus = 'pending' | 'cleared' | 'changes_requested';
 /** One wording of a line as it stood at a sign-off or after one. Never rewritten. */
-export interface LineVersion { line_id: string; batch_id: string; version: number; field: string; text: string; sha256: string; created_by: string; created_at: string; signoff_id?: string }
+export interface LineVersion { line_id: string; batch_id: string; version: number; field: string; text: string; sha256: string; created_by: string; created_at: string; signoff_id?: string;
+  /** The naming code the line was signed off under (B3b joins live results on it). */
+  stub?: string }
 export const sha256 = (s: string) => crypto.createHash('sha256').update(s, 'utf8').digest('hex');
 /** The words that go to production: the edit when there is one. */
 export const finalText = (l: Pick<Line, 'decision' | 'edited_text' | 'text'>) => (l.decision === 'edit' && l.edited_text ? l.edited_text : l.text);
@@ -1462,7 +1464,7 @@ export async function setDecision(batchId: string, lineId: string, patch: { deci
     const versions = await st.listLineVersions(l.id);
     const h = lineHash(l);
     if (!versions.some(v => v.sha256 === h)) {
-      await st.saveLineVersion({ line_id: l.id, batch_id: batchId, version: Math.max(0, ...versions.map(v => v.version)) + 1, field: l.field, text: finalText(l), sha256: h, created_by: user || 'unknown', created_at: l.decided_at! });
+      await st.saveLineVersion({ line_id: l.id, batch_id: batchId, version: Math.max(0, ...versions.map(v => v.version)) + 1, field: l.field, text: finalText(l), sha256: h, created_by: user || 'unknown', created_at: l.decided_at!, stub: l.ready.stub });
     }
     l.ready.changed_since = true;
   } else if (l.ready) l.ready.changed_since = false;

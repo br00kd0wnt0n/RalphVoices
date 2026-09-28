@@ -49,7 +49,10 @@ export async function scenario() {
   const stored = (await S.getStore().listExpectations()).find((e: any) => e.id === exp.id);
   assert.ok(stored);
   assert.match(stored.sha256, /^[0-9a-f]{64}$/);
-  assert.equal(stored.sha256, S.sha256(JSON.stringify({ persona: 'OWN', territory: 'OWN_CALM', signoff_id: signoff.id, signoff_sha256: signoff.sha256, line_ids: [clean.id], reason: expectation.reason, created_by: 'nick', created_at: stored.created_at })));
+  // The naming code is stored on the expectation and on every signed-off version (B3b joins live results on it).
+  assert.deepEqual(stored.stubs, [signoff.lines.find(x => x.line_id === clean.id)!.stub]);
+  assert.match(stored.stubs[0], /^OWN_/);
+  assert.equal(stored.sha256, S.sha256(JSON.stringify({ persona: 'OWN', territory: 'OWN_CALM', signoff_id: signoff.id, signoff_sha256: signoff.sha256, line_ids: [clean.id], stubs: stored.stubs, reason: expectation.reason, created_by: 'nick', created_at: stored.created_at })));
 
   // 3. An edit after sign-off creates version 2 and keeps version 1; the sign-off is untouched.
   const v1Text = signoff.lines.find(x => x.line_id === clean.id)!.text;
@@ -59,6 +62,7 @@ export async function scenario() {
   assert.deepEqual(versions.map((v: any) => v.version), [1, 2]);
   assert.equal(versions[0].text, v1Text);
   assert.notEqual(versions[0].sha256, versions[1].sha256);
+  assert.ok(versions.every((v: any) => v.stub === stored.stubs[0]), 'every version carries the naming code');
   const again = (await S.getStore().listSignoffs()).find((s: any) => s.id === signoff.id);
   assert.equal(again.lines.find((x: any) => x.line_id === clean.id).text, v1Text, 'the signed-off wording is never rewritten');
 

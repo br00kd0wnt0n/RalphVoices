@@ -240,18 +240,18 @@ export class PgStore implements StudioStore {
   async listSignoffs() { return (await this.db.query(`SELECT body FROM studio_signoffs ORDER BY ready_at`)).rows.map(r => r.body); }
   async saveLineVersion(v: any) {
     await this.db.query(
-      `INSERT INTO studio_line_versions (line_id, batch_id, version, field, text, sha256, created_by, created_at, signoff_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (line_id, version) DO NOTHING`,
-      [v.line_id, v.batch_id, v.version, v.field, v.text, v.sha256, v.created_by, v.created_at, v.signoff_id ?? null]);
+      `INSERT INTO studio_line_versions (line_id, batch_id, version, field, text, sha256, created_by, created_at, signoff_id, stub)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (line_id, version) DO NOTHING`,
+      [v.line_id, v.batch_id, v.version, v.field, v.text, v.sha256, v.created_by, v.created_at, v.signoff_id ?? null, v.stub ?? null]);
   }
   async listLineVersions(lineId: string) {
     const r = await this.db.query(`SELECT * FROM studio_line_versions WHERE line_id = $1 ORDER BY version`, [lineId]);
-    return r.rows.map(x => ({ ...x, created_at: new Date(x.created_at).toISOString(), signoff_id: x.signoff_id ?? undefined }));
+    return r.rows.map(x => ({ ...x, created_at: new Date(x.created_at).toISOString(), signoff_id: x.signoff_id ?? undefined, stub: x.stub ?? undefined }));
   }
   async saveExpectation(e: any) {
     await this.db.query(
-      `INSERT INTO studio_expectations (id, persona, territory, signoff_id, line_ids, reason, created_by, created_at, sha256) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [e.id, e.persona, e.territory, e.signoff_id, JSON.stringify(e.line_ids), e.reason, e.created_by, e.created_at, e.sha256]);
+      `INSERT INTO studio_expectations (id, persona, territory, signoff_id, line_ids, stubs, reason, created_by, created_at, sha256) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [e.id, e.persona, e.territory, e.signoff_id, JSON.stringify(e.line_ids), JSON.stringify(e.stubs ?? []), e.reason, e.created_by, e.created_at, e.sha256]);
   }
   async listExpectations() {
     const r = await this.db.query(`SELECT * FROM studio_expectations ORDER BY created_at`);

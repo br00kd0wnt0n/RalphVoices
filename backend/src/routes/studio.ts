@@ -7,6 +7,7 @@
 // Env: STUDIO_EMAILS (comma-separated; fails closed when unset),
 // STUDIO_MONTHLY_CAP_USD (default 50), STUDIO_ASK_OVER_USD (default 2),
 // OPENAI_API_KEY, ANTHROPIC_API_KEY (Claude writers in blind compare).
+// STUDIO_MOCK=true (local development only) uses the mock client.
 
 import express, { type NextFunction, type Response } from 'express';
 import { pool } from '../db/index.js';
@@ -23,6 +24,8 @@ S.setStore(store);
 const pacer = new S.Pacer({}, 8);
 const cap = Number(process.env.STUDIO_MONTHLY_CAP_USD || 50);
 const askOver = Number(process.env.STUDIO_ASK_OVER_USD || 2);
+// Local development only: STUDIO_MOCK=true runs the hosted routes on the mock client (no key, no cost). Ignored in production.
+const mock = process.env.STUDIO_MOCK === 'true' && process.env.NODE_ENV !== 'production';
 
 const displayName = (req: AuthRequest) => req.user?.email?.toLowerCase();
 
@@ -37,8 +40,8 @@ router.get('/access', authMiddleware as any, (req: AuthRequest, res: Response) =
 router.use(authMiddleware, requireStudioAccess as any);
 router.use(createStudioRouter({
   who: req => displayName(req as AuthRequest),
-  api: req => new S.Api({ cap, capWindow: 'month', pacer, user: displayName(req as AuthRequest) }),
-  mock: false,
+  api: req => new S.Api({ mock, cap, capWindow: 'month', pacer, user: displayName(req as AuthRequest) }),
+  mock,
   cap,
   capWindow: 'month',
   askOver,

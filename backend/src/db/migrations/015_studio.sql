@@ -149,8 +149,10 @@ CREATE TABLE IF NOT EXISTS studio_line_versions (
   created_by  TEXT,
   created_at  TIMESTAMPTZ NOT NULL,
   signoff_id  TEXT,                            -- set when the version was the one signed off
+  stub        TEXT,                            -- naming code (PERSONA_TERRITORY_FORMAT_v#_PLATFORM); B3b joins live results on it
   PRIMARY KEY (line_id, version)
 );
+ALTER TABLE studio_line_versions ADD COLUMN IF NOT EXISTS stub TEXT;
 
 -- Which line(s) the team expects to lead, and why; locked with the sign-off. Read by B4 (expected vs actual).
 CREATE TABLE IF NOT EXISTS studio_expectations (
@@ -159,9 +161,11 @@ CREATE TABLE IF NOT EXISTS studio_expectations (
   territory   TEXT NOT NULL,
   signoff_id  TEXT NOT NULL,
   line_ids    JSONB NOT NULL,
+  stubs       JSONB NOT NULL DEFAULT '[]'::jsonb, -- naming codes of line_ids, same order (B3b joins live results on them)
   reason      TEXT NOT NULL,
   created_by  TEXT NOT NULL,
   created_at  TIMESTAMPTZ NOT NULL,
   sha256      TEXT NOT NULL
 );
+ALTER TABLE studio_expectations ADD COLUMN IF NOT EXISTS stubs JSONB NOT NULL DEFAULT '[]'::jsonb;
 CREATE INDEX IF NOT EXISTS studio_expectations_pt ON studio_expectations (persona, territory, created_at);
