@@ -165,3 +165,117 @@ test('a fresh database with no rules: routes say no_rules, and an admin can stil
     assert.equal((await call('GET', '/meta')).status, 200);
   } finally { server.close(); }
 });
+
+test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Ready to traffic, exports', { skip }, async () => {
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const R = await import('../src/services/studio/ready.js');
+  const tables = ['studio_asset_status', 'studio_audit_agreements', 'studio_audit_flags', 'studio_audits', 'studio_upload_files', 'studio_asset_uploads', 'studio_expectations', 'studio_line_versions', 'studio_signoffs', 'studio_edits', 'studio_line_embeddings', 'studio_lines', 'studio_batches', 'studio_taste', 'studio_spend'];
+  await (store as any).db.query(`TRUNCATE ${tables.join(', ')} RESTART IDENTITY CASCADE`);
+  const rules = JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8'));
+  await store.putRules('pf-1', { ...rules, version: 'pf-1' }, { activate: true });
+  await S.refreshRules();
+
+  // Sign off one line with a caveat (the direct-pay one).
+  const api = new S.Api({ mock: true });
+  const caveatLine = 'Your vet gets paid directly. At partner clinics.';
+  const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'pf', own_lines: [{ text: caveatLine, field: 'meta_primary' }] }), api, () => {}, { ownOnly: true, user: 'nick' });
+  const line = run.lines[0];
+  await S.setDecision(run.id, line.id, { decision: 'keep' }, 'nick');
+  for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines[0])) await R.overrideFlag(run.id, line.id, f.rule, 'Test line for Pre-flight', 'nick');
+  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: [line.id], expectation: { line_ids: [line.id], reason: 'Only line.' } }, 'nick');
+  const stub = signoff.lines[0].stub;
+
+  const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
+  const png = (text: string) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from(`fake image VOICES_TEXT: ${text}`)]);
+  const stubs = await pf.stubs();
+  assert.deepEqual(stubs.map(s => s.stub), [stub]);
+  assert.equal(stubs[0].copy[0].text, caveatLine);
+  await assert.rejects(() => pf.upload('NOPE_v1_META', [{ buffer: png('x'), filename: 'a.png', contentType: 'image/png' }]), /isn't in a Ready for production sign-off/);
+  await assert.rejects(() => pf.upload(stub, [{ buffer: Buffer.alloc(26 * 1024 * 1024), filename: 'huge.png', contentType: 'image/png' }]), /limit is 25 MB/);
+  await assert.rejects(() => pf.upload(stub, [{ buffer: png('x'), filename: 'a.pdf', contentType: 'application/pdf' }]), /Upload images/);
+
+  // 1. The asset drops the caveat: copy match is red, and the headline flag.
+  const bad = png('Your vet gets paid directly.');
+  const up1 = await pf.upload(stub, [{ buffer: bad, filename: 'static-v1.png', contentType: 'image/png' }], 'nick');
+  assert.equal(up1.kind, 'static');
+  assert.ok(Buffer.compare((await pf.file(up1.upload_id, 0)).data, bad) === 0, 'the file comes back byte for byte');
+  const a1 = await pf.createAudit(up1.upload_id, 'nick');
+  const events: any[] = [];
+  await pf.runAudit(a1, e => events.push(e), 'nick');
+  assert.ok(events.some(e => e.type === 'done'));
+  let rep = await pf.report(stub, 'brook');
+  assert.equal(rep.flags[0].check, 'copy_match');
+  assert.equal(rep.flags[0].severity, 'red');
+  assert.match(rep.flags[0].quote, /At partner clinics/);
+  assert.equal(rep.audit!.result.text_found, 'Your vet gets paid directly.');
+  assert.ok(rep.audit!.result.objection);
+
+  // 2. Agree or disagree, per person; the round's rate.
+  await pf.agree(rep.flags[0].id, true, undefined, 'brook');
+  await pf.agree(rep.flags[1].id, false, 'Not relevant here', 'brook');
+  await pf.agree(rep.flags[0].id, true, undefined, 'nick');
+  const ag = await pf.agreement();
+  assert.deepEqual([ag.marked, ag.agree], [3, 2]);
+  assert.equal(ag.rate, 0.667);
+  assert.equal((await pf.report(stub, 'brook')).flags[1].mine, false);
+
+  // 3. Ready to traffic is blocked by the red, then allowed after an override with a reason.
+  await assert.rejects(() => pf.setReady(stub, true, 'nick'), /1 red flag to fix/);
+  await assert.rejects(() => pf.override(rep.flags[0].id, '', 'nick'), /written reason/);
+  await assert.rejects(() => pf.override(rep.flags.find((f: any) => f.severity === 'grey').id, 'a grey note', 'nick'), /Only red flags/);
+  await pf.override(rep.flags[0].id, 'The caveat is in the caption for this placement.', 'nick');
+  assert.equal((await pf.setReady(stub, true, 'nick')).status, 'ready');
+  rep = await pf.report(stub);
+  assert.equal(rep.flags[0].override.by, 'nick');
+  assert.equal(rep.status.ready_by, 'nick');
+
+  // 4. A new upload reopens the stub; a fixed asset clears copy match without an override.
+  const up2 = await pf.upload(stub, [{ buffer: png(caveatLine), filename: 'static-v2.png', contentType: 'image/png' }], 'nick');
+  assert.equal((await pf.report(stub)).status.status, 'open');
+  await assert.rejects(() => pf.setReady(stub, true, 'nick'), /Run the audit on the latest upload/);
+  await pf.runAudit(await pf.createAudit(up2.upload_id, 'nick'));
+  assert.equal((await pf.report(stub)).flags.some((f: any) => f.check === 'copy_match'), false);
+  assert.equal((await pf.setReady(stub, true, 'brook')).status, 'ready');
+  assert.equal((await pf.report(stub)).history.length, 2);
+
+  // 5. Exports: the features CSV in B2's format for B3, and the handoff list.
+  const feats = S.parseCsv(await pf.featuresCsv());
+  assert.deepEqual(feats[0].slice(0, 9), ['stub', 'features', 'angle', 'persona', 'asset', 'kind', 'red', 'amber', 'grey']);
+  assert.equal(feats[1][0], stub);
+  assert.equal(feats[1][1], 'direct_vet_pay');
+  const hand = S.parseCsv(await pf.handoffCsv());
+  assert.equal(hand[1][0], stub);
+  assert.equal(hand[1][5], 'Ready to traffic');
+  assert.equal(/approved/i.test(await pf.handoffCsv()), false);
+
+  // 6. Carousel and video kinds.
+  assert.equal((await pf.upload(stub, [1, 2].map(i => ({ buffer: png(`card ${i}`), filename: `card${i}.png`, contentType: 'image/png' })))).kind, 'carousel');
+  const vid = await pf.upload(stub, [{ buffer: png('Your vet gets paid directly. At partner clinics.'), filename: 'hero.mp4', contentType: 'video/mp4' }]);
+  assert.equal(vid.kind, 'video');
+  await pf.runAudit(await pf.createAudit(vid.upload_id));
+  assert.equal((await pf.report(stub)).audit!.result.frames_unavailable, true);
+
+  // 7. Over HTTP: a real multipart upload through the shared router.
+  const express = (await import('express')).default;
+  const { createStudioRouter } = await import('../src/services/studio/router.js');
+  const app = express();
+  app.use('/s', createStudioRouter({ who: () => 'nick', api: () => new S.Api({ mock: true }), mock: true, cap: 50, capWindow: 'month', askOver: 2, preflight: { service: pf, canSetReady: () => false } }));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(r => server.once('listening', r));
+  const base = `http://127.0.0.1:${(server.address() as any).port}/s`;
+  try {
+    const form = new FormData();
+    form.append('files', new Blob([png(caveatLine)], { type: 'image/png' }), 'upload.png');
+    const up = await fetch(`${base}/preflight/stubs/${stub}/uploads`, { method: 'POST', body: form });
+    const body: any = await up.json();
+    assert.equal(up.status, 200, JSON.stringify(body));
+    assert.equal(body.kind, 'static');
+    assert.ok(body.estimate.seconds > 0);
+    const file = await fetch(`${base}/preflight/files/${body.upload_id}/0`);
+    assert.equal(file.headers.get('content-type'), 'image/png');
+    const ready = await fetch(`${base}/preflight/stubs/${stub}/ready`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    assert.equal(ready.status, 403, 'only the creative lead or an admin sets Ready to traffic');
+    assert.equal(((await (await fetch(`${base}/meta`)).json()) as any).preflight.enabled, true);
+  } finally { server.close(); }
+});

@@ -15,6 +15,8 @@ export class PgStore implements StudioStore {
   readonly kind = 'pg' as const;
   constructor(private db: Queryable) {}
 
+  /** The connection, for features that keep their own tables (Pre-flight, migration 017). */
+  get pool(): Queryable { return this.db; }
   static fromUrl(url: string): PgStore { return new PgStore(new pg.Pool({ connectionString: url, max: 5 })); }
   async close() { await (this.db as pg.Pool).end?.(); }
 

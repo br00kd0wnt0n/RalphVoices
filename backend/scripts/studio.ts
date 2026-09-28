@@ -40,6 +40,8 @@ import path from 'node:path';
 import * as S from '../src/services/studio/engine.js';
 import { FileStore } from '../src/services/studio/store.js';
 import { PgStore } from '../src/services/studio/pgStore.js';
+import { Preflight } from '../src/services/studio/preflight.js';
+import { mockEngine } from '../src/services/studio/preflightEngine.js';
 
 const argv = process.argv.slice(2);
 const command = argv[0];
@@ -386,6 +388,9 @@ async function serve() {
     cap: CAP,
     capWindow: 'all',
     askOver: ASK_OVER,
+    // Pre-flight needs the database: `serve --store pg`. Locally, files stay in Postgres unless R2 is configured.
+    // The mock audit engine until B2's library is in (it swaps in here and in routes/studio.ts).
+    preflight: pgStore ? { service: new Preflight(pgStore.pool as any, mockEngine), canSetReady: () => true } : undefined,
   }));
 
   app.listen(port, '127.0.0.1', () => {

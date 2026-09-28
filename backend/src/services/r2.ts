@@ -6,7 +6,7 @@
 // R2_BUCKET_NAME, and R2_PUBLIC_URL (the public bucket domain used to construct
 // fetchable URLs).
 
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { randomUUID } from 'crypto';
 
 const R2_ENABLED = process.env.ENABLE_R2_STORAGE === 'true';
@@ -92,4 +92,30 @@ export async function fetchAsBuffer(url: string): Promise<Buffer> {
   }
   const arrayBuffer = await response.arrayBuffer();
   return Buffer.from(arrayBuffer);
+}
+
+// ---------- private objects (Copy Studio Pre-flight) ----------
+// Stored under a key the caller chooses and read back through the signed-in
+// API, never through R2_PUBLIC_URL. STUDIO_R2_BUCKET can point them at a
+// private bucket; otherwise they share R2_BUCKET_NAME, where the key's random
+// upload id keeps them unguessable (the URL is never sent to a browser).
+
+function privateBucket(): string {
+  const bucket = process.env.STUDIO_R2_BUCKET || process.env.R2_BUCKET_NAME;
+  if (!bucket) throw new Error('R2_BUCKET_NAME (or STUDIO_R2_BUCKET) not configured.');
+  return bucket;
+}
+
+export async function putPrivateObject(key: string, buffer: Buffer, contentType: string): Promise<void> {
+  const s3 = getClient();
+  if (!s3) throw new Error('R2 storage not configured.');
+  await s3.send(new PutObjectCommand({ Bucket: privateBucket(), Key: key, Body: buffer, ContentType: contentType }));
+}
+
+export async function getPrivateObject(key: string): Promise<Buffer> {
+  const s3 = getClient();
+  if (!s3) throw new Error('R2 storage not configured.');
+  const res = await s3.send(new GetObjectCommand({ Bucket: privateBucket(), Key: key }));
+  const bytes = await res.Body!.transformToByteArray();
+  return Buffer.from(bytes);
 }

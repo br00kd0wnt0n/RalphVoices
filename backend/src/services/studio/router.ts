@@ -8,6 +8,8 @@ import express, { type Request, type Response, type Router } from 'express';
 import * as S from './engine.js';
 import type { PgStore } from './pgStore.js';
 import * as R from './ready.js';
+import multer from 'multer';
+import { R2_FILE_CAP, type Preflight } from './preflight.js';
 
 export interface StudioRouterOptions {
   /** The person acting on this request (recorded on runs, decisions, edits and spend). */
@@ -24,6 +26,8 @@ export interface StudioRouterOptions {
   rules?: { store: PgStore; isAdmin(req: Request): boolean };
   /** Extra fields for /meta (e.g. the signed-in user). */
   metaExtra?(req: Request): Record<string, unknown>;
+  /** Pre-flight (needs the database). canSetReady: who may mark assets Ready to traffic. */
+  preflight?: { service: Preflight; canSetReady(req: Request): boolean };
 }
 
 // Top-level keys every rules version needs (scripts/studio/rules.schema.json `required`).
@@ -86,7 +90,8 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
 
   r.get('/meta', wrap(async (req, res) => {
     const { studio_dir, ...m } = await S.meta();
-    res.json({ ...m, ...(o.rules ? {} : { studio_dir }), spend: await spent(), mock: o.mock, cap: o.cap, cap_window: o.capWindow, ask_over: o.askOver, ...(o.metaExtra?.(req) || {}) });
+    const pf = o.preflight ? { enabled: true, storage: o.preflight.service.storage, engine: o.preflight.service.engineName, can_set_ready: o.preflight.canSetReady(req) } : { enabled: false };
+    res.json({ ...m, ...(o.rules ? {} : { studio_dir }), preflight: pf, spend: await spent(), mock: o.mock, cap: o.cap, cap_window: o.capWindow, ask_over: o.askOver, ...(o.metaExtra?.(req) || {}) });
   }));
   r.post('/estimate', wrap(async (req, res) => {
     const b = S.makeBrief(req.body.brief || {});
@@ -170,6 +175,52 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   r.get('/handoff.csv', wrap(async (req, res) => download(res, 'text/csv; charset=utf-8', 'ready-for-production.csv', (await R.handoffPack(pt(req.query))).csv)));
   r.get('/handoff.md', wrap(async (req, res) => download(res, 'text/markdown; charset=utf-8', 'ready-for-production.md', (await R.handoffPack(pt(req.query))).md)));
   r.get('/compliance-sheet.csv', wrap(async (req, res) => download(res, 'text/csv; charset=utf-8', 'trupanion-compliance-sheet.csv', (await R.handoffPack(pt(req.query))).complianceCsv)));
+
+  // ----- Pre-flight (step 6): finished assets per signed-off naming stub -----
+  if (o.preflight) {
+    const pf = o.preflight.service;
+    const files = multer({ storage: multer.memoryStorage(), limits: { fileSize: R2_FILE_CAP, files: 20 } });
+    r.get('/preflight/stubs', wrap(async (req, res) => res.json(await pf.stubs(pt(req.query)))));
+    r.post('/preflight/stubs/:stub/uploads', (req, res, next) => files.array('files', 20)(req, res, (err: any) => {
+      if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? `A file is over the ${Math.round(R2_FILE_CAP / 1048576)} MB limit` : String(err.message || err) });
+      next();
+    }), wrap(async (req, res) => {
+      const list = ((req as any).files || []) as Express.Multer.File[];
+      const up = await pf.upload(req.params.stub, list.map(f => ({ buffer: f.buffer, filename: f.originalname, contentType: f.mimetype })), o.who(req));
+      res.json({ ...up, estimate: await pf.estimate(up.upload_id) });
+    }));
+    r.get('/preflight/uploads/:id/estimate', wrap(async (req, res) => res.json(await pf.estimate(req.params.id))));
+    r.post('/preflight/uploads/:id/audit', wrap(async (req, res) => {
+      const e = await pf.estimate(req.params.id);
+      const so = await spent();
+      if (!o.mock && e.usd > o.askOver && !req.body?.confirm) return res.status(409).json({ needs_confirm: true, estimate: e.usd });
+      if (!o.mock && so + e.usd > o.cap) return res.status(402).json({ error: `This would take spend past ${capText()} ($${so.toFixed(2)} spent).` });
+      const auditId = await pf.createAudit(req.params.id, o.who(req));
+      const who = o.who(req);
+      res.json({ audit: auditId, job: startJob(`preflight~${auditId}`, emit => pf.runAudit(auditId, emit, who)), estimate: e });
+    }));
+    r.get('/preflight/stubs/:stub/report', wrap(async (req, res) => res.json(await pf.report(req.params.stub, o.who(req)))));
+    r.get('/preflight/files/:upload/:position', wrap(async (req, res) => {
+      const f = await pf.file(req.params.upload, Number(req.params.position));
+      res.setHeader('Content-Type', f.contentType);
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.setHeader('Content-Disposition', `inline; filename="${f.filename.replace(/[^\w.~-]/g, '_')}"`);
+      res.send(f.data);
+    }));
+    r.post('/preflight/flags/:id/agree', wrap(async (req, res) => res.json(await pf.agree(req.params.id, !!req.body?.agree, req.body?.note, o.who(req)))));
+    r.post('/preflight/flags/:id/override', wrap(async (req, res) => {
+      if (!o.preflight!.canSetReady(req)) return res.status(403).json({ error: 'Only the people who mark assets Ready to traffic can override a red flag' });
+      res.json(await pf.override(req.params.id, String(req.body?.reason || ''), o.who(req)));
+    }));
+    r.post('/preflight/stubs/:stub/ready', wrap(async (req, res) => {
+      if (!o.preflight!.canSetReady(req)) return res.status(403).json({ error: 'Ready to traffic is set by the creative lead or an admin' });
+      try { res.json(await pf.setReady(req.params.stub, req.body?.ready !== false, o.who(req))); }
+      catch (err: any) { if (err.blocking) return res.status(409).json({ error: err.message, blocking: err.blocking }); throw err; }
+    }));
+    r.get('/preflight/agreement', wrap(async (req, res) => res.json(await pf.agreement(pt(req.query)))));
+    r.get('/preflight/features.csv', wrap(async (_req, res) => download(res, 'text/csv; charset=utf-8', 'preflight-features.csv', await pf.featuresCsv())));
+    r.get('/preflight/handoff.csv', wrap(async (_req, res) => download(res, 'text/csv; charset=utf-8', 'asset-handoff.csv', await pf.handoffCsv())));
+  }
 
   // ----- territories -----
   r.post('/territories', wrap(async (req, res) => res.json(await S.saveTerritory(null, req.body?.territory || {}, String(req.body?.note || ''), o.who(req)))));
