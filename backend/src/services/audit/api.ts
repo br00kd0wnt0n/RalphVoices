@@ -40,6 +40,9 @@ const FATAL_CODES = new Set(['credit_balance_exhausted', 'insufficient_quota', '
 
 export class FatalError extends Error {}
 
+/** Consecutive calls failing after their retries before the audit stops. */
+export const MAX_FAIL_STREAK = 3;
+
 /** Image tokens as OpenAI counts them: 85 at detail low; tiles of 512 at high. */
 export function imageTokens(w: number, h: number, detail: 'low' | 'high'): number {
   if (detail === 'low') return 85;
@@ -116,6 +119,21 @@ export class AuditApi {
   usd = 0;
   calls = 0;
   stopped: string | null = null;
+  private failStreak = 0;
+
+  /**
+   * After retries: out of credits stops the audit at once, and so do
+   * MAX_FAIL_STREAK calls in a row failing (a network or OpenAI outage), rather
+   * than every remaining call backing off for minutes each.
+   */
+  private failed(err: any): never {
+    if (err?.fatal) { this.stopped = `${err.code}: ${String(err.message).slice(0, 120)}`; throw new FatalError(this.stopped); }
+    if (++this.failStreak >= MAX_FAIL_STREAK) {
+      this.stopped = `OpenAI unreachable: ${this.failStreak} calls in a row failed after retries (last: ${err?.status ?? ''} ${String(err?.message || err).slice(0, 80)})`;
+      throw new FatalError(this.stopped);
+    }
+    throw err;
+  }
 
   constructor(private o: ApiOptions) {
     if (o.client) this.client = o.client;
@@ -187,10 +205,8 @@ export class AuditApi {
         // Out of credits or quota also comes back as a 429, but waiting won't fix it.
         if (FATAL_CODES.has(err?.code)) { err.status = 402; err.fatal = true; }
         throw err;
-      }), `${req.stage}`, 6).catch((err: any) => {
-        if (err?.fatal) { this.stopped = `${err.code}: ${String(err.message).slice(0, 120)}`; throw new FatalError(this.stopped); }
-        throw err;
-      });
+      }), `${req.stage}`, 6).catch((err: any) => this.failed(err));
+      this.failStreak = 0;
       res = {
         text: r.choices[0]?.message?.content || '',
         top: (r.choices[0]?.logprobs?.content?.[0]?.top_logprobs || []) as TopLogprob[],
@@ -223,7 +239,8 @@ export class AuditApi {
     else {
       const r: any = await withRetry(() => this.client!.audio.transcriptions.create({ file: fs.createReadStream(file), model, prompt: 'A social ad for Trupanion, medical insurance for cats and dogs.' }, { maxRetries: 0 })
         .catch((err: any) => { if (FATAL_CODES.has(err?.code)) { err.status = 402; err.fatal = true; } throw err; }), stage, 4)
-        .catch((err: any) => { if (err?.fatal) { this.stopped = `${err.code}: ${String(err.message).slice(0, 120)}`; throw new FatalError(this.stopped); } throw err; });
+        .catch((err: any) => this.failed(err));
+      this.failStreak = 0;
       text = String(r?.text || '').trim();
       this.usd += usd;
     }

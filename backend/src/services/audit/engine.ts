@@ -96,13 +96,18 @@ export function describeAsset(a: Asset, frames: FrameText[]): string {
   return lines.join('\n');
 }
 
-async function readFrames(a: Asset, ctx: AuditContext): Promise<FrameText[]> {
+async function readFrames(a: Asset, ctx: AuditContext, errors: string[]): Promise<FrameText[]> {
   return pool(a.frames.map(f => async () => {
-    const r = await ctx.api.chat({
+    let r;
+    try { r = await ctx.api.chat({
       stage: `read ${a.name} ${f.label}`, model: MODELS.vision, max_tokens: 700, temperature: 0, json: true,
       system: 'You transcribe and describe social ad images for a compliance check. Be literal and complete; never paraphrase the words.',
       content: [img(f.path, 'high'), txt('Return JSON {"text": "every word visible in the image, exactly as written, in reading order, one line per block of text; include small print, legal lines, logos and buttons", "description": "two to four plain, factual sentences on what the image shows: the people (rough ages; any children), the animals (species; whether each looks happy, neutral, sad, scared or unwell), the setting, and whether a Trupanion name or logo is visible"}')],
-    });
+    }); } catch (e: any) {
+      if (e instanceof FatalError) throw e;
+      errors.push(`read ${f.label}: ${e?.message}`);
+      r = { text: '{}' };
+    }
     let j: any = {};
     try { j = JSON.parse(r.text || '{}'); } catch { /* keep empty */ }
     const tess = ocr(f.path, ctx.tools || defaultTools());
@@ -184,7 +189,8 @@ export async function auditAsset(a: Asset, ctx: AuditContext): Promise<AssetAudi
 
   // 1. Read the frames; transcribe the voice-over when there's no transcript sidecar.
   progress('read', `reading ${a.frames.length} image${a.frames.length === 1 ? '' : 's'}`);
-  const frames = a.text_only ? [] : await readFrames(a, ctx);
+  const frames = a.text_only ? [] : await readFrames(a, ctx, errors);
+  if (errors.some(e => e.startsWith('read '))) notes.push(`Some images couldn't be read (${errors.filter(e => e.startsWith('read ')).length}); their text is missing from the checks.`);
   lap('read');
   if (a.kind === 'video' && !a.transcript && (a.has_audio || !tools.ffprobe)) {
     try {

@@ -4,6 +4,18 @@ Session B2 of VOICES v2 (Trupanion), Mon 28 Sep 2026. Branch `voices/b2-prefligh
 
 It checks finished ad assets (statics, carousel cards, video keyframes) against each persona's turn-offs, the copy and brand rules and clarity at a glance, before they go to Add3. It also tags each asset with the rubric's content features, which B3's weekly read learns from. **Flags with sources; never a score or a ranking.**
 
+## Update, 28 Sep (later): the engine behind Studio's Pre-flight step
+
+Brook's answers and a scope change, relayed by the coordination session:
+
+- **A library for the hosted Studio.** `backend/src/services/audit/index.ts`: `estimateAudit(input, opts)` → `{calls, usd, seconds}`, `runAudit(input, opts)` → a versioned report JSON (`report_version: 1`), `featuresRow(report)` → one row for B3's `weekly.ts features`. The input is `{stub, persona?, files: [{name, mime, data: Buffer}], copy?: {primary_text, headline, description, caption, hook, on_image}, transcript?}`. The rules, the rubric, the files and the OpenAI client are passed in; the library reads nothing from the client folders and writes only under `tmpDir`, which it removes afterwards (on failure too). The B1 Studio session builds the UI, routes and storage against it. The CLI runs on the same engine and now also writes `reports/<stub>.json` in the same shape.
+- **Copy match** (`copyMatch.ts`): the signed-off copy for the stub is compared with the text read off the asset and the voice-over, normalised (case, punctuation and line breaks don't count), card by card first. **Amber `COPY_MATCH`** when an on-image line or hook is reworded (both versions quoted, with the share of words matching) or missing; **grey** when a signed-off headline isn't on the image (it may run in the headline field); **red `COPY_CAVEAT`** when a required caveat in the signed-off on-asset copy (e.g. "at participating hospitals") isn't on the asset. Post text (primary text, description, caption) isn't expected on the asset, but it still gets every rule check.
+- **Voice-over transcription**: the `transcript` input or a `<stub>.transcript.txt` sidecar first; otherwise the soundtrack is extracted with ffmpeg and transcribed with **gpt-4o-transcribe** ($0.006 a minute, in the estimate). whisper-1 was tried first and dropped 8 of 10 words after a pause on the planted clip. Spoken claims get every copy and compliance check (`where: voice-over`).
+- **Rules v2.3** (from the B1 Studio session, approved by Brook): `COMP_PREEXISTING` is narrowed, so CUR_VET's accurate caveat is no longer red. Brand items with `applies_to: "visual"` (the 16 photography don'ts, BG p.18) or `"both"` (`BR_SAD_PET`) are asked of the images as yes/no items, using their own wordings when the rules give them and otherwise two built from the rule text; `"visual"` items skip the text patterns and aren't asked of text-only concept cards.
+- **Thresholds in config** (`services/audit/config.json`): text load stays at 20 words on the first frame or card (Brook, 28 Sep); feature tag threshold, lone yes/no threshold, models, default pace, transcription price, the $2 ask and the $10 cap.
+- **ffmpeg, ffprobe and tesseract are detected** (`ffmpegPath`, else PATH). Without ffmpeg, a video is audited on its copy and voice-over (the mp4 goes to transcription directly) with the note "Video frames unavailable (ffmpeg not installed)". Without tesseract there's no OCR cross-check, and a note says so.
+- **Outages stop the audit.** A network drop during run 3 left one card's calls backing off for an hour. Now 3 calls in a row failing after their retries stop the audit with "OpenAI unreachable". A failed image read no longer aborts the audit: its text is missing and a note says so.
+
 ## What shipped
 
 - `backend/scripts/audit.ts`: the CLI.
@@ -16,7 +28,8 @@ It checks finished ad assets (statics, carousel cards, video keyframes) against 
   - `engine.ts`: one asset through every layer; severity by agreement
   - `report.ts`, `round.ts`: reports, summary, features CSV, flag sheet, the M3 comparison
   - `mock.ts`: `--mock` stand-in (tesseract for vision, keyword heuristics for yes/no)
-- `backend/tests/audit.test.ts` with made-up rules in `backend/tests/fixtures/audit/`.
+- `index.ts` (the library API), `copyMatch.ts`, `tools.ts` (binary detection), `config.json` + `config.ts` (thresholds)
+- `backend/tests/audit.test.ts` and `backend/tests/auditLibrary.test.ts` (a fake OpenAI client through the real API layer), with made-up rules in `backend/tests/fixtures/audit/`.
 
 No migration, no UI, no route, no new package, no new environment variable (optional `AUDIT_CLIENT_DIR`, `AUDIT_KEY_FILE`, read by the script only). Rules are read from the Studio rules file (v2.2), not forked.
 
@@ -98,6 +111,7 @@ Outputs are in the client folder (not the repo): `Claude outputs/voices-r1/audit
 |---|---|---|---|
 | 1 (16:41) | 234 / 234 | 0 | 0.22 (`older_pet_pitch`, FAM_JOB) |
 | 2 (17:09, after the fixes below; the feature path is unchanged) | 233 / 234 | 0 | 0.21 (`older_pet_pitch`) |
+| 3 (rules v2.3; FAM_CHILDPROOF re-run after a network drop) | 234 / 234 | 0 | 0.16 (`older_pet_pitch`) |
 
 Per feature, the mean absolute difference is 0.000–0.023 for all 15 content features; the largest per-item means are `clear_product` (0.06) and `older_pet_pitch` (0.04). The one side-flip in run 2 is `clear_product` on FAM_JOB: 0.496 against the spike's 0.64, a borderline item on both runs. No disagreement is over 0.3, so there is nothing to explain beyond run-to-run wobble on borderline items.
 
@@ -111,20 +125,23 @@ Per feature, the mean absolute difference is 0.000–0.023 for all 15 content fe
 | DINK_PLANTCAR_CAR (3 cards, "$6,000" framed as what surgery can run) | no red | no red; amber `COMP_FACT_FRAMING` (reviewer; the framing is correct, so this is noise) and `CL_GLANCE` |
 | FAM_PLANTVID_VID (9 s video from 3 cards, sidecar with "best pet insurance" and a 42-character headline) | ambers | 5 keyframes (0, 1.5, 3, 6, 8.9 s); amber `COMP_SUPERLATIVE` "best", `BR_NAMING` "pet insurance", `LIMIT_MAX` 42/40, `CL_GLANCE`, brand not clear on the 1.5 s frame (a teaser opening, correctly read) |
 
+**2b. Planted spoken claim** (`FAM_PLANTVO_VID`: the video cards plus a voice-over made with macOS `say`, "Honestly, they pay the whole vet bill"; no sidecar): transcribed by gpt-4o-transcribe word for word, 🔴 `COMP_PAID_SHARE` quoted from the voice-over (rule + reviewer, P 1.00). $0.27, 5 min.
+
 **3. Human agreement on real drafts: not yet run.** Needs the first three Month 1 drafts (due Wed 30 Sep or Thu 1 Oct) and Brook's marks on `flag-sheet.csv`; then `audit.ts agree`. Target ≥ 90%.
 
 **4. The features CSV loads into B3.** On a throwaway copy of B3's local test database (`voices_b3_test` copied to `voices_b2_featcheck` on :54329, dropped afterwards), with B3's code as of 4ee144e in its worktree: `weekly.ts features --file` read both CSVs with no errors (5 and 9 stubs parsed, none quarantined). After ingesting a four-row synthetic Meta export whose ad names carry the planted stubs plus a delivery date, `features` updated all 4 stored ads (`live_ads.features` e.g. `["direct_vet_pay", "less_hassle"]`); `weekly.ts read` on the same export reported "Features joined for 4 of 4 ads". The concept CSV carries `angle` (e.g. `DINK_A5`), which B3 tags as `angle:DINK_A5`.
 
-**Rules-file finding for Brook.** On both runs, CUR_VET gets a red `COMP_PREEXISTING`: the rules file's pattern `\bcover[^.!?]{0,40}pre-?existing` matches the card's accurate caveat (a line saying conditions that appear before coverage starts may count as pre-existing). The rule cites that slide as a source, so it may be intended as a check. If not, the pattern could exclude "may be considered / aren't covered / excluded". Studio would flag the same line. B2 doesn't change the rules file.
+**Rules-file finding for Brook (fixed in v2.3).** On runs 1 and 2, CUR_VET gets a red `COMP_PREEXISTING`: the rules file's pattern `\bcover[^.!?]{0,40}pre-?existing` matches the card's accurate caveat (a line saying conditions that appear before coverage starts may count as pre-existing). The rule cites that slide as a source, so it may be intended as a check. If not, the pattern could exclude "may be considered / aren't covered / excluded". Studio would flag the same line. B2 doesn't change the rules file. Brook had the pattern narrowed in v2.3; on run 3 CUR_VET has no red flag and none of the nine cards has one.
 
 
 ## Known gaps
 
-- **Motion and sound aren't judged.** Video is read as up to 8 still keyframes. Pacing, cuts, music, supers that appear between keyframes and anything said aloud are unseen unless a transcript sidecar is supplied. OpenAI transcription isn't wired in: at about $0.006 a minute it would cost pennies a round, but the session prompt says estimate and ask first.
+- **Motion and music aren't judged.** Video is read as up to 8 still keyframes plus the transcribed voice-over. Pacing, cuts, music, tone of voice and supers that appear between keyframes are unseen.
 - **Features are judged from stills plus a transcription**, not from watching the ad. A joke carried by timing, or a person who only appears between keyframes, can be missed.
 - **Visual turn-offs rest on the images at detail low** (512 px) plus the high-detail description. Small facial expressions on a busy frame can be missed; `BR_SAD_PET` is the one to watch.
-- **The brand guidelines' other photography don'ts** (pets outdoors without collars, AI-looking or overly staged pets, dark or desaturated photos, pet not the main subject, limit senior pets and brachycephalic breeds; BG p.18 [34]) aren't checked: they aren't in the rules file, and B2 doesn't fork it. Proposal for Brook: add them to `studio-rules.json` as `brand` items with `check: "model"`; B2 would need two wordings each (a few lines in `checks.ts`).
-- **Text load threshold (20 words on the first frame or card) is a house default** with no platform or client source. Brook to confirm or change (`TEXT_LOAD_MAX` in `engine.ts`).
+- **The photography don'ts are judged at 512 px** (detail low) with generic wordings built from each rule. Blur, exposure and saturation are harder to judge at that size; they need Brook's marks before anyone relies on them. They also add about 32 reads per image asset (roughly +50% time and cost).
+- **The text-load threshold (20 words)** is a house rule Brook confirmed on 28 Sep, not a platform limit (`config.json`).
+- **Copy match is word-level.** A rewording that keeps most words in order (e.g. "at checkout" → "at the counter") is amber. A line split across two cards is matched on the joined text. Stylised type the vision read garbles will read as "reworded"; check the image.
 - **Model flags vary a little run to run** (gpt-4o at temperature 0 is near-deterministic, not exactly). Rule-based flags don't.
 - **`COMP_FACT_FRAMING`** (model-only, amber) can fire on a correctly framed figure, as it did in Studio. It needs Brook's marks before any tightening.
 - **Clarity on carousels and video.** The rubric's `one_glance` asks whether the headline or first frame alone carries the point; a teaser opening ("Summer plans?") reads No by design. That's an amber prompt to look, not a breach.
@@ -145,7 +162,7 @@ Per feature, the mean absolute difference is 0.000–0.023 for all 15 content fe
 - **Storage:** `audit.json` per round is already one record per asset (stub, flags with sources, features with P, frames' text, objection). A later migration could hold it as `audit_assets` (stub, round, persona, kind, flags JSONB, features JSONB, objection, run metadata) keyed by naming stub, next to `studio_lines`.
 - **Screen:** a read-only "Pre-flight" tab: per asset the keyframes or cards as thumbnails, the flag chips (same red/amber/grey as Studio, each opening its rule, quote, frame and source), the features and the skeptic. Agree/disagree buttons per flag would replace the flag sheet and feed calibration.
 - **Joins:** the naming stub already links a signed-off Studio line, its audited asset and B3's live read, so the B3b Live tab could show the audit flags next to the live result.
-- **Running it:** keep it a script at first (vision cost and the shared TPM make on-demand runs from the page a later step); the page would read stored results only.
+- **Running it:** superseded on 28 Sep: the Studio calls `runAudit` directly (above). Run it as a background job with progress (`onProgress`), not inside a request: a static takes about 1.5-2 minutes and a video 4-6 at the shared TPM.
 
 ## Costs and time
 
@@ -157,9 +174,9 @@ Per feature, the mean absolute difference is 0.000–0.023 for all 15 content fe
 | — carousel (3 cards) | | 89 | $0.12 | 140 s | |
 | — video (5 keyframes) | | 95 | $0.19 | 204 s | |
 
-At 22k gpt-4o tokens per minute; the run is rate-bound, not cost-bound. **Session spend: $1.68 of the $10 cap** (four live runs: each set twice). Estimates run about 40% high (planted: $0.69 estimated, $0.48 actual).
+At 22k gpt-4o tokens per minute; the run is rate-bound, not cost-bound. **Session spend: $2.52 of the $10 cap** (concept cards three times, planted twice, the planted voice-over video twice, and FAM_CHILDPROOF once more after the outage). Estimates run about 40% high (planted: $0.69 estimated, $0.48 actual).
 
-Month 1 (6 statics, 3 carousels of ~5 cards, 6 videos of 8 keyframes) should be about **$2.50–3** and **45–60 minutes** at 15k TPM, over the $2 ask threshold, so `run` will stop and ask for `--yes`.
+Month 1 (6 statics, 3 carousels of ~5 cards, 6 videos of 8 keyframes) will estimate at about **$4.70** with v2.3's photography items and transcription (a static now ~$0.12, a 5-card carousel ~$0.33, an 8-frame video ~$0.50, before the usual ~35% overestimate: likely **$3–3.50** actual) and take **60–90 minutes** at 15k TPM, over the $2 ask threshold, so `run` will stop and ask for `--yes`.
 
 ## Files
 
@@ -170,5 +187,5 @@ Month 1 (6 statics, 3 carousels of ~5 cards, 6 videos of 8 keyframes) should be 
 
 ## For the next session
 
-- Month 1 drafts: run `estimate` first; 15 assets should be about $3–4 and 30–45 minutes at 15k TPM. Ask Brook before `--yes`.
+- Month 1 drafts: run `estimate` first; 15 assets estimate at about $4.70 (likely $3–3.50 actual) and 60–90 minutes at 15k TPM. Ask Brook before `--yes`.
 - After Brook marks the first three drafts' flag sheets, run `agree` and tune from the misses (thresholds live in `engine.ts`; rules changes go in the rules file with Brook).
