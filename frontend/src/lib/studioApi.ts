@@ -60,6 +60,8 @@ export interface Meta {
   tone_controls: Record<string, Record<string, string>>;
   needs_review: number; spend: number; cap: number; cap_window?: 'all' | 'month'; mock: boolean; ask_over: number; studio_dir?: string;
   store?: 'file' | 'pg';
+  /** Pre-flight needs the database; can_set_ready: may this person mark assets Ready to traffic. */
+  preflight?: { enabled: boolean; storage?: 'r2' | 'db'; engine?: string; can_set_ready?: boolean };
   /** Hosted: the signed-in person. */
   user?: { email: string; name: string | null; admin: boolean } | null;
 }
@@ -77,6 +79,33 @@ export interface Expectation { id: string; persona: string; territory: string; s
 export interface ReadyLine { line: Line; final_text: string; sha256: string; stub: string; red: Flag[]; compliance: NonNullable<Line['compliance']>; versions: LineVersion[] }
 export interface ReadyView { persona: string; territory: string; lines: ReadyLine[]; signoffs: Signoff[]; expectations: Expectation[]; latest: Signoff | null }
 export interface RulesVersion { version: string; status: 'draft' | 'active' | 'retired'; notes?: string; created_by?: string; created_at: string; activated_by?: string | null; activated_at?: string | null }
+// ---------- Pre-flight ----------
+export interface SignedCopy { line_id: string; field: string; label: string; text: string; version: number }
+export interface PfUpload { id: string; kind: 'static' | 'carousel' | 'video'; files: Array<{ position: number; filename: string; content_type: string; size: number }>; uploaded_by: string; uploaded_at: string }
+export interface PfStatus { status: 'open' | 'ready'; ready_by?: string; ready_at?: string; upload_id?: string }
+export interface PfStub {
+  stub: string; persona: string; territory: string; signoff_id: string; ready_by: string; ready_at: string; copy: SignedCopy[];
+  upload: PfUpload | null;
+  audit: { id: string; status: string; usd: number; red: number; amber: number; grey: number; open_red: number; finished_at: string | null; error: string | null } | null;
+  status: PfStatus;
+}
+export interface PfFlag {
+  id: string; rule: string; severity: 'red' | 'amber' | 'grey'; label: string; source: string; quote?: string; why?: string; where?: string;
+  check?: string; persona?: string; cross_persona?: boolean;
+  frame?: { upload_id?: string; position?: number; label?: string; description?: string };
+  override: { reason: string; by: string; at: string } | null;
+  agreements: Array<{ by: string; agree: boolean; note?: string; at: string }>;
+  mine: boolean | null;
+}
+export interface PfReport {
+  stub: string; persona: string; territory: string; signoff_id: string; copy: SignedCopy[]; upload: PfUpload | null;
+  history: Array<{ id: string; kind: string; uploaded_by: string; uploaded_at: string; files: number }>;
+  audit: null | { id: string; status: string; engine: string; rules_version?: string; usd: number; error?: string; started_by?: string; started_at: string; finished_at: string | null;
+    result: null | { text_found: string; transcript?: string; features: Record<string, number>; objection?: string; notes?: string[]; frames_unavailable?: boolean;
+      report?: { copy_match?: Array<{ field: string; signed_off: string; found: string; similarity: number; status: string }>; tagged_features?: string[]; set_aside?: Array<{ rule: string; quote?: string; why: string }> } } };
+  flags: PfFlag[]; status: PfStatus;
+}
+
 export type StudioEvent =
   | { type: 'status'; message: string }
   | { type: 'line'; line: Line }
@@ -199,6 +228,22 @@ export const studio = {
   compliance: (batch: string, line: string, status: ComplianceStatus, note?: string) =>
     req<Line>(`${lineUrl(batch, line)}/compliance`, { method: 'PATCH', body: JSON.stringify({ status, note }) }),
   recheck: (batch: string, line: string) => req<Line>(`${lineUrl(batch, line)}/recheck`, { method: 'POST' }),
+
+  // Pre-flight
+  pfStubs: () => req<PfStub[]>('/preflight/stubs'),
+  pfUpload: async (stub: string, files: File[]) => {
+    const form = new FormData();
+    for (const f of files) form.append('files', f, f.name);
+    const res = await raw(`/preflight/stubs/${enc(stub)}/uploads`, { method: 'POST', body: form });
+    return (await res.json()) as { upload_id: string; kind: string; storage: string; estimate: { usd: number; seconds: number } };
+  },
+  pfAudit: (uploadId: string, confirm = false) => req<{ audit: string; job: string; estimate: { usd: number; seconds: number } }>(`/preflight/uploads/${enc(uploadId)}/audit`, { method: 'POST', body: JSON.stringify({ confirm }) }),
+  pfReport: (stub: string) => req<PfReport>(`/preflight/stubs/${enc(stub)}/report`),
+  pfFile: (uploadId: string, position: number) => `/preflight/files/${enc(uploadId)}/${position}`,
+  pfAgree: (flagId: string, agree: boolean, note?: string) => req<unknown>(`/preflight/flags/${enc(flagId)}/agree`, { method: 'POST', body: JSON.stringify({ agree, note }) }),
+  pfOverride: (flagId: string, reason: string) => req<unknown>(`/preflight/flags/${enc(flagId)}/override`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  pfReady: (stub: string, ready: boolean) => req<PfStatus>(`/preflight/stubs/${enc(stub)}/ready`, { method: 'POST', body: JSON.stringify({ ready }) }),
+  pfAgreement: () => req<{ marked: number; agree: number; rate: number | null; by_severity: Record<string, { marked: number; agree: number }> }>('/preflight/agreement'),
 
   // Rules versions (hosted only)
   rules: () => req<RulesVersion[]>('/rules'),
