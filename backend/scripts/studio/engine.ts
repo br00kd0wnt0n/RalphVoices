@@ -678,7 +678,8 @@ export interface RunSummary {
 export function listBatches(user?: string): RunSummary[] {
   const d = P('batches');
   if (!fs.existsSync(d)) return [];
-  return fs.readdirSync(d).filter(x => fs.existsSync(batchPath(x))).map(x => {
+  // Planted-line checks (adhoc-*) are tests, not runs.
+  return fs.readdirSync(d).filter(x => !x.startsWith('adhoc-') && fs.existsSync(batchPath(x))).map(x => {
     const b = loadBatch(x);
     return {
       id: b.id, name: b.brief.name, persona: b.brief.persona, territory: b.brief.territory,

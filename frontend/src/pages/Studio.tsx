@@ -7,10 +7,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getUser, setUser, studio, type Batch, type Brief, type CompareSet, type Flag, type Line, type Meta, type OwnLine, type RefDoc, type RunSummary, type ShortRow, type StudioEvent, type Territory, type Tone } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
+import { BookOpen, ChevronRight, Shuffle } from 'lucide-react';
 
 const PINK = '#D94D8F';
 type Tab = 'home' | 'territories' | 'brief' | 'review' | 'shortlist' | 'compare' | 'readout';
-const TABS: Array<[Tab, string]> = [['home', 'How it works'], ['territories', 'Territories'], ['brief', 'Write & brief'], ['review', 'Review'], ['shortlist', 'Shortlist'], ['readout', 'Readout']];
+// The writing flow, in order. Readout and Blind compare sit apart from it.
+const FLOW: Array<[Tab, string]> = [['territories', 'Territories'], ['brief', 'Write & brief'], ['review', 'Review'], ['shortlist', 'Shortlist']];
 // Deep links for the demo: /studio?tab=review&batch=<id>&open=L07 (opens that line's first flag), &compare=<name>.
 const params = new URLSearchParams(window.location.search);
 
@@ -46,14 +48,14 @@ function Lockup({ onHome, small }: { onHome?: () => void; small?: boolean }) {
   const [clientLogo, setClientLogo] = useState(true);
   return (
     <button onClick={onHome} className="flex shrink-0 items-center gap-3" aria-label="VOICES Studio: how it works">
-      <img src="/ralph-world.png" alt="Ralph" className={cn('object-contain drop-shadow-[0_0_10px_rgba(217,77,143,0.35)]', small ? 'h-7 w-7' : 'h-9 w-9')} />
-      <span className={cn('font-light leading-none text-[#ECEDEF]', small ? 'text-lg' : 'text-[22px]')} style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>
+      <img src="/ralph-world.png" alt="Ralph" className={cn('object-contain drop-shadow-[0_0_10px_rgba(217,77,143,0.35)]', small ? 'h-7 w-7' : 'h-8 w-8')} />
+      <span className={cn('font-light leading-none text-[#ECEDEF]', small ? 'text-lg' : 'text-xl')} style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>
         Voices <span className="font-medium" style={{ color: PINK }}>Studio</span>
       </span>
       {clientLogo && (
         <>
           <span className={cn('text-[#646A75]', small ? 'text-sm' : 'text-base')} aria-hidden>×</span>
-          <img src={studio.url('/brand/client-logo')} alt="Trupanion" onError={() => setClientLogo(false)} className={cn('w-auto object-contain opacity-95', small ? 'h-4' : 'h-[22px]')} />
+          <img src={studio.url('/brand/client-logo')} alt="Trupanion" onError={() => setClientLogo(false)} className={cn('w-auto object-contain opacity-95', small ? 'h-4' : 'h-5')} />
         </>
       )}
     </button>
@@ -174,27 +176,39 @@ export function Studio() {
 
   return (
     <div className="min-h-screen bg-[#0E0F12] text-[#ECEDEF] [&_input:not([type=range]):not([type=file])]:bg-[#101216] [&_input]:text-[#ECEDEF] [&_textarea]:bg-[#101216] [&_textarea]:text-[#ECEDEF] [&_select]:bg-[#101216] [&_select]:text-[#ECEDEF] [&_input::placeholder]:text-[#646A75] [&_textarea::placeholder]:text-[#646A75]" style={{ fontSize: 16 }}>
-      <header className="sticky top-0 z-20 flex flex-wrap items-center gap-4 border-b border-[#272B34] bg-[#16181D] px-8 py-4">
+      <header className="sticky top-0 z-20 flex h-16 flex-nowrap items-center gap-5 border-b border-[#272B34] bg-[#16181D] px-6">
         <Lockup onHome={() => setTab('home')} />
-        <nav className="ml-4 flex flex-wrap gap-2">
-          {TABS.map(([t, label]) => (
-            <GhostButton key={t} active={tab === t} onClick={() => setTab(t)} className="px-3 py-2 text-base">
-              {t === 'review' && batch ? `Review (${batch.lines.length})` : label}
-            </GhostButton>
+        <nav className="flex flex-nowrap items-center gap-1">
+          <GhostButton active={tab === 'home'} onClick={() => setTab('home')} className="whitespace-nowrap border-transparent px-3 py-1.5 text-sm">How it works</GhostButton>
+          <span className="mx-1 h-5 w-px bg-[#343946]" aria-hidden />
+          {FLOW.map(([t, label], i) => (
+            <span key={t} className="flex items-center">
+              {i > 0 && <ChevronRight className="h-3.5 w-3.5 text-[#4A505D]" aria-hidden />}
+              <GhostButton active={tab === t} onClick={() => setTab(t)} className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-2.5 py-1.5 text-sm">
+                <span className={cn('flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold', tab === t ? 'bg-[#0E0F12] text-white' : 'bg-[#272B34] text-[#A3A8B1]')}>{i + 1}</span>
+                {t === 'review' && batch ? `Review (${batch.lines.length})` : label}
+              </GhostButton>
+            </span>
           ))}
         </nav>
-        <div className="ml-auto flex items-center gap-3 text-base text-[#858B96]">
-          <button onClick={() => setTab('compare')} title="A separate exercise, outside the writing flow" className="rounded-lg border-2 border-dashed border-[#4B55A8] bg-[#1B2150] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#232A5C]">Blind compare ↗</button>
+        <div className="ml-auto flex shrink-0 flex-nowrap items-center gap-2.5 text-sm text-[#858B96]">
+          <span className="mr-1 h-5 w-px bg-[#343946]" aria-hidden />
+          <button onClick={() => setTab('readout')} title="Reference: the persona intelligence readout" className={cn('flex items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 py-1.5 text-sm font-medium transition', tab === 'readout' ? 'border-teal-300 bg-teal-300 text-[#0E0F12]' : 'border-teal-500/50 bg-teal-500/10 text-teal-200 hover:border-teal-300')}>
+            <BookOpen className="h-4 w-4" aria-hidden /> Readout
+          </button>
+          <button onClick={() => setTab('compare')} title="A separate exercise, outside the writing flow" className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-dashed border-[#4B55A8] bg-[#1B2150] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#232A5C]">
+            <Shuffle className="h-4 w-4" aria-hidden /> Blind compare
+          </button>
           <UserBadge user={user} onChange={n => { setUser(n); setUserState(n); setRunsTick(t => t + 1); }} />
-          {running && <span className="animate-pulse font-medium" style={{ color: PINK }}>● {status}</span>}
-          {meta?.mock && <Chip tone="amber">mock: no cost</Chip>}
+          {running && <span className="max-w-[16rem] truncate animate-pulse font-medium" style={{ color: PINK }} title={status}>● {status}</span>}
+          {meta?.mock && <Chip tone="amber">mock</Chip>}
         </div>
       </header>
       {err && <div className="mx-8 mt-4 rounded-lg border-2 border-red-500/45 bg-red-500/10 p-4 text-base text-red-200">{err}</div>}
-      <main className="px-8 py-6">
-        {tab === 'home' && <Home go={setTab} />}
+      <main className="px-6 py-6">
+        {tab === 'home' && <Home />}
         {meta && tab === 'territories' && <Territories meta={meta} onSaved={() => refreshMeta()} onBrief={code => { const t = meta.territories[code]; setBrief(b => ({ ...b, persona: t.persona, territory: code, fields: b.persona === t.persona && b.fields.length ? b.fields : meta.personas[t.persona].default_fields })); setTab('brief'); }} />}
-        {meta && tab === 'brief' && <BriefPanel meta={meta} brief={brief} run={run} running={running} user={user} runsTick={runsTick} onContinue={continueRun} go={setTab}
+        {meta && tab === 'brief' && <BriefPanel meta={meta} brief={brief} run={run} running={running} user={user} runsTick={runsTick} onContinue={continueRun}
           setBrief={b => { if (attached && b.territory !== brief.territory) setAttached(null); setBrief(b); }}
           attachedRun={attached && batch?.id === attached ? batch : null} onNewRun={() => setAttached(null)} />}
         {meta && tab === 'review' && <Review meta={meta} batch={batch} setBatch={setBatch} status={status} running={running} onMore={more} onMoreRun={() => run({ into: batch })} onDecided={() => setRunsTick(t => t + 1)} />}
@@ -207,76 +221,64 @@ export function Studio() {
 
 // ---------- 0. landing: how Voices Studio works ----------
 
-const STEPS: Array<{ tab: Tab; title: string; what: string; you: string }> = [
-  { tab: 'territories', title: 'Territories', what: 'The territories start from the pitch. Edit them as client feedback and your taste come in.', you: 'Rename, rewrite the premise, change the lead angle or format, add new ones, retire old ones.' },
-  { tab: 'brief', title: 'Write', what: 'Your lines come first. Studio checks them in seconds, with the same flags as its own.', you: 'Write a few lines, pick the fields and tone, then check them.' },
-  { tab: 'brief', title: 'Generate', what: 'About 20 lines around yours: the angles and structures you haven’t used, in your voice, never repeating you.', you: 'Watch the lines arrive, already checked.' },
-  { tab: 'review', title: 'Review', what: 'Each line shows its length, its flags and a skeptic’s objection. Click a flag for the words and the source.', you: 'Keep, cut or edit. Add a note, or ask for more like this.' },
-  { tab: 'shortlist', title: 'Shortlist', what: 'Kept lines get naming codes, ready for production. Runs are saved under your name.', you: 'Curate in Sheets, import it back, or continue a run later.' },
+const STEPS: Array<{ title: string; what: string; you: string }> = [
+  { title: 'Territories', what: 'Start from the pitch; update them as feedback comes in.', you: 'Edit, add or retire territories.' },
+  { title: 'Write', what: 'Your lines come first, checked in seconds.', you: 'Write a few lines; pick fields and tone.' },
+  { title: 'Generate', what: 'About 20 lines around yours, in your voice, covering what you didn’t.', you: 'Watch them arrive, already checked.' },
+  { title: 'Review', what: 'Length, flags with their sources, and a skeptic’s objection.', you: 'Keep, cut, edit, or ask for more like this.' },
+  { title: 'Shortlist', what: 'Kept lines get naming codes. Runs are saved to continue later.', you: 'Curate in Sheets and import it back.' },
 ];
 
-function Home({ go }: { go: (t: Tab) => void }) {
+function Home() {
   return (
-    <div className="mx-auto max-w-6xl space-y-10 py-4">
-      <section className="space-y-4">
-        <h1 className="text-5xl font-bold leading-tight tracking-tight" style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>
-          Twenty options per persona,<br />stress-tested as you write.
+    <div className="mx-auto max-w-6xl space-y-7">
+      <section className="space-y-3">
+        <h1 className="text-4xl font-bold leading-tight tracking-tight" style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>
+          Twenty options per persona, stress-tested as you write.
         </h1>
-        <p className="max-w-3xl text-xl leading-relaxed text-[#A3A8B1]">
-          You bring the taste. Studio brings range, the rules, and the audience’s pushback. The market decides what wins.
-        </p>
-        <div className="flex flex-wrap items-center gap-4 pt-2">
-          <PinkButton onClick={() => go('brief')} className="px-7 py-4 text-base">Start writing</PinkButton>
-          <GhostButton onClick={() => go('territories')} className="px-5 py-3 text-base">Review territories</GhostButton>
-          <GhostButton onClick={() => go('readout')} className="px-5 py-3 text-base">Read the persona readout</GhostButton>
-        </div>
+        <p className="text-lg text-[#A3A8B1]">You bring the taste. Studio brings range, the rules, and the audience’s pushback. The market decides what wins.</p>
       </section>
 
       <section>
-        <h2 className="mb-5 text-2xl font-bold tracking-tight" style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>How Voices Studio works</h2>
-        <ol className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
-          {STEPS.map((s, i) => (
-            <li key={s.title}>
-              <button onClick={() => go(s.tab)} className="group flex h-full w-full flex-col rounded-xl border-2 border-[#272B34] bg-[#16181D] p-5 text-left transition hover:border-[#D94D8F]">
-                <div className="mb-3 flex items-center gap-3">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-lg font-bold text-white" style={{ background: PINK }}>{i + 1}</span>
-                  <span className="text-lg font-bold leading-tight">{s.title}</span>
+        <h2 className="mb-3 text-lg font-semibold">How Voices Studio works</h2>
+        <ol className="grid grid-cols-5 gap-3">
+          {STEPS.map((st, i) => (
+            <li key={st.title}>
+              <div className="flex h-full w-full flex-col rounded-xl border border-[#272B34] bg-[#16181D] p-4">
+                <div className="mb-2 flex items-center gap-2.5">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white" style={{ background: PINK }}>{i + 1}</span>
+                  <span className="text-base font-semibold">{st.title}</span>
                 </div>
-                <p className="mb-3 text-base leading-snug text-[#A3A8B1]">{s.what}</p>
-                <p className="mt-auto border-t border-[#272B34] pt-3 text-base font-medium leading-snug text-[#ECEDEF]"><span style={{ color: PINK }}>You:</span> {s.you}</p>
-              </button>
+                <p className="mb-3 text-sm leading-snug text-[#A3A8B1]">{st.what}</p>
+                <p className="mt-auto border-t border-[#272B34] pt-2.5 text-sm leading-snug text-[#C9CCD2]"><span style={{ color: PINK }}>You:</span> {st.you}</p>
+              </div>
             </li>
           ))}
         </ol>
       </section>
 
-      <section className="flex flex-wrap items-center gap-5 rounded-xl border-2 border-dashed border-[#4B55A8] bg-[#151A3A] p-6 text-white">
-        <div className="min-w-[18rem] flex-1">
-          <div className="text-sm uppercase tracking-wide text-[#8F97D6]">Separate exercise</div>
-          <h3 className="mt-1 text-lg font-semibold">Blind compare: choose the writing model</h3>
-          <p className="mt-1 text-base text-[#B9BFEA]">Outside the flow above. Several models write to the same brief, unlabelled; you star the lines you’d use, then reveal who wrote them. Nothing here goes into your runs or the shortlist.</p>
-        </div>
-        <button onClick={() => go('compare')} className="rounded-lg border-2 border-white px-5 py-3 text-lg font-semibold hover:bg-[#E8EAFB] hover:text-[#151A3A]">Open blind compare</button>
-      </section>
-
-      <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <div className="rounded-xl border-2 border-[#272B34] bg-[#16181D] p-6">
-          <h3 className="mb-3 text-lg font-bold">Reading the flags</h3>
-          <ul className="space-y-3 text-base leading-snug">
-            <li className="flex items-start gap-3"><Chip tone="red">red</Chip><span><b>Compliance.</b> A hard rule is broken, or two independent checks agree. Fix it or cut it.</span></li>
-            <li className="flex items-start gap-3"><Chip tone="amber">amber</Chip><span><b>Worth a look.</b> One check raised it: a turn-off, a truncated line, a figure that needs a citation.</span></li>
-            <li className="flex items-start gap-3"><Chip tone="grey">grey</Chip><span><b>A note.</b> For example, a testimony line must be cast with a real member.</span></li>
+      <section className="grid grid-cols-3 gap-3">
+        <div className="rounded-xl border border-[#272B34] bg-[#16181D] p-4">
+          <h3 className="mb-2.5 text-base font-semibold">Reading the flags</h3>
+          <ul className="space-y-2 text-sm leading-snug text-[#C9CCD2]">
+            <li className="flex items-center gap-2"><Chip tone="red">red</Chip> Compliance: a hard rule, or two checks agree.</li>
+            <li className="flex items-center gap-2"><Chip tone="amber">amber</Chip> Worth a look: one check raised it.</li>
+            <li className="flex items-center gap-2"><Chip tone="grey">grey</Chip> A note, e.g. cast a real member.</li>
           </ul>
-          <p className="mt-4 text-sm text-[#858B96]">Every flag names its source: the evidence pack, the brand guidelines, the compliance rules or the platform specs.</p>
         </div>
-        <div className="rounded-xl border-2 border-[#272B34] bg-[#16181D] p-6">
-          <h3 className="mb-3 text-lg font-bold">What Studio is, and isn’t</h3>
-          <ul className="space-y-2 text-base leading-snug text-[#C9CCD2]">
-            <li>✓ A writing partner that gives you range fast and catches problems early.</li>
-            <li>✓ A stress test: the audience’s objections, before the client’s.</li>
-            <li>✗ Not a score, and not a prediction of which line will win.</li>
+        <div className="rounded-xl border border-[#272B34] bg-[#16181D] p-4">
+          <h3 className="mb-2.5 text-base font-semibold">What Studio is, and isn’t</h3>
+          <ul className="space-y-1.5 text-sm leading-snug text-[#C9CCD2]">
+            <li>✓ A writing partner: range fast, problems caught early.</li>
+            <li>✓ A stress test: the audience’s objections first.</li>
+            <li>✗ Not a score, and not a prediction of what wins.</li>
           </ul>
-          <p className="mt-4 text-lg font-semibold" style={{ color: PINK }}>The twins sharpen before spend; the market decides.</p>
+        </div>
+        <div className="flex flex-col rounded-xl border border-dashed border-[#4B55A8] bg-[#151A3A] p-4">
+          <span className="text-xs uppercase tracking-wider text-[#8F97D6]">Separate exercise</span>
+          <span className="mt-1 text-base font-semibold text-white">Blind compare: choose the writing model</span>
+          <span className="mt-1 text-sm leading-snug text-[#B9BFEA]">Models write to the same brief, unlabelled. Star, then reveal. Nothing goes into your runs.</span>
+          <span className="mt-auto pt-2 text-sm text-[#8F97D6]">In the header, on the right.</span>
         </div>
       </section>
     </div>
@@ -285,9 +287,9 @@ function Home({ go }: { go: (t: Tab) => void }) {
 
 // ---------- 1. brief ----------
 
-function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onContinue, go, attachedRun, onNewRun }: {
+function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onContinue, attachedRun, onNewRun }: {
   meta: Meta; brief: Brief; setBrief: (b: Brief) => void; run: (o?: { ownOnly?: boolean }) => void; running: boolean;
-  user: string; runsTick: number; onContinue: (id: string) => void; go: (t: Tab) => void;
+  user: string; runsTick: number; onContinue: (id: string) => void;
   attachedRun: Batch | null; onNewRun: () => void;
 }) {
   const [more, setMore] = useState(false);
@@ -332,7 +334,7 @@ function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onCon
           </select>
         </div>
         <div>
-          <Label>Territory <button className="ml-2 normal-case text-[#D94D8F] underline" onClick={() => go('territories')}>edit</button></Label>
+          <Label>Territory</Label>
           <select className="rounded-lg border-2 border-[#343946] bg-[#101216] px-3 py-2 text-base" value={brief.territory} onChange={e => set({ territory: e.target.value })}>
             {territories.map(([k, x]) => <option key={k} value={k}>{x.name}{x.origin === 'new' ? ' (new)' : x.origin === 'edited' ? ' (edited)' : ''}</option>)}
           </select>
@@ -357,7 +359,7 @@ function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onCon
       </section>
       {t && <p className="px-1 text-base text-[#A3A8B1]"><span className="font-semibold">{t.name}</span> · {t.format} · leads on “{meta.personas[t.persona]?.triggers.find(x => x.id === t.angle)?.label}”. {t.premise}</p>}
 
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1.6fr_1fr]">
+      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[1.6fr_1fr]">
         {/* Your lines: the first action */}
         <section className="rounded-xl border-2 bg-[#16181D] p-5" style={{ borderColor: PINK }}>
           <div className="mb-3 flex items-baseline gap-3">
@@ -450,7 +452,7 @@ function RunsList({ user, tick, meta, onContinue }: { user: string; tick: number
         <GhostButton active={!mine} className="px-2 py-1 text-sm" onClick={() => setMine(false)}>All</GhostButton>
       </div>
       {!runs.length && <p className="text-base text-[#858B96]">{user ? 'No runs yet. Check your lines or generate to start one.' : 'Add your name (top right) to see your runs.'}</p>}
-      <ul className="max-h-80 space-y-2 overflow-y-auto">
+      <ul className="max-h-60 space-y-2 overflow-y-auto">
         {runs.slice(0, 30).map(r => (
           <li key={r.id} className="flex items-center gap-3 rounded-lg border border-[#272B34] px-3 py-2">
             <div className="min-w-0 flex-1">
@@ -468,17 +470,19 @@ function RunsList({ user, tick, meta, onContinue }: { user: string; tick: number
 }
 
 function UserBadge({ user, onChange }: { user: string; onChange: (n: string) => void }) {
-  const [editing, setEditing] = useState(!user);
+  const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(user);
   if (editing) {
     return (
-      <form className="flex items-center gap-2" onSubmit={e => { e.preventDefault(); if (draft.trim()) { onChange(draft.trim()); setEditing(false); } }}>
-        <input autoFocus value={draft} onChange={e => setDraft(e.target.value)} placeholder="Your name" className="w-36 rounded-lg border-2 px-2 py-1 text-base" style={{ borderColor: PINK }} />
-        <button className="rounded-lg px-3 py-1 text-sm font-semibold text-white" style={{ background: PINK }}>Save</button>
+      <form className="flex items-center gap-1.5" onSubmit={e => { e.preventDefault(); if (draft.trim()) { onChange(draft.trim()); setEditing(false); } }}>
+        <input autoFocus value={draft} onChange={e => setDraft(e.target.value)} onBlur={() => !draft.trim() && setEditing(false)} placeholder="Your name"
+          className="w-32 rounded-lg border px-2 py-1 text-sm" style={{ borderColor: PINK }} />
+        <button className="rounded-lg px-2.5 py-1 text-sm font-semibold text-white" style={{ background: PINK }}>Save</button>
       </form>
     );
   }
-  return <button onClick={() => setEditing(true)} className="rounded-full border border-[#343946] px-3 py-1 text-base text-[#C9CCD2] hover:border-[#6B7280]" title="Runs are saved under this name">{user} ✎</button>;
+  if (!user) return <button onClick={() => setEditing(true)} className="whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-semibold text-white" style={{ background: PINK }}>Add your name</button>;
+  return <button onClick={() => { setDraft(user); setEditing(true); }} className="whitespace-nowrap rounded-full border border-[#343946] px-3 py-1 text-sm text-[#C9CCD2] hover:border-[#6B7280]" title="Runs are saved under this name">{user} ✎</button>;
 }
 
 // ---------- territories: editable, with history ----------
@@ -609,8 +613,13 @@ function Readout({ persona, meta }: { persona: string; meta: Meta | null }) {
   }, [toc.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const deck = docs.find(d => d.id === 'readout-deck' && d.available);
   return (
-    <div className="grid max-w-7xl grid-cols-1 gap-8 lg:grid-cols-[260px_1fr]">
-      <aside className="lg:sticky lg:top-28 lg:self-start">
+    <div className="max-w-7xl space-y-5">
+    <div className="flex items-center gap-3 rounded-xl border border-teal-500/40 bg-teal-500/10 px-4 py-2.5 text-sm text-teal-100">
+      <BookOpen className="h-4 w-4" aria-hidden /> <span className="font-semibold uppercase tracking-wider text-teal-200">Reference</span>
+      <span>The persona intelligence readout: background for the writing, outside the flow.</span>
+    </div>
+    <div className="grid grid-cols-1 gap-8 lg:grid-cols-[260px_1fr]">
+      <aside className="lg:sticky lg:top-24 lg:self-start">
         <Label>Contents</Label>
         <nav className="max-h-[70vh] space-y-1 overflow-y-auto text-sm">
           {toc.map(h => <a key={h.id} href={`#${h.id}`} className={cn('block rounded px-2 py-1 hover:bg-[#1C1F26]', h.level === 3 ? 'pl-5 text-[#858B96]' : 'font-semibold')}>{h.text}</a>)}
@@ -622,6 +631,7 @@ function Readout({ persona, meta }: { persona: string; meta: Meta | null }) {
         {!error && !text && <p className="text-[#858B96]">Loading…</p>}
         <Markdown blocks={blocks} />
       </article>
+    </div>
     </div>
   );
 }
