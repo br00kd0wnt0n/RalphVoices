@@ -9,7 +9,7 @@ import { studio, type Batch, type Brief, type CompareSet, type Flag, type Line, 
 import { cn } from '@/lib/utils';
 
 const PINK = '#D94D8F';
-type Tab = 'brief' | 'review' | 'shortlist' | 'compare';
+type Tab = 'home' | 'brief' | 'review' | 'shortlist' | 'compare';
 // Deep links for the demo: /studio?tab=review&batch=<id>&open=L07 (opens that line's first flag), &compare=<name>.
 const params = new URLSearchParams(window.location.search);
 
@@ -58,7 +58,7 @@ function Slider({ label, left, right, value, onChange }: { label: string; left: 
 export function Studio() {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [err, setErr] = useState('');
-  const [tab, setTab] = useState<Tab>((params.get('tab') as Tab) || 'brief');
+  const [tab, setTab] = useState<Tab>((params.get('tab') as Tab) || 'home');
   const [brief, setBrief] = useState<Brief>({ persona: 'DINK', territory: 'DINK_NEVER', fields: [], tone: { dry_warm: 3, playful_plain: 3, short_long: 2 }, banned_words: [], banned_ideas: [], reference_lines: [], n: 20, model: 'gpt-4o' });
   const [batch, setBatch] = useState<Batch | null>(null);
   const [status, setStatus] = useState('');
@@ -126,13 +126,13 @@ export function Studio() {
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900" style={{ fontSize: 18 }}>
       <header className="sticky top-0 z-20 flex flex-wrap items-center gap-4 border-b border-neutral-200 bg-white px-8 py-4">
-        <div className="text-3xl font-bold tracking-tight" style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>
+        <button onClick={() => setTab('home')} className="text-3xl font-bold tracking-tight" style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }} aria-label="How Voices Studio works">
           VOICES <span style={{ color: PINK }}>Studio</span>
-        </div>
+        </button>
         <nav className="ml-6 flex gap-2">
-          {(['brief', 'review', 'shortlist', 'compare'] as Tab[]).map(t => (
+          {(['home', 'brief', 'review', 'shortlist', 'compare'] as Tab[]).map(t => (
             <GhostButton key={t} active={tab === t} onClick={() => setTab(t)} className="px-4 py-2 text-lg capitalize">
-              {t === 'review' && batch ? `Review (${batch.lines.length})` : t === 'compare' ? 'Blind compare' : t}
+              {t === 'home' ? 'How it works' : t === 'review' && batch ? `Review (${batch.lines.length})` : t === 'compare' ? 'Blind compare' : t}
             </GhostButton>
           ))}
         </nav>
@@ -144,11 +144,78 @@ export function Studio() {
       </header>
       {err && <div className="mx-8 mt-4 rounded-lg border-2 border-red-300 bg-red-50 p-4 text-lg text-red-900">{err}</div>}
       <main className="px-8 py-6">
+        {tab === 'home' && <Home go={setTab} />}
         {meta && tab === 'brief' && <BriefPanel meta={meta} brief={brief} setBrief={setBrief} onGenerate={runGenerate} running={running} />}
         {meta && tab === 'review' && <Review meta={meta} batch={batch} setBatch={setBatch} status={status} running={running} onMore={more} />}
         {meta && tab === 'shortlist' && <Shortlist batch={batch} />}
         {meta && tab === 'compare' && <Compare meta={meta} brief={brief} />}
       </main>
+    </div>
+  );
+}
+
+// ---------- 0. landing: how Voices Studio works ----------
+
+const STEPS: Array<{ tab: Tab; title: string; what: string; you: string }> = [
+  { tab: 'brief', title: 'Brief', what: 'Choose the persona, territory, fields and tone: dry–warm, playful–plain, short–long.', you: 'Add banned words, off-limits ideas and 2–3 lines in the voice you want.' },
+  { tab: 'review', title: 'Generate', what: 'About 20 lines across the persona’s triggers, six structures and your tone, with near-duplicates dropped. Takes about a minute.', you: 'Watch the lines arrive, already checked.' },
+  { tab: 'review', title: 'Review', what: 'Each line shows its length against the field, its flags and a skeptic’s objection. Click a flag for the words and the source.', you: 'Keep, cut or edit. Add a note, or ask for more like this.' },
+  { tab: 'shortlist', title: 'Shortlist', what: 'Kept lines get naming codes, ready for production.', you: 'Curate in Sheets with the team, then import it back. Your edits teach the next batch.' },
+  { tab: 'compare', title: 'Blind compare', what: 'One brief, several writing models, lines shuffled and unlabelled.', you: 'Star the lines you’d use, then reveal. Your pick becomes the writer.' },
+];
+
+function Home({ go }: { go: (t: Tab) => void }) {
+  return (
+    <div className="mx-auto max-w-6xl space-y-10 py-4">
+      <section className="space-y-4">
+        <h1 className="text-5xl font-bold leading-tight tracking-tight" style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>
+          Twenty options per persona,<br />stress-tested as you write.
+        </h1>
+        <p className="max-w-3xl text-2xl leading-snug text-neutral-700">
+          You bring the taste. Studio brings range, the rules, and the audience’s pushback. The market decides what wins.
+        </p>
+        <PinkButton onClick={() => go('brief')} className="mt-2 px-7 py-4 text-xl">Start a brief</PinkButton>
+      </section>
+
+      <section>
+        <h2 className="mb-5 text-3xl font-bold tracking-tight" style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>How Voices Studio works</h2>
+        <ol className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+          {STEPS.map((s, i) => (
+            <li key={s.title}>
+              <button onClick={() => go(s.tab)} className="group flex h-full w-full flex-col rounded-xl border-2 border-neutral-200 bg-white p-5 text-left transition hover:border-[#D94D8F]">
+                <div className="mb-3 flex items-center gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-lg font-bold text-white" style={{ background: PINK }}>{i + 1}</span>
+                  <span className="text-xl font-bold leading-tight">{s.title}</span>
+                  {i < STEPS.length - 1 && <span className="ml-auto hidden text-2xl text-neutral-300 xl:inline" aria-hidden>→</span>}
+                </div>
+                <p className="mb-3 text-base leading-snug text-neutral-700">{s.what}</p>
+                <p className="mt-auto border-t border-neutral-100 pt-3 text-base font-medium leading-snug text-neutral-900"><span style={{ color: PINK }}>You:</span> {s.you}</p>
+              </button>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="rounded-xl border-2 border-neutral-200 bg-white p-6">
+          <h3 className="mb-3 text-xl font-bold">Reading the flags</h3>
+          <ul className="space-y-3 text-base leading-snug">
+            <li className="flex items-start gap-3"><Chip tone="red">red</Chip><span><b>Compliance.</b> A hard rule is broken, or two independent checks agree. Fix it or cut it.</span></li>
+            <li className="flex items-start gap-3"><Chip tone="amber">amber</Chip><span><b>Worth a look.</b> One check raised it: a turn-off, a truncated line, a figure that needs a citation.</span></li>
+            <li className="flex items-start gap-3"><Chip tone="grey">grey</Chip><span><b>A note.</b> For example, a testimony line must be cast with a real member.</span></li>
+          </ul>
+          <p className="mt-4 text-sm text-neutral-600">Every flag names its source: the evidence pack, the brand guidelines, the compliance rules or the platform specs.</p>
+        </div>
+        <div className="rounded-xl border-2 border-neutral-200 bg-white p-6">
+          <h3 className="mb-3 text-xl font-bold">What Studio is, and isn’t</h3>
+          <ul className="space-y-2 text-base leading-snug text-neutral-800">
+            <li>✓ A writing partner that gives you range fast and catches problems early.</li>
+            <li>✓ A stress test: the audience’s objections, before the client’s.</li>
+            <li>✗ Not a score, and not a prediction of which line will win.</li>
+          </ul>
+          <p className="mt-4 text-lg font-semibold" style={{ color: PINK }}>The twins sharpen before spend; the market decides.</p>
+        </div>
+      </section>
     </div>
   );
 }
