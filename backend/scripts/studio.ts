@@ -247,8 +247,8 @@ async function serve() {
     const origin = req.headers.origin || '';
     if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Studio-User');
     }
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     next();
@@ -256,6 +256,8 @@ async function serve() {
   app.use(express.json({ limit: '2mb' }));
   app.use(express.text({ type: ['text/csv', 'text/plain'], limit: '5mb' }));
 
+  // Local only: the page sends the name it asked for. The hosted build uses the signed-in user.
+  const who = (req: any) => String(req.headers['x-studio-user'] || '').trim().slice(0, 60) || undefined;
   const wrap = (fn: (req: any, res: any) => any) => async (req: any, res: any) => {
     try { await fn(req, res); } catch (err: any) { res.status(400).json({ error: String(err?.message || err) }); }
   };
@@ -276,19 +278,21 @@ async function serve() {
 
   const base = '/api/studio';
   app.get(`${base}/meta`, wrap((_req, res) => res.json({ ...S.meta(), mock: MOCK, cap: CAP, ask_over: ASK_OVER })));
-  app.post(`${base}/estimate`, wrap((req, res) => { const b = S.makeBrief(req.body.brief || {}); res.json({ brief: b, ...S.estimate(b), spent: S.readSpend().total_usd }); }));
-  app.get(`${base}/batches`, wrap((_req, res) => res.json(S.listBatches())));
+  app.post(`${base}/estimate`, wrap((req, res) => { const b = S.makeBrief(req.body.brief || {}); res.json({ brief: b, ...S.estimate(b, { ownOnly: !!req.body.own_only }), spent: S.readSpend().total_usd }); }));
+  app.get(`${base}/batches`, wrap((req, res) => res.json(S.listBatches(req.query.user ? String(req.query.user) : undefined))));
   app.get(`${base}/batches/:id`, wrap((req, res) => res.json(S.loadBatch(req.params.id))));
   app.post(`${base}/generate`, wrap((req, res) => {
     const b = S.makeBrief(req.body.brief || {});
-    const e = S.estimate(b);
+    const ownOnly = !!req.body.own_only;
+    const e = S.estimate(b, { ownOnly });
     const spent = S.readSpend().total_usd;
     if (!MOCK && e.usd > ASK_OVER && !req.body.confirm) return res.status(409).json({ needs_confirm: true, estimate: e.usd });
     if (!MOCK && spent + e.usd > CAP) return res.status(402).json({ error: `This would take spend past the $${CAP} cap ($${spent.toFixed(2)} spent).` });
     S.saveBrief(b);
-    const id = `${b.territory}-${new Date().toISOString().replace(/[-:T]/g, '').slice(2, 14)}`;
-    startJob(id, emit => S.generate(b, a, emit, { batchId: id }));
-    res.json({ batch: id, estimate: e.usd });
+    // Continue an existing run, or start a new one.
+    const id = req.body.batch ? String(req.body.batch) : `${b.territory}-${new Date().toISOString().replace(/[-:T]/g, '').slice(2, 14)}`;
+    startJob(`${id}~${Date.now()}`, emit => S.generate(b, a, emit, { batchId: id, ownOnly, user: who(req) }));
+    res.json({ batch: id, job: [...jobs.keys()].pop(), estimate: e.usd });
   }));
   app.get(`${base}/jobs/:id/events`, (req: any, res: any) => {
     const job = jobs.get(req.params.id);
@@ -302,7 +306,7 @@ async function serve() {
     job.clients.add(res);
     req.on('close', () => job.clients.delete(res));
   });
-  app.patch(`${base}/batches/:id/lines/:line`, wrap((req, res) => res.json(S.setDecision(req.params.id, req.params.line, req.body || {}))));
+  app.patch(`${base}/batches/:id/lines/:line`, wrap((req, res) => res.json(S.setDecision(req.params.id, req.params.line, req.body || {}, who(req)))));
   app.post(`${base}/batches/:id/lines/:line/more`, wrap((req, res) => {
     const jobId = `${req.params.id}~more~${Date.now()}`;
     startJob(jobId, emit => S.moreLikeThis(req.params.id, req.params.line, String(req.body?.note || ''), Number(req.body?.k || 3), a, emit));
@@ -358,6 +362,18 @@ async function serve() {
     res.json(l);
   }));
   app.post(`${base}/compare/:name/reveal`, wrap((req, res) => res.json(S.revealCompare(req.params.name))));
+
+  app.post(`${base}/territories`, wrap((req, res) => res.json(S.saveTerritory(null, req.body?.territory || {}, String(req.body?.note || ''), who(req)))));
+  app.put(`${base}/territories/:code`, wrap((req, res) => res.json(S.saveTerritory(req.params.code, req.body?.territory || {}, String(req.body?.note || ''), who(req)))));
+  app.get(`${base}/brand/:name`, (req: any, res: any) => {
+    try { res.setHeader('Cache-Control', 'max-age=3600'); res.sendFile(S.brandAssetPath(req.params.name)); } catch { res.sendStatus(404); }
+  });
+  app.get(`${base}/docs`, wrap((_req, res) => res.json(S.referenceDocs())));
+  app.get(`${base}/docs/:id`, wrap((req, res) => {
+    const { doc, file } = S.referenceDocPath(req.params.id);
+    if (doc.kind === 'md') { res.setHeader('Content-Type', 'text/markdown; charset=utf-8'); return res.send(fs.readFileSync(file, 'utf8')); }
+    res.download(file, path.basename(file));
+  }));
 
   app.listen(port, '127.0.0.1', () => {
     console.log(`Studio API on http://127.0.0.1:${port}${base} (${MOCK ? 'MOCK, no cost' : `live, cap $${CAP}`}); files in ${S.studioDir()}`);

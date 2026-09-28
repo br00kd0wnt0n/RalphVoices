@@ -327,6 +327,7 @@ VOICES v2 build 1 as a script: `backend/scripts/studio.ts` (CLI and `serve`) ove
 
 - Flow: `brief` → `generate` (a grid of angle × structure × tone, near-duplicates removed by embedding similarity) → checks on every line (deterministic first, then one JSON call per line, two-wording logprob checks for compliance items, and a skeptic's objection) → `export` (Sheets CSV + Markdown) → `ingest` (curated CSV back: taste examples for the next `generate`, plus a shortlist with `PERSONA_TERRITORY_FORMAT_v#_PLATFORM` stubs) → `compare` (blind writer comparison).
 - Every flag carries a rule id and the source from the rules file. Flags, not scores. The rules file schema and a made-up example are in `backend/scripts/studio/`; `backend/tests/studio.test.ts` runs against the example.
+- Tabs: How it works → Territories (editable, with history, in `territories.json`) → Write & brief (the creative director's own lines first, checked, then "generate around these") → Review → Shortlist → Blind compare → Readout (the persona intelligence readout, read from `Claude outputs/`). Runs are saved by person (`created_by`, `decided_by`) and can be continued.
 - UI: `/studio` in the frontend, dev-only (routed when `import.meta.env.DEV` or `VITE_STUDIO_API` is set), talking to `npx tsx scripts/studio.ts serve` on 127.0.0.1:4100 (`frontend/src/lib/studioApi.ts`, not `api.ts`). `--mock` runs everything with no key and no cost.
 - Run instructions, timings and gaps: `docs/build-log/B1-lite.md`.
 

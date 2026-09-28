@@ -23,6 +23,20 @@ The checks run in this order:
 
 **Severity needs agreement.** A red (compliance) flag needs either a hard rule match, or the model check and the yes/no wordings leaning the same way. Any single layer alone gives an amber flag. Lone yes/no flags need P ≥ 0.8. These are flags, not scores.
 
+## Update, 28 Sep: you write first, saved runs, editable territories, the readout
+
+Changes Brook asked for after the kickoff:
+
+- **The creative director writes first.** The brief tab opens on "Your lines": one line per row, a field and a live character count for each, and pasting several lines splits them into rows. **Check my lines** tags each line with an angle and a structure (one call) and runs the full checks; the lines appear in Review marked "yours". **Generate around these** writes `n` more in the same run: it takes the angle × structure cells the creative director didn't cover, matches their voice, and drops anything too close to their lines. Setup is now one row; bans, reference lines, `n` and the model sit under "More options".
+- **Runs are saved by person, and you can continue them.** Locally the page asks for a name once (kept in the browser, sent as `X-Studio-User`). Every run records `created_by`, and every decision records `decided_by` and `decided_at`. **Your runs** (Mine / All) lists saved runs with **Continue**, which reopens the run in Review; new lines from the brief tab then go into that run until "Start a new run". The hosted build swaps the name for the signed-in user.
+- **Territories are editable, as the first step.** The Territories tab lets you edit a territory's name, premise, lead angle and format, add new territories, and retire or restore them, each change with who, when and why. Edits live in `studio/territories.json` on top of the pitch versions in the rules file, which stay unchanged; the history is kept per territory. A retired territory can't be briefed.
+- **The persona intelligence readout is readable in the tool.** The Readout tab renders `intelligence-readout-v1-team.md` with a contents list, opens at the persona being briefed, and offers the .pptx for download. It's read from the local `Claude outputs/` folder through the API, never the repo; the quote bank (buyer verbatims) isn't listed. `studio/docs.json` can change the list.
+- **No spend tracker on the page.** The cap still applies on the server, and runs over $2 still ask first.
+- **Blind compare is a separate exercise.** It's out of the tabs and the landing flow; a dashed header button opens it on its own indigo page, which says its lines aren't checked, saved to runs or shortlisted.
+- **Design pass: dark theme and one type scale.** 12 px labels, 14 px meta and chips, 16 px body and controls, 18 px card titles, 22 px for the copy lines themselves, 24 px section titles, 48 px landing headline. The palette is near-black with raised cards; pink stays the accent, and flags are tinted chips (red compliance, amber warning, grey note).
+- **Logos in the header:** Ralph roundel · Voices Studio × Trupanion. The Trupanion mark (white, no tagline) was cut from the brand guidelines PDF and lives in the client folder (`studio/brand/trupanion-logo-white.png`), served by an allow-listed API route (`/brand/client-logo`); it's never in the repo, and the header drops it if the file is missing.
+- Tests: 15 studio tests (own lines and continuing a run, runs by person, territory edits and history, reference-document allow-list).
+
 ## How to run a batch (copy-paste)
 
 From the worktree (after merge, the same commands work from `/Users/BD/ralph-voices`):
