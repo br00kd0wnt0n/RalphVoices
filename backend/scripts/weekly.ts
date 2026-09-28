@@ -11,7 +11,10 @@
 //   npx tsx scripts/weekly.ts migrate                                   (apply 016 only; idempotent)
 //   npx tsx scripts/weekly.ts ingest   --file EXPORT.csv --platform meta|tiktok [--features SHORTLIST.csv]... [--no-features] [--dry-run]
 //   npx tsx scripts/weekly.ts features --file SHORTLIST_OR_AUDIT.csv     (refresh features on stored ads by stub)
-//   npx tsx scripts/weekly.ts note     --week 2026-10-19 [--since 2026-10-12] [--prose] [--out DIR]
+//   npx tsx scripts/weekly.ts note     --week 2026-10-19 [--since 2026-10-12] [--audience client] [--prose] [--labels studio-rules.json] [--territories FILE] [--out DIR]
+//                                      (internal note: first screen + appendix + ledger, and the per-ad results saved to live_reads;
+//                                       --audience client: the first screen only)
+//   npx tsx scripts/weekly.ts latest   [--stub STUB]...                 (latest stored read per naming stub)
 //   npx tsx scripts/weekly.ts read     --file EXPORT.csv --platform meta [--week DATE] [--since DATE] [--features CSV] [--note] [--historic]
 //                                      (no database; a quick look at one file. --historic keeps ads outside the naming convention,
 //                                       for the back-test on Add3's history; features can then join by an ad_name column)
@@ -30,7 +33,7 @@ import { type Read } from '../src/services/weekly/model.js';
 import { readSeries } from '../src/services/weekly/series.js';
 import { draftNote, lintNote, newNumbers } from '../src/services/weekly/note.js';
 import { simulate, checkRecovery, type Scenario } from '../src/services/weekly/simulate.js';
-import { saveExport, loadRows, updateFeatures, ingestSources } from '../src/services/weekly/store.js';
+import { saveExport, loadRows, updateFeatures, ingestSources, saveReads, latestReads } from '../src/services/weekly/store.js';
 
 const argv = process.argv.slice(2);
 const command = argv[0];
@@ -66,6 +69,24 @@ function features(): FeatureMap {
   }
   if (!files.length) console.log('Features: none (no --features file and no Studio shortlist found); every ad has features unknown.');
   return map;
+}
+
+// Territory code → name for the client note's labels. Read at runtime from the Studio
+// rules file (client material, never copied into the repo), or --territories FILE:
+// either a {CODE: name} map or a rules file with a "territories" block.
+function territoryNames(): Record<string, string> {
+  const p = opt('territories') || path.join(CLIENT_DIR, 'studio', 'studio-rules.json');
+  try {
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    const t = j.territories ?? j;
+    return Object.fromEntries(Object.entries(t).filter(([k]) => !k.startsWith('_')).map(([k, v]: [string, any]) => [k, typeof v === 'string' ? v : v?.name]).filter(([, v]) => typeof v === 'string'));
+  } catch { return {}; }
+}
+
+// Plain descriptions of feature ids for the note's first screen, from the Studio rules file if present.
+function featureLabels(): Record<string, string> | undefined {
+  const p = opt('labels') || path.join(CLIENT_DIR, 'studio', 'studio-rules.json');
+  try { return JSON.parse(fs.readFileSync(p, 'utf8'))?.features?.items; } catch { return undefined; }
 }
 
 function reportExport(res: ExportResult) {
@@ -111,14 +132,15 @@ function printRead(read: Read) {
 }
 
 function writeNote(read: Read, prev: Read | null, win: ReturnType<typeof aggregate>, weekImps: Map<string, number>, week: { start: string; end: string }, since: string, sources: string[], outDir: string) {
-  const { markdown, ledger } = draftNote(read, { week, since, window: win, prev, week_impressions: weekImps, sources }, cfg);
+  const client = opt('audience') === 'client';
+  const { markdown, ledger } = draftNote(read, { week, since, window: win, prev, week_impressions: weekImps, sources }, cfg, { audience: client ? 'client' : 'internal', featureLabels: featureLabels(), territoryNames: client ? territoryNames() : undefined });
   fs.mkdirSync(outDir, { recursive: true });
-  const base = path.join(outDir, `weekly-${week.start}`);
+  const base = path.join(outDir, `weekly-${week.start}${client ? '-client' : ''}`);
   fs.writeFileSync(`${base}.md`, markdown);
-  fs.writeFileSync(`${base}-ledger.csv`, ledger);
+  if (!client) fs.writeFileSync(`${base}-ledger.csv`, ledger);
   const lint = lintNote(markdown, cfg);
-  console.log(`\nWrote ${base}.md and ${base}-ledger.csv`);
-  console.log(lint.length ? `Wording check: ${lint.length} issue(s)\n${lint.map(i => `  line ${i.line}: ${i.rule}: ${i.text.slice(0, 120)}`).join('\n')}` : 'Wording check: clean (no banned words; every rate has its range).');
+  console.log(`\nWrote ${base}.md${client ? ' (client variant: first screen only)' : ` and ${base}-ledger.csv`}`);
+  console.log(lint.length ? `Wording check: ${lint.length} issue(s)\n${lint.map(i => `  line ${i.line}: ${i.rule}: ${i.text.slice(0, 120)}`).join('\n')}` : 'Wording check: clean (no banned words, no internal terms up front, every rate has its range).');
   return { markdown, path: `${base}.md` };
 }
 
@@ -221,6 +243,7 @@ async function main() {
       const { read, prev, win, weekImps } = doRead(rows, week, since, qa);
       printRead(read);
       const sources = await ingestSources(p, since, week.end);
+      if (opt('audience') !== 'client') console.log(`Stored ${await saveReads(p, read, week, since, cfg.version)} per-ad results in live_reads (week ${week.start}).`);
       await p.end();
       const { path: mdPath } = writeNote(read, prev, win, weekImps, week, since, sources, OUT);
       if (flag('prose')) await prose(mdPath);
@@ -268,6 +291,14 @@ async function main() {
         console.log(`\nCalls: ${Object.entries(counts).map(([k, v]) => `${k} ${v}`).join(', ')}`);
         console.log(rec.summary.join('\n'));
       }
+      return;
+    }
+    case 'latest': {
+      const p = pool();
+      const stubs = opts('stub');
+      for (const r of await latestReads(p, stubs.length ? stubs : undefined))
+        console.log(`${r.stub.padEnd(28)} ${r.week_end}  ${r.call.padEnd(17)} ${r.call_metric ?? ''}${r.rate !== null ? ` ${r.rate.toPrecision(3)} [${r.range_lo!.toPrecision(3)}, ${r.range_hi!.toPrecision(3)}]` : ''}`);
+      await p.end();
       return;
     }
     case 'status': {

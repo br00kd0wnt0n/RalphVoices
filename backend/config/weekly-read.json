@@ -1,9 +1,10 @@
 {
   "_note": "B3 weekly read (VOICES v2, Trupanion). Written 28 Sep 2026, before any live data. Change a threshold only with a dated entry in `changes` and a reason; the weekly note prints the config version it ran with.",
-  "version": 2,
+  "version": 3,
   "changes": [
     { "date": "2026-09-28", "version": 1, "by": "B3 build", "what": "First version, set before Month 1 goes live." },
-    { "date": "2026-09-28", "version": 2, "by": "B3 build, asked by Brook", "what": "Hold bars on calls (calls.hold): a call made last week stays until the evidence falls well back, so ads near a threshold don't flip between scale and keep testing week to week. Still before any live data." }
+    { "date": "2026-09-28", "version": 2, "by": "B3 build, asked by Brook", "what": "Hold bars on calls (calls.hold): a call made last week stays until the evidence falls well back, so ads near a threshold don't flip between scale and keep testing week to week. Still before any live data." },
+    { "date": "2026-09-28", "version": 3, "by": "B3 build, fixes approved by Brook after review", "what": "(1) Ties and calls use the same draws: tied = fewer than 9 in 10 draws put one ad ahead (calls.tie_bar); a scale must be clear of every ad outside its group, a cut must be clear of the ad set's leader. Ties were judged by 90% range overlap before, so an ad could be tied with an ad and cut. (2) min_ads_in_cell 2 -> 3: with two ads the rules produced a scale and a cut every week, a coin toss. (3) Note: one-screen plain-English front, appendix, client variant; cost per enrollment hidden below 5 enrollments. Still before any live data." }
   ],
 
   "naming": {
@@ -98,14 +99,17 @@
     "_metrics": "Calls are made on quotes per 1,000 impressions, the closest read to cost per quote. While quotes are too thin, link CTR can support a cut (an ad that clearly can't earn clicks can't earn quotes) but never a scale. Hook rate is diagnostic only. Cost per enrollment is reported and never used for a call.",
     "min_days_live": 4,
     "_min_days_live": "Meta's learning phase: the first days' delivery skews to cheap impressions.",
-    "min_ads_in_cell": 2,
+    "min_ads_in_cell": 3,
+    "_min_ads_in_cell": "No scale or cut unless the ad set has 3+ ads with enough data. With 2, one is always above the median and one below, so the rules called a scale and a cut every week (a coin toss). Below 3 the call is keep testing and the note says why.",
+    "tie_bar": 0.9,
+    "_tie_bar": "Two ads are tied when fewer than 9 in 10 Monte Carlo draws put one ahead of the other. The same draws decide the calls: a scale must be ahead of every ad outside its scaled group in at least 9 of 10 draws, a cut must be behind the ad set's leader in at least 9 of 10. So an ad is never scaled or cut relative to an ad it's tied with.",
     "p_best_scale": 0.8,
     "max_tied_scale": 2,
     "p_beat_median_tied_scale": 0.9,
     "_scale": "Scale when P(best in cell) >= 0.8. If no single ad reaches it but the top two together do and each beats the cell median with P >= 0.9, both are 'scale (tied)': never 'the winner'.",
     "p_worse_than_median_cut": 0.9,
     "_cut": "Cut when P(worse than the cell median) >= 0.9.",
-    "hold": { "p_best_scale": 0.6, "p_beat_median_tied_scale": 0.75, "p_worse_than_median_cut": 0.75 },
+    "hold": { "p_best_scale": 0.6, "p_beat_median_tied_scale": 0.75, "p_worse_than_median_cut": 0.75, "tie_bar": 0.8 },
     "_hold": "Hysteresis. A call needs the full bar to start and a lower bar to stay: last week's scale stays while P(best) >= 0.6 (and nothing else has reached 0.8); a tied scale stays while the ad is still in the top two by P(best) and beats the median with P >= 0.75; a cut stays while P(worse than median) >= 0.75. Without it, ads near 0.8 or 0.9 flip between calls from one week's noise. Holds apply only to ads still readable and delivering, and each week's read is chained from the start of the flight.",
     "otherwise": "keep testing"
   },
@@ -127,8 +131,15 @@
     "_note": "Trupanion's allowable acquisition cost (PAC) by state hasn't arrived. Ad names don't carry state, so a by-state comparison needs a state breakdown from Add3 too. Until then cost per quote is reported without a target, and the note says so."
   },
 
+  "report": {
+    "min_enrollments_for_cpe": 5,
+    "_min_enrollments_for_cpe": "Below 5 enrollments, cost per enrollment is shown as 'too few enrollments to read (n)', not a dollar figure: one enrollment more or less moves it by 20% or more."
+  },
+
   "wording": {
     "banned": ["predict", "prediction", "predicted", "winner", "winning", "score", "scores", "guarantee", "certain", "proves", "proven"],
+    "internal_terms": ["P(", "cell", "posterior", "median", "prior", "draws", "Monte Carlo", "shrunk"],
+    "_internal_terms": "Not allowed in the one-screen front of the note or the client variant; the appendix may use them.",
     "_banned": "The read reports what live results show, with ranges. Never forecasts, never a winner inside a tie, never scores."
   }
 }

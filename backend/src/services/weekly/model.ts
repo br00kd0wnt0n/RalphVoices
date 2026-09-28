@@ -58,7 +58,8 @@ export interface MetricRead {
   p_best: number | null;   // among readable ads in the cell
   p_worse_than_median: number | null;
   p_beat_median: number | null;
-  tied_with: string[];     // stubs whose range overlaps the cell leader's (for the leader), or the leader's
+  p_ahead: Record<string, number>; // P(this ad's rate > that ad's), by ad key, same draws as P(best)
+  tied_with: string[];     // for the ad set's leader: ads it can't be separated from; for those ads: the leader
   call: Call;
   reason: string;
 }
@@ -222,7 +223,7 @@ export function readWeek(adsIn: AdData[], cfg: WeeklyConfig, opts: { from: strin
       a.metrics[m] = {
         metric: m, n: a.impressions, x, rate_raw: x / a.impressions, rate: al / (al + be),
         lo: quantile(sorted, qLo), hi: quantile(sorted, qHi), prior_mean: pm, readable,
-        p_best: null, p_worse_than_median: null, p_beat_median: null, tied_with: [], call: 'too early to call', reason: '',
+        p_best: null, p_worse_than_median: null, p_beat_median: null, p_ahead: {}, tied_with: [], call: 'too early to call', reason: '',
       };
     }
 
@@ -231,24 +232,27 @@ export function readWeek(adsIn: AdData[], cfg: WeeklyConfig, opts: { from: strin
     for (const a of el) cells.set(a.cell, [...(cells.get(a.cell) || []), a]);
     for (const [, members] of cells) {
       const rd = members.filter(a => a.metrics[m]!.readable);
-      if (rd.length >= cfg.calls.min_ads_in_cell) {
-        const best = new Array(rd.length).fill(0), below = new Array(rd.length).fill(0), above = new Array(rd.length).fill(0);
+      if (rd.length >= 2) {
+        const n = rd.length;
+        const best = new Array(n).fill(0), below = new Array(n).fill(0), above = new Array(n).fill(0);
+        const ahead = Array.from({ length: n }, () => new Array(n).fill(0));
         const col = rd.map(a => samples.get(a.key)!);
-        const tmp = new Array(rd.length);
+        const tmp = new Array(n);
         for (let d = 0; d < draws; d++) {
           let bi = 0;
-          for (let i = 0; i < rd.length; i++) { tmp[i] = col[i][d]; if (tmp[i] > tmp[bi]) bi = i; }
+          for (let i = 0; i < n; i++) { tmp[i] = col[i][d]; if (tmp[i] > tmp[bi]) bi = i; }
           best[bi]++;
           const med = quantile([...tmp].sort((p, q) => p - q), 0.5);
-          for (let i = 0; i < rd.length; i++) { if (tmp[i] < med) below[i]++; else if (tmp[i] > med) above[i]++; }
+          for (let i = 0; i < n; i++) {
+            if (tmp[i] < med) below[i]++; else if (tmp[i] > med) above[i]++;
+            for (let j = 0; j < n; j++) if (tmp[i] > tmp[j]) ahead[i][j]++;
+          }
         }
-        rd.forEach((a, i) => { const r = a.metrics[m]!; r.p_best = best[i] / draws; r.p_worse_than_median = below[i] / draws; r.p_beat_median = above[i] / draws; });
-        // Ties: ranges overlapping the leader's (highest posterior mean).
-        const leader = [...rd].sort((p, q) => q.metrics[m]!.rate - p.metrics[m]!.rate)[0];
-        const L = leader.metrics[m]!;
-        const tied = rd.filter(a => a !== leader && a.metrics[m]!.hi >= L.lo);
-        L.tied_with = tied.map(a => a.stub);
-        for (const a of tied) a.metrics[m]!.tied_with = [leader.stub];
+        rd.forEach((a, i) => {
+          const r = a.metrics[m]!;
+          r.p_best = best[i] / draws; r.p_worse_than_median = below[i] / draws; r.p_beat_median = above[i] / draws;
+          r.p_ahead = Object.fromEntries(rd.map((b, j) => [b.key, ahead[i][j] / draws]).filter(([k]) => k !== a.key));
+        });
       }
       decideCalls(members, m, cfg, prevCalls);
     }
@@ -295,47 +299,89 @@ export function readWeek(adsIn: AdData[], cfg: WeeklyConfig, opts: { from: strin
   return read;
 }
 
+// Calls and ties come from the same draws. Two ads are tied when fewer than
+// `tie_bar` (9 in 10) of the draws put one ahead of the other. A scale must be
+// separated from every ad outside its scaled group; a cut must be separated from
+// the ad set's leader (and so from any scaled ad). So an ad is never scaled or cut
+// relative to an ad it's tied with, and the note's "tied" wording (tied_with, set
+// here from the same bars) can't disagree with the calls. Held calls use the lower
+// hold bars throughout. No scale or cut with fewer than min_ads_in_cell readable ads.
 function decideCalls(members: AdRead[], m: MetricKey, cfg: WeeklyConfig, prevCalls: Map<string, Partial<Record<MetricKey, Call>>> = new Map()) {
-  const c = cfg.calls;
+  const c = cfg.calls, h = c.hold;
   const def = cfg.metrics[m];
-  const rd = members.filter(a => a.metrics[m]!.readable);
-  // Tied scale: the smallest top group whose P(best) sums past the bar, if it's small enough
-  // and every member beats the cell median with high probability.
-  const byBest = [...rd].sort((p, q) => (q.metrics[m]!.p_best ?? 0) - (p.metrics[m]!.p_best ?? 0));
-  let tiedTop: AdRead[] = [];
-  let acc = 0;
-  for (const a of byBest) { tiedTop.push(a); acc += a.metrics[m]!.p_best ?? 0; if (acc >= c.p_best_scale) break; }
-  if (acc < c.p_best_scale || tiedTop.length < 2 || tiedTop.length > c.max_tied_scale || !tiedTop.every(a => (a.metrics[m]!.p_beat_median ?? 0) >= c.p_beat_median_tied_scale)) tiedTop = [];
+  const R = (a: AdRead) => a.metrics[m]!;
+  const rd = members.filter(a => R(a).readable);
+  const enough = rd.length >= c.min_ads_in_cell;
+  const was = (a: AdRead) => prevCalls.get(a.key)?.[m];
+  const wasScale = (a: AdRead) => was(a) === 'scale' || was(a) === 'scale (tied)';
+  const P = (x: AdRead, y: AdRead) => R(x).p_ahead[y.key] ?? 0;
+  const clearOf = (x: AdRead, others: AdRead[], bar: number) => others.every(y => y === x || P(x, y) >= bar);
+  const pct = (p: number | null) => `${Math.round((p ?? 0) * 100)}%`;
+  const byBest = [...rd].sort((p, q) => (R(q).p_best ?? 0) - (R(p).p_best ?? 0));
 
-  const h = c.hold;
-  const freshScale = rd.filter(a => (a.metrics[m]!.p_best ?? 0) >= c.p_best_scale);
-  const top2 = byBest.slice(0, c.max_tied_scale);
+  // The scaled group: fresh single, fresh tied pair, held single, held tied pair (in that order).
+  let group: AdRead[] = [];
+  let kind: 'single' | 'tied' | 'held' | 'held tied' | null = null;
+  if (enough) {
+    const single = byBest.find(x => (R(x).p_best ?? 0) >= c.p_best_scale && clearOf(x, rd, c.tie_bar));
+    if (single) { group = [single]; kind = 'single'; }
+    // Tied group: the leader and the ads it's tied with (same bar), if that group is small,
+    // together likely best, and every member is clearly ahead of every ad outside it.
+    const tiedGroup = (bar: number, pBeat: number, pSum: number, eligible: (a: AdRead) => boolean): AdRead[] | null => {
+      const lead = byBest[0];
+      if (!lead) return null;
+      const g = [lead, ...rd.filter(y => y !== lead && P(lead, y) < bar)];
+      const outside = rd.filter(a => !g.includes(a));
+      const sum = g.reduce((t, a) => t + (R(a).p_best ?? 0), 0);
+      return g.length >= 2 && g.length <= c.max_tied_scale && sum >= pSum && outside.length > 0
+        && g.every(a => eligible(a) && (R(a).p_beat_median ?? 0) >= pBeat && clearOf(a, outside, bar)) ? g : null;
+    };
+    if (!kind) { const g = tiedGroup(c.tie_bar, c.p_beat_median_tied_scale, c.p_best_scale, () => true); if (g) { group = g; kind = 'tied'; } }
+    if (!kind) {
+      const x = byBest.find(a => was(a) === 'scale' && (R(a).p_best ?? 0) >= h.p_best_scale && clearOf(a, rd, h.tie_bar));
+      if (x) { group = [x]; kind = 'held'; }
+    }
+    if (!kind) { const g = tiedGroup(h.tie_bar, h.p_beat_median_tied_scale, h.p_best_scale, wasScale); if (g) { group = g; kind = 'held tied'; } }
+  }
+  const leader = group[0] ?? byBest[0];
+  const held = kind === 'held' || kind === 'held tied';
+
+  const cutOk = (a: AdRead): 'fresh' | 'held' | null => {
+    if (!enough || group.includes(a) || a === leader) return null;
+    const r = R(a);
+    if ((r.p_worse_than_median ?? 0) >= c.p_worse_than_median_cut && P(leader, a) >= (held ? h.tie_bar : c.tie_bar)) return 'fresh';
+    if (was(a) === 'cut' && (r.p_worse_than_median ?? 0) >= h.p_worse_than_median_cut && P(leader, a) >= h.tie_bar) return 'held';
+    return null;
+  };
+
   for (const a of members) {
-    const r = a.metrics[m]!;
-    const pct = (p: number | null) => `${Math.round((p ?? 0) * 100)}%`;
-    const was = prevCalls.get(a.key)?.[m];
+    const r = R(a);
     if (!a.live_now) { r.call = 'too early to call'; r.reason = 'not delivering in the last 7 days'; continue; }
     if (a.impressions < def.min_impressions) { r.call = 'too early to call'; r.reason = `${a.impressions.toLocaleString('en-US')} impressions; needs ${def.min_impressions.toLocaleString('en-US')}`; continue; }
     if (a.days_live < c.min_days_live) { r.call = 'too early to call'; r.reason = `live ${a.days_live} day${a.days_live === 1 ? '' : 's'}; needs ${c.min_days_live}`; continue; }
-    if (r.p_best === null) { r.call = 'keep testing'; r.reason = 'no other readable ad in its ad set to compare with'; continue; }
-    if (r.p_best >= c.p_best_scale) { r.call = 'scale'; r.reason = `P(best in ad set) ${pct(r.p_best)}`; continue; }
-    if (tiedTop.includes(a)) {
-      const other = tiedTop.filter(b => b !== a).map(b => b.stub).join(', ');
-      r.call = 'scale (tied)'; r.reason = `tied with ${other}; together P(best) ${pct(tiedTop.reduce((s, b) => s + (b.metrics[m]!.p_best ?? 0), 0))}, each ahead of the ad set's median (P ${pct(r.p_beat_median)})`; continue;
+    if (!enough) { r.call = 'keep testing'; r.reason = `only ${rd.length} ad${rd.length === 1 ? '' : 's'} with enough data in this ad set; a scale or cut needs ${c.min_ads_in_cell}`; continue; }
+    if (group.includes(a)) {
+      const others = group.filter(b => b !== a).map(b => b.stub).join(', ');
+      if (kind === 'single') { r.call = 'scale'; r.reason = `P(best in ad set) ${pct(r.p_best)}, ahead of every other ad in at least ${Math.round(c.tie_bar * 10)} in 10 draws`; }
+      else if (kind === 'held') { r.call = 'scale'; r.reason = `held from last week: P(best in ad set) ${pct(r.p_best)} (keeps a scale at ${pct(h.p_best_scale)} or more), still ahead of every other ad in at least ${Math.round(h.tie_bar * 10)} in 10 draws`; }
+      else if (kind === 'tied') { r.call = 'scale (tied)'; r.reason = `tied with ${others}; together P(best) ${pct(group.reduce((t, b) => t + (R(b).p_best ?? 0), 0))}, both ahead of every other ad in at least ${Math.round(c.tie_bar * 10)} in 10 draws`; }
+      else { r.call = 'scale (tied)'; r.reason = `held from last week: tied with ${others}, both still ahead of every other ad in at least ${Math.round(h.tie_bar * 10)} in 10 draws`; }
+      continue;
     }
-    // Holds: last week's scale stays while it's still well ahead and nothing else has taken the lead.
-    if (was === 'scale' && r.p_best >= h.p_best_scale) {
-      r.call = 'scale'; r.reason = `held from last week: P(best in ad set) ${pct(r.p_best)}, below the bar to start a scale (P(best) ${pct(c.p_best_scale)}) but above the bar to keep one (P(best) ${pct(h.p_best_scale)})`; continue;
-    }
-    if ((was === 'scale' || was === 'scale (tied)') && !freshScale.length && top2.includes(a) && (r.p_beat_median ?? 0) >= h.p_beat_median_tied_scale) {
-      const other = top2.filter(b => b !== a).map(b => b.stub).join(', ');
-      r.call = 'scale (tied)'; r.reason = `held from last week: still in the top two with ${other}, ahead of the ad set's median (P ${pct(r.p_beat_median)}; keeps a tied scale while P(beat median) is ${pct(h.p_beat_median_tied_scale)} or more)`; continue;
-    }
-    if ((r.p_worse_than_median ?? 0) >= c.p_worse_than_median_cut) { r.call = 'cut'; r.reason = `P(worse than the ad set's median) ${pct(r.p_worse_than_median)}`; continue; }
-    if (was === 'cut' && (r.p_worse_than_median ?? 0) >= h.p_worse_than_median_cut) {
-      r.call = 'cut'; r.reason = `held from last week: P(worse than the ad set's median) ${pct(r.p_worse_than_median)}, above the bar to keep a cut (P(worse) ${pct(h.p_worse_than_median_cut)})`; continue;
-    }
+    const cut = cutOk(a);
+    if (cut === 'fresh') { r.call = 'cut'; r.reason = `P(worse than the ad set's median) ${pct(r.p_worse_than_median)}, behind ${leader.stub} in ${Math.round(P(leader, a) * 100)} of 100 draws`; continue; }
+    if (cut === 'held') { r.call = 'cut'; r.reason = `held from last week: P(worse than the ad set's median) ${pct(r.p_worse_than_median)} (keeps a cut at ${pct(h.p_worse_than_median_cut)} or more)`; continue; }
     r.call = 'keep testing'; r.reason = `P(best) ${pct(r.p_best)}, P(worse than median) ${pct(r.p_worse_than_median)}: neither bar reached`;
+  }
+
+  // Ties for display, from the same bars the calls used: the leader against every
+  // other readable ad; members of a tied scale are tied with each other.
+  for (const a of rd) R(a).tied_with = [];
+  if (rd.length >= 2) {
+    const bar = (y: AdRead) => (held || R(y).call === 'cut' && R(y).reason.startsWith('held') ? h.tie_bar : c.tie_bar);
+    const tied = rd.filter(y => y !== leader && (group.includes(y) || P(leader, y) < bar(y)));
+    R(leader).tied_with = tied.map(y => y.stub);
+    for (const y of tied) R(y).tied_with = [leader.stub];
   }
 }
 

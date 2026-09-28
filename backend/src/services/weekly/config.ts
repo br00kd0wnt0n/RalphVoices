@@ -60,7 +60,8 @@ export interface WeeklyConfig {
     max_tied_scale: number;
     p_beat_median_tied_scale: number;
     p_worse_than_median_cut: number;
-    hold: { p_best_scale: number; p_beat_median_tied_scale: number; p_worse_than_median_cut: number };
+    tie_bar: number;
+    hold: { p_best_scale: number; p_beat_median_tied_scale: number; p_worse_than_median_cut: number; tie_bar: number };
   };
   features: {
     min_ads_with: number;
@@ -71,7 +72,8 @@ export interface WeeklyConfig {
     min_residual_df: number;
   };
   cost_benchmarks: { cost_per_quote: number | null };
-  wording: { banned: string[] };
+  report: { min_enrollments_for_cpe: number };
+  wording: { banned: string[]; internal_terms: string[] };
 }
 
 export const DEFAULT_CONFIG_PATH = path.resolve(__dirname, '../../../config/weekly-read.json');
@@ -94,8 +96,8 @@ export function checkConfig(c: any): WeeklyConfig {
   need(p01(c.calls?.p_best_scale) && p01(c.calls?.p_worse_than_median_cut) && p01(c.calls?.p_beat_median_tied_scale), 'calls probabilities in (0,1)');
   need(METRIC_KEYS.includes(c.calls?.primary_metric), 'calls.primary_metric');
   const h = c.calls?.hold;
-  need(h && p01(h.p_best_scale) && p01(h.p_beat_median_tied_scale) && p01(h.p_worse_than_median_cut), 'calls.hold probabilities in (0,1)');
-  need(h.p_best_scale <= c.calls.p_best_scale && h.p_beat_median_tied_scale <= c.calls.p_beat_median_tied_scale && h.p_worse_than_median_cut <= c.calls.p_worse_than_median_cut, 'calls.hold bars must not be above the bars to start a call');
+  need(h && p01(h.p_best_scale) && p01(h.p_beat_median_tied_scale) && p01(h.p_worse_than_median_cut) && p01(h.tie_bar) && p01(c.calls.tie_bar) && c.calls.tie_bar > 0.5 && h.tie_bar > 0.5, 'calls.hold and tie bars in (0.5,1)');
+  need(h.p_best_scale <= c.calls.p_best_scale && h.p_beat_median_tied_scale <= c.calls.p_beat_median_tied_scale && h.p_worse_than_median_cut <= c.calls.p_worse_than_median_cut && h.tie_bar <= c.calls.tie_bar, 'calls.hold bars must not be above the bars to start a call');
   need(c.model?.mc_draws >= 500, 'model.mc_draws >= 500');
   need(Number.isInteger(c.features?.min_residual_df) && c.features.min_residual_df >= 1, 'features.min_residual_df');
   new RegExp(c.audience.retargeting_pattern, 'i');

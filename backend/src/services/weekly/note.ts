@@ -22,6 +22,7 @@ export const fmtDate = (iso: string, dow = false) => { const d = new Date(iso + 
 const int = (n: number) => Math.round(n).toLocaleString('en-US');
 const money = (n: number | null) => (n === null || !Number.isFinite(n) ? '–' : `$${n >= 100 ? int(n) : n.toFixed(2)}`);
 const pctp = (p: number | null) => (p === null ? '–' : `${Math.round(p * 100)}%`);
+const inTen = (p: number) => `${Math.round(p * 10)} in 10`;
 
 // A rate in the metric's own unit, with its range.
 export function fmtRate(m: MetricKey, v: number, cfg: WeeklyConfig): string {
@@ -40,61 +41,131 @@ const fmtRatio = (e: Effect) => {
 const CALL_ORDER: Record<Call, number> = { scale: 0, 'scale (tied)': 1, cut: 2, 'keep testing': 3, 'too early to call': 4 };
 
 const PLATFORM_NAME: Record<string, string> = { META: 'Meta', TT: 'TikTok' };
+const plat = (a: AdRead) => PLATFORM_NAME[a.platform] || a.platform;
+const FORMAT_NAME: Record<string, string> = { ST: 'statics', VID: 'hero videos', CAR: 'carousels', TT: 'TikTok builds', UGC: 'creator (UGC) videos' };
+const fmtName = (f: string) => FORMAT_NAME[f] || f;
+const plural = (n: number, w: string, ws = `${w}s`) => `${n} ${n === 1 ? w : ws}`;
 
-function personaHeadline(ads: AdRead[], cfg: WeeklyConfig, read: Read): string {
-  const prim = cfg.calls.primary_metric;
-  if (!ads.length) return 'No prospecting ads with parsed names in this window.';
-  const cut = ads.filter(a => a.headline.call === 'cut');
-  const early = ads.filter(a => a.headline.call === 'too early to call');
-  const parts: string[] = [];
-  const cells = [...new Set(ads.map(a => a.cell))].sort();
-  for (const c of cells) {
-    const g = ads.filter(a => a.cell === c);
-    const plat = PLATFORM_NAME[g[0].platform] || g[0].platform;
-    const single = g.filter(a => a.headline.call === 'scale');
-    const tied = g.filter(a => a.headline.call === 'scale (tied)');
-    for (const a of single) parts.push(`${a.stub} is clearly ahead in the ${plat} ad set on ${cfg.metrics[a.headline.metric!].label}`);
-    if (tied.length) parts.push(`in the ${plat} ad set, ${tied.map(a => a.stub).join(' and ')} are ahead of the rest and tied with each other`);
-  }
-  if (parts.length) {
-    const s = parts.join('; ');
-    return `${s[0].toUpperCase()}${s.slice(1)}.${cut.length ? ` ${cut.length} ad${cut.length === 1 ? ' is' : 's are'} clearly behind.` : ''}`;
-  }
-  if (early.length === ads.length) return `Too early to call: none of the ${ads.length} ads has enough data yet.`;
-  if (cut.length) return `Nothing clearly ahead yet; ${cut.length} ad${cut.length === 1 ? ' is' : 's are'} clearly behind.`;
-  const readable = ads.filter(a => a.metrics[prim]?.readable).length;
-  return read.metrics_available[prim] && readable === 0 ? `Too early to call on ${cfg.metrics[prim].label}; keep testing.` : 'Keep testing: no ad is clearly ahead or behind.';
+// How the first screen names an ad. Internal: the naming stub. Client: a readable
+// label, "DINK · Territory name · carousel v2 (Meta)", with the stub in small print.
+export type Namer = (a: AdRead, short?: boolean) => string;
+const stubName: Namer = a => a.stub;
+const FORMAT_WORD: Record<string, string> = { ST: 'static', VID: 'video', CAR: 'carousel', TT: 'TikTok-native', UGC: 'creator video' };
+export function readableLabel(a: Pick<AdRead, 'persona' | 'territory' | 'format' | 'version' | 'platform'>, territoryNames: Record<string, string> = {}): string {
+  const name = territoryNames[`${a.persona}_${a.territory}`] ?? territoryNames[a.territory] ?? a.territory;
+  return `${a.persona} · ${name.replace(/[.\s]+$/, '')} · ${FORMAT_WORD[a.format] || a.format} v${a.version} (${PLATFORM_NAME[a.platform] || a.platform})`;
+}
+export function clientNamer(territoryNames: Record<string, string> = {}): Namer {
+  return (a, short) => (short ? readableLabel(a, territoryNames) : `${readableLabel(a, territoryNames)} <sub>${a.stub}</sub>`);
 }
 
-// The headline metric's rate and range, for an action line.
+export interface NoteOptions {
+  audience?: 'internal' | 'client';
+  featureLabels?: Record<string, string>; // feature id → plain description (Studio rules), for the front page
+  territoryNames?: Record<string, string>; // PERSONA_TERRITORY (or TERRITORY) → name, for the client variant's labels
+}
+export const APPENDIX_MARKER = '<!-- appendix: internal terms allowed below -->';
+
+// The rate an action rests on, in plain words with its range.
 function rateOf(a: AdRead, cfg: WeeklyConfig): string {
   const m = a.headline.metric;
   const r = m ? a.metrics[m] : undefined;
-  return m && r ? `${cfg.metrics[m].label} ${fmtWithRange(m, r, cfg)}` : '';
+  if (!m || !r) return '';
+  return cfg.metrics[m].scale === 'per1k'
+    ? `${fmtRate(m, r.rate, cfg)} quotes per 1,000 impressions (range ${fmtRate(m, r.lo, cfg)}–${fmtRate(m, r.hi, cfg)})`
+    : `${cfg.metrics[m].label} ${fmtWithRange(m, r, cfg)}`;
+}
+const onWhat = (a: AdRead, cfg: WeeklyConfig) => (a.headline.metric === cfg.calls.primary_metric ? 'on quotes' : `on ${cfg.metrics[a.headline.metric!].label}, while quotes are still too thin to read`);
+const isHeld = (a: AdRead) => /held from last week/.test(a.headline.reason);
+const smallAdSets = (ads: AdRead[], cfg: WeeklyConfig) => {
+  const m = cfg.calls.primary_metric;
+  const out: Array<{ plat: string; n: number }> = [];
+  for (const c of [...new Set(ads.map(a => a.cell))].sort()) {
+    const g = ads.filter(a => a.cell === c);
+    const n = g.filter(a => a.metrics[m]?.readable || a.metrics[cfg.calls.fallback_metric ?? m]?.readable).length;
+    if (n > 0 && n < cfg.calls.min_ads_in_cell) out.push({ plat: plat(g[0]), n });
+  }
+  return out;
+};
+
+// One line per persona, plain English: ahead, behind, tied, too early to call, keep testing.
+export function personaHeadline(ads: AdRead[], cfg: WeeklyConfig, nm: Namer = stubName): string {
+  if (!ads.length) return 'No prospecting ads with readable names in this window.';
+  const cut = ads.filter(a => a.headline.call === 'cut');
+  const early = ads.filter(a => a.headline.call === 'too early to call');
+  const parts: string[] = [];
+  for (const c of [...new Set(ads.map(a => a.cell))].sort()) {
+    const g = ads.filter(a => a.cell === c);
+    const single = g.filter(a => a.headline.call === 'scale');
+    const tied = g.filter(a => a.headline.call === 'scale (tied)');
+    for (const a of single) parts.push(`${nm(a)} is clearly ahead in the ${plat(a)} ad set`);
+    if (tied.length) parts.push(`${tied.map(a => nm(a)).join(' and ')} are ahead of the rest of the ${plat(tied[0])} ad set, tied with each other`);
+  }
+  const behind = cut.length ? `${plural(cut.length, 'ad is', 'ads are')} behind.` : '';
+  if (parts.length) { const t = parts.join('; '); return `${t[0].toUpperCase()}${t.slice(1)}.${behind ? ` ${behind}` : ''}`; }
+  if (early.length === ads.length) return `Too early to call: none of the ${ads.length} ads has enough data yet.`;
+  const small = smallAdSets(ads, cfg);
+  const smallTxt = small.length ? ` The ${small.map(s => s.plat).join(' and ')} ad set${small.length > 1 ? 's have' : ' has'} too few ads to call.` : '';
+  if (cut.length) return `Nothing clearly ahead yet; ${behind[0].toLowerCase()}${behind.slice(1)}${smallTxt}`;
+  return `No ad is clearly ahead or behind yet: keep testing.${smallTxt}`;
 }
 
-function actions(ads: AdRead[], cfg: WeeklyConfig): string[] {
+// Up to three actions, plain English, each with its reason and range.
+export function actions(ads: AdRead[], cfg: WeeklyConfig, nm: Namer = stubName): string[] {
   const out: string[] = [];
-  const sorted = [...ads].sort((a, b) => CALL_ORDER[a.headline.call] - CALL_ORDER[b.headline.call]);
-  for (const a of sorted.filter(a => a.headline.call !== 'keep testing' && a.headline.call !== 'too early to call').slice(0, 3)) {
-    const verb = a.headline.call === 'cut' ? 'Cut' : a.headline.call === 'scale (tied)' ? 'Scale (tied)' : 'Scale';
-    out.push(`**${verb}** ${a.stub}: ${rateOf(a, cfg)}; ${a.headline.reason.replace(/^[^:]+: /, '')}.`);
+  const held = (a: AdRead) => (isHeld(a) ? ' Held from last week: its lead has narrowed but still holds.' : '');
+  for (const a of ads.filter(a => a.headline.call === 'scale'))
+    out.push(`**Scale** ${nm(a)}: clearly ahead of every other ad in the ${plat(a)} ad set ${onWhat(a, cfg)}, ${rateOf(a, cfg)}.${held(a)}`);
+  const tiedCells = [...new Set(ads.filter(a => a.headline.call === 'scale (tied)').map(a => a.cell))];
+  for (const c of tiedCells) {
+    const g = ads.filter(a => a.cell === c && a.headline.call === 'scale (tied)');
+    out.push(`**Scale both** ${g.map(a => nm(a)).join(' and ')}: ahead of the rest of the ${plat(g[0])} ad set and tied with each other ${onWhat(g[0], cfg)} (${g.map(a => `${nm(a, true)}: ${rateOf(a, cfg)}`).join('; ')}).${held(g[0])}`);
   }
-  if (out.length < 3) {
-    // Keep testing: the ads nearest a call first, then the thinnest.
-    const prim = cfg.calls.primary_metric;
-    const kt = ads.filter(a => a.headline.call === 'keep testing').sort((a, b) => (b.metrics[prim]?.p_best ?? 0) - (a.metrics[prim]?.p_best ?? 0));
-    for (const a of kt.slice(0, 3 - out.length)) out.push(`**Keep testing** ${a.stub}: ${rateOf(a, cfg) ? `${rateOf(a, cfg)}; ` : ''}${a.headline.reason}.`);
-  }
-  if (out.length < 3) {
-    const early = ads.filter(a => a.headline.call === 'too early to call');
-    if (early.length) {
-      const prim = cfg.calls.primary_metric, need = cfg.metrics[prim].min_impressions;
-      const median = [...early.map(a => a.impressions)].sort((p, q) => p - q)[Math.floor(early.length / 2)];
-      out.push(`**Keep testing** the ${early.length} ad${early.length === 1 ? '' : 's'} still too early to call (median ${int(median)} impressions so far; a call on ${cfg.metrics[prim].label} needs ${int(need)} per ad). Keep budgets even across them until then.`);
-    }
+  const cuts = ads.filter(a => a.headline.call === 'cut').sort((a, b) => (a.metrics[a.headline.metric!]?.rate ?? 0) - (b.metrics[b.headline.metric!]?.rate ?? 0));
+  const cutLine = (a: AdRead) => `**Cut** ${nm(a)}: behind most of the ${plat(a)} ad set and clearly behind its top ad ${onWhat(a, cfg)}, ${rateOf(a, cfg)}.${isHeld(a) ? ' Held from last week.' : ''}`;
+  // At most two cuts up front when there's something else to say; the rest follow the other actions.
+  for (const a of cuts.slice(0, 2)) out.push(cutLine(a));
+  for (const s of smallAdSets(ads, cfg))
+    out.push(`**Keep testing** the ${s.plat} ad set: only ${s.n} ad${s.n === 1 ? '' : 's'} with enough data, too few to call one ahead of another. A third ad would make a call possible.`);
+  const prim = cfg.calls.primary_metric;
+  const kt = ads.filter(a => a.headline.call === 'keep testing' && a.metrics[prim]?.readable && !smallAdSets([a], cfg).length)
+    .sort((a, b) => (b.metrics[prim]?.p_best ?? 0) - (a.metrics[prim]?.p_best ?? 0));
+  for (const a of cuts.slice(2)) out.push(cutLine(a));
+  for (const a of kt.slice(0, 1)) out.push(`**Keep testing** ${nm(a)}: nearest to a call, ${rateOf(a, cfg)}, not yet clearly ahead of the rest.`);
+  const early = ads.filter(a => a.headline.call === 'too early to call');
+  if (early.length) {
+    const need = cfg.metrics[prim].min_impressions;
+    const median = [...early.map(a => a.impressions)].sort((p, q) => p - q)[Math.floor(early.length / 2)];
+    out.push(`**Keep testing** ${early.length === ads.length ? `all ${ads.length} ads` : `the ${plural(early.length, 'ad')} still too early to call`} at even budgets. A read on quotes needs about ${int(need)} impressions per ad; the typical one has ${int(median)} so far.`);
   }
   return out.slice(0, 3);
+}
+
+const featName = (id: string, labels?: Record<string, string>) => {
+  if (labels?.[id]) return `“${labels[id].replace(/\.$/, '')}”`;
+  const [k, v] = id.includes(':') ? id.split(':') : ['', id];
+  return k ? `${k} ${v}` : id.replace(/_/g, ' ');
+};
+
+// One line for the whole account: what's clear, and what we're still waiting to learn.
+export function accountLine(read: Read, cfg: WeeklyConfig, labels?: Record<string, string>): string {
+  const clear = [...read.features, ...read.formats].filter(e => e.verdict === 'clear lift' || e.verdict === 'clear drag')
+    .map(e => {
+      const [f, ref] = e.label.split(' vs ');
+      const who = e.kind === 'format' ? `${fmtName(f)} do ${e.verdict === 'clear lift' ? 'better' : 'worse'} than ${fmtName(ref)}` : `ads tagged ${featName(e.label, labels)} do ${e.verdict === 'clear lift' ? 'better' : 'worse'}`;
+      return `${who} on ${cfg.metrics[e.metric].label}, by ${fmtRatio(e)}`;
+    });
+  const waiting: string[] = [];
+  const prim = cfg.calls.primary_metric;
+  if (!read.metrics_available[prim]) waiting.push('quotes: the export has no quote column yet');
+  else if (!read.ads.some(a => a.metrics[prim]?.readable)) waiting.push(`quotes: no ad has the ${int(cfg.metrics[prim].min_impressions)} impressions a read needs yet`);
+  const open = read.features.filter(e => e.metric === prim && e.verdict === 'not clear yet').sort((a, b) => b.ads_with - a.ads_with).slice(0, 2);
+  if (open.length) waiting.push(`whether ads tagged ${open.map(e => featName(e.label, labels)).join(' or ')} get more quotes`);
+  const fmtNd = [...new Set(read.formats.filter(e => e.verdict === 'not enough data').map(e => e.label.split(' vs ')[0]))];
+  if (fmtNd.length) waiting.push(`how ${fmtNd.map(fmtName).join(' and ')} compare with other formats (too few so far)`);
+  const small = new Set(read.ads.flatMap(a => smallAdSets([...read.ads.filter(b => b.cell === a.cell)], cfg).map(s => `${a.persona} ${s.plat}`)));
+  if (small.size) waiting.push(`calls in ad sets with fewer than ${cfg.calls.min_ads_in_cell} ads (${[...small].sort().join(', ')})`);
+  return `**Across the account:** ${clear.length ? `clear so far: ${clear.join('; ')}. ` : 'nothing clear yet across ads. '}Still waiting to learn: ${waiting.length ? waiting.join('; ') : 'nothing outstanding'}.`;
 }
 
 function whatMoved(ads: AdRead[], prev: Read | null, ctx: NoteContext, cfg: WeeklyConfig): string[] {
@@ -121,9 +192,12 @@ function whatMoved(ads: AdRead[], prev: Read | null, ctx: NoteContext, cfg: Week
   return lines;
 }
 
+const cpeText = (a: AdRead, cfg: WeeklyConfig) =>
+  a.enrollments < cfg.report.min_enrollments_for_cpe ? `too few enrollments to read (${a.enrollments})` : `${money(a.cpe)} (${a.enrollments})`;
+
 function adTable(ads: AdRead[], read: Read, cfg: WeeklyConfig): string[] {
   const ms = METRIC_KEYS.filter(m => read.metrics_available[m] && ads.some(a => a.metrics[m]));
-  const head = ['Ad', 'Impressions', ...ms.map(m => cfg.metrics[m].label), ...(read.metrics_available.quotes_per_1k ? ['Cost per quote (est.)'] : []), `P(best), ${cfg.metrics[cfg.calls.primary_metric].label}`, 'Call'];
+  const head = ['Ad', 'Impressions', ...ms.map(m => cfg.metrics[m].label), ...(read.metrics_available.quotes_per_1k ? ['Cost per quote (est.)'] : []), 'Cost per enrollment (observed; never used for calls)', `P(best), ${cfg.metrics[cfg.calls.primary_metric].label}`, 'Call'];
   const rows = [...ads].sort((a, b) => CALL_ORDER[a.headline.call] - CALL_ORDER[b.headline.call] || a.stub.localeCompare(b.stub)).map(a => {
     const cells = ms.map(m => {
       const r = a.metrics[m];
@@ -132,11 +206,12 @@ function adTable(ads: AdRead[], read: Read, cfg: WeeklyConfig): string[] {
     });
     const cpq = read.metrics_available.quotes_per_1k ? [a.cpq?.lo && a.cpq?.hi ? `${money(a.cpq.value)} (range ${money(a.cpq.lo)}–${money(a.cpq.hi)})` : money(a.cpq?.value ?? null)] : [];
     const pb = a.metrics[cfg.calls.primary_metric]?.p_best ?? null;
-    return [`${a.stub}${a.live_now ? '' : ' (off)'}`, int(a.impressions), ...cells, ...cpq, pctp(pb), a.headline.call];
+    return [`${a.stub}${a.live_now ? '' : ' (off)'}`, int(a.impressions), ...cells, ...cpq, cpeText(a, cfg), pctp(pb), a.headline.call];
   });
   return [`| ${head.join(' | ')} |`, `|${head.map(() => '---').join('|')}|`, ...rows.map(r => `| ${r.join(' | ')} |`)];
 }
 
+// Per ad set and metric: the leader and its ties, from the same draws and bars as the calls.
 function leaderLines(ads: AdRead[], read: Read, cfg: WeeklyConfig): string[] {
   const out: string[] = [];
   const byCell = new Map<string, AdRead[]>();
@@ -148,11 +223,13 @@ function leaderLines(ads: AdRead[], read: Read, cfg: WeeklyConfig): string[] {
       const el = g.filter(a => a.metrics[m]);
       if (!el.length) continue;
       const label = cfg.metrics[m].label;
-      if (rd.length < cfg.calls.min_ads_in_cell) { out.push(`${cell}, ${label}: ${rd.length} of ${el.length} ads have enough data to compare; too early to call.`); continue; }
+      if (rd.length < 2) { out.push(`${cell}, ${label}: ${rd.length} of ${el.length} ads have enough data; nothing to compare.`); continue; }
       const top = [...rd].sort((a, b) => b.metrics[m]!.p_best! - a.metrics[m]!.p_best!)[0];
-      const r = top.metrics[m]!;
-      const tie = r.tied_with.length ? `; its range overlaps ${r.tied_with.length} other ad${r.tied_with.length === 1 ? '' : 's'} (${r.tied_with.join(', ')}), so they're tied` : '';
-      out.push(`${cell}, ${label}: ${rd.length} of ${el.length} ads readable. Highest P(best) is ${top.stub} at ${pctp(r.p_best)}, ${fmtWithRange(m, r, cfg)}${tie}.`);
+      const lead = rd.find(a => a.metrics[m]!.call.startsWith('scale')) ?? top;
+      const r = lead.metrics[m]!;
+      const small = rd.length < cfg.calls.min_ads_in_cell ? ` Only ${rd.length} readable ads: no scale or cut below ${cfg.calls.min_ads_in_cell}.` : '';
+      const tie = r.tied_with.length ? `; tied with ${r.tied_with.join(', ')} (fewer than ${inTen(cfg.calls.tie_bar)} draws put one ahead)` : `; ahead of every other readable ad in at least ${inTen(/held from last week/.test(r.reason) ? cfg.calls.hold.tie_bar : cfg.calls.tie_bar)} draws`;
+      out.push(`${cell}, ${label}: ${rd.length} of ${el.length} ads readable. Leader ${lead.stub}, P(best) ${pctp(r.p_best)}, ${fmtWithRange(m, r, cfg)}${tie}.${small}`);
     }
   }
   return out;
@@ -177,20 +254,26 @@ function effectLines(effects: Effect[], cfg: WeeklyConfig): string[] {
   return out;
 }
 
-export function draftNote(read: Read, ctx: NoteContext, cfg: WeeklyConfig): { markdown: string; ledger: string } {
+export function draftNote(read: Read, ctx: NoteContext, cfg: WeeklyConfig, opts: NoteOptions = {}): { markdown: string; ledger: string } {
+  const client = opts.audience === 'client';
+  const nm: Namer = client ? clientNamer(opts.territoryNames) : stubName;
   const L: string[] = [];
   const iv = Math.round(read.interval * 100);
   const all = read.ads;
   L.push(`# Weekly read: ${fmtDate(ctx.week.start)} to ${fmtDate(ctx.week.end)} ${ctx.week.end.slice(0, 4)}`, '');
-  L.push(`*Draft for Brook to edit before the Wednesday read. Every number is computed by \`weekly.ts note\` (config v${cfg.version}); ranges are ${iv}%. Data from ${fmtDate(ctx.since)} to ${fmtDate(ctx.week.end, true)}, prospecting ads only.*`, '');
+  L.push(client
+    ? `*Live results from prospecting ads, ${fmtDate(ctx.since)} to ${fmtDate(ctx.week.end)}. Each figure comes with a range: where the true figure most likely sits (${iv}%). "Too early to call" means there isn't enough data yet to say.*`
+    : `*Draft for Brook to edit before the Wednesday read (config v${cfg.version}; ranges are ${iv}%; data ${fmtDate(ctx.since)} to ${fmtDate(ctx.week.end, true)}, prospecting ads only). The first screen is for the call; the appendix is the working.*`, '');
 
-  L.push('## Summary', '');
   for (const p of cfg.naming.personas) {
     const ads = all.filter(a => a.persona === p);
-    L.push(`- **${p}:** ${personaHeadline(ads, cfg, read)}`);
+    L.push(`## ${p}`, '', `**${personaHeadline(ads, cfg, nm)}**`, '');
+    if (ads.length) L.push(...actions(ads, cfg, nm).map((x, i) => `${i + 1}. ${x}`), '');
   }
-  L.push('');
+  L.push(accountLine(read, cfg, opts.featureLabels), '');
+  if (client) return { markdown: L.join('\n') + '\n', ledger: ledger(read, ctx, cfg) };
 
+  L.push('---', '', APPENDIX_MARKER, '', '# Appendix (working; not for the call)', '');
   L.push('## What this read covers', '');
   const spend = all.reduce((s, a) => s + a.spend, 0), imps = all.reduce((s, a) => s + a.impressions, 0);
   L.push(`- ${all.length} prospecting ads, ${int(imps)} impressions, ${money(spend)} spend (observed totals).`);
@@ -200,23 +283,22 @@ export function draftNote(read: Read, ctx: NoteContext, cfg: WeeklyConfig): { ma
   if (lo.unknown_audience.ads) L.push(`- **Left out, audience unknown** (campaign and ad set names match neither the prospecting nor the retargeting rule): ${lo.unknown_audience.ads} ads, ${int(lo.unknown_audience.impressions)} impressions.`);
   if (ctx.window.overlaps_dropped) L.push(`- ${ctx.window.overlaps_dropped} rows overlapped finer rows for the same ad (two exports covering the same days); the coarser rows were dropped.`);
   for (const n of read.notes) L.push(`- ${n}`);
-  L.push(`- Calls are made on ${cfg.metrics[cfg.calls.primary_metric].label}${cfg.calls.fallback_metric ? `; while that's too thin, ${cfg.metrics[cfg.calls.fallback_metric].label} can support a cut but not a scale` : ''}. Hook rate is diagnostic only. Cost per enrollment is reported and never used for a call.`);
+  L.push(`- Calls are made on ${cfg.metrics[cfg.calls.primary_metric].label}${cfg.calls.fallback_metric ? `; while that's too thin, ${cfg.metrics[cfg.calls.fallback_metric].label} can support a cut but not a scale` : ''}. No scale or cut in an ad set with fewer than ${cfg.calls.min_ads_in_cell} readable ads. Hook rate is diagnostic only. Cost per enrollment is reported (from ${cfg.report.min_enrollments_for_cpe} enrollments) and never used for a call.`);
+  L.push(`- Ties and calls come from the same draws: tied = fewer than ${inTen(cfg.calls.tie_bar)} draws put one ad ahead of the other. A scale is ahead of every ad outside its group, a cut is behind the ad set's leader, in at least ${inTen(cfg.calls.tie_bar)} draws (${inTen(cfg.calls.hold.tie_bar)} to hold last week's call).`);
   if (all.some(a => a.platform === 'TT' && a.metrics.hook_rate)) L.push('- TikTok hook rate is 2-second views over impressions (TikTok\'s closest measure), so it is only compared within TikTok, never with Meta\'s 3-second rate.');
   L.push(cfg.cost_benchmarks.cost_per_quote ? `- Cost per quote is compared against a target of ${money(cfg.cost_benchmarks.cost_per_quote)}.` : '- No cost benchmark yet: Trupanion\'s allowable acquisition cost by state hasn\'t arrived, so cost per quote is shown without a target.');
   L.push('');
 
   for (const p of cfg.naming.personas) {
     const ads = all.filter(a => a.persona === p);
-    L.push(`## ${p}`, '', `**${personaHeadline(ads, cfg, read)}**`, '');
     if (!ads.length) continue;
+    L.push(`## ${p}: detail`, '');
     L.push('### What moved', '', ...whatMoved(ads, ctx.prev, ctx, cfg).map(x => `- ${x}`), '');
     L.push('### How sure we are', '', ...leaderLines(ads, read, cfg).map(x => `- ${x}`), '');
     L.push(...adTable(ads, read, cfg), '');
-    const cpe = ads.filter(a => a.cpe !== null);
-    if (cpe.length) L.push(`Cost per enrollment (observed, not used for calls): ${cpe.map(a => `${a.stub} ${money(a.cpe)} from ${a.enrollments} enrollment${a.enrollments === 1 ? '' : 's'}`).join('; ')}.`, '');
-    L.push('### Recommended actions', '', ...actions(ads, cfg).map((x, i) => `${i + 1}. ${x}`), '');
-    const called = [...ads].filter(a => a.headline.call !== 'keep testing' && a.headline.call !== 'too early to call').sort((a, b) => CALL_ORDER[a.headline.call] - CALL_ORDER[b.headline.call]).slice(3);
-    if (called.length) L.push(`Also called (see the table): ${called.map(a => `${a.headline.call} ${a.stub}`).join('; ')}.`, '');
+    const shown = new Set(actions(ads, cfg).join(' ').match(/\b[A-Z]+_[A-Z0-9_]+_v\d+_[A-Z]+\b/g) || []);
+    const called = ads.filter(a => (a.headline.call !== 'keep testing' && a.headline.call !== 'too early to call') && !shown.has(a.stub));
+    if (called.length) L.push(`Also called (not in the first screen): ${called.map(a => `${a.headline.call} ${a.stub}`).join('; ')}.`, '');
     const pf = read.persona_features.filter(e => e.persona === p && e.verdict !== 'not enough data');
     if (pf.length) L.push(`### ${p}: features within this persona`, '', ...effectLines(pf, cfg), '');
   }
@@ -263,7 +345,11 @@ export function lintNote(md: string, cfg: WeeklyConfig): LintIssue[] {
   const issues: LintIssue[] = [];
   // Stems: "predict" also catches "predicts" and "predicted".
   const banned = new RegExp(`\\b((?:${cfg.wording.banned.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\w*)`, 'i');
+  const cut = md.indexOf(APPENDIX_MARKER);
+  const frontLines = (cut < 0 ? md : md.slice(0, cut)).split('\n').length;
+  const internal = cfg.wording.internal_terms.map(t => ({ t, re: new RegExp(/^\w/.test(t) ? `\\b${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\w*` : t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') }));
   md.split('\n').forEach((line, i) => {
+    if (i < frontLines && !line.startsWith('<!--')) for (const { t, re } of internal) if (re.test(line)) issues.push({ rule: `internal term "${t}" before the appendix`, line: i + 1, text: line });
     const b = banned.exec(line);
     if (b) issues.push({ rule: `banned word "${b[1]}"`, line: i + 1, text: line });
     // A percentage or "per 1,000" rate needs a range nearby. P(...) values, effect

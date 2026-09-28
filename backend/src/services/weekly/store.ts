@@ -5,6 +5,7 @@ import type { Pool, PoolClient } from 'pg';
 import type { ExportResult, FeatureMap } from './ingest.js';
 import { COUNT_FIELDS } from './ingest.js';
 import type { MetricRow } from './window.js';
+import type { Read } from './model.js';
 
 export interface SaveResult { ingest_id: number; ads_inserted: number; ads_updated: number; metrics_inserted: number; metrics_updated: number; replaced_ingest: boolean }
 
@@ -105,4 +106,51 @@ export async function loadRows(pool: Pool, to?: string): Promise<MetricRow[]> {
 export async function ingestSources(pool: Pool, from: string, to: string): Promise<string[]> {
   const r = await pool.query(`SELECT file_name, source_platform, ingested_at FROM live_ingests WHERE period_end >= $1 AND period_start <= $2 ORDER BY ingested_at`, [from, to]);
   return r.rows.map(x => `${x.file_name} (${x.source_platform})`);
+}
+
+// Persist a weekly read's per-ad results (one row per ad; the week's rows are replaced).
+export async function saveReads(pool: Pool, read: Read, week: { start: string; end: string }, since: string, configVersion: number): Promise<number> {
+  const ids = await pool.query(`SELECT id, source_platform || '|' || ad_name || '|' || campaign_name || '|' || ad_set_name AS key FROM live_ads`);
+  const idOf = new Map<string, number>(ids.rows.map(r => [r.key, r.id]));
+  const c = await pool.connect();
+  let n = 0;
+  try {
+    await c.query('BEGIN');
+    for (const a of read.ads) {
+      const id = idOf.get(a.key);
+      if (!id) continue;
+      const m = a.headline.metric;
+      const r = m ? a.metrics[m] : undefined;
+      const metrics = Object.fromEntries(Object.entries(a.metrics).map(([k, v]) => [k, {
+        n: v!.n, x: v!.x, rate: v!.rate, lo: v!.lo, hi: v!.hi, readable: v!.readable, p_best: v!.p_best,
+        p_worse_than_median: v!.p_worse_than_median, tied_with: v!.tied_with, call: v!.call, reason: v!.reason,
+      }]));
+      await c.query(
+        `INSERT INTO live_reads (ad_id, stub, persona, name_platform, week_start, week_end, since, config_version, impressions, live_now, call, call_metric, reason, rate, range_lo, range_hi, p_best, p_worse_than_median, tied_with, metrics)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+         ON CONFLICT (ad_id, week_end, since) DO UPDATE SET stub = EXCLUDED.stub, persona = EXCLUDED.persona, name_platform = EXCLUDED.name_platform, week_start = EXCLUDED.week_start,
+           config_version = EXCLUDED.config_version, impressions = EXCLUDED.impressions, live_now = EXCLUDED.live_now, call = EXCLUDED.call, call_metric = EXCLUDED.call_metric,
+           reason = EXCLUDED.reason, rate = EXCLUDED.rate, range_lo = EXCLUDED.range_lo, range_hi = EXCLUDED.range_hi, p_best = EXCLUDED.p_best,
+           p_worse_than_median = EXCLUDED.p_worse_than_median, tied_with = EXCLUDED.tied_with, metrics = EXCLUDED.metrics, read_at = NOW()`,
+        [id, a.stub, a.persona, a.platform, week.start, week.end, since, configVersion, a.impressions, a.live_now, a.headline.call, m, a.headline.reason,
+          r?.rate ?? null, r?.lo ?? null, r?.hi ?? null, r?.p_best ?? null, r?.p_worse_than_median ?? null, JSON.stringify(r?.tied_with ?? []), JSON.stringify(metrics)]);
+      n++;
+    }
+    await c.query('COMMIT');
+  } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
+  return n;
+}
+
+export interface LatestRead {
+  stub: string; persona: string | null; platform: string | null; week_start: string; week_end: string; config_version: number;
+  call: string; call_metric: string | null; reason: string | null; rate: number | null; range_lo: number | null; range_hi: number | null;
+  p_best: number | null; tied_with: string[]; impressions: number | null; live_now: boolean | null;
+}
+
+// The latest weekly read per naming stub (for B3b's Live tab), optionally for some stubs only.
+export async function latestReads(pool: Pool, stubs?: string[]): Promise<LatestRead[]> {
+  const r = await pool.query(
+    `SELECT stub, persona, name_platform, week_start::text, week_end::text, config_version, call, call_metric, reason, rate, range_lo, range_hi, p_best, tied_with, impressions, live_now
+       FROM live_latest_reads ${stubs ? 'WHERE stub = ANY($1)' : ''} ORDER BY stub`, stubs ? [stubs] : []);
+  return r.rows.map(x => ({ ...x, platform: x.name_platform, rate: num(x.rate), range_lo: num(x.range_lo), range_hi: num(x.range_hi), p_best: num(x.p_best), impressions: num(x.impressions) }));
 }

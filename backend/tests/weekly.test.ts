@@ -9,7 +9,7 @@ import { mapColumns, parseExport, classifyAudience, loadFeatureCsv, parseNumber,
 import { aggregate, fromIngest, weekOf, addDays, type MetricRow } from '../src/services/weekly/window.js';
 import { readWeek, type AdData, type Read } from '../src/services/weekly/model.js';
 import { simulate, checkRecovery } from '../src/services/weekly/simulate.js';
-import { draftNote, lintNote, newNumbers } from '../src/services/weekly/note.js';
+import { draftNote, lintNote, newNumbers, APPENDIX_MARKER, readableLabel } from '../src/services/weekly/note.js';
 import { rng, beta } from '../src/services/weekly/stats.js';
 import { readSeries } from '../src/services/weekly/series.js';
 
@@ -295,28 +295,56 @@ test('a cell with one readable ad has nothing to compare: keep testing, not scal
   const read = readWeek([ad('A', 60000, 900, 60), ad('B', 3000, 45, 2)], cfg, { from: '2026-10-12', to: '2026-10-25', quotesAvailable: true });
   const a = read.ads.find(x => x.key === 'A')!, b = read.ads.find(x => x.key === 'B')!;
   assert.equal(a.headline.call, 'keep testing');
-  assert.match(a.headline.reason, /no other readable ad/);
+  assert.match(a.headline.reason, /only 1 ad with enough data in this ad set/);
   assert.equal(b.headline.call, 'too early to call');
 });
 
 // ---------- note ----------
 
-test('the drafted note passes its own wording rules and covers every persona', () => {
-  const { read } = simRead('month1', 42);
-  const sim = simulate('month1', 42);
+function noteFor(seed: number, audience: 'internal' | 'client' = 'internal') {
+  const { read } = simRead('month1', seed);
+  const sim = simulate('month1', seed);
   const w = aggregate([...parseExport(sim.meta_csv, 'meta', cfg).rows].map(fromIngest), '2026-10-12', '2026-11-08');
-  const { markdown, ledger } = draftNote(read, { week: { start: '2026-11-02', end: '2026-11-08' }, since: '2026-10-12', window: w, prev: null, week_impressions: new Map(), sources: ['sim'] }, cfg);
+  return { read, ...draftNote(read, { week: { start: '2026-11-02', end: '2026-11-08' }, since: '2026-10-12', window: w, prev: null, week_impressions: new Map(), sources: ['sim'] }, cfg, { audience }) };
+}
+
+test('the internal note: one plain-English screen, then the appendix; passes its own wording rules', () => {
+  const { markdown, ledger, read } = noteFor(42);
   assert.deepEqual(lintNote(markdown, cfg), []);
-  for (const p of cfg.naming.personas) assert.ok(markdown.includes(`## ${p}`));
-  assert.ok(markdown.includes('### Recommended actions'));
-  assert.ok(markdown.includes('No cost benchmark yet'));
+  const [front, appendix] = markdown.split(APPENDIX_MARKER);
+  assert.ok(appendix, 'has an appendix');
+  for (const p of cfg.naming.personas) assert.ok(front.includes(`## ${p}`));
+  assert.ok(front.includes('**Across the account:**'));
+  for (const t of ['P(', 'cell', 'median', 'draws']) assert.ok(!front.includes(t), `"${t}" is kept out of the first screen`);
+  for (const p of cfg.naming.personas) {
+    const sec = front.split(`## ${p}`)[1].split('\n## ')[0];
+    assert.ok((sec.match(/^\d+\. /gm) || []).length <= 3, `${p}: at most 3 actions`);
+  }
+  assert.ok(front.split('\n').length < 40, `first screen is ${front.split('\n').length} lines`);
+  assert.ok(appendix.includes('How sure we are') && appendix.includes('No cost benchmark yet'));
   assert.ok(ledger.split('\n')[0].startsWith('week_start,week_end'));
   assert.ok(ledger.split('\n').length > read.ads.length * 2);
 });
 
-test('wording lint catches banned words (and their forms) and rates without ranges', () => {
-  const md = ['The winner is FAM_SUMMER.', 'CTR was 1.4% this week.', 'CTR 1.4% (range 1.2%–1.6%).', 'P(best) 86% and P(worse than median) 3%.', 'Our model predicts growth.', 'Effect +34% (range +13% to +60%).'].join('\n');
-  assert.deepEqual(lintNote(md, cfg).map(i => [i.line, i.rule]), [[1, 'banned word "winner"'], [2, 'rate without a range'], [5, 'banned word "predicts"']]);
+test('the client variant is the first screen only, with the same wording rules', () => {
+  const { markdown } = noteFor(42, 'client');
+  assert.deepEqual(lintNote(markdown, cfg), []);
+  assert.ok(!markdown.includes(APPENDIX_MARKER) && !markdown.includes('Appendix'));
+  assert.ok(!/P\(|config v|Brook|quarantin|draft/i.test(markdown));
+  assert.ok(markdown.includes('**Across the account:**'));
+});
+
+test('cost per enrollment is hidden below the minimum enrollments', () => {
+  const { markdown, read } = noteFor(42);
+  const few = read.ads.find(a => a.enrollments < cfg.report.min_enrollments_for_cpe)!;
+  assert.ok(few, 'the simulation has an ad with few enrollments');
+  const row = markdown.split('\n').find(l => l.startsWith(`| ${few.stub}`))!;
+  assert.ok(row.includes(`too few enrollments to read (${few.enrollments})`), row);
+});
+
+test('wording lint catches banned words (and their forms), internal terms up front, and rates without ranges', () => {
+  const md = ['The winner is FAM_SUMMER.', 'CTR was 1.4% this week.', 'CTR 1.4% (range 1.2%–1.6%).', 'Our model predicts growth.', 'Effect +34% (range +13% to +60%).', 'The cell leader.', APPENDIX_MARKER, 'P(best) 86% and P(worse than median) 3%; the cell leader.'].join('\n');
+  assert.deepEqual(lintNote(md, cfg).map(i => [i.line, i.rule]), [[1, 'banned word "winner"'], [2, 'rate without a range'], [4, 'banned word "predicts"'], [6, 'internal term "cell" before the appendix']]);
 });
 
 test('the prose guard rejects any number, or number word, not in the source', () => {
@@ -399,4 +427,104 @@ test('hold bars cut week-to-week reversals in a simulated month without losing a
   };
   const without = count(noHold), withHold = count(cfg);
   assert.ok(withHold < without, `reversals ${withHold} with holds vs ${without} without`);
+});
+
+// ---------- ties and calls agree; small ad sets ----------
+
+test('an ad is never scaled while tied with an ad outside its scale, and never cut while tied with the leader', () => {
+  // A has P(best) above 0.8 but fewer than 9 in 10 draws put it ahead of B: under the old
+  // rules A was "scale" with its range overlapping B's. Now A and B are a tied pair.
+  const r = readWeek([hAd('A', 70), hAd('B', 58), hAd('C', 30), hAd('D', 30)], cfg, hOpts);
+  const A = qCall(r, 'A'), B = qCall(r, 'B');
+  assert.ok(A.p_best! >= cfg.calls.p_best_scale && A.p_ahead.B < cfg.calls.tie_bar, `P(best) ${A.p_best}, P(A>B) ${A.p_ahead.B}`);
+  assert.equal(A.call, 'scale (tied)');
+  assert.equal(B.call, 'scale (tied)');
+  assert.deepEqual(A.tied_with, ['B']);
+  assert.equal(qCall(r, 'C').call, 'cut');
+  // Across simulated months, every week: the property holds for every ad set and metric.
+  for (let s = 1; s <= 4; s++) {
+    const sim = simulate('month1', 3000 + s);
+    const fm = loadFeatureCsv(sim.features_csv, 'sim', cfg).map;
+    const rows = [...parseExport(sim.meta_csv, 'meta', cfg, fm).rows, ...parseExport(sim.tiktok_csv, 'tiktok', cfg, fm).rows].map(fromIngest);
+    for (const read of readSeries(rows, sim.truth.start, addDays(sim.truth.start, 27), cfg, { quotesAvailable: true }).reads) {
+      for (const cell of new Set(read.ads.map(a => a.cell))) for (const m of ['link_ctr', 'quotes_per_1k'] as const) {
+        const rd = read.ads.filter(a => a.cell === cell && a.metrics[m]?.readable);
+        const scaled = rd.filter(a => a.metrics[m]!.call.startsWith('scale'));
+        for (const x of scaled) for (const y of rd.filter(y => !scaled.includes(y)))
+          assert.ok(!x.metrics[m]!.tied_with.includes(y.stub) && !y.metrics[m]!.tied_with.includes(x.stub), `${x.stub} scaled but tied with ${y.stub}`);
+        const leader = scaled[0] ?? [...rd].sort((p, q) => (q.metrics[m]!.p_best ?? 0) - (p.metrics[m]!.p_best ?? 0))[0];
+        for (const y of rd.filter(y => y.metrics[m]!.call === 'cut'))
+          assert.ok(!leader.metrics[m]!.tied_with.includes(y.stub), `${y.stub} cut but tied with the leader ${leader.stub}`);
+      }
+    }
+  }
+});
+
+test('an ad set with fewer than 3 readable ads gets no scale or cut, and says why', () => {
+  const r = readWeek([hAd('A', 90), hAd('B', 30)], cfg, hOpts);
+  for (const k of ['A', 'B']) {
+    assert.equal(qCall(r, k).call, 'keep testing');
+    assert.match(qCall(r, k).reason, /only 2 ads with enough data in this ad set; a scale or cut needs 3/);
+  }
+  const { read } = simRead('month1', 42);
+  assert.ok(read.ads.filter(a => a.platform === 'TT').every(a => !['scale', 'scale (tied)', 'cut'].includes(a.headline.call)), 'the 2-ad TikTok ad sets are never called');
+  const { markdown } = noteFor(42);
+  assert.ok(markdown.split(APPENDIX_MARKER)[0].includes('The TikTok ad set has too few ads to call'));
+});
+
+// ---------- database (opt-in: WEEKLY_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:54329/voices_b3_test) ----------
+
+const TEST_DB = process.env.WEEKLY_TEST_DATABASE_URL;
+test('database: 016 twice, idempotent ingest, stored reads, latest read per stub', { skip: !TEST_DB && 'set WEEKLY_TEST_DATABASE_URL to a local test database' }, async () => {
+  const { default: pg } = await import('pg');
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const store = await import('../src/services/weekly/store.js');
+  assert.ok(/@(127\.0\.0\.1|localhost)[:/]/.test(TEST_DB!), 'local databases only');
+  pg.types.setTypeParser(1082, (v: string) => v);
+  const pool = new pg.Pool({ connectionString: TEST_DB });
+  try {
+    const sql = fs.readFileSync(path.join(__dirname, '../src/db/migrations/016_live_performance.sql'), 'utf8');
+    await pool.query(sql); await pool.query(sql);
+    await pool.query('TRUNCATE live_reads, live_metrics, live_ads, live_ingests RESTART IDENTITY CASCADE');
+    const sim = simulate('month1', 42);
+    const fm = loadFeatureCsv(sim.features_csv, 'sim', cfg).map;
+    const exp = parseExport(sim.meta_csv, 'meta', cfg, fm);
+    const first = await store.saveExport(pool, { name: 'meta.csv', sha256: 'x' }, exp, cfg.version);
+    const again = await store.saveExport(pool, { name: 'meta.csv', sha256: 'x' }, exp, cfg.version);
+    assert.equal(first.metrics_inserted, exp.rows.length);
+    assert.equal(again.metrics_inserted, 0);
+    assert.equal(again.metrics_updated, exp.rows.length);
+    const rows = await store.loadRows(pool);
+    assert.equal(rows.length, exp.rows.length);
+    const { read, reads } = readSeries(rows, '2026-10-12', '2026-11-08', cfg, { quotesAvailable: true });
+    await store.saveReads(pool, reads[0], { start: '2026-10-12', end: '2026-10-18' }, '2026-10-12', cfg.version);
+    const n = await store.saveReads(pool, read, { start: '2026-11-02', end: '2026-11-08' }, '2026-10-12', cfg.version);
+    assert.equal(await store.saveReads(pool, read, { start: '2026-11-02', end: '2026-11-08' }, '2026-10-12', cfg.version), n, 're-running a week replaces its rows');
+    const latest = await store.latestReads(pool);
+    assert.equal(latest.length, new Set(read.ads.map(a => a.stub)).size);
+    const standout = (await store.latestReads(pool, [sim.truth.standout!.stub]))[0];
+    assert.equal(standout.week_end, '2026-11-08');
+    assert.equal(standout.call, read.ads.find(a => a.stub === sim.truth.standout!.stub)!.headline.call);
+    assert.ok(standout.range_lo! <= standout.rate! && standout.rate! <= standout.range_hi!);
+  } finally {
+    await pool.end();
+  }
+});
+
+test('client labels: persona · territory name · format in words v# (platform), falling back to the code', () => {
+  const names = JSON.parse(require('node:fs').readFileSync(require('node:path').join(__dirname, '../config/territory-names.example.json'), 'utf8'));
+  const ad = { persona: 'DINK', territory: 'SIMA', format: 'CAR', version: 2, platform: 'META' };
+  assert.equal(readableLabel(ad, names), 'DINK · Example Territory A · carousel v2 (Meta)');
+  assert.equal(readableLabel({ ...ad, persona: 'CUR', territory: 'SIMC', format: 'UGC', version: 1 }, names), 'CUR · Example Territory C · creator video v1 (Meta)');
+  assert.equal(readableLabel({ ...ad, territory: 'NEWONE', format: 'TT', platform: 'TT' }, names), 'DINK · NEWONE · TikTok-native v2 (TikTok)');
+  const sim = simulate('month1', 42);
+  const w = aggregate([...parseExport(sim.meta_csv, 'meta', cfg).rows].map(fromIngest), '2026-10-12', '2026-11-08');
+  const { read } = simRead('month1', 42);
+  const md = draftNote(read, { week: { start: '2026-11-02', end: '2026-11-08' }, since: '2026-10-12', window: w, prev: null, week_impressions: new Map(), sources: [] }, cfg, { audience: 'client', territoryNames: names }).markdown;
+  assert.ok(md.includes('FAM · Example Territory E · static v2 (Meta) <sub>FAM_SIME_ST_v2_META</sub>'), 'label with the stub in small print');
+  assert.ok(!/\*\*(Scale|Cut)\S*\*\* [A-Z]+_[A-Z0-9]+_/.test(md), 'no bare stubs as the name of an action');
+  assert.deepEqual(lintNote(md, cfg), []);
+  const internal = draftNote(read, { week: { start: '2026-11-02', end: '2026-11-08' }, since: '2026-10-12', window: w, prev: null, week_impressions: new Map(), sources: [] }, cfg, { territoryNames: names }).markdown;
+  assert.ok(internal.includes('**Scale** FAM_SIME_ST_v2_META'), 'the internal note keeps the stub');
 });
