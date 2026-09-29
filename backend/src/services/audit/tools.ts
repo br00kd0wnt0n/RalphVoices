@@ -3,12 +3,17 @@
 // without tesseract there's no OCR cross-check.
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 
 export interface Tools { ffmpeg: string | null; ffprobe: string | null; tesseract: string | null }
 
+/** The first executable `bin` on PATH (no child process). */
 function which(bin: string): string | null {
-  try { return execFileSync('which', [bin], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null; } catch { return null; }
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    if (!dir) continue;
+    const p = path.join(dir, bin);
+    try { fs.accessSync(p, fs.constants.X_OK); if (fs.statSync(p).isFile()) return p; } catch { /* next */ }
+  }
+  return null;
 }
 const exists = (p?: string | null) => (p && fs.existsSync(p) ? p : null);
 

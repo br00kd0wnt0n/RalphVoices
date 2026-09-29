@@ -17,12 +17,12 @@ const RULES: Array<[RegExp, (ad: string) => boolean]> = [
   [/sick, scared or sad|unwell, frightened/i, ad => /sad|sick|scared/i.test(ad)],
 ];
 
-export function mockResponder(read: (imagePath: string) => string = ocr) {
-  return (req: ChatReq): ChatRes => {
+export function mockResponder(read: (imagePath: string) => string | Promise<string> = ocr) {
+  return async (req: ChatReq): Promise<ChatRes> => {
     const text = req.content.map(c => (c.type === 'text' ? c.text : '')).join('\n');
     if (req.stage.startsWith('read ')) {
       const im = req.content.find(c => c.type === 'image');
-      const words = im && im.type === 'image' ? read(im.image.path) : '';
+      const words = im && im.type === 'image' ? await read(im.image.path) : '';
       return { text: JSON.stringify({ text: words, description: 'Mock: no description.' }), top: [], usd: 0, usage: {} };
     }
     if (req.stage.startsWith('review ')) return { text: '{"hits":[]}', top: [], usd: 0, usage: {} };

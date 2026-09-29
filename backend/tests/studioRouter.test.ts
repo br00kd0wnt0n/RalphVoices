@@ -92,3 +92,96 @@ test('hosted access: STUDIO_EMAILS or ADMIN_EMAILS, case-insensitive, closed whe
 test('the monthly window starts on the 1st (UTC)', () => {
   assert.equal(monthStart(new Date('2026-09-28T12:00:00Z')), '2026-09-01T00:00:00.000Z');
 });
+
+test('compliance status is set by the producer or an admin; everyone else gets a clear 403', async () => {
+  const { canSetCompliance } = await import('../src/utils/studioAccess.js');
+  const env = { STUDIO_COMPLIANCE_EMAILS: 'vivan@ralph.world', ADMIN_EMAILS: 'brook@ralph.world' } as NodeJS.ProcessEnv;
+  assert.equal(canSetCompliance('Vivan@ralph.world', env), true);
+  assert.equal(canSetCompliance('brook@ralph.world', env), true);
+  assert.equal(canSetCompliance('nick.larson@ralph.world', env), false);
+  const app = express();
+  app.use('/s', createStudioRouter({ who: () => 'nick', api: () => new S.Api({ mock: true }), mock: true, cap: 50, capWindow: 'month', askOver: 2, canSetCompliance: () => false }));
+  const srv = app.listen(0, '127.0.0.1');
+  await new Promise(r => srv.once('listening', r));
+  const b = `http://127.0.0.1:${(srv.address() as AddressInfo).port}/s`;
+  try {
+    const res = await fetch(`${b}/batches/x/lines/y/compliance`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: '{"status":"cleared"}' });
+    assert.equal(res.status, 403);
+    assert.equal(((await (await fetch(`${b}/meta`)).json()) as any).can_set_compliance, false);
+  } finally { srv.close(); }
+});
+
+test('the live rules in plain words: every item with its source, visual-only brand items marked', async () => {
+  const r = await call('GET', '/rules/active');
+  assert.equal(r.status, 200);
+  assert.ok(r.body.compliance.every((x: any) => x.rule && x.source));
+  assert.ok(r.body.brand.some((x: any) => x.applies_to === 'visual'), 'the visual-only items are listed (marked), unlike in the text checks');
+  assert.ok(Object.values<any>(r.body.personas).every(p => Array.isArray(p.triggers) && Array.isArray(p.turn_offs)));
+});
+
+test('meta carries persona context from the rules file (who, triggers with detail and source, turn-offs, language)', async () => {
+  const m = (await call('GET', '/meta')).body;
+  const p: any = Object.values(m.personas)[0];
+  assert.ok(p.triggers.every((t: any) => 'detail' in t && 'source' in t));
+  assert.ok(Array.isArray(p.context.turn_offs) && Array.isArray(p.context.language));
+  assert.ok(m.sources && typeof m.sources === 'object');
+});
+
+test('Pre-flight notes an asset whose type doesn’t fit the code’s format (never blocks)', async () => {
+  const { formatNote } = await import('../src/services/studio/preflight.js');
+  assert.equal(formatNote('DINK_NEVER_STATIC_v1_META', 'static'), null);
+  assert.match(formatNote('DINK_NEVER_UGC_v1_TIKTOK', 'static')!, /a video \(UGC\).*static was uploaded/);
+  assert.match(formatNote('DINK_NEVER_CAROUSEL_v2_META', 'static')!, /carousel cards/);
+  assert.equal(formatNote('DINK_NEVER_VIDEO_v1_TIKTOK', 'video'), null);
+  assert.equal(formatNote('ODD_NAME', 'static'), null);
+});
+
+test('Pre-flight storage: production with R2 needs the private bucket, never the public one', async () => {
+  const { preflightStorage } = await import('../src/services/studio/preflight.js');
+  const prod = { NODE_ENV: 'production', ENABLE_R2_STORAGE: 'true', R2_BUCKET_NAME: 'public-bucket' } as NodeJS.ProcessEnv;
+  const refused = preflightStorage(prod, true);
+  assert.equal(refused.mode, 'refuse');
+  assert.match(refused.reason!, /set STUDIO_R2_BUCKET to a private bucket/);
+  assert.equal(preflightStorage({ ...prod, STUDIO_R2_BUCKET: 'private' }, true).mode, 'r2');
+  assert.equal(preflightStorage({ ...prod, ENABLE_R2_STORAGE: 'true' }, false).mode, 'refuse', 'R2 on but unusable still refuses in production');
+  assert.equal(preflightStorage({ NODE_ENV: 'development' } as NodeJS.ProcessEnv, false).mode, 'db');
+  assert.equal(preflightStorage({ NODE_ENV: 'development', R2_BUCKET_NAME: 'public-bucket' } as NodeJS.ProcessEnv, true).mode, 'db', 'never the public bucket, even in dev');
+});
+
+test('an audit from older rules or older checks says so (never re-run automatically)', async () => {
+  const { staleness, PREFLIGHT_LOGIC_VERSION } = await import('../src/services/studio/preflight.js');
+  assert.equal(staleness({ status: 'done', rules_version: 'v2.4', result: { logic_version: PREFLIGHT_LOGIC_VERSION } }, 'v2.4'), null);
+  assert.match(staleness({ status: 'done', rules_version: 'v2.3', result: { logic_version: PREFLIGHT_LOGIC_VERSION } }, 'v2.4')!, /older rules \(v2\.3; live: v2\.4\): audit again/);
+  assert.match(staleness({ status: 'done', rules_version: 'v2.4', result: {} }, 'v2.4')!, /older version of the checks/);
+  assert.equal(staleness({ status: 'failed', rules_version: 'v1' }, 'v2.4'), null);
+});
+
+test('a red flag on copy is overridden only by the Ready to traffic people or an admin; everyone else gets a 403', async () => {
+  const app = express();
+  app.use('/s', createStudioRouter({ who: () => 'vivan', api: () => new S.Api({ mock: true }), mock: true, cap: 50, capWindow: 'month', askOver: 2, canOverride: () => false }));
+  const srv = app.listen(0, '127.0.0.1');
+  await new Promise(r => srv.once('listening', r));
+  const b = `http://127.0.0.1:${(srv.address() as AddressInfo).port}/s`;
+  try {
+    const res = await fetch(`${b}/batches/x/lines/y/override`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"rule":"COMP_X","reason":"Looks fine to me"}' });
+    assert.equal(res.status, 403);
+    assert.match(((await res.json()) as any).error, /creative lead|admin/);
+    assert.equal(((await (await fetch(`${b}/meta`)).json()) as any).can_override, false);
+  } finally { srv.close(); }
+  // Locally (no role check) the route still reaches the override logic.
+  const local = await call('POST', '/batches/nope/lines/L1/override', { rule: 'X', reason: 'A reason here' });
+  assert.notEqual(local.status, 403);
+});
+
+test('lines only go into a run of the same persona and territory: a brief for another is a 409, never silently moved', async () => {
+  const g = await call('POST', '/generate', { brief: { territory: 'OWN_CALM', n: 2, name: 'mismatch-run' } });
+  await events(g.body.job);
+  const other = await call('POST', '/generate', { brief: { persona: 'DINK', territory: 'DINK_NEVER', own_lines: [{ text: 'A DINK line', field: 'meta_headline' }] }, batch: g.body.batch, own_only: true });
+  assert.equal(other.status, 409);
+  assert.match(other.body.error, /^This run is for .*Start a new run for /);
+  const run = (await call('GET', `/batches/${g.body.batch}`)).body;
+  assert.equal(run.lines.some((l: any) => l.text === 'A DINK line'), false, 'nothing was added to the other run');
+  // The same persona and territory still go in.
+  const same = await call('POST', '/generate', { brief: { territory: 'OWN_CALM', own_lines: [{ text: 'Another calm line', field: 'meta_headline' }] }, batch: g.body.batch, own_only: true });
+  assert.equal(same.status, 200);
+});

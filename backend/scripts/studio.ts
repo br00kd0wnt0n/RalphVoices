@@ -40,6 +40,9 @@ import path from 'node:path';
 import * as S from '../src/services/studio/engine.js';
 import { FileStore } from '../src/services/studio/store.js';
 import { PgStore } from '../src/services/studio/pgStore.js';
+import { Preflight } from '../src/services/studio/preflight.js';
+import { mockEngine } from '../src/services/studio/preflightEngine.js';
+import { b2Engine } from '../src/services/studio/preflightB2.js';
 
 const argv = process.argv.slice(2);
 const command = argv[0];
@@ -298,8 +301,7 @@ async function main() {
       const plan = await planImport(src, { since: opt('since') || undefined, runs: list(opt('runs')), compares: flag('compares') }, allHistory, briefFiles);
       const rules = await src.getRules();
       const edits = await src.getTerritoryEdits();
-      const assetNames = [];
-      for (const name of Object.keys(S.localAssets())) if (await src.hasAsset(name)) assetNames.push(name);
+      // No files come across: reference documents and the readout aren't in the tool, and hosted shows the text wordmark (Brook, 28 Sep).
       const spend = await src.listSpend();
       let attributed = 0, unnamed = 0;
       for (const r of plan.runs) {
@@ -307,14 +309,15 @@ async function main() {
         unnamed += b.lines.filter((l: any) => l.decision && !l.decided_by).length;
         attributed += attributeDecisions(b, plan.history).length;
       }
-      console.log(`From ${src.dir}\nRules: ${flag('with-rules') ? `${rules.version} (becomes the active version)` : 'not touched (upload and activate them in the Studio\'s Rules view; --with-rules to import them here)'}\nTerritory edits: ${Object.keys(edits).length}\nAssets: ${assetNames.join(', ') || 'none'}\n${describePlan(plan)}\nSpend: ${flag('with-spend') ? `${spend.length} records, $${spend.reduce((t, e) => t + (e.usd || 0), 0).toFixed(3)}` : 'not imported (add --with-spend)'}`);
+      console.log(`From ${src.dir}\nRules: ${flag('with-rules') ? `${rules.version} (becomes the active version)` : 'not touched (upload and activate them in the Studio\'s Rules view; --with-rules to import them here)'}\nTerritory edits: ${Object.keys(edits).length}\n${describePlan(plan)}\nSpend: ${flag('with-spend') ? `${spend.length} records, $${spend.reduce((t, e) => t + (e.usd || 0), 0).toFixed(3)}` : 'not imported (add --with-spend)'}`);
       if (unnamed) console.log(`Decisions with no name or time: ${unnamed}, attributed to the run's author at the run's last save.`);
       if (attributed) console.log(`Decisions with no history: ${attributed}, each given one history record marked imported.`);
       if (!opt('since') && !opt('runs')) console.log('Note: no --since or --runs, so every run except planted-line checks is included. The agreed carry-over is --since 2026-09-28.');
       if (flag('dry-run')) { console.log('Dry run: nothing written.'); return; }
       if (!pgStore) throw new Error('db-import needs --store pg (or --dry-run)');
       if (flag('with-rules')) await pgStore.putRules(rules.version || 'imported', rules, { activate: true, by: opt('user', 'import'), notes: 'Imported from the local studio folder' });
-      for (const key of ['personas', 'voices'] as const) { const v = await src.getInput(key); if (v) await pgStore.putInput(key, v); }
+      // Inputs: persona seeds, lived voices, and the M3 rubric (Pre-flight's audit engine needs it).
+      for (const key of ['personas', 'voices', 'rubric'] as const) { const v = await src.getInput(key); if (v) await pgStore.putInput(key, v); }
       for (const [code, t] of Object.entries(edits)) await pgStore.saveTerritoryEdit(code, t);
       for (const f of plan.briefs) await pgStore.saveBrief(JSON.parse(fs.readFileSync(path.join(briefsDir, f), 'utf8')));
       let lines = 0;
@@ -331,7 +334,6 @@ async function main() {
       for (const e of plan.history) if (!(await seen(e))) await pgStore.recordEdit(e);
       await pgStore.saveTaste(plan.taste);
       for (const name of plan.compares) { await pgStore.saveCompare(await src.getCompare(name)); await pgStore.saveCompareKey(name, await src.getCompareKey(name)); }
-      for (const name of assetNames) await pgStore.putAsset(name, (await src.getAsset(name))!);
       let spendAdded = 0;
       if (flag('with-spend')) {
         // Spend is append-only too: skip entries already in the database (same label, time and amount).
@@ -343,7 +345,7 @@ async function main() {
           spendAdded++;
         }
       }
-      console.log(`Imported: ${plan.runs.length} runs (${lines} lines), ${plan.briefs.length} briefs, ${plan.history.length + attributed} decision-history records (${attributed} marked imported), ${plan.taste.length} taste examples, ${plan.compares.length} compares, ${assetNames.length} assets${flag('with-spend') ? `, ${spendAdded} of ${spend.length} spend records (the rest were already there)` : ''}.`);
+      console.log(`Imported: ${plan.runs.length} runs (${lines} lines), ${plan.briefs.length} briefs, ${plan.history.length + attributed} decision-history records (${attributed} marked imported), ${plan.taste.length} taste examples, ${plan.compares.length} compares${flag('with-spend') ? `, ${spendAdded} of ${spend.length} spend records (the rest were already there)` : ''}.`);
       return;
     }
     case 'serve': { await serve(); return; }
@@ -388,6 +390,9 @@ async function serve() {
     cap: CAP,
     capWindow: 'all',
     askOver: ASK_OVER,
+    // Pre-flight needs the database: `serve --store pg`. Locally, files stay in Postgres unless R2 is configured.
+    // B2's audit engine (the mock with --mock).
+    preflight: pgStore ? { service: new Preflight(pgStore.pool as any, MOCK ? mockEngine : b2Engine({ capUsd: async () => Math.max(0, CAP - (await S.readSpend()).total_usd) })), canSetReady: () => true } : undefined,
   }));
 
   app.listen(port, '127.0.0.1', () => {

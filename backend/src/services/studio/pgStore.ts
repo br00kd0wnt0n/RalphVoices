@@ -3,7 +3,7 @@
 // imports src/db (which loads .env), so it can't reach a database by accident.
 
 import pg from 'pg';
-import type { Asset, EditRecord, SpendEntry, StudioStore } from './store.js';
+import type { Asset, EditRecord, InputKey, SpendEntry, StudioStore } from './store.js';
 
 type Queryable = Pick<pg.Pool, 'query' | 'connect'>;
 
@@ -15,6 +15,8 @@ export class PgStore implements StudioStore {
   readonly kind = 'pg' as const;
   constructor(private db: Queryable) {}
 
+  /** The connection, for features that keep their own tables (Pre-flight, migration 017). */
+  get pool(): Queryable { return this.db; }
   static fromUrl(url: string): PgStore { return new PgStore(new pg.Pool({ connectionString: url, max: 5 })); }
   async close() { await (this.db as pg.Pool).end?.(); }
 
@@ -35,24 +37,25 @@ export class PgStore implements StudioStore {
         `INSERT INTO studio_rules (version, body, status, notes, created_by) VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (version) DO UPDATE SET body = EXCLUDED.body, status = EXCLUDED.status, notes = COALESCE(EXCLUDED.notes, studio_rules.notes)`,
         [version, body, opts.activate ? 'active' : 'draft', opts.notes ?? null, opts.by ?? null]);
+      if (opts.activate) await c.query(`UPDATE studio_rules SET activated_by = $2, activated_at = NOW() WHERE version = $1`, [version, opts.by ?? null]);
       await c.query('COMMIT');
     } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
   }
   /** Make an uploaded version the active one (the previous active version is retired). */
-  async activateRules(version: string) {
+  async activateRules(version: string, by?: string) {
     const c = await this.db.connect();
     try {
       await c.query('BEGIN');
       const hit = await c.query(`SELECT 1 FROM studio_rules WHERE version = $1`, [version]);
       if (!hit.rowCount) throw new Error(`No rules version ${version}`);
       await c.query(`UPDATE studio_rules SET status = 'retired' WHERE status = 'active' AND version <> $1`, [version]);
-      await c.query(`UPDATE studio_rules SET status = 'active' WHERE version = $1`, [version]);
+      await c.query(`UPDATE studio_rules SET status = 'active', activated_by = $2, activated_at = NOW() WHERE version = $1`, [version, by ?? null]);
       await c.query('COMMIT');
     } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
   }
-  async listRules() { return (await this.db.query(`SELECT version, status, notes, created_by, created_at FROM studio_rules ORDER BY created_at DESC`)).rows; }
+  async listRules() { return (await this.db.query(`SELECT version, status, notes, created_by, created_at, activated_by, activated_at FROM studio_rules ORDER BY created_at DESC`)).rows; }
 
-  async getInput(key: 'personas' | 'voices') {
+  async getInput(key: InputKey) {
     const r = await this.db.query(`SELECT value FROM studio_inputs WHERE key = $1`, [key]);
     return r.rows[0]?.value ?? null;
   }

@@ -2,7 +2,8 @@
 // keyframes with ffmpeg and a tesseract read of every image.
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { parseStub } from './rules.js';
 import type { Asset, Frame } from './types.js';
 import { defaultTools, type Tools } from './tools.js';
@@ -53,24 +54,36 @@ export function parseSidecar(text: string): { copy: Record<string, string>; labe
   return { copy, labels };
 }
 
-export function videoDuration(file: string, tools: Tools = defaultTools()): number {
+const execFileP = promisify(execFile);
+/** Per-call limit for ffmpeg, ffprobe and tesseract (they run inside the main Voices backend). */
+export const TOOL_TIMEOUT_MS = 60_000;
+/**
+ * Run a tool without blocking the event loop (the audit runs in the same
+ * process as every other Voices request). Arguments are an array, never a shell string.
+ */
+export async function runTool(bin: string, args: string[], timeout = TOOL_TIMEOUT_MS): Promise<string> {
+  const { stdout } = await execFileP(bin, args, { encoding: 'utf8', timeout, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024 });
+  return stdout;
+}
+
+export async function videoDuration(file: string, tools: Tools = defaultTools()): Promise<number> {
   if (!tools.ffprobe) return 0;
-  const out = execFileSync(tools.ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file], { encoding: 'utf8' });
+  const out = await runTool(tools.ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file]);
   return Number(out.trim()) || 0;
 }
 
-export function hasAudio(file: string, tools: Tools = defaultTools()): boolean {
+export async function hasAudio(file: string, tools: Tools = defaultTools()): Promise<boolean> {
   if (!tools.ffprobe) return false;
   try {
-    return execFileSync(tools.ffprobe, ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=index', '-of', 'csv=p=0', file], { encoding: 'utf8' }).trim().length > 0;
+    return (await runTool(tools.ffprobe, ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=index', '-of', 'csv=p=0', file])).trim().length > 0;
   } catch { return false; }
 }
 
 /** The soundtrack as 16 kHz mono MP3 (small uploads; plenty for speech). */
-export function extractAudio(file: string, out: string, tools: Tools = defaultTools()): string {
+export async function extractAudio(file: string, out: string, tools: Tools = defaultTools()): Promise<string> {
   if (!tools.ffmpeg) return file; // the transcription API takes mp4/mov directly (up to 25 MB)
   fs.mkdirSync(path.dirname(out), { recursive: true });
-  execFileSync(tools.ffmpeg, ['-y', '-v', 'error', '-i', file, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '48k', out]);
+  await runTool(tools.ffmpeg, ['-y', '-v', 'error', '-i', file, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '48k', out], TOOL_TIMEOUT_MS * 2);
   return out;
 }
 
@@ -84,26 +97,26 @@ export function keyframeTimes(duration: number, cap = 8): Array<{ at: number; ro
   return out.slice(0, cap);
 }
 
-export function extractKeyframes(file: string, outDir: string, cap = 8, tools: Tools = defaultTools()): { frames: Frame[]; duration: number } {
+export async function extractKeyframes(file: string, outDir: string, cap = 8, tools: Tools = defaultTools()): Promise<{ frames: Frame[]; duration: number }> {
   if (!tools.ffmpeg || !tools.ffprobe) return { frames: [], duration: 0 };
   fs.mkdirSync(outDir, { recursive: true });
-  const duration = videoDuration(file, tools);
+  const duration = await videoDuration(file, tools);
   const frames: Frame[] = [];
-  keyframeTimes(duration, cap).forEach((k, i) => {
+  for (const [i, k] of keyframeTimes(duration, cap).entries()) {
     const p = path.join(outDir, `f${i}-${k.at.toFixed(1)}s.jpg`);
     // Longest side at most 1536 px: what vision reads at detail "high" anyway.
-    execFileSync(tools.ffmpeg!, ['-y', '-v', 'error', '-ss', String(k.at), '-i', file, '-frames:v', '1',
+    await runTool(tools.ffmpeg, ['-y', '-v', 'error', '-ss', String(k.at), '-i', file, '-frames:v', '1',
       '-vf', "scale='if(gt(iw,ih),min(1536,iw),-2)':'if(gt(iw,ih),-2,min(1536,ih))'", '-q:v', '3', p]);
     if (fs.existsSync(p)) frames.push({ label: k.label, path: p, at: k.at, role: k.role });
-  });
+  }
   return { frames, duration };
 }
 
 /** tesseract's read of one image, as a cross-check on vision. Empty when tesseract isn't installed. */
-export function ocr(image: string, tools: Tools = defaultTools()): string {
+export async function ocr(image: string, tools: Tools = defaultTools()): Promise<string> {
   if (!tools.tesseract) return '';
   try {
-    return execFileSync(tools.tesseract, [image, '-', '--psm', '11'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    return (await runTool(tools.tesseract, [image, '-', '--psm', '11']))
       .replace(/[ \t]+/g, ' ').split('\n').map(s => s.trim()).filter(Boolean).join('\n');
   } catch { return ''; }
 }
@@ -118,7 +131,7 @@ const byNumber = (a: string, b: string) => {
  * (carousel), or a video. Named by naming stub; `<stub>.txt` next to it is the
  * sidecar copy. Frames for video are extracted into workDir/<name>/.
  */
-export function discoverRound(roundDir: string, workDir: string, personas?: string[]): Asset[] {
+export async function discoverRound(roundDir: string, workDir: string, personas?: string[]): Promise<Asset[]> {
   if (!fs.existsSync(roundDir)) throw new Error(`No round folder at ${roundDir}`);
   const entries = fs.readdirSync(roundDir).filter(n => !n.startsWith('.') && !n.startsWith('_'));
   const sidecars = new Map(entries.filter(n => /\.txt$/i.test(n) && !/\.transcript\.txt$/i.test(n)).map(n => [n.replace(/\.txt$/i, '').toUpperCase(), n]));
@@ -143,8 +156,8 @@ export function discoverRound(roundDir: string, workDir: string, personas?: stri
       const innerT = fs.readdirSync(full).find(n => /transcript\.txt$/i.test(n));
       if (innerT) a.transcript = fs.readFileSync(path.join(full, innerT), 'utf8').trim();
     } else if (a.kind === 'video') {
-      const { frames, duration } = extractKeyframes(full, path.join(workDir, 'frames', base));
-      a.frames = frames; a.duration = duration; a.has_audio = hasAudio(full);
+      const { frames, duration } = await extractKeyframes(full, path.join(workDir, 'frames', base));
+      a.frames = frames; a.duration = duration; a.has_audio = await hasAudio(full);
     } else {
       a.frames = [{ label: 'image', path: full, role: 'first' }];
     }

@@ -1,5 +1,6 @@
 [phases.setup]
-nixPkgs = ["nodejs_18"]
+# ffmpeg: video frames for Studio Pre-flight (B2's audit engine); without it videos are audited on copy and voice-over only.
+nixPkgs = ["nodejs_18", "ffmpeg"]
 
 [phases.install]
 cmds = ["npm install"]

@@ -48,11 +48,22 @@ export interface RunSummary {
 export interface FieldSpec { platform: string; label: string; visible: number; max: number; source: string }
 export interface Territory {
   persona: string; name: string; angle: string; format: string; premise: string; source: string;
+  /** The pitched headline ("headline as sold"), from the concept cards (rules v2.4+). */
+  headline?: string; headline_source?: string;
   status?: string; origin?: 'pitch' | 'edited' | 'new'; note?: string; updated_by?: string; updated_at?: string;
   history?: Array<{ at: string; by: string; note: string; before: Partial<Territory> | null }>;
 }
+export interface PersonaContext {
+  who?: string; tension?: string; who_source?: string; platforms: string[];
+  turn_offs: Array<{ id: string; rule: string; source: string; severity?: string }>;
+  language: Array<{ text: string; caution: boolean; source: string }>;
+}
 export interface Meta {
-  personas: Record<string, { name: string; default_fields: string[]; triggers: Array<{ id: string; label: string }> }>;
+  personas: Record<string, { name: string; default_fields: string[]; triggers: Array<{ id: string; label: string; detail?: string; source?: string }>; context?: PersonaContext }>;
+  /** Source codes (TM, EP, CLB…) → titles, for plain-words sources. */
+  sources?: Record<string, string>;
+  can_set_compliance?: boolean;
+  can_override?: boolean;
   territories: Record<string, Territory>;
   formats: string[];
   fields: Record<string, FieldSpec>;
@@ -60,10 +71,11 @@ export interface Meta {
   tone_controls: Record<string, Record<string, string>>;
   needs_review: number; spend: number; cap: number; cap_window?: 'all' | 'month'; mock: boolean; ask_over: number; studio_dir?: string;
   store?: 'file' | 'pg';
+  /** Pre-flight needs the database; can_set_ready: may this person mark assets Ready to traffic. */
+  preflight?: { enabled: boolean; storage?: string; engine?: string; can_set_ready?: boolean };
   /** Hosted: the signed-in person. */
   user?: { email: string; name: string | null; admin: boolean } | null;
 }
-export interface RefDoc { id: string; title: string; kind: 'md' | 'file'; available: boolean }
 export interface ShortRow { stub: string; id: string; persona: string; territory: string; field: string; platform: string; format: string; text: string; angle: string; structure: string; note: string; flags: string; compliance_flags: string[]; warn_flags: string[] }
 export interface CompareLine { id: string; label: string; field: string; text: string; chars: number; angle: string; structure: string; favourite?: boolean; note?: string; stars?: Record<string, boolean> }
 export interface CompareSet { name: string; brief: Brief; n_per_model: number; lines: CompareLine[]; created: string; revealed?: boolean; revealed_by?: string; revealed_at?: string }
@@ -77,7 +89,42 @@ export interface Signoff {
 export interface Expectation { id: string; persona: string; territory: string; signoff_id: string; line_ids: string[]; reason: string; created_by: string; created_at: string; sha256: string }
 export interface ReadyLine { line: Line; final_text: string; sha256: string; stub: string; red: Flag[]; compliance: NonNullable<Line['compliance']>; versions: LineVersion[] }
 export interface ReadyView { persona: string; territory: string; lines: ReadyLine[]; signoffs: Signoff[]; expectations: Expectation[]; latest: Signoff | null }
-export interface RulesVersion { version: string; status: 'draft' | 'active' | 'retired'; notes?: string; created_by?: string; created_at: string }
+export interface RuleEntry { id: string; rule: string; severity: 'compliance' | 'warn' | 'note'; source: string; applies_to: 'text' | 'visual' | 'both'; status?: string }
+export interface ActiveRules {
+  version: string; updated?: string; compliance: RuleEntry[]; brand: RuleEntry[]; clarity: RuleEntry[];
+  personas: Record<string, { name: string; triggers: Array<{ label: string; detail?: string; source?: string }>; turn_offs: RuleEntry[]; language: Array<{ text: string; caution: boolean; source: string }> }>;
+}
+export interface RulesVersion { version: string; status: 'draft' | 'active' | 'retired'; notes?: string; created_by?: string; created_at: string; activated_by?: string | null; activated_at?: string | null }
+// ---------- Pre-flight ----------
+export interface SignedCopy { line_id: string; field: string; label: string; text: string; version: number }
+export interface PfUpload { id: string; kind: 'static' | 'carousel' | 'video'; files: Array<{ position: number; filename: string; content_type: string; size: number }>; uploaded_by: string; uploaded_at: string; stubs: string[] }
+export interface PfStatus { status: 'open' | 'ready'; ready_by?: string; ready_at?: string; upload_id?: string }
+export interface PfStub {
+  stub: string; persona: string; territory: string; signoff_id: string; ready_by: string; ready_at: string; copy: SignedCopy[];
+  upload: PfUpload | null;
+  audit: { id: string; status: string; usd: number; red: number; amber: number; grey: number; open_red: number; finished_at: string | null; error: string | null; stale?: string | null } | null;
+  status: PfStatus;
+}
+export interface PfFlag {
+  id: string; rule: string; severity: 'red' | 'amber' | 'grey'; label: string; source: string; quote?: string; why?: string; where?: string;
+  check?: string; persona?: string; cross_persona?: boolean;
+  frame?: { upload_id?: string; position?: number; label?: string; description?: string };
+  override: { reason: string; by: string; at: string } | null;
+  agreements: Array<{ by: string; agree: boolean; note?: string; at: string }>;
+  mine: boolean | null;
+}
+export interface PfReport {
+  stub: string; persona: string; territory: string; signoff_id: string; copy: SignedCopy[]; upload: PfUpload | null;
+  same_visual_as: string[]; on_asset_copy: SignedCopy[]; post_copy: SignedCopy[];
+  /** Set when the upload's type doesn't fit the code's format (a note, never a block). */
+  format_note?: string | null;
+  history: Array<{ id: string; kind: string; uploaded_by: string; uploaded_at: string; files: number }>;
+  audit: null | { id: string; upload_id: string; status: string; engine: string; stale?: string | null; rules_version?: string; usd: number; error?: string; started_by?: string; started_at: string; finished_at: string | null;
+    result: null | { text_found: string; transcript?: string; copy_match?: Array<{ field: string; signed_off: string; found: string; similarity: number; status: string }>; features: Record<string, number>; objection?: string; notes?: string[]; frames_unavailable?: boolean;
+      report?: { copy_match?: Array<{ field: string; signed_off: string; found: string; similarity: number; status: string }>; tagged_features?: string[]; set_aside?: Array<{ rule: string; quote?: string; why: string }> } } };
+  flags: PfFlag[]; status: PfStatus;
+}
+
 export type StudioEvent =
   | { type: 'status'; message: string }
   | { type: 'line'; line: Line }
@@ -180,8 +227,6 @@ export const studio = {
     req<{ job: string }>(`${lineUrl(batch, line)}/more`, { method: 'POST', body: JSON.stringify({ note, k }) }),
   saveTerritory: (code: string | null, territory: Partial<Territory>, note: string) =>
     req<{ code: string; territory: Territory }>(code ? `/territories/${enc(code)}` : '/territories', { method: code ? 'PUT' : 'POST', body: JSON.stringify({ territory, note }) }),
-  docs: () => req<RefDoc[]>('/docs'),
-  docText: async (id: string) => (await raw(`/docs/${enc(id)}`)).text(),
   /** An object URL for an image the server sends (the client logo). */
   imageUrl: async (path: string) => URL.createObjectURL(await (await raw(path)).blob()),
   shortlist: () => req<ShortRow[]>('/shortlist'),
@@ -203,10 +248,30 @@ export const studio = {
     req<Line>(`${lineUrl(batch, line)}/compliance`, { method: 'PATCH', body: JSON.stringify({ status, note }) }),
   recheck: (batch: string, line: string) => req<Line>(`${lineUrl(batch, line)}/recheck`, { method: 'POST' }),
 
+  // Pre-flight
+  pfStubs: () => req<PfStub[]>('/preflight/stubs'),
+  /** Upload the visual for a stub; `also`: other signed-off stubs that run on the same visual. */
+  pfUpload: async (stub: string, files: File[], also: string[] = []) => {
+    const form = new FormData();
+    for (const f of files) form.append('files', f, f.name);
+    if (also.length) form.append('also', also.join(','));
+    const res = await raw(`/preflight/stubs/${enc(stub)}/uploads`, { method: 'POST', body: form });
+    return (await res.json()) as { upload_id: string; kind: string; storage: string; estimate: { usd: number; seconds: number }; format_notes?: string[] };
+  },
+  pfAudit: (uploadId: string, confirm = false) => req<{ audit: string; job: string; estimate: { usd: number; seconds: number } }>(`/preflight/uploads/${enc(uploadId)}/audit`, { method: 'POST', body: JSON.stringify({ confirm }) }),
+  pfReport: (stub: string) => req<PfReport>(`/preflight/stubs/${enc(stub)}/report`),
+  pfFile: (uploadId: string, position: number) => `/preflight/files/${enc(uploadId)}/${position}`,
+  pfAgree: (flagId: string, agree: boolean, note?: string) => req<unknown>(`/preflight/flags/${enc(flagId)}/agree`, { method: 'POST', body: JSON.stringify({ agree, note }) }),
+  pfOverride: (flagId: string, reason: string) => req<unknown>(`/preflight/flags/${enc(flagId)}/override`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  pfReady: (stub: string, ready: boolean) => req<PfStatus>(`/preflight/stubs/${enc(stub)}/ready`, { method: 'POST', body: JSON.stringify({ ready }) }),
+  pfAgreement: () => req<{ marked: number; agree: number; rate: number | null; by_severity: Record<string, { marked: number; agree: number }> }>('/preflight/agreement'),
+
+  /** The live rules, read-only and in plain words (everyone). */
+  activeRules: () => req<ActiveRules>('/rules/active'),
   // Rules versions (hosted only)
   rules: () => req<RulesVersion[]>('/rules'),
   activateRules: (version: string) => req<RulesVersion[]>(`/rules/${enc(version)}/activate`, { method: 'POST' }),
-  uploadRules: (version: string, rules: unknown, notes: string) => req<RulesVersion[]>('/rules', { method: 'POST', body: JSON.stringify({ version, rules, notes }) }),
+  uploadRules: (version: string, rules: unknown, notes: string, activate = false) => req<RulesVersion[]>('/rules', { method: 'POST', body: JSON.stringify({ version, rules, notes, activate }) }),
 
   download,
   events,

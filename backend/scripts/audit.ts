@@ -47,10 +47,25 @@ const CAP = Number(opt('cap', String(CONFIG.cap_usd)));
 const ASK_OVER = CONFIG.ask_over_usd;
 const SPEND = path.join(AUDIT_DIR, 'spend.json');
 
+/** The CLI's key: ~/.config/voices/openai.key (or AUDIT_KEY_FILE), else OPENAI_API_KEY, else backend/.env's line (never dotenv). */
+function loadKey(): string {
+  const keyFile = process.env.AUDIT_KEY_FILE || path.join(process.env.HOME || '', '.config/voices/openai.key');
+  if (fs.existsSync(keyFile)) { const k = fs.readFileSync(keyFile, 'utf8').trim(); if (k.length > 20) return k; }
+  if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY;
+  const env = path.resolve(path.dirname(process.argv[1] || '.'), '../.env');
+  if (fs.existsSync(env)) {
+    const m = /^OPENAI_API_KEY\s*=\s*(.*)$/m.exec(fs.readFileSync(env, 'utf8'));
+    const k = m?.[1].trim().replace(/^['"]|['"]$/g, '') || '';
+    if (k.length > 20 && !k.includes('...')) return k;
+  }
+  throw new Error('No OpenAI key: put it in ~/.config/voices/openai.key or export OPENAI_API_KEY');
+}
+
 function makeApi(logPath?: string) {
   const tpm = Number(opt('tpm', String(CONFIG.tpm_default)));
   return new AuditApi({
     mock: MOCK ? mockResponder() : undefined,
+    apiKey: MOCK ? undefined : loadKey(),
     tpm: { [MODELS.yesno]: tpm, [MODELS.compliance]: 150000 },
     capUsd: CAP, spendPath: SPEND, logPath, transcribeUsdPerMinute: CONFIG.transcribe_usd_per_minute,
   });
@@ -93,7 +108,7 @@ async function main() {
       if (!round) throw new Error(`usage: ${command} --round NAME`);
       const { dir, out } = roundDirs(round);
       fs.mkdirSync(out, { recursive: true });
-      let assets = discoverRound(dir, out, Object.keys(rules.personas));
+      let assets = await discoverRound(dir, out, Object.keys(rules.personas));
       const only = opt('only');
       if (only) { const want = only.toUpperCase().split(','); assets = assets.filter(a => want.includes((a.stub?.stub || a.name).toUpperCase()) || want.includes(a.name.toUpperCase())); }
       if (!assets.length) { console.log(`No assets in ${dir}.`); return; }

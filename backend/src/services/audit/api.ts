@@ -4,7 +4,6 @@
 // a cumulative spend log with a hard cap, and a stop when credits run out.
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 import OpenAI from 'openai';
 import { withRetry } from '../../utils/retry.js';
 
@@ -53,20 +52,25 @@ export function imageTokens(w: number, h: number, detail: 'low' | 'high'): numbe
   return 85 + 170 * Math.ceil(w / 512) * Math.ceil(h / 512);
 }
 
-export function imageSize(file: string, ffprobe: string | null = 'ffprobe'): { w: number; h: number } {
-  if (ffprobe) try {
-    const out = execFileSync(ffprobe, ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0:s=x', file], { encoding: 'utf8' });
-    const [w, h] = out.trim().split('x').map(Number);
-    if (w && h) return { w, h };
-  } catch { /* fall through */ }
-  // Without ffprobe: PNG and JPEG headers carry the size.
+/**
+ * Width and height from the file's header (PNG, JPEG, WebP, GIF): no process,
+ * so token counting never blocks the server. `_ffprobe` is kept for callers.
+ */
+export function imageSize(file: string, _ffprobe?: string | null): { w: number; h: number } {
   try {
     const b = fs.readFileSync(file);
-    if (b.readUInt32BE(0) === 0x89504e47) return { w: b.readUInt32BE(16), h: b.readUInt32BE(20) };
-    for (let i = 2; i < b.length - 9;) {
+    if (b.length > 24 && b.readUInt32BE(0) === 0x89504e47) return { w: b.readUInt32BE(16), h: b.readUInt32BE(20) };
+    if (b.length > 10 && b.toString('ascii', 0, 3) === 'GIF') return { w: b.readUInt16LE(6), h: b.readUInt16LE(8) };
+    if (b.length > 30 && b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP') {
+      const chunk = b.toString('ascii', 12, 16);
+      if (chunk === 'VP8X') return { w: 1 + b.readUIntLE(24, 3), h: 1 + b.readUIntLE(27, 3) };
+      if (chunk === 'VP8 ') return { w: b.readUInt16LE(26) & 0x3fff, h: b.readUInt16LE(28) & 0x3fff };
+      if (chunk === 'VP8L') { const v = b.readUInt32LE(21); return { w: 1 + (v & 0x3fff), h: 1 + ((v >> 14) & 0x3fff) }; }
+    }
+    for (let i = 2; b[0] === 0xff && b[1] === 0xd8 && i < b.length - 9;) {
       if (b[i] !== 0xff) break;
       const m = b[i + 1], len = b.readUInt16BE(i + 2);
-      if (m >= 0xc0 && m <= 0xc3) return { w: b.readUInt16BE(i + 7), h: b.readUInt16BE(i + 5) };
+      if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return { w: b.readUInt16BE(i + 7), h: b.readUInt16BE(i + 5) };
       i += 2 + len;
     }
   } catch { /* default */ }
@@ -97,7 +101,8 @@ export interface OpenAILike {
 }
 
 export interface ApiOptions {
-  client?: OpenAILike;            // an OpenAI client; the CLI makes one from the key file
+  client?: OpenAILike;            // an OpenAI client (the CLI makes one from its key file)
+  apiKey?: string;                // or a key; otherwise OPENAI_API_KEY from the environment
   mock?: Responder;
   mockTranscribe?: (file: string) => string;
   transcribeUsdPerMinute?: number;
@@ -137,7 +142,12 @@ export class AuditApi {
 
   constructor(private o: ApiOptions) {
     if (o.client) this.client = o.client;
-    else if (!o.mock) this.client = new OpenAI({ apiKey: loadKey(), maxRetries: 0 }) as unknown as OpenAILike;
+    else if (!o.mock) {
+      // The library never reads key files: its caller passes a client or a key, or the environment has one.
+      const apiKey = o.apiKey || process.env.OPENAI_API_KEY;
+      if (!apiKey) throw new Error('No OpenAI key: pass a client or apiKey, or set OPENAI_API_KEY');
+      this.client = new OpenAI({ apiKey, maxRetries: 0 }) as unknown as OpenAILike;
+    }
   }
 
   get mock(): boolean { return !!this.o.mock; }
@@ -273,20 +283,3 @@ function writeSpend(p: string, entry: any) {
   fs.writeFileSync(p, JSON.stringify(s, null, 2));
 }
 
-/**
- * The OpenAI key only: ~/.config/voices/openai.key (or AUDIT_KEY_FILE), then
- * OPENAI_API_KEY, then backend/.env parsed by hand for that one variable. Never
- * dotenv.config(): that file's DATABASE_URL is production.
- */
-export function loadKey(): string {
-  const keyFile = process.env.AUDIT_KEY_FILE || path.join(process.env.HOME || '', '.config/voices/openai.key');
-  if (fs.existsSync(keyFile)) { const k = fs.readFileSync(keyFile, 'utf8').trim(); if (k.length > 20) return k; }
-  if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY;
-  for (const p of [path.resolve(process.cwd(), '.env'), '/Users/BD/ralph-voices/backend/.env']) {
-    if (!fs.existsSync(p)) continue;
-    const m = /^OPENAI_API_KEY\s*=\s*(.*)$/m.exec(fs.readFileSync(p, 'utf8'));
-    const k = m?.[1].trim().replace(/^['"]|['"]$/g, '') || '';
-    if (k.length > 20 && !k.includes('...')) return k;
-  }
-  throw new Error('No OpenAI key: put it in ~/.config/voices/openai.key or export OPENAI_API_KEY');
-}

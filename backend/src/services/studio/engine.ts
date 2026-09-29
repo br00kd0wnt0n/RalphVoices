@@ -296,11 +296,34 @@ function labelOf(i: RuleItem) {
 }
 
 // Persona seeds and lived voice samples (from the SM spike), for the writer and the objection.
+// From the rules file (v2.6+: personas.<code>.seed and .voice); the store's inputs
+// (db-import, or the local folder) are only a fallback for older rules files.
 function personaSeed(code: string): any {
-  return seedsCache?.personas?.find((x: any) => x.code === code)?.body || null;
+  return (rulesCache?.personas?.[code] as any)?.seed || seedsCache?.personas?.find((x: any) => x.code === code)?.body || null;
 }
 function voiceSample(code: string): string {
-  return voicesCache[code] || '';
+  return (rulesCache?.personas?.[code] as any)?.voice || voicesCache[code] || '';
+}
+export { personaSeed, voiceSample };
+
+/**
+ * What a rules file must carry for the hosted Studio to need nothing else: the
+ * M3 rubric (Pre-flight's features) and each persona's seed and voice (the
+ * skeptic). Checked when an admin uploads it, never at audit time.
+ */
+export function hostedRulesGaps(body: any): string[] {
+  const gaps: string[] = [];
+  if (!Array.isArray(body?.rubric?.items) || !body.rubric.items.length) gaps.push('rubric');
+  for (const [code, p] of Object.entries<any>(body?.personas || {})) {
+    if (!p?.seed || typeof p.seed !== 'object') gaps.push(`personas.${code}.seed`);
+    if (!p?.voice || typeof p.voice !== 'string') gaps.push(`personas.${code}.voice`);
+  }
+  return gaps;
+}
+
+/** The M3 rubric: from the rules file (v2.6+), else the store (local, or an older rules file). */
+export async function rubricFor(rules?: any): Promise<any | null> {
+  return (rules ?? await getStore().getRules())?.rubric || await getStore().getInput('rubric');
 }
 
 // ---------- OpenAI plumbing (after measurement-spike.ts) ----------
@@ -878,7 +901,23 @@ export async function newBatchId(territory: string): Promise<string> {
   }
 }
 
+/**
+ * Lines only go into a run of the same persona and territory: a brief for
+ * another one is refused, never quietly given the run's persona (lines written
+ * for DINKs once landed in a Curators run). Null when it fits or there's no run.
+ */
+export async function runMismatch(batchId: string | undefined, b: Pick<Brief, 'persona' | 'territory'>): Promise<string | null> {
+  if (!batchId || !(await batchExists(batchId))) return null;
+  const run = (await loadBatch(batchId)).brief;
+  if (run.persona === b.persona && run.territory === b.territory) return null;
+  const r = loadRules();
+  const name = (p: string, t: string) => `${r.personas[p]?.name || p} · ${(r.territories[t]?.name || t).replace(/\.$/, '')}`;
+  return `This run is for ${name(run.persona, run.territory)}. Start a new run for ${name(b.persona, b.territory)}.`;
+}
+
 export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: { check?: boolean; batchId?: string; ownOnly?: boolean; user?: string } = {}): Promise<Batch> {
+  const mismatch = await runMismatch(opts.batchId, b);
+  if (mismatch) throw Object.assign(new Error(mismatch), { status: 409 });
   const r = loadRules();
   const existing = opts.batchId && (await batchExists(opts.batchId)) ? await loadBatch(opts.batchId) : null;
   const id = existing?.id || opts.batchId || (await newBatchId(b.territory));
@@ -1638,7 +1677,18 @@ export async function revealCompare(name: string, user?: string): Promise<{ labe
 export async function meta() {
   const r = await refreshRules();
   return {
-    personas: Object.fromEntries(Object.entries(r.personas).map(([k, v]) => [k, { name: v.name, default_fields: v.default_fields, triggers: v.triggers.map(t => ({ id: t.id, label: t.label })) }])),
+    // Who each persona is, from the active rules file (never the readout): shown on Territories and beside Write & brief.
+    personas: Object.fromEntries(Object.entries(r.personas).map(([k, v]) => [k, {
+      name: v.name, default_fields: v.default_fields,
+      triggers: v.triggers.map(t => ({ id: t.id, label: t.label, detail: t.detail, source: t.source })),
+      context: {
+        who: (v as any).who, tension: (v as any).tension, who_source: (v as any).who_source, platforms: (v as any).platforms || [],
+        turn_offs: (v.turn_offs || []).map(t => ({ id: t.id, rule: t.rule, source: t.source, severity: t.severity })),
+        language: ((v as any).language || []).map((l: any) => ({ text: l.text, caution: !!l.caution, source: l.source })),
+      },
+    }])),
+    // Source codes → titles, for plain-words sources on flags.
+    sources: Object.fromEntries(Object.entries((r as any).sources || {}).map(([k, v]: [string, any]) => [k, v?.title || k])),
     territories: r.territories,
     formats: FORMATS,
     fields: r.fields,
@@ -1651,36 +1701,18 @@ export async function meta() {
   };
 }
 
-// ---------- reference documents and the client logo ----------
+// ---------- the client logo (local only) ----------
 
-// Client material: never committed. Locally the files come from the Claude
-// outputs and studio folders; hosted, from the database (studio_assets, loaded
-// by `studio.ts db-import`). Only listed names are served, never arbitrary paths.
-// Buyer verbatims (the quote bank) stay analyst-only and aren't listed.
-export interface RefDoc { id: string; title: string; kind: 'md' | 'file'; path: string; contentType: string }
-const OUTPUTS = path.dirname(INPUTS);
-export const REFERENCE_DOCS: RefDoc[] = [
-  { id: 'readout', title: 'Persona intelligence readout (v1.2, team version)', kind: 'md', path: 'intelligence-readout-v1-team.md', contentType: 'text/markdown; charset=utf-8' },
-  { id: 'readout-deck', title: 'Persona intelligence readout (v1.2 deck, .pptx)', kind: 'file', path: 'Trupanion_Persona_Intelligence_Readout_v1.2.pptx', contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' },
-];
+// Locally the header shows the client logo from the studio folder (client
+// material, never committed). Hosted, there's no logo asset (Brook, 28 Sep),
+// so the page shows the text wordmark. Reference documents and the readout
+// are not in the tool (decision 10).
 const BRAND_ASSETS: Record<string, { path: string; contentType: string }> = { 'client-logo': { path: 'brand/trupanion-logo-white.png', contentType: 'image/png' } };
 /** Asset names and where FileStore finds them on this machine. */
 export function localAssets(): Record<string, { path: string; contentType: string }> {
   const out: Record<string, { path: string; contentType: string }> = {};
-  for (const d of REFERENCE_DOCS) out[`doc:${d.id}`] = { path: path.join(OUTPUTS, d.path), contentType: d.contentType };
   for (const [k, v] of Object.entries(BRAND_ASSETS)) out[`brand:${k}`] = { path: path.join(STUDIO, v.path), contentType: v.contentType };
   return out;
-}
-export async function referenceDocs(): Promise<Array<{ id: string; title: string; kind: 'md' | 'file'; available: boolean }>> {
-  const st = getStore();
-  return Promise.all(REFERENCE_DOCS.map(async d => ({ id: d.id, title: d.title, kind: d.kind, available: await st.hasAsset(`doc:${d.id}`) })));
-}
-export async function referenceDoc(id: string) {
-  const doc = REFERENCE_DOCS.find(d => d.id === id);
-  if (!doc) throw new Error(`No reference document ${id}`);
-  const asset = await getStore().getAsset(`doc:${id}`);
-  if (!asset) throw new Error(`${doc.title} isn't available`);
-  return { doc, asset };
 }
 export async function brandAsset(name: string) {
   if (!BRAND_ASSETS[name]) throw new Error(`No brand asset ${name}`);

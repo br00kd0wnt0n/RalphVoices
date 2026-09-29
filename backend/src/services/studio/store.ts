@@ -7,6 +7,7 @@ import path from 'node:path';
 
 export interface SpendEntry { label: string; usd: number; by_stage?: Record<string, number>; calls?: Record<string, number>; at: string; user?: string }
 export interface Asset { contentType: string; data: Buffer; filename?: string }
+export type InputKey = 'personas' | 'voices' | 'rubric';
 export interface EditRecord { line_id: string; batch_id: string; before: unknown; after: unknown; by: string; at: string }
 
 export interface StudioStore {
@@ -16,8 +17,8 @@ export interface StudioStore {
   /** Territory edits layered over the rules' pitch territories. */
   getTerritoryEdits(): Promise<Record<string, any>>;
   saveTerritoryEdit(code: string, territory: any): Promise<void>;
-  /** Named inputs: 'personas' (seed file), 'voices' (lived voice samples). */
-  getInput(key: 'personas' | 'voices'): Promise<any | null>;
+  /** Named inputs: 'personas' (seed file), 'voices' (lived voice samples), 'rubric' (the M3 rubric, for Pre-flight). */
+  getInput(key: InputKey): Promise<any | null>;
 
   saveBrief(brief: any): Promise<void>;
   getBrief(name: string): Promise<any | null>;
@@ -86,9 +87,10 @@ export class FileStore implements StudioStore {
     all[code] = territory;
     writeJson(this.P('territories.json'), { _note: 'Territory edits made in Studio (client feedback, creative director preference). They override the pitch versions in studio-rules.json, which stay unchanged.', territories: all });
   }
-  async getInput(key: 'personas' | 'voices') {
+  async getInput(key: InputKey) {
     const inputs = this.opts.inputsDir;
-    const candidates = key === 'personas'
+    const candidates = key === 'rubric' ? [this.P('rubric.json'), ...(inputs ? [path.join(inputs, 'rubric.json')] : [])]
+      : key === 'personas'
       ? [this.P('personas.json'), ...(inputs ? [path.join(inputs, 'personas.json')] : [])]
       : [this.P('voices.json'), ...(inputs ? [path.join(inputs, 'sm-spike', 'voices.json')] : [])];
     const p = candidates.find(c => fs.existsSync(c));

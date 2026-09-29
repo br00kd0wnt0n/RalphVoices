@@ -5,10 +5,15 @@
 // database connection.
 
 import express, { type Request, type Response, type Router } from 'express';
-import path from 'node:path';
 import * as S from './engine.js';
 import type { PgStore } from './pgStore.js';
 import * as R from './ready.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
+import multer from 'multer';
+import { R2_FILE_CAP, type Preflight } from './preflight.js';
 
 export interface StudioRouterOptions {
   /** The person acting on this request (recorded on runs, decisions, edits and spend). */
@@ -22,9 +27,16 @@ export interface StudioRouterOptions {
   /** Runs estimated above this need a confirm. */
   askOver: number;
   /** Hosted only: rules versions live in the database and only admins may upload or activate one. */
-  rules?: { store: PgStore; isAdmin(req: Request): boolean };
+  /** selfContained: an upload must carry the rubric and each persona's seed and voice (hosted: nothing is imported from a laptop). */
+  rules?: { store: PgStore; isAdmin(req: Request): boolean; selfContained?: boolean };
   /** Extra fields for /meta (e.g. the signed-in user). */
   metaExtra?(req: Request): Record<string, unknown>;
+  /** Pre-flight (needs the database). canSetReady: who may mark assets Ready to traffic. */
+  preflight?: { service: Preflight; canSetReady(req: Request): boolean };
+  /** Who may set compliance status on copy. Local: anyone. */
+  canSetCompliance?(req: Request): boolean;
+  /** Who may override a red flag on copy at Ready for production (hosted: STUDIO_READY_EMAILS + admins, as in Pre-flight). Unset = anyone (local). */
+  canOverride?(req: Request): boolean;
 }
 
 // Top-level keys every rules version needs (scripts/studio/rules.schema.json `required`).
@@ -87,7 +99,8 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
 
   r.get('/meta', wrap(async (req, res) => {
     const { studio_dir, ...m } = await S.meta();
-    res.json({ ...m, ...(o.rules ? {} : { studio_dir }), spend: await spent(), mock: o.mock, cap: o.cap, cap_window: o.capWindow, ask_over: o.askOver, ...(o.metaExtra?.(req) || {}) });
+    const pf = o.preflight ? { enabled: true, storage: o.preflight.service.storageStatus, engine: o.preflight.service.engineName, can_set_ready: o.preflight.canSetReady(req) } : { enabled: false };
+    res.json({ ...m, ...(o.rules ? {} : { studio_dir }), preflight: pf, can_set_compliance: o.canSetCompliance ? o.canSetCompliance(req) : true, can_override: o.canOverride ? o.canOverride(req) : true, spend: await spent(), mock: o.mock, cap: o.cap, cap_window: o.capWindow, ask_over: o.askOver, ...(o.metaExtra?.(req) || {}) });
   }));
   r.post('/estimate', wrap(async (req, res) => {
     const b = S.makeBrief(req.body.brief || {});
@@ -98,7 +111,11 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   r.get('/batches', wrap(async (req, res) => res.json(await S.listBatches(req.query.user ? String(req.query.user) : undefined))));
   r.get('/batches/:id', wrap(async (req, res) => res.json(await S.loadBatch(req.params.id))));
   r.post('/generate', wrap(async (req, res) => {
-    const b = S.makeBrief(req.body.brief || {});
+    // Checked before the brief is built, so the answer is always "start a new run", whatever else is wrong with it.
+    const raw = req.body.brief || {};
+    const mismatch = await S.runMismatch(req.body.batch ? String(req.body.batch) : undefined, { persona: raw.persona || S.loadRules().territories[raw.territory]?.persona, territory: raw.territory });
+    if (mismatch) return res.status(409).json({ error: mismatch, run_mismatch: true });
+    const b = S.makeBrief(raw);
     const ownOnly = !!req.body.own_only;
     const e = S.estimate(b, { ownOnly });
     const so = await spent();
@@ -161,8 +178,11 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
       throw err;
     }
   }));
-  r.post('/batches/:id/lines/:line/override', wrap(async (req, res) => res.json(await R.overrideFlag(req.params.id, req.params.line, String(req.body?.rule || ''), String(req.body?.reason || ''), o.who(req)))));
-  r.patch('/batches/:id/lines/:line/compliance', wrap(async (req, res) => res.json(await R.setCompliance(req.params.id, req.params.line, String(req.body?.status || ''), req.body?.note, o.who(req)))));
+  r.post('/batches/:id/lines/:line/override', wrap(async (req, res) => (o.canOverride && !o.canOverride(req)) ? res.status(403).json({ error: 'Only the people who mark assets Ready to traffic (the creative lead) or an admin can override a red flag' }) : res.json(await R.overrideFlag(req.params.id, req.params.line, String(req.body?.rule || ''), String(req.body?.reason || ''), o.who(req)))));
+  r.patch('/batches/:id/lines/:line/compliance', wrap(async (req, res) => {
+    if (o.canSetCompliance && !o.canSetCompliance(req)) return res.status(403).json({ error: 'Compliance status is updated by the producer (Vivan) or an admin' });
+    res.json(await R.setCompliance(req.params.id, req.params.line, String(req.body?.status || ''), req.body?.note, o.who(req)));
+  }));
   r.post('/batches/:id/lines/:line/recheck', wrap(async (req, res) => {
     if (!o.mock && (await spent()) + 0.02 > o.cap) return res.status(402).json({ error: `Spend is at ${capText()}.` });
     res.json(await R.recheckLine(req.params.id, req.params.line, o.api(req), o.who(req)));
@@ -171,6 +191,61 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   r.get('/handoff.csv', wrap(async (req, res) => download(res, 'text/csv; charset=utf-8', 'ready-for-production.csv', (await R.handoffPack(pt(req.query))).csv)));
   r.get('/handoff.md', wrap(async (req, res) => download(res, 'text/markdown; charset=utf-8', 'ready-for-production.md', (await R.handoffPack(pt(req.query))).md)));
   r.get('/compliance-sheet.csv', wrap(async (req, res) => download(res, 'text/csv; charset=utf-8', 'trupanion-compliance-sheet.csv', (await R.handoffPack(pt(req.query))).complianceCsv)));
+
+  // ----- Pre-flight (step 6): finished assets per signed-off naming stub -----
+  if (o.preflight) {
+    const pf = o.preflight.service;
+    // To disk, not memory: a video is streamed on to R2 and the temp copy removed after the request.
+    const uploadDir = path.join(os.tmpdir(), 'studio-uploads');
+    fs.mkdirSync(uploadDir, { recursive: true });
+    const files = multer({ storage: multer.diskStorage({ destination: uploadDir }), limits: { fileSize: R2_FILE_CAP, files: 20 } });
+    r.get('/preflight/stubs', wrap(async (req, res) => res.json(await pf.stubs(pt(req.query)))));
+    r.post('/preflight/stubs/:stub/uploads', (req, res, next) => files.array('files', 20)(req, res, (err: any) => {
+      if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? `A file is over the ${Math.round(R2_FILE_CAP / 1048576)} MB limit` : String(err.message || err) });
+      next();
+    }), wrap(async (req, res) => {
+      const list = ((req as any).files || []) as Express.Multer.File[];
+      const also = ([] as string[]).concat((req.body?.also as any) || []).flatMap(x => String(x).split(',')).map(x => x.trim()).filter(Boolean);
+      try {
+        res.json(await pf.upload(req.params.stub, list.map(f => ({ path: f.path, size: f.size, filename: f.originalname, contentType: f.mimetype })), o.who(req), also));
+      } finally {
+        for (const f of list) fs.rm(f.path, { force: true }, () => {});
+      }
+    }));
+    r.get('/preflight/uploads/:id/estimate', wrap(async (req, res) => res.json(await pf.estimate(req.params.id))));
+    r.post('/preflight/uploads/:id/audit', wrap(async (req, res) => {
+      const e = await pf.estimate(req.params.id);
+      const so = await spent();
+      if (!o.mock && e.usd > o.askOver && !req.body?.confirm) return res.status(409).json({ needs_confirm: true, estimate: e.usd });
+      if (!o.mock && so + e.usd > o.cap) return res.status(402).json({ error: `This would take spend past ${capText()} ($${so.toFixed(2)} spent).` });
+      const auditId = await pf.createAudit(req.params.id, o.who(req));
+      const who = o.who(req);
+      res.json({ audit: auditId, job: startJob(`preflight~${auditId}`, emit => pf.runAudit(auditId, emit, who)), estimate: e });
+    }));
+    r.get('/preflight/stubs/:stub/report', wrap(async (req, res) => res.json(await pf.report(req.params.stub, o.who(req)))));
+    r.get('/preflight/files/:upload/:position', wrap(async (req, res) => {
+      const f = await pf.fileStream(req.params.upload, Number(req.params.position));
+      res.setHeader('Content-Type', f.contentType);
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.setHeader('Content-Disposition', `inline; filename="${f.filename.replace(/[^\w.~-]/g, '_')}"`);
+      if (f.data) return res.send(f.data);
+      res.setHeader('Content-Length', String(f.size));
+      await pipeline(f.stream!, res);
+    }));
+    r.post('/preflight/flags/:id/agree', wrap(async (req, res) => res.json(await pf.agree(req.params.id, !!req.body?.agree, req.body?.note, o.who(req)))));
+    r.post('/preflight/flags/:id/override', wrap(async (req, res) => {
+      if (!o.preflight!.canSetReady(req)) return res.status(403).json({ error: 'Only the people who mark assets Ready to traffic can override a red flag' });
+      res.json(await pf.override(req.params.id, String(req.body?.reason || ''), o.who(req)));
+    }));
+    r.post('/preflight/stubs/:stub/ready', wrap(async (req, res) => {
+      if (!o.preflight!.canSetReady(req)) return res.status(403).json({ error: 'Ready to traffic is set by the creative lead or an admin' });
+      try { res.json(await pf.setReady(req.params.stub, req.body?.ready !== false, o.who(req))); }
+      catch (err: any) { if (err.blocking) return res.status(409).json({ error: err.message, blocking: err.blocking }); throw err; }
+    }));
+    r.get('/preflight/agreement', wrap(async (req, res) => res.json(await pf.agreement(pt(req.query)))));
+    r.get('/preflight/features.csv', wrap(async (_req, res) => download(res, 'text/csv; charset=utf-8', 'preflight-features.csv', await pf.featuresCsv())));
+    r.get('/preflight/handoff.csv', wrap(async (_req, res) => download(res, 'text/csv; charset=utf-8', 'asset-handoff.csv', await pf.handoffCsv())));
+  }
 
   // ----- territories -----
   r.post('/territories', wrap(async (req, res) => res.json(await S.saveTerritory(null, req.body?.territory || {}, String(req.body?.note || ''), o.who(req)))));
@@ -189,14 +264,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   r.patch('/compare/:name/lines/:id', wrap(async (req, res) => res.json(await S.markCompareLine(req.params.name, req.params.id, req.body || {}, o.who(req)))));
   r.post('/compare/:name/reveal', wrap(async (req, res) => res.json(await S.revealCompare(req.params.name, o.who(req)))));
 
-  // ----- reference documents and the client logo -----
-  r.get('/docs', wrap(async (_req, res) => res.json(await S.referenceDocs())));
-  r.get('/docs/:id', wrap(async (req, res) => {
-    const { doc, asset } = await S.referenceDoc(req.params.id);
-    if (doc.kind === 'file') return download(res, asset.contentType, asset.filename || path.basename(doc.path), asset.data);
-    res.setHeader('Content-Type', asset.contentType);
-    res.send(asset.data);
-  }));
+  // ----- the client logo (local only; hosted shows the text wordmark) -----
   r.get('/brand/:name', async (req, res) => {
     try {
       const a = await S.brandAsset(req.params.name);
@@ -205,6 +273,21 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
       res.send(a.data);
     } catch { res.sendStatus(404); }
   });
+
+  // ----- the live rules, read-only, for everyone (the Rules view) -----
+  r.get('/rules/active', wrap(async (_req, res) => {
+    const full: any = await S.getStore().getRules();   // unfiltered: the visual-only brand items are shown, marked as such
+    const item = (x: any) => ({ id: x.id, rule: x.rule, severity: x.severity || 'warn', source: x.source, applies_to: x.applies_to || 'text', status: x.status });
+    res.json({
+      version: full.version, updated: full.updated,
+      compliance: (full.compliance || []).map(item), brand: (full.brand || []).map(item), clarity: (full.clarity || []).map(item),
+      personas: Object.fromEntries(Object.entries(full.personas || {}).map(([k, p]: [string, any]) => [k, {
+        name: p.name, triggers: (p.triggers || []).map((t: any) => ({ label: t.label, detail: t.detail, source: t.source })),
+        turn_offs: (p.turn_offs || []).map(item), language: (p.language || []).map((l: any) => ({ text: l.text, caution: !!l.caution, source: l.source })),
+      }])),
+      sources: Object.fromEntries(Object.entries(full.sources || {}).map(([k, v]: [string, any]) => [k, v?.title || k])),
+    });
+  }));
 
   // ----- rules versions (hosted) -----
   if (o.rules) {
@@ -220,6 +303,8 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
       if (!version || !body || typeof body !== 'object') throw new Error('Send { version, rules } with the studio-rules.json body');
       const missing = RULES_REQUIRED.filter(k => !(k in body));
       if (missing.length) throw new Error(`Rules body is missing ${missing.join(', ')} (see scripts/studio/rules.schema.json)`);
+      const gaps = o.rules!.selfContained ? S.hostedRulesGaps(body) : [];
+      if (gaps.length) return res.status(400).json({ error: `${version} is missing ${gaps.join(', ')}. The hosted Studio reads the M3 rubric and each persona's seed and voice from the rules file (v2.6 or later).`, gaps });
       // Versions are never overwritten: past runs name the version they were checked against.
       if ((await store.listRules()).some((x: any) => x.version === version)) throw new Error(`Rules version ${version} already exists; upload it under a new version`);
       await store.putRules(version, { ...body, version }, { activate: !!req.body?.activate, by: o.who(req), notes: req.body?.notes ? String(req.body.notes) : undefined });
@@ -227,7 +312,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
       res.json(await store.listRules());
     }));
     r.post('/rules/:version/activate', admin(async (req, res) => {
-      await store.activateRules(req.params.version);
+      await store.activateRules(req.params.version, o.who(req));
       await S.refreshRules();
       res.json(await store.listRules());
     }));
