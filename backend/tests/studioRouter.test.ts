@@ -155,3 +155,20 @@ test('an audit from older rules or older checks says so (never re-run automatica
   assert.match(staleness({ status: 'done', rules_version: 'v2.4', result: {} }, 'v2.4')!, /older version of the checks/);
   assert.equal(staleness({ status: 'failed', rules_version: 'v1' }, 'v2.4'), null);
 });
+
+test('a red flag on copy is overridden only by the Ready to traffic people or an admin; everyone else gets a 403', async () => {
+  const app = express();
+  app.use('/s', createStudioRouter({ who: () => 'vivan', api: () => new S.Api({ mock: true }), mock: true, cap: 50, capWindow: 'month', askOver: 2, canOverride: () => false }));
+  const srv = app.listen(0, '127.0.0.1');
+  await new Promise(r => srv.once('listening', r));
+  const b = `http://127.0.0.1:${(srv.address() as AddressInfo).port}/s`;
+  try {
+    const res = await fetch(`${b}/batches/x/lines/y/override`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"rule":"COMP_X","reason":"Looks fine to me"}' });
+    assert.equal(res.status, 403);
+    assert.match(((await res.json()) as any).error, /creative lead|admin/);
+    assert.equal(((await (await fetch(`${b}/meta`)).json()) as any).can_override, false);
+  } finally { srv.close(); }
+  // Locally (no role check) the route still reaches the override logic.
+  const local = await call('POST', '/batches/nope/lines/L1/override', { rule: 'X', reason: 'A reason here' });
+  assert.notEqual(local.status, 403);
+});

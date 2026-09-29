@@ -296,11 +296,34 @@ function labelOf(i: RuleItem) {
 }
 
 // Persona seeds and lived voice samples (from the SM spike), for the writer and the objection.
+// From the rules file (v2.6+: personas.<code>.seed and .voice); the store's inputs
+// (db-import, or the local folder) are only a fallback for older rules files.
 function personaSeed(code: string): any {
-  return seedsCache?.personas?.find((x: any) => x.code === code)?.body || null;
+  return (rulesCache?.personas?.[code] as any)?.seed || seedsCache?.personas?.find((x: any) => x.code === code)?.body || null;
 }
 function voiceSample(code: string): string {
-  return voicesCache[code] || '';
+  return (rulesCache?.personas?.[code] as any)?.voice || voicesCache[code] || '';
+}
+export { personaSeed, voiceSample };
+
+/**
+ * What a rules file must carry for the hosted Studio to need nothing else: the
+ * M3 rubric (Pre-flight's features) and each persona's seed and voice (the
+ * skeptic). Checked when an admin uploads it, never at audit time.
+ */
+export function hostedRulesGaps(body: any): string[] {
+  const gaps: string[] = [];
+  if (!Array.isArray(body?.rubric?.items) || !body.rubric.items.length) gaps.push('rubric');
+  for (const [code, p] of Object.entries<any>(body?.personas || {})) {
+    if (!p?.seed || typeof p.seed !== 'object') gaps.push(`personas.${code}.seed`);
+    if (!p?.voice || typeof p.voice !== 'string') gaps.push(`personas.${code}.voice`);
+  }
+  return gaps;
+}
+
+/** The M3 rubric: from the rules file (v2.6+), else the store (local, or an older rules file). */
+export async function rubricFor(rules?: any): Promise<any | null> {
+  return (rules ?? await getStore().getRules())?.rubric || await getStore().getInput('rubric');
 }
 
 // ---------- OpenAI plumbing (after measurement-spike.ts) ----------

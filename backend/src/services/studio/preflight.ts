@@ -265,7 +265,7 @@ export class Preflight {
     const { copy } = await this.findStub(u.stub);
     const st = S.getStore();
     return this.engine.estimate({
-      ...u, copy, rules: await st.getRules(), rubric: await st.getInput('rubric'),
+      ...u, copy, rules: await st.getRules(), rubric: await S.rubricFor(),
       files: files.map(f => ({ path: f.path || '', filename: f.filename, contentType: f.contentType, data: this.engine.name === 'mock' ? undefined : bytesOf(f) })),
     });
   }
@@ -322,7 +322,8 @@ export class Preflight {
       const files = rows.map(f => ({ path: f.path, filename: f.filename, contentType: f.contentType }));
       const { copy } = await this.findStub(a.stub);
       const rules = await S.getStore().getRules();   // the full file: B2 uses the visual-only items Studio's text checks skip
-      const rubric = await S.getStore().getInput('rubric');
+      const rubric = await S.rubricFor(rules);
+      if (!rubric) throw new Error('The live rules have no M3 rubric: an admin uploads studio-rules.json v2.6 or later in the Rules view');
       emit({ type: 'status', message: `Auditing ${a.stub} (${a.kind})` });
       const result = await this.engine.run({ stub: a.stub, persona: a.persona, territory: a.territory, kind: a.kind, files, copy, rules, rubric }, message => { heartbeat(); emit({ type: 'status', message }); });
       // Copy match is Studio's, per stub the visual serves (the engine's own copy flags are replaced by these).

@@ -48,7 +48,7 @@ test('B2 reads the asset; Studio’s per-stub copy match finds the dropped cavea
   const engine = b2Engine({ openai: () => fakeOpenAI('Your vet can be paid directly.'), tesseractPath: false });
   const copy = [{ line_id: 'L1', field: 'tiktok_hook', label: 'TikTok hook', text: 'Your vet can be paid directly, at participating hospitals.', version: 1 }];
   const input = { stub, persona, territory: `${persona}_TEST`, kind: 'static' as const, files: [{ path: img, filename: 'card.png', contentType: 'image/png', data: fs.readFileSync(img) }], copy, rules, rubric };
-  const est = engine.estimate(input);
+  const est = await engine.estimate(input);
   assert.ok(est.seconds > 0 && est.usd >= 0);
   const msgs: string[] = [];
   const r = await engine.run(input, m => msgs.push(m));

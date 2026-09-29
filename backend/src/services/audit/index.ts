@@ -1,7 +1,7 @@
 // B2 pre-flight audit as a library: the engine behind the hosted Studio's
 // Pre-flight step (and under scripts/audit.ts).
 //
-//   estimateAudit(input, opts)  → { calls, usd, seconds }
+//   estimateAudit(input, opts)  → Promise<{ calls, usd, seconds }>
 //   runAudit(input, opts)       → AuditReport (JSON, report_version 1)
 //   featuresRow(report)         → one row for B3's `weekly.ts features --file`
 //
@@ -132,7 +132,7 @@ function kindOf(files: AuditFile[]): { kind: Asset['kind']; media: AuditFile[] }
 }
 
 /** Write the files, pull keyframes, and build the engine's asset. */
-function materialise(input: AuditInput, rules: Rules, dir: string, tools: Tools): Asset {
+async function materialise(input: AuditInput, rules: Rules, dir: string, tools: Tools): Promise<Asset> {
   const { kind, media } = kindOf(input.files);
   const { stub, error } = stubOf(input, rules);
   const paths = media.map((f, i) => { const p = path.join(dir, safe(f.name, i)); fs.writeFileSync(p, f.data); return p; });
@@ -143,8 +143,8 @@ function materialise(input: AuditInput, rules: Rules, dir: string, tools: Tools)
     transcript: input.transcript?.trim() || undefined, transcript_source: input.transcript?.trim() ? 'sidecar' : undefined,
   };
   if (kind === 'video') {
-    const { frames, duration } = extractKeyframes(paths[0], path.join(dir, 'frames'), 8, tools);
-    a.frames = frames; a.duration = duration; a.has_audio = hasAudio(paths[0], tools);
+    const { frames, duration } = await extractKeyframes(paths[0], path.join(dir, 'frames'), 8, tools);
+    a.frames = frames; a.duration = duration; a.has_audio = await hasAudio(paths[0], tools);
   } else {
     a.frames = paths.map((p, i): Frame => ({ label: kind === 'carousel' ? `card ${i + 1}` : 'image', path: p, role: kind === 'carousel' ? 'card' : 'first' }));
   }
@@ -161,7 +161,7 @@ function personasFor(rules: Rules, given?: AuditOptions['personas']): Record<str
  * Calls, cost and time before running. For video it probes the duration
  * (ffprobe) to count keyframes and audio minutes; nothing is sent to OpenAI.
  */
-export function estimateAudit(input: AuditInput, opts: Pick<AuditOptions, 'rules' | 'rubric' | 'ffmpegPath' | 'tmpDir' | 'tpm' | 'concurrency'>): { calls: number; usd: number; seconds: number } {
+export async function estimateAudit(input: AuditInput, opts: Pick<AuditOptions, 'rules' | 'rubric' | 'ffmpegPath' | 'tmpDir' | 'tpm' | 'concurrency'>): Promise<{ calls: number; usd: number; seconds: number }> {
   const tools = detectTools({ ffmpegPath: opts.ffmpegPath, tesseractPath: false });
   const dir = fs.mkdtempSync(path.join(opts.tmpDir || os.tmpdir(), 'voices-audit-est-'));
   try {
@@ -171,8 +171,8 @@ export function estimateAudit(input: AuditInput, opts: Pick<AuditOptions, 'rules
     let frames: Frame[] = paths.map(p => ({ label: 'image', path: p }));
     let duration = 0, audio = false;
     if (kind === 'video') {
-      duration = videoDuration(paths[0], tools);
-      audio = hasAudio(paths[0], tools) || !tools.ffprobe;
+      duration = await videoDuration(paths[0], tools);
+      audio = (await hasAudio(paths[0], tools)) || !tools.ffprobe;
       // Frame size for the token count: 1080×1920 (vertical video) is the common case.
       frames = tools.ffprobe ? keyframeTimes(duration).map(() => ({ label: 'frame', path: paths[0] })) : [];
     }
@@ -195,7 +195,7 @@ export async function runAudit(input: AuditInput, opts: AuditOptions): Promise<A
   const dir = fs.mkdtempSync(path.join(opts.tmpDir || os.tmpdir(), 'voices-audit-'));
   const t0 = Date.now();
   try {
-    const asset = materialise(input, opts.rules, dir, tools);
+    const asset = await materialise(input, opts.rules, dir, tools);
     const api = new AuditApi({
       client: opts.openai, capUsd: opts.capUsd, ffprobe: tools.ffprobe,
       tpm: { [CONFIG.models.yesno]: opts.tpm || CONFIG.tpm_default, [CONFIG.models.compliance]: 150000 },

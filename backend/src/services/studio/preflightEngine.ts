@@ -64,7 +64,7 @@ export interface AuditResult {
 
 export interface AuditEngine {
   name: string;
-  estimate(input: AuditInput): { usd: number; seconds: number };
+  estimate(input: AuditInput): { usd: number; seconds: number } | Promise<{ usd: number; seconds: number }>;
   run(input: AuditInput, progress: (message: string) => void): Promise<AuditResult>;
 }
 

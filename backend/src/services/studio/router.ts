@@ -27,13 +27,16 @@ export interface StudioRouterOptions {
   /** Runs estimated above this need a confirm. */
   askOver: number;
   /** Hosted only: rules versions live in the database and only admins may upload or activate one. */
-  rules?: { store: PgStore; isAdmin(req: Request): boolean };
+  /** selfContained: an upload must carry the rubric and each persona's seed and voice (hosted: nothing is imported from a laptop). */
+  rules?: { store: PgStore; isAdmin(req: Request): boolean; selfContained?: boolean };
   /** Extra fields for /meta (e.g. the signed-in user). */
   metaExtra?(req: Request): Record<string, unknown>;
   /** Pre-flight (needs the database). canSetReady: who may mark assets Ready to traffic. */
   preflight?: { service: Preflight; canSetReady(req: Request): boolean };
   /** Who may set compliance status on copy. Local: anyone. */
   canSetCompliance?(req: Request): boolean;
+  /** Who may override a red flag on copy at Ready for production (hosted: STUDIO_READY_EMAILS + admins, as in Pre-flight). Unset = anyone (local). */
+  canOverride?(req: Request): boolean;
 }
 
 // Top-level keys every rules version needs (scripts/studio/rules.schema.json `required`).
@@ -97,7 +100,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   r.get('/meta', wrap(async (req, res) => {
     const { studio_dir, ...m } = await S.meta();
     const pf = o.preflight ? { enabled: true, storage: o.preflight.service.storageStatus, engine: o.preflight.service.engineName, can_set_ready: o.preflight.canSetReady(req) } : { enabled: false };
-    res.json({ ...m, ...(o.rules ? {} : { studio_dir }), preflight: pf, can_set_compliance: o.canSetCompliance ? o.canSetCompliance(req) : true, spend: await spent(), mock: o.mock, cap: o.cap, cap_window: o.capWindow, ask_over: o.askOver, ...(o.metaExtra?.(req) || {}) });
+    res.json({ ...m, ...(o.rules ? {} : { studio_dir }), preflight: pf, can_set_compliance: o.canSetCompliance ? o.canSetCompliance(req) : true, can_override: o.canOverride ? o.canOverride(req) : true, spend: await spent(), mock: o.mock, cap: o.cap, cap_window: o.capWindow, ask_over: o.askOver, ...(o.metaExtra?.(req) || {}) });
   }));
   r.post('/estimate', wrap(async (req, res) => {
     const b = S.makeBrief(req.body.brief || {});
@@ -171,7 +174,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
       throw err;
     }
   }));
-  r.post('/batches/:id/lines/:line/override', wrap(async (req, res) => res.json(await R.overrideFlag(req.params.id, req.params.line, String(req.body?.rule || ''), String(req.body?.reason || ''), o.who(req)))));
+  r.post('/batches/:id/lines/:line/override', wrap(async (req, res) => (o.canOverride && !o.canOverride(req)) ? res.status(403).json({ error: 'Only the people who mark assets Ready to traffic (the creative lead) or an admin can override a red flag' }) : res.json(await R.overrideFlag(req.params.id, req.params.line, String(req.body?.rule || ''), String(req.body?.reason || ''), o.who(req)))));
   r.patch('/batches/:id/lines/:line/compliance', wrap(async (req, res) => {
     if (o.canSetCompliance && !o.canSetCompliance(req)) return res.status(403).json({ error: 'Compliance status is updated by the producer (Vivan) or an admin' });
     res.json(await R.setCompliance(req.params.id, req.params.line, String(req.body?.status || ''), req.body?.note, o.who(req)));
@@ -296,6 +299,8 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
       if (!version || !body || typeof body !== 'object') throw new Error('Send { version, rules } with the studio-rules.json body');
       const missing = RULES_REQUIRED.filter(k => !(k in body));
       if (missing.length) throw new Error(`Rules body is missing ${missing.join(', ')} (see scripts/studio/rules.schema.json)`);
+      const gaps = o.rules!.selfContained ? S.hostedRulesGaps(body) : [];
+      if (gaps.length) return res.status(400).json({ error: `${version} is missing ${gaps.join(', ')}. The hosted Studio reads the M3 rubric and each persona's seed and voice from the rules file (v2.6 or later).`, gaps });
       // Versions are never overwritten: past runs name the version they were checked against.
       if ((await store.listRules()).some((x: any) => x.version === version)) throw new Error(`Rules version ${version} already exists; upload it under a new version`);
       await store.putRules(version, { ...body, version }, { activate: !!req.body?.activate, by: o.who(req), notes: req.body?.notes ? String(req.body.notes) : undefined });

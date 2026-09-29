@@ -26,17 +26,25 @@ export function signedOffCopy(copy: SignedCopy[]): SignedOffCopy {
 /** Name files so B2's "sort by the number in the name" keeps the upload order (frame_index = card position). */
 const b2Name = (i: number, filename: string) => `${String(i + 1).padStart(2, '0')}-${filename}`;
 
+/**
+ * The rubric and the skeptic's persona context. From the rules file (v2.6+: rubric,
+ * personas.<code>.seed and .voice), so an admin's upload is all the hosted Studio
+ * needs; the store's inputs (db-import, the local folder) are a fallback only.
+ */
 async function context() {
   const st = S.getStore();
-  const rubric = await st.getInput('rubric' as any);
-  if (!rubric) throw new Error('The M3 rubric isn’t loaded yet: run `studio.ts db-import` (it carries rubric.json across)');
-  const seeds = (await st.getInput('personas')) || {};
-  const voices = (await st.getInput('voices')) || {};
-  const rules = await st.getRules();
+  const rules: any = await st.getRules();
+  const rubric = await S.rubricFor(rules);
+  if (!rubric) throw new Error('The live rules have no M3 rubric: an admin uploads studio-rules.json v2.6 or later in the Rules view');
+  const needStore = Object.values<any>(rules.personas || {}).some(p => !p.seed || !p.voice);
+  const seeds = needStore ? (await st.getInput('personas')) || {} : {};
+  const voices = needStore ? (await st.getInput('voices')) || {} : {};
   const personas: Record<string, { name?: string; seed?: any; voice?: string }> = {};
   for (const [code, p] of Object.entries<any>(rules.personas || {})) {
-    const seed = Array.isArray(seeds) ? seeds.find((x: any) => x.code === code || x.id === code) : seeds[code];
-    personas[code] = { name: p.name, seed, voice: typeof voices[code] === 'string' ? voices[code] : voices[code]?.text };
+    const list = Array.isArray(seeds) ? seeds : Array.isArray(seeds.personas) ? seeds.personas : null;
+    const stored = list ? list.find((x: any) => x.code === code || x.id === code) : seeds[code];
+    const voice = voices[code];
+    personas[code] = { name: p.name, seed: p.seed || stored?.body || stored, voice: p.voice || (typeof voice === 'string' ? voice : voice?.text) };
   }
   return { rules, rubric, personas };
 }
@@ -44,10 +52,10 @@ async function context() {
 export function b2Engine(opts: { tpm?: number; capUsd?: () => Promise<number>; ffmpegPath?: string; tesseractPath?: string | false; openai?: () => any } = {}): AuditEngine {
   return {
     name: 'b2',
-    estimate(i) {
+    async estimate(i) {
       // Sync in B2; needs the file bytes (it probes video duration). Rules and rubric are passed in by Preflight.
       const files: AuditFile[] = i.files.map((f, n) => ({ name: b2Name(n, f.filename), mime: f.contentType, data: f.data || Buffer.alloc(0) }));
-      const e = estimateAudit({ stub: i.stub, persona: i.persona, files }, { rules: i.rules, rubric: i.rubric, ffmpegPath: opts.ffmpegPath, tpm: opts.tpm });
+      const e = await estimateAudit({ stub: i.stub, persona: i.persona, files }, { rules: i.rules, rubric: i.rubric, ffmpegPath: opts.ffmpegPath, tpm: opts.tpm });
       return { usd: e.usd, seconds: e.seconds };
     },
     async run(i: AuditInput, progress) {

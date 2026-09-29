@@ -14,12 +14,11 @@
 // yes/no reads leaning the same way. A lone yes/no read needs P >= 0.8.
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 import type { AuditApi, Content } from './api.js';
 import { FatalError } from './api.js';
 import { buildItems, type YesNoItem } from './checks.js';
 import { addFlag, copyFlags, labelOf, ocrOnlyWords, sevOf, wordCount, type TextBlock } from './copyChecks.js';
-import { extractAudio, ocr } from './assets.js';
+import { extractAudio, ocr, runTool } from './assets.js';
 import { CONFIG } from './config.js';
 import { copyMatch, type SignedOffCopy } from './copyMatch.js';
 import { defaultTools, type Tools } from './tools.js';
@@ -68,13 +67,13 @@ const withWording = (source: string, w: string) => (w.startsWith('B2') || w === 
 const yesNoPrompt = (ad: string, q: string) => `AD:\n${ad}\n\n${q} Answer with exactly one word: Yes or No.`;
 
 /** A 512 px copy for detail-low questions: smaller uploads, same tokens (85). */
-function lowCopy(src: string, dir: string, tools: Tools): string {
+async function lowCopy(src: string, dir: string, tools: Tools): Promise<string> {
   if (!tools.ffmpeg) return src;
   fs.mkdirSync(dir, { recursive: true });
   const out = path.join(dir, path.basename(src).replace(/\.[^.]+$/, '') + '-512.jpg');
   if (fs.existsSync(out)) return out;
   try {
-    execFileSync(tools.ffmpeg, ['-y', '-v', 'error', '-i', src, '-vf', "scale='if(gt(iw,ih),min(512,iw),-2)':'if(gt(iw,ih),-2,min(512,ih))'", '-q:v', '3', out]);
+    await runTool(tools.ffmpeg, ['-y', '-v', 'error', '-i', src, '-vf', "scale='if(gt(iw,ih),min(512,iw),-2)':'if(gt(iw,ih),-2,min(512,ih))'", '-q:v', '3', out]);
     return out;
   } catch { return src; }
 }
@@ -110,7 +109,7 @@ async function readFrames(a: Asset, ctx: AuditContext, errors: string[]): Promis
     }
     let j: any = {};
     try { j = JSON.parse(r.text || '{}'); } catch { /* keep empty */ }
-    const tess = ocr(f.path, ctx.tools || defaultTools());
+    const tess = await ocr(f.path, ctx.tools || defaultTools());
     ctx.onProgress?.({ stage: 'read', calls_done: ctx.api.calls, calls_estimated: 0, message: `read ${f.label}` });
     const text = String(j.text || '');
     return { label: f.label, text, ocr: tess, ocr_only: ocrOnlyWords(text, tess), description: String(j.description || '') };
@@ -195,7 +194,7 @@ export async function auditAsset(a: Asset, ctx: AuditContext): Promise<AssetAudi
   if (a.kind === 'video' && !a.transcript && (a.has_audio || !tools.ffprobe)) {
     try {
       progress('transcribe', 'transcribing the voice-over');
-      const mp3 = extractAudio(a.source, path.join(ctx.workDir, 'audio', `${a.stub?.stub || a.name}.mp3`), tools);
+      const mp3 = await extractAudio(a.source, path.join(ctx.workDir, 'audio', `${a.stub?.stub || a.name}.mp3`), tools);
       a.transcript = await ctx.api.transcribe(`transcribe ${a.name}`, MODELS.transcribe, mp3, a.duration || 0);
       a.transcript_source = ctx.api.mock ? 'mock' : 'openai';
       log(`  transcribed ${Math.round(a.duration || 0)} s of audio (${a.transcript.length} chars)`);
@@ -205,7 +204,7 @@ export async function auditAsset(a: Asset, ctx: AuditContext): Promise<AssetAudi
   log(`  read ${frames.length} image${frames.length === 1 ? '' : 's'}`);
   const ad = describeAsset(a, frames);
   const lowDir = path.join(ctx.workDir, 'low', a.stub?.stub || a.name);
-  const lows = a.frames.map(f => lowCopy(f.path, lowDir, tools));
+  const lows = await Promise.all(a.frames.map(f => lowCopy(f.path, lowDir, tools)));
   const images: Content = lows.map(p => img(p, 'low'));
 
   // 2. Rule-based copy checks.

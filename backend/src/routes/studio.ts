@@ -8,9 +8,13 @@
 // STUDIO_MONTHLY_CAP_USD (default 50), STUDIO_ASK_OVER_USD (default 2),
 // OPENAI_API_KEY, ANTHROPIC_API_KEY (Claude writers in blind compare).
 // STUDIO_MOCK=true (local development only) uses the mock client.
-// STUDIO_READY_EMAILS: who (besides admins) may mark Pre-flight assets Ready to traffic.
+// STUDIO_READY_EMAILS: who (besides admins) may mark Pre-flight assets Ready to traffic
+// and override red flags, on copy and on assets.
 // STUDIO_COMPLIANCE_EMAILS: who (besides admins) may set compliance status on copy (the producer).
-// STUDIO_R2_BUCKET (optional): a private bucket for Pre-flight files; otherwise R2_BUCKET_NAME.
+// STUDIO_R2_BUCKET: the private bucket for Pre-flight files. Required in production with R2
+// on: when unset, uploads are refused. Never R2_BUCKET_NAME (it has a public URL).
+// The rules file (v2.6+) carries the M3 rubric and each persona's seed and voice: an
+// admin's upload in the Rules view is all Pre-flight needs; no import from a laptop.
 
 import express, { type NextFunction, type Response } from 'express';
 import { pool } from '../db/index.js';
@@ -72,9 +76,10 @@ router.use(createStudioRouter({
   cap,
   capWindow: 'month',
   askOver,
-  rules: { store, isAdmin: req => studioAccess((req as AuthRequest).user?.email).admin },
+  rules: { store, isAdmin: req => studioAccess((req as AuthRequest).user?.email).admin, selfContained: true },
   preflight: { service: preflight, canSetReady: req => canSetReady((req as AuthRequest).user?.email) },
   canSetCompliance: req => canSetCompliance((req as AuthRequest).user?.email),
+  canOverride: req => canSetReady((req as AuthRequest).user?.email),
   metaExtra: req => {
     const u = (req as AuthRequest).user;
     return { user: u ? { email: u.email, name: u.name, admin: studioAccess(u.email).admin } : null };

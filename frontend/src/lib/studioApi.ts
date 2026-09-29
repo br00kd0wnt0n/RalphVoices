@@ -63,6 +63,7 @@ export interface Meta {
   /** Source codes (TM, EP, CLB…) → titles, for plain-words sources. */
   sources?: Record<string, string>;
   can_set_compliance?: boolean;
+  can_override?: boolean;
   territories: Record<string, Territory>;
   formats: string[];
   fields: Record<string, FieldSpec>;

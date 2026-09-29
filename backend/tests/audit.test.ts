@@ -113,7 +113,7 @@ test('a mock static end to end: red flag, features, features CSV B3 can read, fl
   const png = path.join(round, 'DINK_JOKE_STATIC_v1_META.png');
   execFileSync('ffmpeg', ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=320x320', '-frames:v', '1', png]);
   fs.writeFileSync(path.join(round, 'DINK_JOKE_STATIC_v1_META.txt'), 'Primary text: The best pet insurance.\nHeadline: Surgery can run $6,000\n');
-  const [asset] = discoverRound(round, dir);
+  const [asset] = await discoverRound(round, dir);
   assert.equal(asset.stub?.stub, 'DINK_JOKE_ST_v1_META');
   assert.equal(asset.copy.meta_headline, 'Surgery can run $6,000');
 
@@ -157,7 +157,7 @@ test('spoken claims: a transcribed voice-over gets the copy and compliance check
   fs.mkdirSync(round);
   // 4 s of blue with a tone: a video that has an audio track.
   execFileSync('ffmpeg', ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=320x320:d=4', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=4', '-shortest', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', path.join(round, 'FAM_TALK_VID_v1_META.mp4')]);
-  const [asset] = discoverRound(round, dir);
+  const [asset] = await discoverRound(round, dir);
   assert.equal(asset.has_audio, true);
   assert.equal(asset.transcript, undefined);
   const api = new AuditApi({ mock: mockResponder(() => ''), mockTranscribe: () => 'Honestly, they pay the whole vet bill.', capUsd: 1, spendPath: path.join(dir, 'spend.json') });
@@ -169,7 +169,7 @@ test('spoken claims: a transcribed voice-over gets the copy and compliance check
 
   // A transcript sidecar wins over transcription.
   fs.writeFileSync(path.join(round, 'FAM_TALK_VID_v1_META.transcript.txt'), 'Nothing to file.');
-  const [again] = discoverRound(round, dir);
+  const [again] = await discoverRound(round, dir);
   assert.equal(again.transcript_source, 'sidecar');
   assert.equal(again.transcript, 'Nothing to file.');
 });

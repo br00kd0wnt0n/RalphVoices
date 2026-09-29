@@ -1275,7 +1275,7 @@ function Ready({ meta, batch, user, onNext }: { meta: Meta; batch: Batch | null;
               <ReadyCard key={x.line.id} meta={meta} item={x} included={include.has(x.line.id)} lead={lead.has(x.line.id)}
                 onInclude={on => setInclude(cur => { const n = new Set(cur); if (on) n.add(x.line.id); else n.delete(x.line.id); return n; })}
                 onLead={on => setLead(cur => { const n = new Set(cur); if (on) n.add(x.line.id); else n.delete(x.line.id); return n; })}
-                onChanged={() => load(true).catch(e => setError(e.message))} onError={setError} canCompliance={meta.can_set_compliance !== false} />
+                onChanged={() => load(true).catch(e => setError(e.message))} onError={setError} canCompliance={meta.can_set_compliance !== false} canOverride={meta.can_override !== false} />
             ))}
           </div>
 
@@ -1330,9 +1330,9 @@ function Ready({ meta, batch, user, onNext }: { meta: Meta; batch: Batch | null;
   );
 }
 
-function ReadyCard({ meta, item, included, lead, onInclude, onLead, onChanged, onError, canCompliance }: {
+function ReadyCard({ meta, item, included, lead, onInclude, onLead, onChanged, onError, canCompliance, canOverride }: {
   meta: Meta; item: ReadyView['lines'][number]; included: boolean; lead: boolean;
-  onInclude: (on: boolean) => void; onLead: (on: boolean) => void; onChanged: () => void; onError: (m: string) => void; canCompliance: boolean;
+  onInclude: (on: boolean) => void; onLead: (on: boolean) => void; onChanged: () => void; onError: (m: string) => void; canCompliance: boolean; canOverride: boolean;
 }) {
   const { line, final_text, red, compliance, versions } = item;
   const f = meta.fields[line.field];
@@ -1386,7 +1386,7 @@ function ReadyCard({ meta, item, included, lead, onInclude, onLead, onChanged, o
                 <span className="text-[#ECEDEF]">{fl.label}</span>
                 {fl.quote && <mark className="bg-amber-400/30 px-1 text-amber-50">{fl.quote}</mark>}
               </div>
-              <div className="mt-0.5 text-sm text-[#A3A8B1]">Source: {fl.source}{fl.why ? ` · ${fl.why}` : ''}</div>
+              <div className="mt-0.5 text-sm text-[#A3A8B1]">Source: <Src s={fl.source} />{fl.why ? ` · ${fl.why}` : ''}</div>
               {overriding === fl.rule ? (
                 <div className="mt-2 space-y-2">
                   <textarea rows={2} className="w-full rounded-lg border-2 border-red-500/45 px-3 py-2 text-base" placeholder="Why this is OK to run (recorded with your name, and shown on the line)" value={why} onChange={e => setWhy(e.target.value)} autoFocus />
@@ -1398,7 +1398,8 @@ function ReadyCard({ meta, item, included, lead, onInclude, onLead, onChanged, o
               ) : (
                 <div className="mt-2 flex flex-wrap gap-2">
                   <GhostButton onClick={() => { setDraft(final_text); setEditing(true); }}>Edit the wording</GhostButton>
-                  <GhostButton onClick={() => { setOverriding(fl.rule); setWhy(''); }}>Override with a reason…</GhostButton>
+                  {canOverride ? <GhostButton onClick={() => { setOverriding(fl.rule); setWhy(''); }}>Override with a reason…</GhostButton>
+                    : <span className="self-center text-xs text-[#646A75]">Fix the wording, or ask the creative lead to override it</span>}
                 </div>
               )}
             </div>

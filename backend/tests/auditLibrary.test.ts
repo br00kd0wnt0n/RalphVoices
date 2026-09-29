@@ -128,13 +128,13 @@ test('runAudit: video without ffmpeg returns a clear note, not a crash; transcri
   assert.equal(r.clarity.brand_by_hook?.p ?? null, null);
 });
 
-test('estimateAudit: calls, cost and time before any call; video counts keyframes and audio minutes', { skip: !hasFfmpeg && 'needs ffmpeg' }, () => {
+test('estimateAudit: calls, cost and time before any call; video counts keyframes and audio minutes', { skip: !hasFfmpeg && 'needs ffmpeg' }, async () => {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-lib-est-'));
-  const still = estimateAudit({ stub: 'CUR_X_ST_v1_META', files: [{ name: 'a.png', mime: 'image/png', data: png(work, 'a.png') }] }, { rules, rubric, tmpDir: work });
+  const still = await estimateAudit({ stub: 'CUR_X_ST_v1_META', files: [{ name: 'a.png', mime: 'image/png', data: png(work, 'a.png') }] }, { rules, rubric, tmpDir: work });
   assert.ok(still.calls > 10 && still.usd > 0 && still.seconds > 0);
   const mp4 = path.join(work, 'v.mp4');
   execFileSync('ffmpeg', ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=320x320:d=12', '-f', 'lavfi', '-i', 'sine=duration=12', '-shortest', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', mp4]);
-  const vid = estimateAudit({ stub: 'CUR_X_VID_v1_META', files: [{ name: 'v.mp4', mime: 'video/mp4', data: fs.readFileSync(mp4) }] }, { rules, rubric, tmpDir: work });
+  const vid = await estimateAudit({ stub: 'CUR_X_VID_v1_META', files: [{ name: 'v.mp4', mime: 'video/mp4', data: fs.readFileSync(mp4) }] }, { rules, rubric, tmpDir: work });
   assert.ok(vid.calls > still.calls, 'keyframe reads and video items');
   assert.ok(vid.usd > still.usd);
   assert.equal(fs.readdirSync(work).filter(n => n.startsWith('voices-audit-est-')).length, 0);
@@ -153,4 +153,37 @@ test('an outage stops the audit after a few failed calls instead of backing off 
   );
   assert.ok(n <= 6, `stopped after ${n} calls`);
   assert.equal(fs.readdirSync(work).filter(x => x.startsWith('voices-audit-')).length, 0, 'temp files removed on failure too');
+});
+
+test('ffmpeg and ffprobe run without blocking the server: timers keep firing while a video is split into frames', { skip: !hasFfmpeg && 'needs ffmpeg' }, async () => {
+  const { extractKeyframes } = await import('../src/services/audit/assets.js');
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-async-'));
+  const mp4 = path.join(work, 'v.mp4');
+  execFileSync('ffmpeg', ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=1080x1920:rate=25', '-t', '9', '-pix_fmt', 'yuv420p', mp4]);
+  let ticks = 0;
+  const timer = setInterval(() => { ticks++; }, 5);
+  const t0 = Date.now();
+  const { frames } = await extractKeyframes(mp4, path.join(work, 'frames'));
+  const ms = Date.now() - t0;
+  clearInterval(timer);
+  assert.ok(frames.length >= 4, `frames: ${frames.length}`);
+  // A blocking call would starve the timer; with async calls it fires most of its slots.
+  assert.ok(ticks >= Math.floor(ms / 5) * 0.5, `timer fired ${ticks} times in ${ms} ms`);
+  fs.rmSync(work, { recursive: true, force: true });
+});
+
+test('a tool that hangs is killed at its time limit', async () => {
+  const { runTool } = await import('../src/services/audit/assets.js');
+  const t0 = Date.now();
+  await assert.rejects(() => runTool('sleep', ['5'], 200));
+  assert.ok(Date.now() - t0 < 2000);
+});
+
+test('temp files are removed when a video can’t be read', { skip: !hasFfmpeg && 'needs ffmpeg' }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-clean-'));
+  const input: AuditInput = { stub: 'CUR_X_VID_v1_META', files: [{ name: 'bad.mp4', mime: 'video/mp4', data: Buffer.from('not a video at all') }] };
+  await runAudit(input, { rules, rubric, openai: fakeOpenAI(), tmpDir: tmp, tesseractPath: false }).catch(() => null);
+  await estimateAudit(input, { rules, rubric, tmpDir: tmp }).catch(() => null);
+  assert.deepEqual(fs.readdirSync(tmp), [], 'nothing left behind, whether the audit finished or failed');
+  fs.rmSync(tmp, { recursive: true, force: true });
 });

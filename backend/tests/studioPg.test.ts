@@ -118,6 +118,17 @@ test('hosted rules endpoints: anyone lists, only admins upload or activate, vers
     assert.equal((await call('GET', '/rules')).status, 200);
     assert.equal((await call('POST', '/rules', { version: 'example-3', rules: current })).status, 403);
     assert.match((await call('POST', '/rules', { version: 'bad', rules: { personas: {} } }, true)).body.error, /missing sources/);
+    // Hosted: the rules file carries the rubric and each persona's seed and voice, or the upload is refused (never an error at audit time).
+    const hosted = express();
+    hosted.use('/h', createStudioRouter({ who: () => 'brook', api: () => new S.Api({ mock: true }), mock: true, cap: 50, capWindow: 'month', askOver: 2, rules: { store, isAdmin: () => true, selfContained: true } }));
+    const hs = hosted.listen(0, '127.0.0.1');
+    await new Promise(r => hs.once('listening', r));
+    try {
+      const { rubric: _r, ...noRubric } = current as any;
+      const res = await fetch(`http://127.0.0.1:${(hs.address() as any).port}/h/rules`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version: 'no-rubric', rules: noRubric }) });
+      assert.equal(res.status, 400);
+      assert.match(((await res.json()) as any).error, /no-rubric is missing rubric/);
+    } finally { hs.close(); }
     const up = await call('POST', '/rules', { version: 'example-3', rules: current, notes: 'test' }, true);
     assert.equal(up.status, 200);
     assert.equal(up.body.find((x: any) => x.version === 'example-3').status, 'draft');
@@ -305,6 +316,15 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   assert.match(rf.audit!.error!, /run the audit again/);
   await pf.runAudit(await pf.createAudit(upOut.upload_id));
   assert.equal((await pf.report(stub)).audit!.status, 'done');
+
+  // Nothing imported from a laptop: the store has no rubric, persona seeds or voices; the audit gets the rubric from the live rules.
+  assert.equal(await S.getStore().getInput('rubric'), null);
+  assert.equal(await S.getStore().getInput('personas'), null);
+  const seen: any[] = [];
+  const spy = new Preflight((store as any).db, { ...mockEngine, run: async (i, p) => { seen.push(i.rubric); return mockEngine.run(i, p); } }, { storage: 'db' });
+  await spy.runAudit(await spy.createAudit(upOut.upload_id));
+  assert.ok(seen[0]?.items?.length, 'the rubric came from the rules file');
+  assert.ok(S.personaSeed('OWN') && S.voiceSample('OWN'), 'the skeptic’s seed and voice come from the rules file');
 
   // An audit orphaned by a restart (no progress for STUCK_MINUTES) reads as failed and retryable, and Audit again works.
   const orphan = await pf.createAudit(upOut.upload_id);
