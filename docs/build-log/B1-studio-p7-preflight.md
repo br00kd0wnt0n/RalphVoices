@@ -14,7 +14,7 @@ Branch `voices/b1-studio-preflight`, draft PR #15. It is on hold because it cont
   - A failed audit (for example an OpenAI outage) can be run again; "Audit again" re-checks after a rules change.
   - Exports: the features CSV in B2's format for B3's `weekly.ts features`, and the asset handoff list.
 - **Storage:**
-  - Production: the private R2 bucket in `STUDIO_R2_BUCKET` (required; never the public `R2_BUCKET_NAME`), under `studio/preflight/<stub>/<upload id>/…`, served only through the signed-in API. Without it, uploads are refused.
+  - Production: the private R2 bucket in `STUDIO_R2_BUCKET` (required; never the public `R2_BUCKET_NAME`), under `studio/preflight/<stub>/<upload id>/…`, streamed, and served only through the signed-in API. Without it, uploads are refused. 100 MB per file.
   - Local and dev: Postgres, 25 MB per file.
 - **Migration 017** (additive, idempotent): the Pre-flight tables, plus `studio_rules.activated_by`/`activated_at` for the Rules view.
 - **Also:**
@@ -56,31 +56,32 @@ Screenshots are in `Claude outputs/voices-r1/studio/screens/` (client material):
 
 **Tests:** 107 backend tests pass (after the UX round), covering the whole flow on Postgres and B2's real engine with a stand-in OpenAI client. Type checks are clean.
 
-## Deploy checklist for Brook
+## Deploy checklist for Brook (final, 29 Sep)
+
+**Merge order:** PR #16 (B2's engine) is already on `main`, and this branch contains all of it: `main` is ahead only by #16's merge commit, and the merge is clean. Merge PR #15 at a deliberate deploy, because it carries **migration 017**.
 
 **Before the merge**, on the **backend** Railway service:
 
 | Variable | Value |
 |---|---|
-| `STUDIO_READY_EMAILS` | `nick.larson@ralph.world` (admins in `ADMIN_EMAILS` can already mark assets ready) |
-| `STUDIO_R2_BUCKET` | **required**: the new private R2 bucket (no public URL; the existing R2 keys, with the token's scope extended to it). Without it, production refuses Pre-flight uploads with "Pre-flight storage isn't configured: set STUDIO_R2_BUCKET to a private bucket". It never falls back to `R2_BUCKET_NAME`, which has a public URL. At startup the logs say "Pre-flight files: private R2 bucket reachable", or warn if the keys can't reach it. |
-| `STUDIO_COMPLIANCE_EMAILS` | `vivan@ralph.world`. Who sets the compliance status on copy (admins can too); everyone else sees it read-only ("Vivan updates this"). |
-| `FFMPEG_PATH` | not needed once ffmpeg is in the image (below) |
+| `STUDIO_R2_BUCKET` | **Required.** A new private R2 bucket: no public URL, and the existing R2 token's scope extended to it. Without it, production refuses Pre-flight uploads with "Pre-flight storage isn't configured: set STUDIO_R2_BUCKET to a private bucket". It never falls back to `R2_BUCKET_NAME`, which has a public URL. |
+| `STUDIO_READY_EMAILS` | `nick.larson@ralph.world`. Who marks assets Ready to traffic and overrides red flags (admins in `ADMIN_EMAILS` can too). |
+| `STUDIO_COMPLIANCE_EMAILS` | `vivan@ralph.world`. Who sets compliance status on copy (admins can too); everyone else sees it read-only. |
 
-`ENABLE_R2_STORAGE=true` and the `R2_*` variables are already set (Brook, 28 Sep); nothing new is needed for R2. Don't set `STUDIO_MOCK`.
+`ENABLE_R2_STORAGE=true` and the `R2_*` keys are already set (28 Sep). Don't set `STUDIO_MOCK` or `FFMPEG_PATH`.
 
-- **ffmpeg:** `backend/nixpacks.toml` now has `nixPkgs = ["nodejs_18", "ffmpeg"]`. Check that the backend service builds from `backend/` (its Root Directory). If it builds from the repo root, the same line goes in the root `nixpacks.toml`. Without ffmpeg, videos are still audited on copy and voice-over, with a note that frames were unavailable.
-- **Migration 017** needs nothing new from the database: it's additive and idempotent (`IF NOT EXISTS` throughout). Migration 016 (B3) is separate.
-
-**Rules v2.4** (29 Sep, UX review item 12): the pitched headline on each territory card. Upload `studio-rules.json` (v2.4) in the Rules view with "Upload and activate". No check changes. Audits run under v2.3 will say "Checked under older rules: audit again".
+- **ffmpeg** is in both `backend/nixpacks.toml` and the root `nixpacks.toml` (the root `start` runs the backend), so it's in the image whichever Root Directory the backend service builds from. In the build log, look for `ffmpeg` among the Nix packages. Without it, videos are still audited on copy and voice-over, with a note that frames were unavailable.
+- **Migration 017** needs nothing new from the database: it's additive and idempotent (`IF NOT EXISTS` throughout). It adds the Pre-flight tables plus two columns: `studio_asset_uploads.estimate`, the estimate stored at upload, and `studio_audits.heartbeat_at`, which lets an audit orphaned by a restart become retryable. Migration 016 (B3) is separate.
+- **File size:** up to 100 MB per file. Uploads go to disk and stream to and from R2. The one whole copy in memory is B2's, while an audit runs.
 
 **After the deploy:**
-1. The logs show "Database migrations applied." with no warning.
-2. `db-import` carries the M3 rubric (`rubric.json`), which Pre-flight needs. Re-run the carry-over (`--since 2026-09-28`, dry run first) or send the rubric on its own. It's safe to re-run.
-3. **Smoke test:** upload one test static to a signed-off code, run the audit (about $0.10), check the copy-match table, then take the test asset back.
+1. The logs show "Database migrations applied." and "[studio] Pre-flight files: private R2 bucket reachable", with no warning.
+2. **Rules v2.5:** in the Rules view, "Upload and activate" `Claude outputs/voices-r1/studio/studio-rules.json`. v2.5 adds the pitched headline on each territory card (v2.4) and each persona's who and tension (v2.5). No check changed. Audits run under older rules will say "Checked under older rules: audit again".
+3. **The M3 rubric:** `db-import` carries `rubric.json`, which Pre-flight needs. Re-run the carry-over (`--since 2026-09-28`, dry run first) or send the rubric on its own. It's safe to re-run.
+4. **Smoke test:** upload one test static to a signed-off code, run the audit (about $0.10), check the copy-match table, then take the test asset back.
 
 **Rollback:** `ENABLE_STUDIO=false` hides the whole Studio. Migration 017 is additive, so its tables can stay.
 
 ## UX review (29 Sep, approved by Brook): done
 
-All 18 items, plus the coordination session's notes A (private bucket required) and B (stale audits), are in commits a543239, c03be08 and 08164bd. Screenshots: `Claude outputs/voices-r1/studio/screens/ux-29sep/`.
+All 18 items, plus the coordination session's notes A (private bucket required) and B (stale audits), are in commits a543239, c03be08 and 08164bd. The follow-ups after the re-walk (step highlight, springboard badge, who and tension in rules v2.5, plain sources, the Compare label) come next, and B2's review fixes are in f6d482f: bounded memory, one persona per shared visual, and orphaned audits. Screenshots: `Claude outputs/voices-r1/studio/screens/ux-29sep/`.

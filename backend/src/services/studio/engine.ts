@@ -1643,7 +1643,7 @@ export async function meta() {
       name: v.name, default_fields: v.default_fields,
       triggers: v.triggers.map(t => ({ id: t.id, label: t.label, detail: t.detail, source: t.source })),
       context: {
-        who: (v as any).who, tension: (v as any).tension, platforms: (v as any).platforms || [],
+        who: (v as any).who, tension: (v as any).tension, who_source: (v as any).who_source, platforms: (v as any).platforms || [],
         turn_offs: (v.turn_offs || []).map(t => ({ id: t.id, rule: t.rule, source: t.source, severity: t.severity })),
         language: ((v as any).language || []).map((l: any) => ({ text: l.text, caution: !!l.caution, source: l.source })),
       },

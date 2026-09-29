@@ -54,7 +54,7 @@ export interface Territory {
   history?: Array<{ at: string; by: string; note: string; before: Partial<Territory> | null }>;
 }
 export interface PersonaContext {
-  who?: string; tension?: string; platforms: string[];
+  who?: string; tension?: string; who_source?: string; platforms: string[];
   turn_offs: Array<{ id: string; rule: string; source: string; severity?: string }>;
   language: Array<{ text: string; caution: boolean; source: string }>;
 }

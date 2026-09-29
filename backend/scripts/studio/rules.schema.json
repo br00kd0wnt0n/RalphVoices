@@ -51,7 +51,7 @@
     "clarity": { "type": "array", "items": { "$ref": "#/definitions/rule" } },
     "features": { "type": "object", "required": ["items", "source"], "properties": { "items": { "type": "object", "additionalProperties": { "type": "string" } }, "source": { "type": "string" } } },
     "personas": { "type": "object", "additionalProperties": { "type": "object", "required": ["name", "default_fields", "triggers", "turn_offs", "language", "verbatims"], "properties": {
-      "name": { "type": "string" }, "platforms": { "type": "array", "items": { "type": "string" } }, "default_fields": { "type": "array", "items": { "type": "string" } },
+      "name": { "type": "string" }, "who": { "type": "string" }, "tension": { "type": "string" }, "who_source": { "type": "string" }, "platforms": { "type": "array", "items": { "type": "string" } }, "default_fields": { "type": "array", "items": { "type": "string" } },
       "triggers": { "type": "array", "items": { "type": "object", "required": ["id", "label", "detail", "source"] } },
       "turn_offs": { "type": "array", "items": { "$ref": "#/definitions/rule" } },
       "language": { "type": "array", "items": { "type": "object", "required": ["text", "source"] } },

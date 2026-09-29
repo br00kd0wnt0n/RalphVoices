@@ -50,17 +50,47 @@ const sevTone = (s: Flag['severity']) => (s === 'compliance' ? 'red' : s === 'wa
 /** Source codes in the rules file, as people say them. */
 const SOURCE_NAMES: Record<string, string> = {
   TM: 'Trigger maps', EP: 'Evidence pack', QB: 'Quote bank', CLB: 'Creative brief', CC: 'Concept cards', RB: 'Rubric',
-  BG: 'Brand guidelines', META: 'Meta ads guide', META3P: 'Meta length guides', HOUSE: 'House rule', LEGAL: 'Legal', GUIDE: 'Guide',
+  BG: 'Brand guidelines', META: 'Meta ads guide', META3P: 'Meta length guides', TT: 'TikTok ads help', TT3P: 'TikTok length guides',
+  HOUSE: 'House rule', LEGAL: 'Legal', GUIDE: 'Guide',
 };
-/** "CLB 'Rules that bind every line'; TM DINK watch-outs; EP §3.1" → "Creative brief: 'Rules that bind every line' · Trigger maps: DINK watch-outs · Evidence pack §3.1" */
+const MAP_PERSONA: Record<string, string> = { '1': 'DINKs', '2': 'Curators', '3': 'Busy Families' };
+/** Territory code → name, for "Concept card: Ask Your Vet". Filled when the rules load. */
+let TERRITORY_NAMES: Record<string, string> = {};
+/**
+ * A rules-file source in plain words; the codes stay in the raw source (a tooltip or "details").
+ * "CC CUR_VET slide 2" → "Concept card: Ask Your Vet, slide 2"; "Brook decision 25 Sep (NR_EXCLUSIONS)" →
+ * "Ralph decision, 25 Sep"; "RB mocks_viewer" → "Rubric"; "TM Trigger map 1 watch-outs" → "Trigger maps: DINKs, watch-outs".
+ */
 function plainSource(src?: string): string {
   if (!src) return '';
-  return src.split(/;\s*/).map(part => {
-    const m = /^([A-Z][A-Z0-9]+)\b\s*:?\s*(.*)$/.exec(part.trim());
-    if (!m || !SOURCE_NAMES[m[1]]) return part.trim();
-    const rest = m[2].replace(/^Trigger map\s*/i, 'map ');
-    return rest ? (/^[§p]/.test(rest) ? `${SOURCE_NAMES[m[1]]} ${rest}` : `${SOURCE_NAMES[m[1]]}: ${rest}`) : SOURCE_NAMES[m[1]];
-  }).join(' · ');
+  const card = (code: string) => TERRITORY_NAMES[code] ? `Concept card: ${TERRITORY_NAMES[code].replace(/\.$/, '')}` : 'Concept card';
+  const parts = src.split(/;\s*/).map(raw => {
+    let part = raw.trim()
+      .replace(/\s*\((?:NR_[A-Z_]+|facts? [A-Z]\d[^)]*)\)/g, '')                   // checklist and fact codes
+      .replace(/\bBrook decision (\d+ \w+)/g, 'Ralph decision, $1')
+      .replace(/\bpersonas\.json\b.*$/, 'Persona profiles');
+    const m = /^([A-Z][A-Z0-9]+)\b\s*:?\s*(.*)$/.exec(part);
+    if (!m || !SOURCE_NAMES[m[1]]) return part;
+    const [, code] = m;
+    let rest = m[2];
+    if (code === 'RB') return /^draft/.test(rest) ? `Rubric, ${rest}` : 'Rubric';
+    if (code === 'CC') {
+      const c = /^(?:card\s+)?([A-Z]+_[A-Z]+)\b\s*(.*)$/.exec(rest);
+      if (c) return `${card(c[1])}${c[2] ? `, ${c[2].replace(/^\((.*)\)$/, '$1')}` : ''}`;
+    }
+    if (code === 'TM') {
+      const t = /^Trigger map (\d)\s*(?:\([^)]*\))?:?\s*(.*)$/.exec(rest);
+      if (t) rest = `${MAP_PERSONA[t[1]] || `map ${t[1]}`}${t[2] ? `, ${t[2].replace(/^#(\d)/, 'trigger $1')}` : ''}`;
+    }
+    return rest ? (/^[§p]/.test(rest) ? `${SOURCE_NAMES[code]} ${rest}` : `${SOURCE_NAMES[code]}: ${rest}`) : SOURCE_NAMES[code];
+  });
+  // Any territory code left (e.g. in a parenthesis) reads as its name.
+  return [...new Set(parts.filter(Boolean))].join(' · ').replace(/\b[A-Z]+_[A-Z]+\b/g, c => TERRITORY_NAMES[c]?.replace(/\.$/, '') ?? c);
+}
+/** A source in plain words, with the rules file's own wording (codes and all) on hover. */
+function Src({ s, className }: { s?: string; className?: string }) {
+  if (!s) return null;
+  return <span className={className} title={`Source in the rules file: ${s}`}>{plainSource(s)}</span>;
 }
 /** Tone levels (1-5) in words, from the rules file's tone controls: "even · light touch · short". */
 function toneWords(tone: Tone | undefined, meta: Meta): string {
@@ -127,20 +157,21 @@ function PersonaPanel({ meta, persona, open: startOpen = false, className }: { m
         <div className="space-y-3 border-t border-[#272B34] px-4 py-3 text-sm">
           {(c?.who || c?.platforms?.length) && <p className="text-base text-[#C9CCD2]">{c?.who || p.name}{c?.platforms?.length ? <span className="text-[#858B96]"> · on {c.platforms.join(', ')}</span> : null}</p>}
           {c?.tension && <p className="text-[#C9CCD2]"><span className="font-semibold">The tension:</span> {c.tension}</p>}
+          {(c?.who || c?.tension) && c?.who_source && <p className="-mt-2 text-xs text-[#646A75]"><Src s={c.who_source} /></p>}
           <div>
             <Label>What moves them</Label>
-            <ul className="space-y-1.5">{p.triggers.map(t => <li key={t.id}><span className="font-semibold text-[#ECEDEF]">{t.label}</span>{t.detail ? <span className="text-[#C9CCD2]">: {t.detail}</span> : null}{t.source && <div className="text-xs text-[#646A75]">{plainSource(t.source)}</div>}</li>)}</ul>
+            <ul className="space-y-1.5">{p.triggers.map(t => <li key={t.id}><span className="font-semibold text-[#ECEDEF]">{t.label}</span>{t.detail ? <span className="text-[#C9CCD2]">: {t.detail}</span> : null}{t.source && <div className="text-xs text-[#646A75]"><Src s={t.source} /></div>}</li>)}</ul>
           </div>
           {!!c?.turn_offs?.length && (
             <div>
               <Label>Turn-offs</Label>
-              <ul className="space-y-1.5">{c.turn_offs.map(t => <li key={t.id}><span className="text-[#C9CCD2]">{t.rule}</span><div className="text-xs text-[#646A75]">{plainSource(t.source)}</div></li>)}</ul>
+              <ul className="space-y-1.5">{c.turn_offs.map(t => <li key={t.id}><span className="text-[#C9CCD2]">{t.rule}</span><div className="text-xs text-[#646A75]"><Src s={t.source} /></div></li>)}</ul>
             </div>
           )}
           {!!c?.language?.length && (
             <div>
               <Label>Language to use</Label>
-              <ul className="space-y-1">{c.language.map((l, i) => <li key={i}><span className={cn(l.caution ? 'text-amber-200' : 'text-[#C9CCD2]')}>“{l.text}”</span>{l.caution && <span className="ml-1 text-xs text-amber-300">use carefully</span>}<span className="ml-1 text-xs text-[#646A75]">{plainSource(l.source)}</span></li>)}</ul>
+              <ul className="space-y-1">{c.language.map((l, i) => <li key={i}><span className={cn(l.caution ? 'text-amber-200' : 'text-[#C9CCD2]')}>“{l.text}”</span>{l.caution && <span className="ml-1 text-xs text-amber-300">use carefully</span>}<span className="ml-1 text-xs text-[#646A75]"><Src s={l.source} /></span></li>)}</ul>
             </div>
           )}
           <p className="text-xs text-[#646A75]">From the live rules file.</p>
@@ -181,7 +212,19 @@ export function Studio() {
   const [err, setErr] = useState('');
   const [tab, setTabState] = useState<Tab>((params.get('tab') as Tab) || 'home');
   // Every step opens at the top, so moving on never looks like staying put.
-  const setTab = useCallback((t: Tab) => { setTabState(t); window.scrollTo({ top: 0 }); }, []);
+  // The step bar, the screen and the address all follow this one value: no hover or focus is left looking like the current step.
+  const setTab = useCallback((t: Tab) => {
+    setTabState(t);
+    window.scrollTo({ top: 0 });
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    const u = new URL(window.location.href);
+    if (u.searchParams.get('tab') !== t) { u.searchParams.set('tab', t); window.history.pushState({ tab: t }, '', u); }
+  }, []);
+  useEffect(() => {
+    const onPop = () => setTabState((new URL(window.location.href).searchParams.get('tab') as Tab) || 'home');
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
   const [brief, setBrief] = useState<Brief>({ persona: 'DINK', territory: 'DINK_NEVER', fields: [], tone: { dry_warm: 3, playful_plain: 3, short_long: 2 }, banned_words: [], banned_ideas: [], reference_lines: [], n: 20, model: 'gpt-4o' });
   const [batch, setBatch] = useState<Batch | null>(null);
   const [status, setStatus] = useState('');
@@ -193,6 +236,7 @@ export function Studio() {
   const esRef = useRef<{ close: () => void } | null>(null);
 
   const refreshMeta = useCallback(() => studio.meta().then(m => {
+    TERRITORY_NAMES = Object.fromEntries(Object.entries(m.territories).map(([k, t]) => [k, t.name]));
     setMeta(m);
     setErr('');
     if (HOSTED && m.user) { setSignedInUser(m.user.email); setUserState(m.user.email); }
@@ -321,7 +365,7 @@ export function Studio() {
           <span className="mx-1 h-5 w-px bg-[#343946]" aria-hidden />
           {FLOW.map(([t, label], i) => (
             <span key={t} className="flex items-center">
-              <GhostButton active={tab === t} onClick={() => setTab(t)} title={label} aria-label={label} className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-1.5 py-1.5 text-sm">
+              <GhostButton active={tab === t} aria-current={tab === t ? 'step' : undefined} onClick={() => setTab(t)} title={label} aria-label={label} className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-1.5 py-1.5 text-sm hover:border-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D94D8F]">
                 <span className={cn('hidden h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold min-[1280px]:flex', tab === t ? 'bg-[#0E0F12] text-white' : 'bg-[#272B34] text-[#A3A8B1]')}>{i + 1}</span>
                 {t === 'review' && batch ? `Review (${batch.lines.length})` : SHORT[t] ? <><span className="min-[1600px]:hidden">{SHORT[t]}</span><span className="hidden min-[1600px]:inline">{label}</span></> : label}
               </GhostButton>
@@ -338,7 +382,7 @@ export function Studio() {
         <div className="ml-auto flex shrink-0 flex-nowrap items-center gap-2.5 text-sm text-[#858B96]">
           <span className="mr-1 h-5 w-px bg-[#343946]" aria-hidden />
           <button onClick={() => setTab('compare')} title="Blind compare: a separate exercise, outside the writing flow" aria-label="Blind compare" className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-dashed border-[#4B55A8] bg-[#1B2150] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#232A5C]">
-            <Shuffle className="h-4 w-4" aria-hidden /> <span className="min-[1600px]:hidden">Compare</span><span className="hidden min-[1600px]:inline">Blind compare</span>
+            <Shuffle className="h-4 w-4" aria-hidden /> Compare
           </button>
           <button onClick={() => setTab('rules')} title="Rules: what every line is checked against" className={cn('flex items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 py-1.5 text-sm transition', tab === 'rules' ? 'border-[#ECEDEF] text-[#ECEDEF]' : 'border-transparent text-[#858B96] hover:text-[#ECEDEF]')}>
             <ScrollText className="h-4 w-4" aria-hidden /> Rules
@@ -432,7 +476,7 @@ function Home({ onStart }: { onStart: () => void }) {
           <span className="text-xs uppercase tracking-wider text-[#8F97D6]">Separate exercise</span>
           <span className="mt-1 text-base font-semibold text-white">Blind compare: choose the writing model</span>
           <span className="mt-1 text-sm leading-snug text-[#B9BFEA]">Models write to the same brief, unlabelled. Star, then reveal. Nothing goes into your runs.</span>
-          <span className="mt-auto pt-2 text-sm text-[#8F97D6]">“Blind compare”, in the header on the right.</span>
+          <span className="mt-auto pt-2 text-sm text-[#8F97D6]">“Compare”, top right.</span>
         </div>
       </section>
     </div>
@@ -693,7 +737,7 @@ function TerritoryCard({ meta, code, t, onEdit, onBrief, onSaved }: { meta: Meta
     <div className={cn('flex flex-col rounded-xl border-2 bg-[#16181D] p-5', retired ? 'border-[#272B34] opacity-60' : 'border-[#272B34]')}>
       <div className="mb-1 flex flex-wrap items-center gap-2">
         <h3 className="text-lg font-bold">{territoryName(t)}</h3>
-        <Chip tone={t.origin === 'pitch' ? 'grey' : 'outline'} className={t.origin !== 'pitch' ? 'border-[#D94D8F] text-[#D94D8F]' : ''}>{t.origin === 'new' ? 'new' : t.origin === 'edited' ? 'edited' : 'from the pitch'}</Chip>
+        <Chip tone={t.origin === 'pitch' ? 'grey' : 'outline'} className={t.origin !== 'pitch' ? 'border-[#D94D8F] text-[#D94D8F]' : ''}>{t.origin === 'new' ? 'new' : t.origin === 'edited' ? 'edited' : t.status === 'springboard' ? 'from the research' : 'from the pitch'}</Chip>
         {retired && <Chip tone="grey">retired</Chip>}
 
       </div>
@@ -809,7 +853,7 @@ function Review({ meta, batch, setBatch, status, running, onMore, onMoreRun, onD
       {running && <div className="text-base text-[#858B96]">{status}</div>}
       {[...groups.entries()].map(([g, ls]) => (
         <section key={g}>
-          <h2 className="mb-3 mt-2 text-lg font-bold capitalize">{g} <span className="font-normal text-[#858B96]">({ls.length})</span></h2>
+          <h2 className="mb-3 mt-2 text-lg font-bold first-letter:uppercase">{g} <span className="font-normal text-[#858B96]">({ls.length})</span></h2>
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             {ls.map(l => <LineCard key={l.id} meta={meta} line={l} onChange={x => { if (filter !== 'all') setStay(cur => new Set(cur).add(x.id)); replace(x); onDecided(); }} onMore={onMore} />)}
           </div>
@@ -886,7 +930,7 @@ function LineCard({ meta, line, onChange, onMore }: { meta: Meta; line: Line; on
           {openFlag.quote && <div className="mt-1">In the line: <mark className="bg-amber-400/30 text-amber-50 px-1">{openFlag.quote}</mark></div>}
           {openFlag.why && <div className="mt-1 text-[#A3A8B1]">{openFlag.why}</div>}
           {whatToDo(openFlag.rule, f) && <div className="mt-1"><span className="font-semibold">What to do:</span> {whatToDo(openFlag.rule, f)}</div>}
-          <div className="mt-1 text-sm text-[#858B96]">Source: {plainSource(openFlag.source)}
+          <div className="mt-1 text-sm text-[#858B96]">Source: <Src s={openFlag.source} />
             <button className="ml-2 text-xs underline-offset-2 hover:underline" onClick={() => setDetails(!details)}>{details ? 'hide details' : 'details'}</button>
             {details && <span className="ml-2 text-xs">found by {openFlag.by.join(' + ')}{openFlag.p !== undefined ? ` · P(yes) ${openFlag.p}` : ''} · {openFlag.source}</span>}
           </div>
@@ -1906,7 +1950,7 @@ function LiveRules({ active, meta }: { active: ActiveRules; meta: Meta | null })
           {sev(r)}
           <div className="min-w-0">
             <div className="text-base text-[#ECEDEF]">{r.rule}{r.status === 'pending' && <span className="ml-2 text-xs text-amber-300">awaiting the client’s confirmation</span>}</div>
-            <div className="text-xs text-[#646A75]">{plainSource(r.source)}{r.applies_to === 'both' ? ' · also checked on images' : ''}</div>
+            <div className="text-xs text-[#646A75]"><Src s={r.source} />{r.applies_to === 'both' ? ' · also checked on images' : ''}</div>
           </div>
         </li>
       ))}
