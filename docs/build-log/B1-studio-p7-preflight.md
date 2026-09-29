@@ -14,7 +14,7 @@ Branch `voices/b1-studio-preflight`, draft PR #15. It is on hold because it cont
   - A failed audit (for example an OpenAI outage) can be run again; "Audit again" re-checks after a rules change.
   - Exports: the features CSV in B2's format for B3's `weekly.ts features`, and the asset handoff list.
 - **Storage:**
-  - Production: the private R2 bucket in `STUDIO_R2_BUCKET` (required; never the public `R2_BUCKET_NAME`), under `studio/preflight/<stub>/<upload id>/…`, streamed, and served only through the signed-in API. Without it, uploads are refused. 100 MB per file.
+  - Production: the private R2 bucket in `STUDIO_R2_BUCKET` (required; never the public `R2_BUCKET_NAME`), under `studio/preflight/<stub>/<upload id>/…`, streamed, and served only through the signed-in API. Without it, uploads are refused. 200 MB per file.
   - Local and dev: Postgres, 25 MB per file.
 - **Migration 017** (additive, idempotent): the Pre-flight tables, plus `studio_rules.activated_by`/`activated_at` for the Rules view.
 - **Also:**
@@ -72,7 +72,7 @@ Screenshots are in `Claude outputs/voices-r1/studio/screens/` (client material):
 
 - **ffmpeg** is in both `backend/nixpacks.toml` and the root `nixpacks.toml` (the root `start` runs the backend), so it's in the image whichever Root Directory the backend service builds from. In the build log, look for `ffmpeg` among the Nix packages. Without it, videos are still audited on copy and voice-over, with a note that frames were unavailable.
 - **Migration 017** needs nothing new from the database: it's additive and idempotent (`IF NOT EXISTS` throughout). It adds the Pre-flight tables plus two columns: `studio_asset_uploads.estimate`, the estimate stored at upload, and `studio_audits.heartbeat_at`, which lets an audit orphaned by a restart become retryable. Migration 016 (B3) is separate.
-- **File size:** up to 100 MB per file. Uploads go to disk and stream to and from R2. The one whole copy in memory is B2's, while an audit runs.
+- **File size:** up to 200 MB per file. Uploads go to disk, stream to and from R2, and reach B2 by path (PR #17): no whole video is held in memory.
 
 **After the deploy:**
 1. The logs show "Database migrations applied." and "[studio] Pre-flight files: private R2 bucket reachable", with no warning.

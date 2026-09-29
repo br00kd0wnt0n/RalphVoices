@@ -3,7 +3,6 @@
 // Studio's text checks skip); the M3 rubric and the persona seeds and voices
 // come from the Studio store (studio_inputs, loaded by `studio.ts db-import`).
 
-import fs from 'node:fs';
 import OpenAI from 'openai';
 import { estimateAudit, featuresRow, runAudit, type AuditFile, type AuditReport } from '../audit/index.js';
 import type { SignedOffCopy } from '../audit/copyMatch.js';
@@ -53,8 +52,8 @@ export function b2Engine(opts: { tpm?: number; capUsd?: () => Promise<number>; f
   return {
     name: 'b2',
     async estimate(i) {
-      // Sync in B2; needs the file bytes (it probes video duration). Rules and rubric are passed in by Preflight.
-      const files: AuditFile[] = i.files.map((f, n) => ({ name: b2Name(n, f.filename), mime: f.contentType, data: f.data || Buffer.alloc(0) }));
+      // By path when the file is on disk (B2 links it, never reads it whole); bytes only for in-memory files. Rules and rubric come from Preflight.
+      const files: AuditFile[] = i.files.map((f, n) => ({ name: b2Name(n, f.filename), mime: f.contentType, ...(f.path ? { path: f.path } : { data: f.data || Buffer.alloc(0) }) }));
       const e = await estimateAudit({ stub: i.stub, persona: i.persona, files }, { rules: i.rules, rubric: i.rubric, ffmpegPath: opts.ffmpegPath, tpm: opts.tpm });
       return { usd: e.usd, seconds: e.seconds };
     },
@@ -63,7 +62,7 @@ export function b2Engine(opts: { tpm?: number; capUsd?: () => Promise<number>; f
       const { rubric, personas } = i.rubric ? { rubric: i.rubric, personas: await context().then(c => c.personas).catch(() => undefined) } : await context();
       let openai = opts.openai?.();
       if (!openai) { S.loadKey(false); openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY }); }
-      const files: AuditFile[] = i.files.map((f, n) => ({ name: b2Name(n, f.filename), mime: f.contentType, data: fs.readFileSync(f.path) }));
+      const files: AuditFile[] = i.files.map((f, n) => ({ name: b2Name(n, f.filename), mime: f.contentType, path: f.path }));
       const capUsd = opts.capUsd ? await opts.capUsd() : undefined;
       const report = await runAudit(
         // No copy: the lines were checked at sign-off, and copy match runs in Studio per stub the visual serves.

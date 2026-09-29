@@ -41,11 +41,11 @@ export function preflightStorage(env: NodeJS.ProcessEnv = process.env, r2Enabled
   return { mode: 'db' };
 }
 /**
- * Production, per file. Files go to disk on upload and stream to and from R2;
- * the one whole copy in memory is B2's (AuditFile.data) while an audit or an
- * estimate runs, so this also bounds the backend's memory per audit.
+ * Production, per file. Files go to disk on upload, stream to and from R2, and
+ * reach B2 by path (AuditFile.path, linked, never read whole): no whole video
+ * is held in memory at any step.
  */
-export const R2_FILE_CAP = 100 * 1024 * 1024;
+export const R2_FILE_CAP = 200 * 1024 * 1024;
 /** An audit that hasn't reported progress for this long died with the process (a deploy or a crash). */
 export const STUCK_MINUTES = 10;
 const IMAGE = /^image\/(png|jpe?g|webp|gif)$/;
@@ -266,7 +266,7 @@ export class Preflight {
     const st = S.getStore();
     return this.engine.estimate({
       ...u, copy, rules: await st.getRules(), rubric: await S.rubricFor(),
-      files: files.map(f => ({ path: f.path || '', filename: f.filename, contentType: f.contentType, data: this.engine.name === 'mock' ? undefined : bytesOf(f) })),
+      files: files.map(f => ({ path: f.path || '', filename: f.filename, contentType: f.contentType, data: this.engine.name === 'mock' || f.path ? undefined : bytesOf(f) })),
     });
   }
 
