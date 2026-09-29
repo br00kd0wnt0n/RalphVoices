@@ -8,6 +8,10 @@ import express, { type Request, type Response, type Router } from 'express';
 import * as S from './engine.js';
 import type { PgStore } from './pgStore.js';
 import * as R from './ready.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import multer from 'multer';
 import { R2_FILE_CAP, type Preflight } from './preflight.js';
 
@@ -184,7 +188,10 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   // ----- Pre-flight (step 6): finished assets per signed-off naming stub -----
   if (o.preflight) {
     const pf = o.preflight.service;
-    const files = multer({ storage: multer.memoryStorage(), limits: { fileSize: R2_FILE_CAP, files: 20 } });
+    // To disk, not memory: a video is streamed on to R2 and the temp copy removed after the request.
+    const uploadDir = path.join(os.tmpdir(), 'studio-uploads');
+    fs.mkdirSync(uploadDir, { recursive: true });
+    const files = multer({ storage: multer.diskStorage({ destination: uploadDir }), limits: { fileSize: R2_FILE_CAP, files: 20 } });
     r.get('/preflight/stubs', wrap(async (req, res) => res.json(await pf.stubs(pt(req.query)))));
     r.post('/preflight/stubs/:stub/uploads', (req, res, next) => files.array('files', 20)(req, res, (err: any) => {
       if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? `A file is over the ${Math.round(R2_FILE_CAP / 1048576)} MB limit` : String(err.message || err) });
@@ -192,8 +199,11 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     }), wrap(async (req, res) => {
       const list = ((req as any).files || []) as Express.Multer.File[];
       const also = ([] as string[]).concat((req.body?.also as any) || []).flatMap(x => String(x).split(',')).map(x => x.trim()).filter(Boolean);
-      const up = await pf.upload(req.params.stub, list.map(f => ({ buffer: f.buffer, filename: f.originalname, contentType: f.mimetype })), o.who(req), also);
-      res.json({ ...up, estimate: await pf.estimate(up.upload_id) });
+      try {
+        res.json(await pf.upload(req.params.stub, list.map(f => ({ path: f.path, size: f.size, filename: f.originalname, contentType: f.mimetype })), o.who(req), also));
+      } finally {
+        for (const f of list) fs.rm(f.path, { force: true }, () => {});
+      }
     }));
     r.get('/preflight/uploads/:id/estimate', wrap(async (req, res) => res.json(await pf.estimate(req.params.id))));
     r.post('/preflight/uploads/:id/audit', wrap(async (req, res) => {
@@ -207,11 +217,13 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     }));
     r.get('/preflight/stubs/:stub/report', wrap(async (req, res) => res.json(await pf.report(req.params.stub, o.who(req)))));
     r.get('/preflight/files/:upload/:position', wrap(async (req, res) => {
-      const f = await pf.file(req.params.upload, Number(req.params.position));
+      const f = await pf.fileStream(req.params.upload, Number(req.params.position));
       res.setHeader('Content-Type', f.contentType);
       res.setHeader('Cache-Control', 'private, max-age=3600');
       res.setHeader('Content-Disposition', `inline; filename="${f.filename.replace(/[^\w.~-]/g, '_')}"`);
-      res.send(f.data);
+      if (f.data) return res.send(f.data);
+      res.setHeader('Content-Length', String(f.size));
+      await pipeline(f.stream!, res);
     }));
     r.post('/preflight/flags/:id/agree', wrap(async (req, res) => res.json(await pf.agree(req.params.id, !!req.body?.agree, req.body?.note, o.who(req)))));
     r.post('/preflight/flags/:id/override', wrap(async (req, res) => {

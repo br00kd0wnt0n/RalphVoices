@@ -6,6 +6,9 @@
 // R2_BUCKET_NAME, and R2_PUBLIC_URL (the public bucket domain used to construct
 // fetchable URLs).
 
+import fs from 'node:fs';
+import type { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { randomUUID } from 'crypto';
 
@@ -117,10 +120,13 @@ export async function checkPrivateBucket(): Promise<{ ok: boolean; error?: strin
   }
 }
 
-export async function putPrivateObject(key: string, buffer: Buffer, contentType: string): Promise<void> {
+/** Store a Pre-flight file: a Buffer, or a file on disk (streamed, never read into memory). */
+export async function putPrivateObject(key: string, body: Buffer | { path: string; size: number }, contentType: string): Promise<void> {
   const s3 = getClient();
   if (!s3) throw new Error('R2 storage not configured.');
-  await s3.send(new PutObjectCommand({ Bucket: privateBucket(), Key: key, Body: buffer, ContentType: contentType }));
+  const Body = Buffer.isBuffer(body) ? body : fs.createReadStream(body.path);
+  const ContentLength = Buffer.isBuffer(body) ? body.length : body.size;
+  await s3.send(new PutObjectCommand({ Bucket: privateBucket(), Key: key, Body, ContentLength, ContentType: contentType }));
 }
 
 export async function getPrivateObject(key: string): Promise<Buffer> {
@@ -129,4 +135,16 @@ export async function getPrivateObject(key: string): Promise<Buffer> {
   const res = await s3.send(new GetObjectCommand({ Bucket: privateBucket(), Key: key }));
   const bytes = await res.Body!.transformToByteArray();
   return Buffer.from(bytes);
+}
+
+/** A Pre-flight file as a stream (to send to the browser, or to a temp file), never whole in memory. */
+export async function getPrivateObjectStream(key: string): Promise<Readable> {
+  const s3 = getClient();
+  if (!s3) throw new Error('R2 storage not configured.');
+  const res = await s3.send(new GetObjectCommand({ Bucket: privateBucket(), Key: key }));
+  return res.Body as Readable;
+}
+
+export async function downloadPrivateObject(key: string, dest: string): Promise<void> {
+  await pipeline(await getPrivateObjectStream(key), fs.createWriteStream(dest));
 }

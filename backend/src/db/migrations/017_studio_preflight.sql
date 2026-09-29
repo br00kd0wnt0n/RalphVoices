@@ -100,3 +100,9 @@ CREATE TABLE IF NOT EXISTS studio_asset_status (
 -- view can say "Live: v2.3, activated by … at …" (a draft looked live on 28 Sep).
 ALTER TABLE studio_rules ADD COLUMN IF NOT EXISTS activated_by TEXT;
 ALTER TABLE studio_rules ADD COLUMN IF NOT EXISTS activated_at TIMESTAMPTZ;
+
+-- The estimate is stored at upload and reused by the audit (no second download
+-- of a large video); heartbeat_at lets an audit orphaned by a restart be marked
+-- failed and retryable (29 Sep, B2 review).
+ALTER TABLE studio_asset_uploads ADD COLUMN IF NOT EXISTS estimate JSONB;
+ALTER TABLE studio_audits ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ;

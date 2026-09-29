@@ -284,6 +284,12 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   assert.deepEqual(pr.audit!.result.copy_match.map((r: any) => r.status), []);
   assert.equal((await pf.setReady(postStub, true, 'nick')).status, 'ready');
   assert.equal((await pf.report(headlineStub)).status.status, 'open', 'each code is marked on its own');
+  assert.deepEqual(await pf.estimate(shared.upload_id), shared.estimate, 'the estimate is stored at upload and reused');
+  // A shared visual is audited for one persona, so it can only serve codes of the same persona and territory.
+  const other = new Preflight((store as any).db, mockEngine, { storage: 'db' });
+  const realFind = (other as any).findStub.bind(other);
+  (other as any).findStub = async (x: string) => x === postStub ? { ...(await realFind(x)), signoff: { ...(await realFind(x)).signoff, persona: 'DINK', territory: 'DINK_NEVER' } } : realFind(x);
+  await assert.rejects(() => other.upload(headlineStub, [{ buffer: png('x'), filename: 'x.png', contentType: 'image/png' }], 'nick', [postStub]), /same persona and territory only/);
   const hand2 = S.parseCsv(await pf.handoffCsv());
   assert.equal(hand2.find(r => r[0] === postStub)![5], headlineStub, 'the handoff says which codes share the visual');
 
@@ -299,6 +305,19 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   assert.match(rf.audit!.error!, /run the audit again/);
   await pf.runAudit(await pf.createAudit(upOut.upload_id));
   assert.equal((await pf.report(stub)).audit!.status, 'done');
+
+  // An audit orphaned by a restart (no progress for STUCK_MINUTES) reads as failed and retryable, and Audit again works.
+  const orphan = await pf.createAudit(upOut.upload_id);
+  await (store as any).db.query(`UPDATE studio_audits SET status = 'running', heartbeat_at = NOW() - interval '11 minutes' WHERE id = $1`, [orphan]);
+  const ro = await pf.report(stub);
+  assert.equal(ro.audit!.id, orphan);
+  assert.equal(ro.audit!.status, 'failed');
+  assert.equal(ro.audit!.result.retryable, true);
+  assert.match(ro.audit!.error!, /server restarted.*run the audit again/);
+  const live = await pf.createAudit(upOut.upload_id);
+  await (store as any).db.query(`UPDATE studio_audits SET status = 'running', heartbeat_at = NOW() - interval '1 minute' WHERE id = $1`, [live]);
+  assert.equal((await pf.report(stub)).audit!.status, 'running', 'a long audit that is still reporting progress is left alone');
+  await pf.runAudit(live);
 
   // 7. Over HTTP: a real multipart upload through the shared router.
   const express = (await import('express')).default;
@@ -317,6 +336,7 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
     assert.equal(body.kind, 'static');
     assert.ok(body.estimate.seconds > 0);
     const file = await fetch(`${base}/preflight/files/${body.upload_id}/0`);
+    assert.ok(Buffer.compare(Buffer.from(await file.clone().arrayBuffer()), png(caveatLine)) === 0, 'uploaded through disk, stored and served byte for byte');
     assert.equal(file.headers.get('content-type'), 'image/png');
     const ready = await fetch(`${base}/preflight/stubs/${stub}/ready`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     assert.equal(ready.status, 403, 'only the creative lead or an admin sets Ready to traffic');

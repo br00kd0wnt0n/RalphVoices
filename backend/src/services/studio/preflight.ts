@@ -16,7 +16,7 @@ import path from 'node:path';
 import type pg from 'pg';
 import * as S from './engine.js';
 import type { Signoff } from './ready.js';
-import { getPrivateObject, isR2Enabled, putPrivateObject } from '../r2.js';
+import { downloadPrivateObject, getPrivateObject, getPrivateObjectStream, isR2Enabled, putPrivateObject } from '../r2.js';
 import { FatalError } from '../audit/api.js';
 import type { AssetKind, AuditEngine, AuditFlag, AuditResult, SignedCopy } from './preflightEngine.js';
 import { copyMatch } from '../audit/copyMatch.js';
@@ -40,11 +40,21 @@ export function preflightStorage(env: NodeJS.ProcessEnv = process.env, r2Enabled
   if (production && (r2Enabled || env.ENABLE_R2_STORAGE === 'true')) return { mode: 'refuse', reason: "Pre-flight storage isn't configured: set STUDIO_R2_BUCKET to a private bucket" };
   return { mode: 'db' };
 }
-export const R2_FILE_CAP = 200 * 1024 * 1024;    // production, per file
+/**
+ * Production, per file. Files go to disk on upload and stream to and from R2;
+ * the one whole copy in memory is B2's (AuditFile.data) while an audit or an
+ * estimate runs, so this also bounds the backend's memory per audit.
+ */
+export const R2_FILE_CAP = 100 * 1024 * 1024;
+/** An audit that hasn't reported progress for this long died with the process (a deploy or a crash). */
+export const STUCK_MINUTES = 10;
 const IMAGE = /^image\/(png|jpe?g|webp|gif)$/;
 const VIDEO = /^video\/(mp4|quicktime)$/;
 
-export interface UploadFile { buffer: Buffer; filename: string; contentType: string }
+/** A file to store: in memory (small, and tests) or on disk (uploads through the API, streamed to R2). */
+export interface UploadFile { buffer?: Buffer; path?: string; size?: number; filename: string; contentType: string }
+const sizeOf = (f: UploadFile) => f.buffer ? f.buffer.length : f.size ?? fs.statSync(f.path!).size;
+const bytesOf = (f: UploadFile) => f.buffer ?? fs.readFileSync(f.path!);
 export interface StubRow {
   stub: string; persona: string; territory: string; signoff_id: string; ready_by: string; ready_at: string;
   copy: SignedCopy[];
@@ -144,6 +154,7 @@ export class Preflight {
   }
 
   async stubs(filter: { persona?: string; territory?: string } = {}): Promise<StubRow[]> {
+    await this.expireStuck();
     const out: StubRow[] = [];
     for (const s of await this.latestSignoffs()) {
       if (filter.persona && s.persona !== filter.persona) continue;
@@ -167,15 +178,19 @@ export class Preflight {
   // ---------- uploads ----------
 
   /** Upload the visual for a stub; `also` lists other signed-off stubs that run on the same visual. */
-  async upload(stub: string, files: UploadFile[], user?: string, also: string[] = []): Promise<{ upload_id: string; kind: AssetKind; storage: 'r2' | 'db'; stubs: string[]; format_notes: string[] }> {
+  async upload(stub: string, files: UploadFile[], user?: string, also: string[] = []): Promise<{ upload_id: string; kind: AssetKind; storage: 'r2' | 'db'; stubs: string[]; format_notes: string[]; estimate: { usd: number; seconds: number } }> {
     if (!files.length) throw new Error('Choose a file to upload');
     const { signoff } = await this.findStub(stub);
     const stubs = [stub, ...new Set(also.filter(x => x && x !== stub))];
-    for (const x of stubs.slice(1)) await this.findStub(x);
+    for (const x of stubs.slice(1)) {
+      // One visual, several copy lines, in one ad set: the audit runs once, for this persona, so the codes must share it.
+      const o = (await this.findStub(x)).signoff;
+      if (o.persona !== signoff.persona || o.territory !== signoff.territory) throw new Error(`${x} is for another persona or territory: the same visual can serve codes of the same persona and territory only (upload it to ${x} separately so it's audited for that persona)`);
+    }
     const kind = kindOf(files);
     const cap = this.storage === 'r2' ? R2_FILE_CAP : DB_FILE_CAP;
-    const big = files.find(f => f.buffer.length > cap);
-    if (big) throw new Error(`${big.filename} is ${fmtMb(big.buffer.length)}; the limit is ${fmtMb(cap)} per file${this.storage === 'db' ? ' when files are kept in the database (local; production uses R2)' : ''}`);
+    const big = files.find(f => sizeOf(f) > cap);
+    if (big) throw new Error(`${big.filename} is ${fmtMb(sizeOf(big))}; the limit is ${fmtMb(cap)} per file${this.storage === 'db' ? ' when files are kept in the database (local; production uses R2)' : ''}`);
     const uploadId = id('up');
     await this.db.query(
       `INSERT INTO studio_asset_uploads (id, stub, persona, territory, signoff_id, kind, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -187,19 +202,22 @@ export class Preflight {
       await this.setStatusRow(x, 'open', uploadId, null, null);
       await S.getStore().recordEdit({ line_id: `asset:${x}`, batch_id: 'preflight', before: null, after: { upload: uploadId, kind, files: files.map(f => f.filename), same_visual_as: stubs.filter(y => y !== x) }, by: user || 'unknown', at: new Date().toISOString() });
     }
-    return { upload_id: uploadId, kind, storage: this.storage, stubs, format_notes: stubs.map(x => formatNote(x, kind)).filter(Boolean) as string[] };
+    // The estimate is worked out now, from the files already here, and reused by the audit (no second download).
+    const estimate = await this.estimateFrom({ stub, persona: signoff.persona, territory: signoff.territory, kind }, files);
+    await this.db.query(`UPDATE studio_asset_uploads SET estimate = $2 WHERE id = $1`, [uploadId, estimate]);
+    return { upload_id: uploadId, kind, storage: this.storage, stubs, format_notes: stubs.map(x => formatNote(x, kind)).filter(Boolean) as string[], estimate };
   }
 
   private async putFile(uploadId: string, stub: string, position: number, f: UploadFile, role: 'asset' | 'frame') {
     const storage = this.storage;
     const key = storage === 'r2' ? `studio/preflight/${safe(stub)}/${uploadId}/${role === 'frame' ? 'frames/' : ''}${position}-${safe(f.filename)}` : null;
-    if (storage === 'r2') await putPrivateObject(key!, f.buffer, f.contentType);
+    if (storage === 'r2') await putPrivateObject(key!, f.buffer ?? { path: f.path!, size: sizeOf(f) }, f.contentType);
     await this.db.query(
       `INSERT INTO studio_upload_files (upload_id, position, filename, content_type, size, storage, r2_key, data, role)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (upload_id, position) DO UPDATE SET filename = EXCLUDED.filename, content_type = EXCLUDED.content_type, size = EXCLUDED.size,
          storage = EXCLUDED.storage, r2_key = EXCLUDED.r2_key, data = EXCLUDED.data, role = EXCLUDED.role`,
-      [uploadId, position, f.filename, f.contentType, f.buffer.length, storage, key, storage === 'db' ? f.buffer : null, role]);
+      [uploadId, position, f.filename, f.contentType, sizeOf(f), storage, key, storage === 'db' ? bytesOf(f) : null, role]);
   }
 
   /** A stored file (an asset, or a frame thumbnail from the audit), for the signed-in API to send. */
@@ -208,6 +226,26 @@ export class Preflight {
     const f = r.rows[0];
     if (!f) throw new Error('No such file');
     return { filename: f.filename, contentType: f.content_type, data: f.storage === 'r2' ? await getPrivateObject(f.r2_key) : f.data };
+  }
+
+  /** The same, streamed from R2 (a video isn't read into memory to send it). */
+  async fileStream(uploadId: string, position: number): Promise<{ filename: string; contentType: string; size: number; stream?: NodeJS.ReadableStream; data?: Buffer }> {
+    const f = (await this.db.query(`SELECT filename, content_type, size, storage, r2_key, data FROM studio_upload_files WHERE upload_id = $1 AND position = $2`, [uploadId, position])).rows[0];
+    if (!f) throw new Error('No such file');
+    return { filename: f.filename, contentType: f.content_type, size: Number(f.size), ...(f.storage === 'r2' ? { stream: await getPrivateObjectStream(f.r2_key) } : { data: f.data }) };
+  }
+
+  /** Copy an upload's asset files to a folder (streamed from R2), in card order. */
+  private async materialise(uploadId: string, dir: string) {
+    const rows = (await this.db.query(`SELECT position, filename, content_type, storage, r2_key FROM studio_upload_files WHERE upload_id = $1 AND role = 'asset' ORDER BY position`, [uploadId])).rows;
+    const out: Array<{ position: number; path: string; filename: string; contentType: string }> = [];
+    for (const f of rows) {
+      const p = path.join(dir, `${f.position}-${safe(f.filename)}`);
+      if (f.storage === 'r2') await downloadPrivateObject(f.r2_key, p);
+      else fs.writeFileSync(p, (await this.db.query(`SELECT data FROM studio_upload_files WHERE upload_id = $1 AND position = $2`, [uploadId, f.position])).rows[0].data);
+      out.push({ position: f.position, path: p, filename: f.filename, contentType: f.content_type });
+    }
+    return out;
   }
 
   /** The latest upload serving a stub (its own, or a shared visual). */
@@ -222,15 +260,41 @@ export class Preflight {
 
   // ---------- audits ----------
 
+  /** Cost and time, from files in hand (B2 reads each file once; the mock needs none). */
+  private async estimateFrom(u: { stub: string; persona: string; territory: string; kind: AssetKind }, files: UploadFile[]): Promise<{ usd: number; seconds: number }> {
+    const { copy } = await this.findStub(u.stub);
+    const st = S.getStore();
+    return this.engine.estimate({
+      ...u, copy, rules: await st.getRules(), rubric: await st.getInput('rubric'),
+      files: files.map(f => ({ path: f.path || '', filename: f.filename, contentType: f.contentType, data: this.engine.name === 'mock' ? undefined : bytesOf(f) })),
+    });
+  }
+
+  /** The estimate stored at upload; for an older upload, worked out once from the stored files and kept. */
   async estimate(uploadId: string): Promise<{ usd: number; seconds: number }> {
     const u = (await this.db.query(`SELECT * FROM studio_asset_uploads WHERE id = $1`, [uploadId])).rows[0];
     if (!u) throw new Error('No such upload');
-    const rows = (await this.db.query(`SELECT position, filename, content_type FROM studio_upload_files WHERE upload_id = $1 AND role = 'asset' ORDER BY position`, [uploadId])).rows;
-    const files = [];
-    for (const f of rows) files.push({ path: '', filename: f.filename, contentType: f.content_type, data: this.engine.name === 'mock' ? undefined : (await this.file(uploadId, f.position)).data });
-    const { copy } = await this.findStub(u.stub);
-    const st = S.getStore();
-    return this.engine.estimate({ stub: u.stub, persona: u.persona, territory: u.territory, kind: u.kind, copy, files, rules: await st.getRules(), rubric: await st.getInput('rubric') });
+    if (u.estimate) return u.estimate;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-estimate-'));
+    try {
+      const files = await this.materialise(uploadId, tmp);
+      const e = await this.estimateFrom(u, files);
+      await this.db.query(`UPDATE studio_asset_uploads SET estimate = $2 WHERE id = $1`, [uploadId, e]);
+      return e;
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+
+  /**
+   * Audits left 'queued' or 'running' by a process that has gone (a deploy or a
+   * crash mid-audit) are marked failed and retryable. A live audit reports
+   * progress (heartbeat_at) well inside STUCK_MINUTES.
+   */
+  async expireStuck(): Promise<number> {
+    const r = await this.db.query(
+      `UPDATE studio_audits SET status = 'failed', finished_at = NOW(), result = '{"retryable": true}',
+         error = 'The audit stopped part way (the server restarted). The upload is kept: run the audit again.'
+       WHERE status IN ('queued', 'running') AND COALESCE(heartbeat_at, started_at) < NOW() - make_interval(mins => $1)`, [STUCK_MINUTES]);
+    return r.rowCount ?? 0;
   }
 
   async createAudit(uploadId: string, user?: string): Promise<string> {
@@ -246,20 +310,21 @@ export class Preflight {
     const a = (await this.db.query(`SELECT a.*, u.persona, u.territory, u.kind FROM studio_audits a JOIN studio_asset_uploads u ON u.id = a.upload_id WHERE a.id = $1`, [auditId])).rows[0];
     if (!a) throw new Error('No such audit');
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-preflight-'));
-    await this.db.query(`UPDATE studio_audits SET status = 'running', started_at = NOW() WHERE id = $1`, [auditId]);
+    await this.db.query(`UPDATE studio_audits SET status = 'running', started_at = NOW(), heartbeat_at = NOW() WHERE id = $1`, [auditId]);
+    let beat = Date.now();
+    const heartbeat = () => {
+      if (Date.now() - beat < 30_000) return;
+      beat = Date.now();
+      this.db.query(`UPDATE studio_audits SET heartbeat_at = NOW() WHERE id = $1 AND status = 'running'`, [auditId]).catch(() => {});
+    };
     try {
-      const rows = (await this.db.query(`SELECT position, filename, content_type FROM studio_upload_files WHERE upload_id = $1 AND role = 'asset' ORDER BY position`, [a.upload_id])).rows;
-      const files = [];
-      for (const f of rows) {
-        const p = path.join(tmp, `${f.position}-${safe(f.filename)}`);
-        fs.writeFileSync(p, (await this.file(a.upload_id, f.position)).data);
-        files.push({ path: p, filename: f.filename, contentType: f.content_type });
-      }
+      const rows = await this.materialise(a.upload_id, tmp);
+      const files = rows.map(f => ({ path: f.path, filename: f.filename, contentType: f.contentType }));
       const { copy } = await this.findStub(a.stub);
       const rules = await S.getStore().getRules();   // the full file: B2 uses the visual-only items Studio's text checks skip
       const rubric = await S.getStore().getInput('rubric');
       emit({ type: 'status', message: `Auditing ${a.stub} (${a.kind})` });
-      const result = await this.engine.run({ stub: a.stub, persona: a.persona, territory: a.territory, kind: a.kind, files, copy, rules, rubric }, message => emit({ type: 'status', message }));
+      const result = await this.engine.run({ stub: a.stub, persona: a.persona, territory: a.territory, kind: a.kind, files, copy, rules, rubric }, message => { heartbeat(); emit({ type: 'status', message }); });
       // Copy match is Studio's, per stub the visual serves (the engine's own copy flags are replaced by these).
       result.flags = result.flags.filter(f => f.check !== 'copy_match');
       const served = (await this.db.query(`SELECT stub FROM studio_upload_stubs WHERE upload_id = $1 ORDER BY stub`, [a.upload_id])).rows.map(x => x.stub);
@@ -332,6 +397,7 @@ export class Preflight {
 
   /** Everything the report screen shows for one stub. */
   async report(stub: string, viewer?: string) {
+    await this.expireStuck();
     const { signoff, copy } = await this.findStub(stub);
     const upload = await this.latestUpload(stub);
     const a = await this.latestAuditRow(stub);
@@ -407,6 +473,7 @@ export class Preflight {
     if (!ready) {
       await this.setStatusRow(stub, 'open', null, null, null);
     } else {
+      await this.expireStuck();
       const upload = await this.latestUpload(stub);
       if (!upload) throw new Error('Upload the asset first');
       const a = await this.latestAuditRow(stub);
