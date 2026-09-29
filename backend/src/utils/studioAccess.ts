@@ -10,6 +10,12 @@ export function canSetReady(email: string | undefined, env: NodeJS.ProcessEnv = 
   return !!e && (studioAccess(e, env).admin || emails(env.STUDIO_READY_EMAILS).includes(e));
 }
 
+/** Who may set the compliance status on copy (pending / cleared / changes requested): admins, plus STUDIO_COMPLIANCE_EMAILS (the producer). */
+export function canSetCompliance(email: string | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
+  const e = (email || '').trim().toLowerCase();
+  return !!e && (studioAccess(e, env).admin || emails(env.STUDIO_COMPLIANCE_EMAILS).includes(e));
+}
+
 export function studioAccess(email: string | undefined, env: NodeJS.ProcessEnv = process.env): { allowed: boolean; admin: boolean } {
   const e = (email || '').trim().toLowerCase();
   if (!e) return { allowed: false, admin: false };

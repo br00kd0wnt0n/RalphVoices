@@ -9,6 +9,7 @@
 // OPENAI_API_KEY, ANTHROPIC_API_KEY (Claude writers in blind compare).
 // STUDIO_MOCK=true (local development only) uses the mock client.
 // STUDIO_READY_EMAILS: who (besides admins) may mark Pre-flight assets Ready to traffic.
+// STUDIO_COMPLIANCE_EMAILS: who (besides admins) may set compliance status on copy (the producer).
 // STUDIO_R2_BUCKET (optional): a private bucket for Pre-flight files; otherwise R2_BUCKET_NAME.
 
 import express, { type NextFunction, type Response } from 'express';
@@ -17,7 +18,7 @@ import { authMiddleware, type AuthRequest } from '../middleware/auth.js';
 import * as S from '../services/studio/engine.js';
 import { PgStore } from '../services/studio/pgStore.js';
 import { createStudioRouter } from '../services/studio/router.js';
-import { canSetReady, studioAccess } from '../utils/studioAccess.js';
+import { canSetCompliance, canSetReady, studioAccess } from '../utils/studioAccess.js';
 import { Preflight } from '../services/studio/preflight.js';
 import { mockEngine, type AuditEngine } from '../services/studio/preflightEngine.js';
 import { b2Engine } from '../services/studio/preflightB2.js';
@@ -61,6 +62,7 @@ router.use(createStudioRouter({
   askOver,
   rules: { store, isAdmin: req => studioAccess((req as AuthRequest).user?.email).admin },
   preflight: { service: preflight, canSetReady: req => canSetReady((req as AuthRequest).user?.email) },
+  canSetCompliance: req => canSetCompliance((req as AuthRequest).user?.email),
   metaExtra: req => {
     const u = (req as AuthRequest).user;
     return { user: u ? { email: u.email, name: u.name, admin: studioAccess(u.email).admin } : null };

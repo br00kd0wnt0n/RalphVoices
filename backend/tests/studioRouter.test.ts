@@ -92,3 +92,46 @@ test('hosted access: STUDIO_EMAILS or ADMIN_EMAILS, case-insensitive, closed whe
 test('the monthly window starts on the 1st (UTC)', () => {
   assert.equal(monthStart(new Date('2026-09-28T12:00:00Z')), '2026-09-01T00:00:00.000Z');
 });
+
+test('compliance status is set by the producer or an admin; everyone else gets a clear 403', async () => {
+  const { canSetCompliance } = await import('../src/utils/studioAccess.js');
+  const env = { STUDIO_COMPLIANCE_EMAILS: 'vivan@ralph.world', ADMIN_EMAILS: 'brook@ralph.world' } as NodeJS.ProcessEnv;
+  assert.equal(canSetCompliance('Vivan@ralph.world', env), true);
+  assert.equal(canSetCompliance('brook@ralph.world', env), true);
+  assert.equal(canSetCompliance('nick.larson@ralph.world', env), false);
+  const app = express();
+  app.use('/s', createStudioRouter({ who: () => 'nick', api: () => new S.Api({ mock: true }), mock: true, cap: 50, capWindow: 'month', askOver: 2, canSetCompliance: () => false }));
+  const srv = app.listen(0, '127.0.0.1');
+  await new Promise(r => srv.once('listening', r));
+  const b = `http://127.0.0.1:${(srv.address() as AddressInfo).port}/s`;
+  try {
+    const res = await fetch(`${b}/batches/x/lines/y/compliance`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: '{"status":"cleared"}' });
+    assert.equal(res.status, 403);
+    assert.equal(((await (await fetch(`${b}/meta`)).json()) as any).can_set_compliance, false);
+  } finally { srv.close(); }
+});
+
+test('the live rules in plain words: every item with its source, visual-only brand items marked', async () => {
+  const r = await call('GET', '/rules/active');
+  assert.equal(r.status, 200);
+  assert.ok(r.body.compliance.every((x: any) => x.rule && x.source));
+  assert.ok(r.body.brand.some((x: any) => x.applies_to === 'visual'), 'the visual-only items are listed (marked), unlike in the text checks');
+  assert.ok(Object.values<any>(r.body.personas).every(p => Array.isArray(p.triggers) && Array.isArray(p.turn_offs)));
+});
+
+test('meta carries persona context from the rules file (who, triggers with detail and source, turn-offs, language)', async () => {
+  const m = (await call('GET', '/meta')).body;
+  const p: any = Object.values(m.personas)[0];
+  assert.ok(p.triggers.every((t: any) => 'detail' in t && 'source' in t));
+  assert.ok(Array.isArray(p.context.turn_offs) && Array.isArray(p.context.language));
+  assert.ok(m.sources && typeof m.sources === 'object');
+});
+
+test('Pre-flight notes an asset whose type doesn’t fit the code’s format (never blocks)', async () => {
+  const { formatNote } = await import('../src/services/studio/preflight.js');
+  assert.equal(formatNote('DINK_NEVER_STATIC_v1_META', 'static'), null);
+  assert.match(formatNote('DINK_NEVER_UGC_v1_TIKTOK', 'static')!, /a video \(UGC\).*static was uploaded/);
+  assert.match(formatNote('DINK_NEVER_CAROUSEL_v2_META', 'static')!, /carousel cards/);
+  assert.equal(formatNote('DINK_NEVER_VIDEO_v1_TIKTOK', 'video'), null);
+  assert.equal(formatNote('ODD_NAME', 'static'), null);
+});

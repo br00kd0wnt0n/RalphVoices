@@ -49,6 +49,19 @@ const kindOf = (files: UploadFile[]): AssetKind => {
   return files.length > 1 ? 'carousel' : 'static';
 };
 const fmtMb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`;
+/**
+ * Does the uploaded kind fit the naming code's format? A note, never a block
+ * (formats in codes: STATIC/ST, CAROUSEL/CAR, VIDEO/VID, UGC).
+ */
+export function formatNote(stub: string, kind: AssetKind): string | null {
+  const fmt = /_(STATIC|ST|CAROUSEL|CAR|VIDEO|VID|UGC)_v\d+_/i.exec(stub)?.[1]?.toUpperCase();
+  if (!fmt) return null;
+  const want: AssetKind[] = /^(STATIC|ST)$/.test(fmt) ? ['static'] : /^(CAROUSEL|CAR)$/.test(fmt) ? ['carousel'] : ['video'];
+  if (want.includes(kind)) return null;
+  const name = { STATIC: 'a static image', ST: 'a static image', CAROUSEL: 'carousel cards', CAR: 'carousel cards', VIDEO: 'a video', VID: 'a video', UGC: 'a video (UGC)' }[fmt];
+  return `This code is for ${name}, but a ${kind} was uploaded. Check it’s the right asset, or that the code’s format is right.`;
+}
+
 /** Fields that run in the post (never on the asset): listed on the report, not compared. */
 export const POST_COPY_FIELDS = new Set(['meta_primary', 'meta_description', 'tiktok_caption']);
 
@@ -121,7 +134,7 @@ export class Preflight {
   // ---------- uploads ----------
 
   /** Upload the visual for a stub; `also` lists other signed-off stubs that run on the same visual. */
-  async upload(stub: string, files: UploadFile[], user?: string, also: string[] = []): Promise<{ upload_id: string; kind: AssetKind; storage: 'r2' | 'db'; stubs: string[] }> {
+  async upload(stub: string, files: UploadFile[], user?: string, also: string[] = []): Promise<{ upload_id: string; kind: AssetKind; storage: 'r2' | 'db'; stubs: string[]; format_notes: string[] }> {
     if (!files.length) throw new Error('Choose a file to upload');
     const { signoff } = await this.findStub(stub);
     const stubs = [stub, ...new Set(also.filter(x => x && x !== stub))];
@@ -141,7 +154,7 @@ export class Preflight {
       await this.setStatusRow(x, 'open', uploadId, null, null);
       await S.getStore().recordEdit({ line_id: `asset:${x}`, batch_id: 'preflight', before: null, after: { upload: uploadId, kind, files: files.map(f => f.filename), same_visual_as: stubs.filter(y => y !== x) }, by: user || 'unknown', at: new Date().toISOString() });
     }
-    return { upload_id: uploadId, kind, storage: this.storage, stubs };
+    return { upload_id: uploadId, kind, storage: this.storage, stubs, format_notes: stubs.map(x => formatNote(x, kind)).filter(Boolean) as string[] };
   }
 
   private async putFile(uploadId: string, stub: string, position: number, f: UploadFile, role: 'asset' | 'frame') {
@@ -308,6 +321,7 @@ export class Preflight {
     return {
       stub, persona: signoff.persona, territory: signoff.territory, signoff_id: signoff.id, copy, upload, history,
       same_visual_as: upload ? upload.stubs.filter(x => x !== stub) : [],
+      format_note: upload ? formatNote(stub, upload.kind) : null,
       on_asset_copy: copy.filter(c => !POST_COPY_FIELDS.has(c.field)), post_copy: copy.filter(c => POST_COPY_FIELDS.has(c.field)),
       audit: a ? { id: a.id, upload_id: a.upload_id, status: a.status, engine: a.engine, rules_version: a.rules_version, usd: Number(a.usd), error: a.error, started_by: a.started_by, started_at: new Date(a.started_at).toISOString(), finished_at: a.finished_at ? new Date(a.finished_at).toISOString() : null, result } : null,
       flags, status: await this.status(stub),

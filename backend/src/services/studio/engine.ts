@@ -1638,7 +1638,18 @@ export async function revealCompare(name: string, user?: string): Promise<{ labe
 export async function meta() {
   const r = await refreshRules();
   return {
-    personas: Object.fromEntries(Object.entries(r.personas).map(([k, v]) => [k, { name: v.name, default_fields: v.default_fields, triggers: v.triggers.map(t => ({ id: t.id, label: t.label })) }])),
+    // Who each persona is, from the active rules file (never the readout): shown on Territories and beside Write & brief.
+    personas: Object.fromEntries(Object.entries(r.personas).map(([k, v]) => [k, {
+      name: v.name, default_fields: v.default_fields,
+      triggers: v.triggers.map(t => ({ id: t.id, label: t.label, detail: t.detail, source: t.source })),
+      context: {
+        who: (v as any).who, tension: (v as any).tension, platforms: (v as any).platforms || [],
+        turn_offs: (v.turn_offs || []).map(t => ({ id: t.id, rule: t.rule, source: t.source, severity: t.severity })),
+        language: ((v as any).language || []).map((l: any) => ({ text: l.text, caution: !!l.caution, source: l.source })),
+      },
+    }])),
+    // Source codes → titles, for plain-words sources on flags.
+    sources: Object.fromEntries(Object.entries((r as any).sources || {}).map(([k, v]: [string, any]) => [k, v?.title || k])),
     territories: r.territories,
     formats: FORMATS,
     fields: r.fields,

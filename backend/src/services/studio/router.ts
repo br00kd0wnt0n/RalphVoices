@@ -28,6 +28,8 @@ export interface StudioRouterOptions {
   metaExtra?(req: Request): Record<string, unknown>;
   /** Pre-flight (needs the database). canSetReady: who may mark assets Ready to traffic. */
   preflight?: { service: Preflight; canSetReady(req: Request): boolean };
+  /** Who may set compliance status on copy. Local: anyone. */
+  canSetCompliance?(req: Request): boolean;
 }
 
 // Top-level keys every rules version needs (scripts/studio/rules.schema.json `required`).
@@ -91,7 +93,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   r.get('/meta', wrap(async (req, res) => {
     const { studio_dir, ...m } = await S.meta();
     const pf = o.preflight ? { enabled: true, storage: o.preflight.service.storage, engine: o.preflight.service.engineName, can_set_ready: o.preflight.canSetReady(req) } : { enabled: false };
-    res.json({ ...m, ...(o.rules ? {} : { studio_dir }), preflight: pf, spend: await spent(), mock: o.mock, cap: o.cap, cap_window: o.capWindow, ask_over: o.askOver, ...(o.metaExtra?.(req) || {}) });
+    res.json({ ...m, ...(o.rules ? {} : { studio_dir }), preflight: pf, can_set_compliance: o.canSetCompliance ? o.canSetCompliance(req) : true, spend: await spent(), mock: o.mock, cap: o.cap, cap_window: o.capWindow, ask_over: o.askOver, ...(o.metaExtra?.(req) || {}) });
   }));
   r.post('/estimate', wrap(async (req, res) => {
     const b = S.makeBrief(req.body.brief || {});
@@ -166,7 +168,10 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     }
   }));
   r.post('/batches/:id/lines/:line/override', wrap(async (req, res) => res.json(await R.overrideFlag(req.params.id, req.params.line, String(req.body?.rule || ''), String(req.body?.reason || ''), o.who(req)))));
-  r.patch('/batches/:id/lines/:line/compliance', wrap(async (req, res) => res.json(await R.setCompliance(req.params.id, req.params.line, String(req.body?.status || ''), req.body?.note, o.who(req)))));
+  r.patch('/batches/:id/lines/:line/compliance', wrap(async (req, res) => {
+    if (o.canSetCompliance && !o.canSetCompliance(req)) return res.status(403).json({ error: 'Compliance status is updated by the producer (Vivan) or an admin' });
+    res.json(await R.setCompliance(req.params.id, req.params.line, String(req.body?.status || ''), req.body?.note, o.who(req)));
+  }));
   r.post('/batches/:id/lines/:line/recheck', wrap(async (req, res) => {
     if (!o.mock && (await spent()) + 0.02 > o.cap) return res.status(402).json({ error: `Spend is at ${capText()}.` });
     res.json(await R.recheckLine(req.params.id, req.params.line, o.api(req), o.who(req)));
@@ -249,6 +254,21 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
       res.send(a.data);
     } catch { res.sendStatus(404); }
   });
+
+  // ----- the live rules, read-only, for everyone (the Rules view) -----
+  r.get('/rules/active', wrap(async (_req, res) => {
+    const full: any = await S.getStore().getRules();   // unfiltered: the visual-only brand items are shown, marked as such
+    const item = (x: any) => ({ id: x.id, rule: x.rule, severity: x.severity || 'warn', source: x.source, applies_to: x.applies_to || 'text', status: x.status });
+    res.json({
+      version: full.version, updated: full.updated,
+      compliance: (full.compliance || []).map(item), brand: (full.brand || []).map(item), clarity: (full.clarity || []).map(item),
+      personas: Object.fromEntries(Object.entries(full.personas || {}).map(([k, p]: [string, any]) => [k, {
+        name: p.name, triggers: (p.triggers || []).map((t: any) => ({ label: t.label, detail: t.detail, source: t.source })),
+        turn_offs: (p.turn_offs || []).map(item), language: (p.language || []).map((l: any) => ({ text: l.text, caution: !!l.caution, source: l.source })),
+      }])),
+      sources: Object.fromEntries(Object.entries(full.sources || {}).map(([k, v]: [string, any]) => [k, v?.title || k])),
+    });
+  }));
 
   // ----- rules versions (hosted) -----
   if (o.rules) {
