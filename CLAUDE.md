@@ -334,6 +334,15 @@ VOICES v2 build 1: `backend/scripts/studio.ts` (CLI and `serve`) over `backend/s
 - Hosted (phase 3, off by default): `ENABLE_STUDIO=true` mounts `/api/studio` (`backend/src/routes/studio.ts`) behind `authMiddleware` plus `STUDIO_EMAILS`/`ADMIN_EMAILS` (`utils/studioAccess.ts`, fails closed), on `PgStore(pool)`, with a monthly budget `STUDIO_MONTHLY_CAP_USD` (default 50). Endpoints are shared with `serve` in `services/studio/router.ts`; change them there. Rules upload/activate are admin-only. Handoff: `docs/build-log/B1-studio-p3.md`.
 - Run instructions, timings and gaps: `docs/build-log/B1-lite.md`.
 
+## Pre-flight audit, B2 (script)
+
+VOICES v2 build 2: `backend/scripts/audit.ts` (CLI) over `backend/src/services/audit/` (self-contained; imports nothing from Studio or weekly code). No database, no auth, no deploy. Reads the rules from `Claude outputs/voices-r1/studio/studio-rules.json` and the M3 rubric from `Claude outputs/voices-r1/rubric.json`; the OpenAI key from `~/.config/voices/openai.key` (never `dotenv.config()`). Assets in `Claude outputs/voices-r1/assets/<round>/`, named by naming stub (a folder of numbered cards is a carousel; `.mp4/.mov` is video; `<stub>.txt` is sidecar copy). Output in `Claude outputs/voices-r1/audit/<round>/`: `reports/<stub>.md`, `summary.md`, `features.csv` (for B3's `weekly.ts features --file`), `flag-sheet.csv`, `audit.json`, `calls.jsonl`; `audit/spend.json` is cumulative ($10 cap, `--yes` over $2).
+
+- Library (the engine behind the hosted Studio's Pre-flight step): `services/audit/index.ts` exports `estimateAudit(input, opts)`, `runAudit(input, opts)` → report JSON (`report_version`), `featuresRow(report)`. Rules, rubric, files and the OpenAI client are arguments; it never reads the client folders. Thresholds in `services/audit/config.json`. Video needs ffmpeg (else audited on copy and voice-over with a note); voice-over is transcribed with gpt-4o-transcribe unless a transcript is given.
+- Commands: `estimate --round R`, `run --round R [--only STUB] [--yes]`, `concepts [--only CODE] [--compare-only]` (the nine concept cards against the spike's M3 table), `plant` (planted test images), `agree --file SHEET` (agreement from Brook's marks), `status`. `--mock` runs free.
+- Flags, never scores: red = compliance (a rule match, or the reviewer and the two-wording yes/no agreeing), amber = warning (intended persona's turn-offs, brand, clarity, limits, text load), grey = note (the other personas' turn-offs, UGC casting). Every flag carries its rules-file source.
+- Run instructions, what each check does, agreement and costs: `docs/build-log/B2-preflight.md`.
+
 ## Roadmap
 
 The Trupanion engagement build plan (evidence layer, copy-set tests, format dimension, reports, live-performance anchors, governance) is in `docs/trupanion-build-plan.md`. Phase 0 safeguards have shipped on `voices/trupanion-phase0`.
