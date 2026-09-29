@@ -49,7 +49,7 @@ export interface FieldSpec { platform: string; label: string; visible: number; m
 export interface Territory {
   persona: string; name: string; angle: string; format: string; premise: string; source: string;
   /** The pitched headline ("headline as sold"), from the concept cards (rules v2.4+). */
-  headline?: string; headline_source?: string;
+  headline?: string; headline_source?: string; headline_note?: string; pitched_name?: string; name_note?: string;
   status?: string; origin?: 'pitch' | 'edited' | 'new'; note?: string; updated_by?: string; updated_at?: string;
   history?: Array<{ at: string; by: string; note: string; before: Partial<Territory> | null }>;
 }
@@ -62,6 +62,7 @@ export interface Meta {
   personas: Record<string, { name: string; default_fields: string[]; triggers: Array<{ id: string; label: string; detail?: string; source?: string }>; context?: PersonaContext }>;
   /** Source codes (TM, EP, CLB…) → titles, for plain-words sources. */
   sources?: Record<string, string>;
+  what_to_do?: Record<string, string>;
   can_set_compliance?: boolean;
   can_override?: boolean;
   territories: Record<string, Territory>;
@@ -89,10 +90,11 @@ export interface Signoff {
 export interface Expectation { id: string; persona: string; territory: string; signoff_id: string; line_ids: string[]; reason: string; created_by: string; created_at: string; sha256: string }
 export interface ReadyLine { line: Line; final_text: string; sha256: string; stub: string; red: Flag[]; compliance: NonNullable<Line['compliance']>; versions: LineVersion[] }
 export interface ReadyView { persona: string; territory: string; lines: ReadyLine[]; signoffs: Signoff[]; expectations: Expectation[]; latest: Signoff | null }
-export interface RuleEntry { id: string; rule: string; severity: 'compliance' | 'warn' | 'note'; source: string; applies_to: 'text' | 'visual' | 'both'; status?: string }
+export interface RuleEntry { id: string; rule: string; severity: 'compliance' | 'warn' | 'note'; source: string; applies_to: 'text' | 'visual' | 'both'; status?: string; what_to_do?: string }
 export interface ActiveRules {
   version: string; updated?: string; compliance: RuleEntry[]; brand: RuleEntry[]; clarity: RuleEntry[];
   personas: Record<string, { name: string; triggers: Array<{ label: string; detail?: string; source?: string }>; turn_offs: RuleEntry[]; language: Array<{ text: string; caution: boolean; source: string }> }>;
+  disclaimer?: (RuleEntry & { text: string | null; active: boolean }) | null;
 }
 export interface RulesVersion { version: string; status: 'draft' | 'active' | 'retired'; notes?: string; created_by?: string; created_at: string; activated_by?: string | null; activated_at?: string | null }
 // ---------- Pre-flight ----------

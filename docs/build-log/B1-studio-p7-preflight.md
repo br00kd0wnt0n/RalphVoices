@@ -91,3 +91,15 @@ Screenshots are in `Claude outputs/voices-r1/studio/screens/` (client material):
 ## UX review (29 Sep, approved by Brook): done
 
 All 18 items, plus the coordination session's notes A (private bucket required) and B (stale audits), are in commits a543239, c03be08 and 08164bd. The follow-ups after the re-walk (step highlight, springboard badge, who and tension in rules v2.5, plain sources, the Compare label) come next, and B2's review fixes are in f6d482f: bounded memory, one persona per shared visual, and orphaned audits. Screenshots: `Claude outputs/voices-r1/studio/screens/ux-29sep/`.
+
+## Rules v2.7 support (29 Sep, Trupanion's brand notes)
+
+The rules file itself is client material (`Claude outputs/voices-r1/studio/studio-rules.json`, v2.6 kept as `studio-rules-v2.6.json`). The code this needed:
+
+- **The disclaimer on the last screen** (`disclaimerCheck` in `services/studio/preflight.ts`). A top-level `disclaimer` block in the rules holds `text`. The check reads the last card of a carousel, the image of a static, or the last video frame, never the voice-over. Matching ignores case, punctuation, spacing and line breaks, and tolerates OCR slips (90% of the words). It's red when the disclaimer is missing and a grey note ("Disclaimer check off: no approved text in the rules yet") while `text` is empty. `PREFLIGHT_LOGIC_VERSION` is now 3.
+- **Red brand rules need agreement too.** A brand item with `severity: compliance` and two `wordings` (BR_PET_RESPECT) is asked as yes/no and reconciled like compliance items, so a lone model call can't turn a line red.
+- **`what_to_do` in the rules file.** Items can carry the fix in plain words. It goes out in meta and in the Rules view, and wins over the page's built-in list.
+- **Rules view and Territories:** a "last screen" section showing whether the disclaimer check is on; territory notes (`pitched_name`, `name_note`, `headline_note`).
+- **Planted checks:** four more (the idiot / little monster pair, and 'worth it?' / protection). Checked through the hosted route on rehearsal: 16/16, twice. A real Pre-flight audit showed the grey disclaimer note.
+
+After it deploys, Brook uploads and activates v2.7 in the Rules view. v2.7 also works on the current production code, but without the disclaimer note, the red-brand agreement or the plain-words fixes.

@@ -277,7 +277,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   // ----- the live rules, read-only, for everyone (the Rules view) -----
   r.get('/rules/active', wrap(async (_req, res) => {
     const full: any = await S.getStore().getRules();   // unfiltered: the visual-only brand items are shown, marked as such
-    const item = (x: any) => ({ id: x.id, rule: x.rule, severity: x.severity || 'warn', source: x.source, applies_to: x.applies_to || 'text', status: x.status });
+    const item = (x: any) => ({ id: x.id, rule: x.rule, severity: x.severity || 'warn', source: x.source, applies_to: x.applies_to || 'text', status: x.status, what_to_do: x.what_to_do });
     res.json({
       version: full.version, updated: full.updated,
       compliance: (full.compliance || []).map(item), brand: (full.brand || []).map(item), clarity: (full.clarity || []).map(item),
@@ -286,6 +286,8 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
         turn_offs: (p.turn_offs || []).map(item), language: (p.language || []).map((l: any) => ({ text: l.text, caution: !!l.caution, source: l.source })),
       }])),
       sources: Object.fromEntries(Object.entries(full.sources || {}).map(([k, v]: [string, any]) => [k, v?.title || k])),
+      // Checked on the last screen in Pre-flight; off until the approved text is in the rules.
+      disclaimer: full.disclaimer ? { ...item(full.disclaimer), text: full.disclaimer.text || null, active: !!String(full.disclaimer.text || '').trim() } : null,
     });
   }));
 

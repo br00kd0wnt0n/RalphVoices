@@ -25,8 +25,8 @@ import { signedOffCopy } from './preflightB2.js';
 type Queryable = Pick<pg.Pool, 'query'>;
 
 export const DB_FILE_CAP = 25 * 1024 * 1024;     // local/dev only (R2 off)
-/** Bump when the audit or copy-match logic changes what a stored audit would say (2: on-asset copy match per stub). */
-export const PREFLIGHT_LOGIC_VERSION = 2;
+/** Bump when the audit or copy-match logic changes what a stored audit would say (2: on-asset copy match per stub; 3: the disclaimer on the last screen). */
+export const PREFLIGHT_LOGIC_VERSION = 3;
 
 /**
  * Where Pre-flight files go. Production with R2 on: the private bucket
@@ -111,6 +111,40 @@ export function copyMatchForStub(copy: SignedCopy[], assetText: Array<{ where: s
       frame: cardOf(f.where) !== undefined ? { asset_position: cardOf(f.where), label: f.where } : undefined,
     })),
   };
+}
+
+/** Case, punctuation, spacing and line breaks don't count: small print split over lines still matches. */
+const normWords = (s: string) => s.normalize('NFKC').toLowerCase().replace(/[’']/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+/**
+ * The approved disclaimer on the last screen (rules v2.7 `disclaimer`): on the
+ * final card of a carousel, the image of a static, or the last video frame,
+ * never the voice-over. Off, with a grey note, until the rules carry the text.
+ * A match is the whole text in order, or (for OCR slips) at least 90% of its
+ * words present on that screen.
+ */
+export function disclaimerCheck(rules: any, assetText: Array<{ where: string; text: string }>, kind: AssetKind, cards = 1): AuditFlag[] {
+  const d = rules?.disclaimer;
+  if (!d) return [];
+  const base = { rule: d.id || 'DISCLAIMER_LAST_SCREEN', source: d.source, check: 'disclaimer' };
+  if (!String(d.text || '').trim()) return [{ ...base, severity: 'grey', label: 'Disclaimer check off: no approved text in the rules yet' }];
+  const screens = assetText.filter(t => t.where !== 'voice-over');
+  const where = kind === 'carousel' ? `card ${cards}` : kind === 'static' ? 'image' : 'last frame';
+  const last = kind === 'carousel' ? screens.find(t => t.where === where)
+    : kind === 'static' ? screens.find(t => t.where === 'image') || screens[0]
+    : screens.find(t => /last frame/.test(t.where));
+  if (kind === 'video' && !last) return [{ ...base, severity: 'grey', label: 'Disclaimer not checked: the last video frame wasn’t read', why: 'No frames from the video (ffmpeg couldn’t read it); check the last screen by eye' }];
+  const want = normWords(d.text), have = normWords(last?.text || '');
+  const words = want.split(' ').filter(w => w.length > 2);
+  const present = new Set(have.split(' '));
+  const coverage = words.length ? words.filter(w => present.has(w)).length / words.length : 1;
+  if (have.includes(want) || coverage >= 0.9) return [];
+  const frame = kind === 'video' ? { label: last!.where } : { asset_position: kind === 'carousel' ? cards - 1 : 0, label: last?.where || where };
+  return [{
+    ...base, severity: 'red', label: d.rule, where: last?.where || where, frame,
+    quote: `approved: "${d.text}"`,
+    why: last?.text?.trim() ? `The approved disclaimer isn't on ${last.where} (${Math.round(coverage * 100)}% of its words found)` : `${last?.where || where} has no readable text`,
+  }];
 }
 
 /**
@@ -328,6 +362,7 @@ export class Preflight {
       const result = await this.engine.run({ stub: a.stub, persona: a.persona, territory: a.territory, kind: a.kind, files, copy, rules, rubric }, message => { heartbeat(); emit({ type: 'status', message }); });
       // Copy match is Studio's, per stub the visual serves (the engine's own copy flags are replaced by these).
       result.flags = result.flags.filter(f => f.check !== 'copy_match');
+      result.flags.push(...disclaimerCheck(rules, result.asset_text || [{ where: a.kind === 'static' ? 'image' : 'asset', text: result.text_found }], a.kind, rows.length));
       const served = (await this.db.query(`SELECT stub FROM studio_upload_stubs WHERE upload_id = $1 ORDER BY stub`, [a.upload_id])).rows.map(x => x.stub);
       const copyByStub: Record<string, any[]> = {};
       const perStub: Array<{ stub: string; flag: AuditFlag }> = [];
