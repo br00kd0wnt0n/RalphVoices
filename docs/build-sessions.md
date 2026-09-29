@@ -165,7 +165,7 @@ Handoff: docs/build-log/B3-weekly-read.md. Cover what shipped, the config thresh
 ```
 Build session B1-lite of VOICES v2 (Trupanion). Create branch voices/b1-lite from an up-to-date origin/main.
 
-Deadline: demo-ready by Monday 28 Sep, 9am. Brook shows it at the creative director kickoff that day. The first live copy session (about 20 lines per persona, shortlisted to 2-3 per visual) is date TBC, once the creative lead is up to speed. A rough tool that works beats a polished one that doesn't.
+Deadline: demo-ready by Monday 28 Sep, 9am. Brook shows it at the creative director kickoff that day. The first live copy session (about 20 lines per run, shortlisted to 2-3 per visual) is date TBC, once the creative lead is up to speed. A rough tool that works beats a polished one that doesn't.
 
 Read first:
 - CLAUDE.md, and the ground rules in docs/build-sessions.md (follow them exactly: never touch the Railway databases; no push, merge or deploy without Brook's say-so; commits end with Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>).
