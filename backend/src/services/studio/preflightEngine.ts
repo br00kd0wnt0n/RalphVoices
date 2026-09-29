@@ -1,8 +1,8 @@
 // The audit engine Pre-flight runs, behind one small interface so Studio can
 // build against it while B2 packages its engine (backend/src/services/audit/).
 // `mockEngine` needs no key and no model: it reads the words on a test asset
-// from a marker in the file and checks copy match, so the whole flow can be
-// tested end to end. The B2 adapter lives in preflightB2.ts.
+// from a marker in the file, so the whole flow can be tested end to end. Copy
+// match isn't the engine's job: Studio runs it per stub (preflight.ts). The B2 adapter lives in preflightB2.ts.
 
 import fs from 'node:fs';
 
@@ -49,6 +49,8 @@ export interface AuditResult {
   engine: string;
   flags: AuditFlag[];
   text_found: string;
+  /** What was read off the asset, piece by piece (card, frame, voice-over): Studio's copy match runs on it per stub. */
+  asset_text?: Array<{ where: string; text: string }>;
   transcript?: string;
   /** Feature probabilities (P(Yes)) by feature id, as B2 reports them. */
   features: Record<string, number>;
@@ -66,42 +68,6 @@ export interface AuditEngine {
   run(input: AuditInput, progress: (message: string) => void): Promise<AuditResult>;
 }
 
-// ---------- copy match (used by the mock; B2 has its own) ----------
-
-const norm = (s: string) => s.toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9$%'. ]+/g, ' ').replace(/\s+/g, ' ').trim();
-
-/**
- * Every signed-off line must appear on the asset word for word (after
- * normalising case and punctuation). A missing sentence, such as a dropped
- * caveat, is red: the asset doesn't carry the wording that was signed off.
- */
-export function copyMatchFlags(copy: SignedCopy[], found: string): AuditFlag[] {
-  const onAsset = norm(found);
-  const flags: AuditFlag[] = [];
-  for (const c of copy) {
-    if (onAsset.includes(norm(c.text))) continue;
-    const sentences = c.text.split(/(?<=[.!?])\s+/).filter(Boolean);
-    let missing = sentences.filter(s => !onAsset.includes(norm(s)));
-    // One sentence cut short (a dropped caveat at the end): quote just the words that didn't make it.
-    if (missing.length === 1) {
-      const words = missing[0].split(/\s+/);
-      let keep = 0;
-      while (keep < words.length && onAsset.includes(norm(words.slice(0, keep + 1).join(' ')))) keep++;
-      if (keep > 0 && keep < words.length) missing = [words.slice(keep).join(' ')];
-    }
-    flags.push({
-      rule: 'COPY_MATCH', severity: 'red', check: 'copy_match', where: c.label,
-      label: 'The asset must carry the signed-off wording',
-      source: `Ready for production, ${c.label} v${c.version}`,
-      quote: (missing.length ? missing : [c.text]).join(' '),
-      why: missing.length && missing.join(' ') !== c.text
-        ? 'The asset carries part of the signed-off line, not all of it'
-        : 'This signed-off line isn’t on the asset as written',
-    });
-  }
-  return flags;
-}
-
 // ---------- mock engine ----------
 
 /** Test assets carry their words after a marker, e.g. an image file ending in "VOICES_TEXT: Your vet bill…". */
@@ -116,15 +82,16 @@ export const mockEngine: AuditEngine = {
   estimate: i => ({ usd: 0, seconds: 2 + i.files.length }),
   async run(i, progress) {
     progress(`Reading ${i.files.length} file${i.files.length === 1 ? '' : 's'}`);
-    const found = i.files.map(f => plantedText(f.path)).filter(Boolean).join('\n');
-    progress('Checking copy match');
-    const flags = copyMatchFlags(i.copy, found);
+    const pieces = i.files.map((f, n) => ({ where: i.kind === 'carousel' ? `card ${n + 1}` : i.kind === 'video' ? 'voice-over' : 'image', text: plantedText(f.path) })).filter(p => p.text);
+    const found = pieces.map(p => p.text).join('\n');
+    progress('Checking the asset');
+    // Copy match runs in Studio, per stub (preflight.ts); the engine only reads the asset.
+    const flags: AuditFlag[] = [];
     if (/pays? for itself/i.test(found)) flags.push({ rule: 'COMP_PAYS_FOR_ITSELF', severity: 'red', label: 'Never say or imply the policy pays for itself.', source: 'rules', quote: 'pays for itself', where: 'on the asset' });
     if (i.kind === 'video') flags.push({ rule: 'FRAMES_UNAVAILABLE', severity: 'grey', label: 'Video frames unavailable (no ffmpeg); judged on the transcript and caption only', source: 'engine' });
     flags.push({ rule: 'CROSS_PERSONA', severity: 'grey', label: 'How another persona might read it', source: 'engine', persona: 'OWN', cross_persona: true, why: 'Owners may read this as a price message.' });
-    if (i.kind !== 'video' && flags.length) flags[0].frame = { asset_position: 0, label: 'card 1' };
     return {
-      engine: 'mock', flags, text_found: found, transcript: i.kind === 'video' ? found : undefined,
+      engine: 'mock', flags, text_found: found, asset_text: pieces, transcript: i.kind === 'video' ? found : undefined,
       features: { humour: 0.1, direct_vet_pay: /paid directly|pays your vet/i.test(found) ? 0.9 : 0.05, dollar_figure: /\$\d/.test(found) ? 0.95 : 0.02 },
       objection: 'Sounds nice, but what does it actually cost me?', frames_unavailable: i.kind === 'video', usd: 0,
     };

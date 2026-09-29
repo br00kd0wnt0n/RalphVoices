@@ -32,6 +32,16 @@ CREATE TABLE IF NOT EXISTS studio_upload_files (
 );
 ALTER TABLE studio_upload_files ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'asset';
 
+-- One visual can serve several naming codes (2-3 copy lines run as separate ads on the same asset).
+-- The upload's own stub is always listed; others are added with "Same visual as".
+CREATE TABLE IF NOT EXISTS studio_upload_stubs (
+  upload_id  TEXT NOT NULL REFERENCES studio_asset_uploads(id) ON DELETE CASCADE,
+  stub       TEXT NOT NULL,
+  PRIMARY KEY (upload_id, stub)
+);
+CREATE INDEX IF NOT EXISTS studio_upload_stubs_stub ON studio_upload_stubs (stub);
+INSERT INTO studio_upload_stubs (upload_id, stub) SELECT id, stub FROM studio_asset_uploads ON CONFLICT DO NOTHING;
+
 -- One audit of one upload. `result` holds what the report shows: text found on
 -- the asset, the transcript, features, the skeptic's objection, cross-persona notes.
 CREATE TABLE IF NOT EXISTS studio_audits (
@@ -58,8 +68,10 @@ CREATE TABLE IF NOT EXISTS studio_audit_flags (
   rule       TEXT NOT NULL,
   severity   TEXT NOT NULL,                    -- red | amber | grey
   body       JSONB NOT NULL,                   -- label, source, quote, why, where, frame, check, persona
-  override   JSONB                             -- a red flag let through: { reason, by, at }
+  override   JSONB,                            -- a red flag let through: { reason, by, at }
+  for_stub   TEXT                              -- NULL: about the visual (every code it serves); else copy match for one code
 );
+ALTER TABLE studio_audit_flags ADD COLUMN IF NOT EXISTS for_stub TEXT;
 CREATE INDEX IF NOT EXISTS studio_audit_flags_audit ON studio_audit_flags (audit_id, position);
 
 -- Agree or disagree with a flag: one row per person per flag (the latest stands), for the agreement rate.

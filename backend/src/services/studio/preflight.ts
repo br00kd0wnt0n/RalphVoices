@@ -1,6 +1,8 @@
 // Pre-flight (step 6, after Ready for production): the finished asset for each
 // signed-off naming stub is uploaded, audited (B2's engine, via
-// preflightEngine.ts), and the report is reviewed. People agree or disagree
+// preflightEngine.ts), and the report is reviewed. One visual can serve several
+// stubs (2-3 copy lines on the same asset): it's audited once, and copy match
+// runs per stub, on on-asset fields only (post copy travels with the ad). People agree or disagree
 // with each flag (the round's agreement rate is Brook's 90% target), red flags
 // are fixed by a new upload or overridden with a reason, and the stub is marked
 // "Ready to traffic". Exports: the features CSV for B3 and an asset handoff list.
@@ -17,6 +19,8 @@ import type { Signoff } from './ready.js';
 import { getPrivateObject, isR2Enabled, putPrivateObject } from '../r2.js';
 import { FatalError } from '../audit/api.js';
 import type { AssetKind, AuditEngine, AuditFlag, AuditResult, SignedCopy } from './preflightEngine.js';
+import { copyMatch } from '../audit/copyMatch.js';
+import { signedOffCopy } from './preflightB2.js';
 
 type Queryable = Pick<pg.Pool, 'query'>;
 
@@ -29,7 +33,7 @@ export interface UploadFile { buffer: Buffer; filename: string; contentType: str
 export interface StubRow {
   stub: string; persona: string; territory: string; signoff_id: string; ready_by: string; ready_at: string;
   copy: SignedCopy[];
-  upload: { id: string; kind: AssetKind; files: Array<{ position: number; filename: string; content_type: string; size: number }>; uploaded_by: string; uploaded_at: string } | null;
+  upload: { id: string; kind: AssetKind; files: Array<{ position: number; filename: string; content_type: string; size: number }>; uploaded_by: string; uploaded_at: string; stubs: string[] } | null;
   audit: { id: string; status: string; usd: number; red: number; amber: number; grey: number; open_red: number; finished_at: string | null; error: string | null } | null;
   status: { status: 'open' | 'ready'; ready_by?: string; ready_at?: string; upload_id?: string };
 }
@@ -45,6 +49,31 @@ const kindOf = (files: UploadFile[]): AssetKind => {
   return files.length > 1 ? 'carousel' : 'static';
 };
 const fmtMb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`;
+/** Fields that run in the post (never on the asset): listed on the report, not compared. */
+export const POST_COPY_FIELDS = new Set(['meta_primary', 'meta_description', 'tiktok_caption']);
+
+/**
+ * Copy match for one stub, on what was read off the visual: B2's own rules
+ * (services/audit/copyMatch.ts). Only on-asset fields are compared (the TikTok
+ * hook and on-image text; the headline if it's designed in). Red only for a
+ * required caveat missing from on-asset text; a hook that differs is amber; a
+ * headline not on the image is grey.
+ */
+export function copyMatchForStub(copy: SignedCopy[], assetText: Array<{ where: string; text: string }>, rules: any, kind: AssetKind) {
+  const { rows, flags } = copyMatch(signedOffCopy(copy.filter(c => !POST_COPY_FIELDS.has(c.field))), assetText, rules);
+  const cardOf = (where?: string) => {
+    if (kind === 'video' || !where) return undefined;
+    const m = /card (\d+)/i.exec(where);
+    return m ? Number(m[1]) - 1 : /^image/i.test(where) ? 0 : undefined;
+  };
+  return {
+    rows,
+    flags: flags.map((f): AuditFlag => ({
+      rule: f.rule, severity: f.severity, label: f.label, source: f.source, quote: f.quote, why: f.why, where: f.where, check: 'copy_match',
+      frame: cardOf(f.where) !== undefined ? { asset_position: cardOf(f.where), label: f.where } : undefined,
+    })),
+  };
+}
 
 export class Preflight {
   constructor(private db: Queryable, private engine: AuditEngine, private opts: { storage?: 'r2' | 'db' } = {}) {}
@@ -91,9 +120,12 @@ export class Preflight {
 
   // ---------- uploads ----------
 
-  async upload(stub: string, files: UploadFile[], user?: string): Promise<{ upload_id: string; kind: AssetKind; storage: 'r2' | 'db' }> {
+  /** Upload the visual for a stub; `also` lists other signed-off stubs that run on the same visual. */
+  async upload(stub: string, files: UploadFile[], user?: string, also: string[] = []): Promise<{ upload_id: string; kind: AssetKind; storage: 'r2' | 'db'; stubs: string[] }> {
     if (!files.length) throw new Error('Choose a file to upload');
     const { signoff } = await this.findStub(stub);
+    const stubs = [stub, ...new Set(also.filter(x => x && x !== stub))];
+    for (const x of stubs.slice(1)) await this.findStub(x);
     const kind = kindOf(files);
     const cap = this.storage === 'r2' ? R2_FILE_CAP : DB_FILE_CAP;
     const big = files.find(f => f.buffer.length > cap);
@@ -103,10 +135,13 @@ export class Preflight {
       `INSERT INTO studio_asset_uploads (id, stub, persona, territory, signoff_id, kind, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [uploadId, stub, signoff.persona, signoff.territory, signoff.id, kind, user ?? null]);
     for (let i = 0; i < files.length; i++) await this.putFile(uploadId, stub, i, files[i], 'asset');
-    // A new upload replaces what was ready: the stub is open until it's reviewed again.
-    await this.setStatusRow(stub, 'open', uploadId, null, null);
-    await S.getStore().recordEdit({ line_id: `asset:${stub}`, batch_id: 'preflight', before: null, after: { upload: uploadId, kind, files: files.map(f => f.filename) }, by: user || 'unknown', at: new Date().toISOString() });
-    return { upload_id: uploadId, kind, storage: this.storage };
+    for (const x of stubs) {
+      await this.db.query(`INSERT INTO studio_upload_stubs (upload_id, stub) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [uploadId, x]);
+      // A new upload replaces what was ready: each stub it serves is open until it's reviewed again.
+      await this.setStatusRow(x, 'open', uploadId, null, null);
+      await S.getStore().recordEdit({ line_id: `asset:${x}`, batch_id: 'preflight', before: null, after: { upload: uploadId, kind, files: files.map(f => f.filename), same_visual_as: stubs.filter(y => y !== x) }, by: user || 'unknown', at: new Date().toISOString() });
+    }
+    return { upload_id: uploadId, kind, storage: this.storage, stubs };
   }
 
   private async putFile(uploadId: string, stub: string, position: number, f: UploadFile, role: 'asset' | 'frame') {
@@ -129,11 +164,14 @@ export class Preflight {
     return { filename: f.filename, contentType: f.content_type, data: f.storage === 'r2' ? await getPrivateObject(f.r2_key) : f.data };
   }
 
+  /** The latest upload serving a stub (its own, or a shared visual). */
   private async latestUpload(stub: string): Promise<StubRow['upload']> {
-    const u = (await this.db.query(`SELECT * FROM studio_asset_uploads WHERE stub = $1 ORDER BY uploaded_at DESC LIMIT 1`, [stub])).rows[0];
+    const u = (await this.db.query(
+      `SELECT u.* FROM studio_asset_uploads u JOIN studio_upload_stubs us ON us.upload_id = u.id WHERE us.stub = $1 ORDER BY u.uploaded_at DESC LIMIT 1`, [stub])).rows[0];
     if (!u) return null;
     const files = (await this.db.query(`SELECT position, filename, content_type, size FROM studio_upload_files WHERE upload_id = $1 AND role = 'asset' ORDER BY position`, [u.id])).rows;
-    return { id: u.id, kind: u.kind, files, uploaded_by: u.uploaded_by, uploaded_at: new Date(u.uploaded_at).toISOString() };
+    const stubs = (await this.db.query(`SELECT stub FROM studio_upload_stubs WHERE upload_id = $1 ORDER BY stub`, [u.id])).rows.map(x => x.stub);
+    return { id: u.id, kind: u.kind, files, uploaded_by: u.uploaded_by, uploaded_at: new Date(u.uploaded_at).toISOString(), stubs };
   }
 
   // ---------- audits ----------
@@ -176,10 +214,20 @@ export class Preflight {
       const rubric = await S.getStore().getInput('rubric');
       emit({ type: 'status', message: `Auditing ${a.stub} (${a.kind})` });
       const result = await this.engine.run({ stub: a.stub, persona: a.persona, territory: a.territory, kind: a.kind, files, copy, rules, rubric }, message => emit({ type: 'status', message }));
+      // Copy match is Studio's, per stub the visual serves (the engine's own copy flags are replaced by these).
+      result.flags = result.flags.filter(f => f.check !== 'copy_match');
+      const served = (await this.db.query(`SELECT stub FROM studio_upload_stubs WHERE upload_id = $1 ORDER BY stub`, [a.upload_id])).rows.map(x => x.stub);
+      const copyByStub: Record<string, any[]> = {};
+      const perStub: Array<{ stub: string; flag: AuditFlag }> = [];
+      for (const st of served) {
+        const cm = copyMatchForStub((await this.findStub(st)).copy, result.asset_text || [{ where: 'asset', text: result.text_found }], rules, a.kind);
+        copyByStub[st] = cm.rows;
+        for (const f of cm.flags) perStub.push({ stub: st, flag: f });
+      }
       // Frames the flags rest on are kept as thumbnails next to the upload.
       let framePos = 1000;
-      const flags = [];
-      for (const f of result.flags) {
+      const flags: Array<any> = [];
+      for (const [f, forStub] of [...result.flags.map(f => [f, null] as const), ...perStub.map(x => [x.flag, x.stub] as const)]) {
         const { frame, ...rest } = f;
         let frameRef: { upload_id?: string; position?: number; label?: string; description?: string } | undefined;
         if (frame?.path && fs.existsSync(frame.path)) {
@@ -189,15 +237,16 @@ export class Preflight {
         } else if (frame && frame.asset_position !== undefined && frame.asset_position < rows.length) {
           frameRef = { upload_id: a.upload_id, position: rows[frame.asset_position].position, label: frame.label };
         } else if (frame) frameRef = { label: frame.label, description: frame.description };
-        flags.push({ ...rest, frame: frameRef });
+        flags.push({ ...rest, frame: frameRef, for_stub: forStub });
       }
       await this.db.query(`DELETE FROM studio_audit_flags WHERE audit_id = $1`, [auditId]);
       for (let i = 0; i < flags.length; i++) {
-        const { rule, severity, ...body } = flags[i];
-        await this.db.query(`INSERT INTO studio_audit_flags (id, audit_id, stub, position, rule, severity, body) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [`${auditId}-F${String(i + 1).padStart(2, '0')}`, auditId, a.stub, i + 1, rule, severity, body]);
+        const { rule, severity, for_stub, ...body } = flags[i];
+        await this.db.query(`INSERT INTO studio_audit_flags (id, audit_id, stub, position, rule, severity, body, for_stub) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [`${auditId}-F${String(i + 1).padStart(2, '0')}`, auditId, for_stub || a.stub, i + 1, rule, severity, body, for_stub]);
       }
-      const { flags: _f, ...stored } = result;
+      const { flags: _f, ...rest } = result;
+      const stored = { ...rest, copy_match_by_stub: copyByStub };
       await this.db.query(`UPDATE studio_audits SET status = 'done', result = $2, usd = $3, rules_version = $4, finished_at = NOW() WHERE id = $1`,
         [auditId, stored, result.usd || 0, rules?.version ?? null]);
       if (result.usd) await S.getStore().addSpend({ label: `preflight ${a.stub}`, usd: Math.round(result.usd * 10000) / 10000, at: new Date().toISOString(), user: user || a.started_by || undefined });
@@ -216,14 +265,21 @@ export class Preflight {
     }
   }
 
+  /** The latest audit of the latest upload serving a stub. */
   private async latestAuditRow(stub: string) {
-    return (await this.db.query(`SELECT * FROM studio_audits WHERE stub = $1 ORDER BY started_at DESC LIMIT 1`, [stub])).rows[0] || null;
+    const up = await this.latestUpload(stub);
+    if (!up) return null;
+    return (await this.db.query(`SELECT * FROM studio_audits WHERE upload_id = $1 ORDER BY started_at DESC LIMIT 1`, [up.id])).rows[0] || null;
+  }
+  /** Flags of an audit that concern a stub: those about the visual, and its own copy match. */
+  private async flagsFor(auditId: string, stub: string) {
+    return (await this.db.query(`SELECT * FROM studio_audit_flags WHERE audit_id = $1 AND (for_stub IS NULL OR for_stub = $2) ORDER BY position`, [auditId, stub])).rows;
   }
 
   private async latestAuditSummary(stub: string): Promise<StubRow['audit']> {
     const a = await this.latestAuditRow(stub);
     if (!a) return null;
-    const f = (await this.db.query(`SELECT severity, override FROM studio_audit_flags WHERE audit_id = $1`, [a.id])).rows;
+    const f = await this.flagsFor(a.id, stub);
     const n = (s: string) => f.filter(x => x.severity === s).length;
     return { id: a.id, status: a.status, usd: Number(a.usd), red: n('red'), amber: n('amber'), grey: n('grey'), open_red: f.filter(x => x.severity === 'red' && !x.override).length, finished_at: a.finished_at ? new Date(a.finished_at).toISOString() : null, error: a.error };
   }
@@ -235,7 +291,7 @@ export class Preflight {
     const a = await this.latestAuditRow(stub);
     let flags: any[] = [];
     if (a) {
-      const rows = (await this.db.query(`SELECT * FROM studio_audit_flags WHERE audit_id = $1 ORDER BY position`, [a.id])).rows;
+      const rows = await this.flagsFor(a.id, stub);
       const agr = (await this.db.query(`SELECT flag_id, by_user, agree, note, at FROM studio_audit_agreements WHERE flag_id = ANY($1)`, [rows.map(r => r.id)])).rows;
       flags = rows.map(r => ({
         id: r.id, rule: r.rule, severity: r.severity, ...r.body, override: r.override || null,
@@ -247,10 +303,13 @@ export class Preflight {
     flags.sort((x, y) => (x.check === 'copy_match' ? -1 : 0) - (y.check === 'copy_match' ? -1 : 0) || sevRank[x.severity] - sevRank[y.severity] || x.position - y.position);
     const history = (await this.db.query(
       `SELECT u.id, u.kind, u.uploaded_by, u.uploaded_at, (SELECT count(*) FROM studio_upload_files f WHERE f.upload_id = u.id AND f.role = 'asset') AS files
-         FROM studio_asset_uploads u WHERE u.stub = $1 ORDER BY u.uploaded_at DESC`, [stub])).rows.map(x => ({ ...x, files: Number(x.files), uploaded_at: new Date(x.uploaded_at).toISOString() }));
+         FROM studio_asset_uploads u JOIN studio_upload_stubs us ON us.upload_id = u.id WHERE us.stub = $1 ORDER BY u.uploaded_at DESC`, [stub])).rows.map(x => ({ ...x, files: Number(x.files), uploaded_at: new Date(x.uploaded_at).toISOString() }));
+    const result = a?.result ? { ...a.result, copy_match: a.result.copy_match_by_stub?.[stub] ?? a.result.report?.copy_match } : null;
     return {
       stub, persona: signoff.persona, territory: signoff.territory, signoff_id: signoff.id, copy, upload, history,
-      audit: a ? { id: a.id, upload_id: a.upload_id, status: a.status, engine: a.engine, rules_version: a.rules_version, usd: Number(a.usd), error: a.error, started_by: a.started_by, started_at: new Date(a.started_at).toISOString(), finished_at: a.finished_at ? new Date(a.finished_at).toISOString() : null, result: a.result } : null,
+      same_visual_as: upload ? upload.stubs.filter(x => x !== stub) : [],
+      on_asset_copy: copy.filter(c => !POST_COPY_FIELDS.has(c.field)), post_copy: copy.filter(c => POST_COPY_FIELDS.has(c.field)),
+      audit: a ? { id: a.id, upload_id: a.upload_id, status: a.status, engine: a.engine, rules_version: a.rules_version, usd: Number(a.usd), error: a.error, started_by: a.started_by, started_at: new Date(a.started_at).toISOString(), finished_at: a.finished_at ? new Date(a.finished_at).toISOString() : null, result } : null,
       flags, status: await this.status(stub),
     };
   }
@@ -306,7 +365,7 @@ export class Preflight {
       const a = await this.latestAuditRow(stub);
       if (!a || a.upload_id !== upload.id) throw new Error('Run the audit on the latest upload first');
       if (a.status !== 'done') throw new Error(a.status === 'failed' ? `The audit failed: ${a.error}. Run it again.` : 'The audit is still running');
-      const open = (await this.db.query(`SELECT id, rule, body FROM studio_audit_flags WHERE audit_id = $1 AND severity = 'red' AND override IS NULL ORDER BY position`, [a.id])).rows;
+      const open = (await this.flagsFor(a.id, stub)).filter(x => x.severity === 'red' && !x.override);
       if (open.length) throw Object.assign(new Error(`${open.length} red flag${open.length === 1 ? '' : 's'} to fix (a new upload) or override first`), { blocking: open.map(o => ({ flag_id: o.id, rule: o.rule, label: o.body.label })) });
       await this.setStatusRow(stub, 'ready', upload.id, a.id, user ?? null);
     }
@@ -326,7 +385,8 @@ export class Preflight {
     const stubs = (await this.stubs(filter)).map(s => s.stub);
     if (!stubs.length) return { marked: 0, agree: 0, rate: null as number | null, by_severity: {} as Record<string, { marked: number; agree: number }> };
     const rows = (await this.db.query(
-      `SELECT f.severity, g.agree FROM studio_audit_agreements g JOIN studio_audit_flags f ON f.id = g.flag_id WHERE f.stub = ANY($1)`, [stubs])).rows;
+      `SELECT f.severity, g.agree FROM studio_audit_agreements g JOIN studio_audit_flags f ON f.id = g.flag_id
+        WHERE f.audit_id IN (SELECT a.id FROM studio_audits a JOIN studio_upload_stubs us ON us.upload_id = a.upload_id WHERE us.stub = ANY($1))`, [stubs])).rows;
     const by: Record<string, { marked: number; agree: number }> = {};
     for (const r of rows) { by[r.severity] = by[r.severity] || { marked: 0, agree: 0 }; by[r.severity].marked++; if (r.agree) by[r.severity].agree++; }
     const agree = rows.filter(r => r.agree).length;
@@ -349,7 +409,7 @@ export class Preflight {
       if (s.audit?.status !== 'done') continue;
       const a = (await this.db.query(`SELECT result FROM studio_audits WHERE id = $1`, [s.audit.id])).rows[0];
       if (a?.result?.report) {
-        const row = b2FeaturesRow({ ...a.result.report, stub: s.stub }, keys);
+        const row: Record<string, string | number> = { ...b2FeaturesRow({ ...a.result.report, stub: s.stub }, keys), red: s.audit.red, amber: s.audit.amber, grey: s.audit.grey };
         rows.push(head.map(h => String(row[h] ?? '')));
         continue;
       }
@@ -363,17 +423,17 @@ export class Preflight {
 
   /** The asset handoff list: stub, file, status, open flags. */
   async handoffCsv(): Promise<string> {
-    const rows = [['Naming code', 'Persona', 'Territory', 'Kind', 'File', 'Status', 'Ready to traffic by', 'Ready to traffic at', 'Open red flags', 'Amber flags', 'Overridden red flags']];
+    const rows = [['Naming code', 'Persona', 'Territory', 'Kind', 'File', 'Same visual as', 'Status', 'Ready to traffic by', 'Ready to traffic at', 'Open red flags', 'Amber flags', 'Overridden red flags']];
     for (const s of await this.stubs()) {
       let open = '', amber = '', overridden = '';
       if (s.audit) {
-        const f = (await this.db.query(`SELECT rule, severity, body, override FROM studio_audit_flags WHERE audit_id = $1 ORDER BY position`, [s.audit.id])).rows;
+        const f = await this.flagsFor(s.audit.id, s.stub);
         open = f.filter(x => x.severity === 'red' && !x.override).map(x => x.body.label || x.rule).join('; ');
         amber = f.filter(x => x.severity === 'amber').map(x => x.body.label || x.rule).join('; ');
         overridden = f.filter(x => x.severity === 'red' && x.override).map(x => `${x.body.label || x.rule} (overridden by ${x.override.by}: “${x.override.reason}”)`).join('; ');
       }
       const status = s.status.status === 'ready' ? 'Ready to traffic' : !s.upload ? 'Not uploaded' : s.audit?.status === 'done' ? 'Needs review' : s.audit ? `Audit ${s.audit.status}` : 'Not audited';
-      rows.push([s.stub, s.persona, s.territory, s.upload?.kind || '', s.upload?.files.map(f => f.filename).join(' | ') || '', status, s.status.ready_by || '', s.status.ready_at || '', open, amber, overridden]);
+      rows.push([s.stub, s.persona, s.territory, s.upload?.kind || '', s.upload?.files.map(f => f.filename).join(' | ') || '', s.upload?.stubs.filter(x => x !== s.stub).join(' | ') || '', status, s.status.ready_by || '', s.status.ready_at || '', open, amber, overridden]);
     }
     return S.toCsv(rows);
   }

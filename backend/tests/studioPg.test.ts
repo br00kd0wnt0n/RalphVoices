@@ -182,18 +182,26 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   // Sign off one line with a caveat (the direct-pay one).
   const api = new S.Api({ mock: true });
   const caveatLine = 'Your vet gets paid directly. At partner clinics.';
-  const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'pf', own_lines: [{ text: caveatLine, field: 'meta_primary' }] }), api, () => {}, { ownOnly: true, user: 'nick' });
+  // The caveat line is an on-asset field (the TikTok hook); a Meta primary text line is post copy, never compared with the asset.
+  const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'pf', own_lines: [
+    { text: caveatLine, field: 'tiktok_hook' },
+    { text: 'Calm at the counter, every time.', field: 'meta_headline' },
+    { text: 'Primary text that only runs in the post.', field: 'meta_primary' },
+  ] }), api, () => {}, { ownOnly: true, user: 'nick' });
   const line = run.lines[0];
-  await S.setDecision(run.id, line.id, { decision: 'keep' }, 'nick');
-  for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines[0])) await R.overrideFlag(run.id, line.id, f.rule, 'Test line for Pre-flight', 'nick');
-  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: [line.id], expectation: { line_ids: [line.id], reason: 'Only line.' } }, 'nick');
-  const stub = signoff.lines[0].stub;
+  for (const l of run.lines) {
+    await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+    for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find(x => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'Test line for Pre-flight', 'nick');
+  }
+  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: run.lines.map(l => l.id), expectation: { line_ids: [line.id], reason: 'The hook.' } }, 'nick');
+  const stubOf = (id: string) => signoff.lines.find(x => x.line_id === id)!.stub;
+  const stub = stubOf(line.id), headlineStub = stubOf(run.lines[1].id), postStub = stubOf(run.lines[2].id);
 
   const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
   const png = (text: string) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from(`fake image VOICES_TEXT: ${text}`)]);
   const stubs = await pf.stubs();
-  assert.deepEqual(stubs.map(s => s.stub), [stub]);
-  assert.equal(stubs[0].copy[0].text, caveatLine);
+  assert.deepEqual(stubs.map(s => s.stub).sort(), [stub, headlineStub, postStub].sort());
+  assert.equal(stubs.find(s => s.stub === stub)!.copy[0].text, caveatLine);
   await assert.rejects(() => pf.upload('NOPE_v1_META', [{ buffer: png('x'), filename: 'a.png', contentType: 'image/png' }]), /isn't in a Ready for production sign-off/);
   await assert.rejects(() => pf.upload(stub, [{ buffer: Buffer.alloc(26 * 1024 * 1024), filename: 'huge.png', contentType: 'image/png' }]), /limit is 25 MB/);
   await assert.rejects(() => pf.upload(stub, [{ buffer: png('x'), filename: 'a.pdf', contentType: 'application/pdf' }]), /Upload images/);
@@ -210,7 +218,9 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   let rep = await pf.report(stub, 'brook');
   assert.equal(rep.flags[0].check, 'copy_match');
   assert.equal(rep.flags[0].severity, 'red');
-  assert.match(rep.flags[0].quote, /At partner clinics/);
+  assert.equal(rep.flags[0].rule, 'COPY_CAVEAT');
+  assert.match(rep.flags[0].quote, /partner clinics/i);
+  assert.ok(rep.audit!.result.copy_match.some((r: any) => r.field === 'hook' && r.status !== 'match'));
   assert.equal(rep.audit!.result.text_found, 'Your vet gets paid directly.');
   assert.ok(rep.audit!.result.objection);
 
@@ -249,8 +259,9 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   assert.equal(feats[1][0], stub);
   assert.equal(feats[1][1], 'direct_vet_pay');
   const hand = S.parseCsv(await pf.handoffCsv());
-  assert.equal(hand[1][0], stub);
-  assert.equal(hand[1][5], 'Ready to traffic');
+  assert.equal(hand[0][6], 'Status');
+  assert.equal(hand.find(r => r[0] === stub)![6], 'Ready to traffic');
+  assert.equal(hand.find(r => r[0] === postStub)![6], 'Not uploaded');
   assert.equal(/approved/i.test(await pf.handoffCsv()), false);
 
   // 6. Carousel and video kinds.
@@ -259,6 +270,22 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   assert.equal(vid.kind, 'video');
   await pf.runAudit(await pf.createAudit(vid.upload_id));
   assert.equal((await pf.report(stub)).audit!.result.frames_unavailable, true);
+
+  // One visual, several codes: audited once, copy match per code, post copy never compared.
+  const shared = await pf.upload(headlineStub, [{ buffer: png('Calm at the counter, every time.'), filename: 'shared.png', contentType: 'image/png' }], 'nick', [postStub]);
+  assert.deepEqual(shared.stubs.sort(), [headlineStub, postStub].sort());
+  await pf.runAudit(await pf.createAudit(shared.upload_id));
+  const hr = await pf.report(headlineStub), pr = await pf.report(postStub);
+  assert.deepEqual(hr.same_visual_as, [postStub]);
+  assert.equal(hr.audit!.id, pr.audit!.id, 'audited once');
+  assert.equal(hr.flags.some((f: any) => f.check === 'copy_match'), false, 'the headline is on the visual');
+  assert.equal(pr.flags.some((f: any) => f.check === 'copy_match'), false, 'post copy is never compared with the asset');
+  assert.equal(pr.post_copy[0].text, 'Primary text that only runs in the post.');
+  assert.deepEqual(pr.audit!.result.copy_match.map((r: any) => r.status), []);
+  assert.equal((await pf.setReady(postStub, true, 'nick')).status, 'ready');
+  assert.equal((await pf.report(headlineStub)).status.status, 'open', 'each code is marked on its own');
+  const hand2 = S.parseCsv(await pf.handoffCsv());
+  assert.equal(hand2.find(r => r[0] === postStub)![5], headlineStub, 'the handoff says which codes share the visual');
 
   // An OpenAI outage fails the audit as retryable; running it again on the same upload works.
   const { FatalError } = await import('../src/services/audit/api.js');

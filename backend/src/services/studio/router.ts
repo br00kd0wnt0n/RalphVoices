@@ -186,7 +186,8 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
       next();
     }), wrap(async (req, res) => {
       const list = ((req as any).files || []) as Express.Multer.File[];
-      const up = await pf.upload(req.params.stub, list.map(f => ({ buffer: f.buffer, filename: f.originalname, contentType: f.mimetype })), o.who(req));
+      const also = ([] as string[]).concat((req.body?.also as any) || []).flatMap(x => String(x).split(',')).map(x => x.trim()).filter(Boolean);
+      const up = await pf.upload(req.params.stub, list.map(f => ({ buffer: f.buffer, filename: f.originalname, contentType: f.mimetype })), o.who(req), also);
       res.json({ ...up, estimate: await pf.estimate(up.upload_id) });
     }));
     r.get('/preflight/uploads/:id/estimate', wrap(async (req, res) => res.json(await pf.estimate(req.params.id))));

@@ -7,12 +7,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { HOSTED, getUser, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type CompareSet, type Flag, type Line, type Meta, type OwnLine, type RunSummary, type ShortRow, type StudioEvent, type Territory, type Tone, type EditRecord, type LineVersion, type Reveal, type ComplianceStatus, type ReadyView, type RulesVersion, type PfStub, type PfReport, type PfFlag } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
-import { ArrowLeft, ScrollText, Shuffle } from 'lucide-react';
+import { ArrowLeft, HelpCircle, ScrollText, Shuffle } from 'lucide-react';
 
 const PINK = '#D94D8F';
 type Tab = 'home' | 'territories' | 'brief' | 'review' | 'shortlist' | 'ready' | 'preflight' | 'compare' | 'rules';
 // The writing flow, in order. Blind compare sits apart from it; Live comes later (B3b).
 const FLOW: Array<[Tab, string]> = [['territories', 'Territories'], ['brief', 'Write & brief'], ['review', 'Review'], ['shortlist', 'Shortlist'], ['ready', 'Ready for production'], ['preflight', 'Pre-flight']];
+// Below 1440 px (and inside the tools.ralph.world frame) the bar uses short labels; the full name is in the tooltip.
+const SHORT: Partial<Record<Tab, string>> = { brief: 'Write', ready: 'Ready' };
 // Deep links for the demo: /studio?tab=review&batch=<id>&open=L07 (opens that line's first flag), &compare=<name>,
 // ?tab=ready&persona=<P>&territory=<T>, ?tab=preflight&stub=<naming code>.
 const params = new URLSearchParams(window.location.search);
@@ -54,15 +56,15 @@ function Lockup({ onHome, small }: { onHome?: () => void; small?: boolean }) {
   }, []);
   return (
     <button onClick={onHome} className="flex shrink-0 items-center gap-3" aria-label="VOICES Studio: how it works">
-      <img src="/ralph-world.png" alt="Ralph" className={cn('object-contain drop-shadow-[0_0_10px_rgba(217,77,143,0.35)]', small ? 'h-7 w-7' : 'h-8 w-8')} />
-      <span className={cn('font-light leading-none text-[#ECEDEF]', small ? 'text-lg' : 'text-xl')} style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>
+      <img src="/ralph-world.png" alt="Ralph" className={cn('object-contain drop-shadow-[0_0_10px_rgba(217,77,143,0.35)]', small ? 'h-7 w-7' : 'h-7 w-7 min-[1440px]:h-8 min-[1440px]:w-8')} />
+      <span className={cn('font-light leading-none text-[#ECEDEF]', small ? 'text-lg' : 'text-lg min-[1440px]:text-xl')} style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>
         Voices <span className="font-medium" style={{ color: PINK }}>Studio</span>
       </span>
       <span className={cn('text-[#646A75]', small ? 'text-sm' : 'text-base')} aria-hidden>×</span>
       {clientLogo
         ? <img src={clientLogo} alt="Trupanion" onError={() => setClientLogo(null)} className={cn('w-auto object-contain opacity-95', small ? 'h-4' : 'h-5')} />
         // No logo asset (production, Brook 28 Sep): the client's name as a wordmark.
-        : <span className={cn('font-semibold tracking-tight text-[#ECEDEF]', small ? 'text-base' : 'text-lg')} style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>Trupanion</span>}
+        : <span className={cn('font-semibold tracking-tight text-[#ECEDEF]', small ? 'text-base' : 'text-base min-[1440px]:text-lg')} style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>Trupanion</span>}
     </button>
   );
 }
@@ -72,7 +74,9 @@ function Lockup({ onHome, small }: { onHome?: () => void; small?: boolean }) {
 export function Studio() {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [err, setErr] = useState('');
-  const [tab, setTab] = useState<Tab>((params.get('tab') as Tab) || 'home');
+  const [tab, setTabState] = useState<Tab>((params.get('tab') as Tab) || 'home');
+  // Every step opens at the top, so moving on never looks like staying put.
+  const setTab = useCallback((t: Tab) => { setTabState(t); window.scrollTo({ top: 0 }); }, []);
   const [brief, setBrief] = useState<Brief>({ persona: 'DINK', territory: 'DINK_NEVER', fields: [], tone: { dry_warm: 3, playful_plain: 3, short_long: 2 }, banned_words: [], banned_ideas: [], reference_lines: [], n: 20, model: 'gpt-4o' });
   const [batch, setBatch] = useState<Batch | null>(null);
   const [status, setStatus] = useState('');
@@ -202,17 +206,19 @@ export function Studio() {
 
   return (
     <div className="min-h-screen bg-[#0E0F12] text-[#ECEDEF] [&_input:not([type=range]):not([type=file])]:bg-[#101216] [&_input]:text-[#ECEDEF] [&_textarea]:bg-[#101216] [&_textarea]:text-[#ECEDEF] [&_select]:bg-[#101216] [&_select]:text-[#ECEDEF] [&_input::placeholder]:text-[#646A75] [&_textarea::placeholder]:text-[#646A75]" style={{ fontSize: 16 }}>
-      <header className="sticky top-0 z-20 flex h-16 flex-nowrap items-center gap-4 border-b border-[#272B34] bg-[#16181D] px-6">
+      <header className="sticky top-0 z-20 flex h-16 flex-nowrap items-center gap-3 border-b border-[#272B34] bg-[#16181D] px-4 min-[1440px]:gap-4 min-[1440px]:px-6">
         {HOSTED && <a href="/" title="Back to Voices" className="-mr-2 rounded-lg p-1.5 text-[#858B96] hover:bg-[#1C1F26] hover:text-[#ECEDEF]"><ArrowLeft className="h-4 w-4" aria-label="Back to Voices" /></a>}
         <Lockup onHome={() => setTab('home')} />
         <nav className="flex min-w-0 flex-nowrap items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <GhostButton active={tab === 'home'} onClick={() => setTab('home')} className="whitespace-nowrap border-transparent px-3 py-1.5 text-sm">How it works</GhostButton>
+          <GhostButton active={tab === 'home'} onClick={() => setTab('home')} title="How it works" aria-label="How it works" className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-2 py-1.5 text-sm">
+            <HelpCircle className="h-4 w-4 min-[1600px]:hidden" aria-hidden /><span className="hidden min-[1600px]:inline">How it works</span>
+          </GhostButton>
           <span className="mx-1 h-5 w-px bg-[#343946]" aria-hidden />
           {FLOW.map(([t, label], i) => (
             <span key={t} className="flex items-center">
-              <GhostButton active={tab === t} onClick={() => setTab(t)} className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-1.5 py-1.5 text-sm">
-                <span className={cn('flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold', tab === t ? 'bg-[#0E0F12] text-white' : 'bg-[#272B34] text-[#A3A8B1]')}>{i + 1}</span>
-                {t === 'review' && batch ? `Review (${batch.lines.length})` : label}
+              <GhostButton active={tab === t} onClick={() => setTab(t)} title={label} aria-label={label} className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-1.5 py-1.5 text-sm">
+                <span className={cn('hidden h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold min-[1280px]:flex', tab === t ? 'bg-[#0E0F12] text-white' : 'bg-[#272B34] text-[#A3A8B1]')}>{i + 1}</span>
+                {t === 'review' && batch ? `Review (${batch.lines.length})` : SHORT[t] ? <><span className="min-[1440px]:hidden">{SHORT[t]}</span><span className="hidden min-[1440px]:inline">{label}</span></> : label}
               </GhostButton>
             </span>
           ))}
@@ -266,8 +272,7 @@ export function Studio() {
 
 const STEPS: Array<{ title: string; what: string; you: string }> = [
   { title: 'Territories', what: 'Start from the pitch; update them as feedback comes in.', you: 'Edit, add or retire territories.' },
-  { title: 'Write', what: 'Your lines come first, checked in seconds.', you: 'Write a few lines; pick fields and tone.' },
-  { title: 'Generate', what: 'About 20 lines around yours, in your voice, covering what you didn’t.', you: 'Watch them arrive, already checked.' },
+  { title: 'Write & brief', what: 'Your lines come first, checked in seconds; then about 20 more around them, in your voice.', you: 'Write a few lines, pick fields and tone, then generate.' },
   { title: 'Review', what: 'Length, flags with their sources, and a skeptic’s objection.', you: 'Keep, cut, edit, or ask for more like this.' },
   { title: 'Shortlist', what: 'Kept lines get naming codes. Runs are saved to continue later.', you: 'Curate in Sheets and import it back.' },
   { title: 'Ready for production', what: 'Red flags fixed or overridden with a reason, then the set is locked with your expectations.', you: 'Sign off, and hand over the pack.' },
@@ -286,7 +291,7 @@ function Home() {
 
       <section>
         <h2 className="mb-3 text-lg font-semibold">How Voices Studio works</h2>
-        <ol className="grid grid-cols-7 gap-3">
+        <ol className="grid grid-cols-6 gap-3">
           {STEPS.map((st, i) => (
             <li key={st.title}>
               <div className="flex h-full w-full flex-col rounded-xl border border-[#272B34] bg-[#16181D] p-4">
@@ -645,14 +650,17 @@ function TerritoryEditor({ meta, code, territory, persona, onDone }: { meta: Met
 function Review({ meta, batch, setBatch, status, running, onMore, onMoreRun, onDecided }: { meta: Meta; batch: Batch | null; setBatch: React.Dispatch<React.SetStateAction<Batch | null>>; status: string; running: boolean; onMore: (l: Line, note: string) => void; onMoreRun: () => void; onDecided: () => void }) {
   const [group, setGroup] = useState<'angle' | 'structure'>('angle');
   const [filter, setFilter] = useState<'all' | 'compliance' | 'open' | 'kept'>('all');
+  // Lines decided while a filter is on stay where they are until the filter or grouping changes (no jumping under the cursor).
+  const [stay, setStay] = useState<Set<string>>(new Set());
+  useEffect(() => { setStay(new Set()); }, [filter, group, batch?.id]);
   const [batches, setBatches] = useState<RunSummary[]>([]);
   useEffect(() => { studio.batches().then(setBatches).catch(() => {}); }, [batch?.id, running]);
 
   if (!batch) return <div className="text-base text-[#858B96]">No run open yet. Write your lines on the brief tab, or continue a saved run.</div>;
   const yours = batch.lines.filter(l => l.model === 'human').length;
   const checked = batch.lines.filter(l => l.status === 'checked').length;
-  const shown = batch.lines.filter(l =>
-    filter === 'all' ? true : filter === 'compliance' ? l.flags.some(f => f.severity === 'compliance') : filter === 'open' ? !l.decision : l.decision === 'keep' || l.decision === 'edit');
+  const shown = batch.lines.filter(l => stay.has(l.id) ||
+    (filter === 'all' ? true : filter === 'compliance' ? l.flags.some(f => f.severity === 'compliance') : filter === 'open' ? !l.decision : l.decision === 'keep' || l.decision === 'edit'));
   const groups = new Map<string, Line[]>();
   for (const l of shown) {
     const k = group === 'angle' ? `${l.angle} · ${l.angle_label}` : l.structure.replace('_', ' ');
@@ -694,7 +702,7 @@ function Review({ meta, batch, setBatch, status, running, onMore, onMoreRun, onD
         <section key={g}>
           <h2 className="mb-3 mt-2 text-lg font-bold capitalize">{g} <span className="font-normal text-[#858B96]">({ls.length})</span></h2>
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            {ls.map(l => <LineCard key={l.id} meta={meta} line={l} onChange={x => { replace(x); onDecided(); }} onMore={onMore} />)}
+            {ls.map(l => <LineCard key={l.id} meta={meta} line={l} onChange={x => { if (filter !== 'all') setStay(cur => new Set(cur).add(x.id)); replace(x); onDecided(); }} onMore={onMore} />)}
           </div>
         </section>
       ))}
@@ -729,9 +737,12 @@ function LineCard({ meta, line, onChange, onMore }: { meta: Meta; line: Line; on
         {line.parent && <Chip tone="outline">more like {line.parent.split('-').pop()}</Chip>}
         {line.status !== 'checked' && <span className="animate-pulse" style={{ color: PINK }}>checking…</span>}
         {line.ready && <Chip tone="outline" className="border-emerald-500/60 text-emerald-300" title={`Signed off by ${line.ready.ready_by}, ${when(line.ready.ready_at)}`}>ready v{line.ready.version}{line.ready.changed_since ? ' · edited since' : ''}</Chip>}
-        {line.decided_by && line.decision
-          ? <button onClick={() => setHistory(!history)} className="ml-auto text-xs text-[#858B96] underline-offset-2 hover:text-[#ECEDEF] hover:underline" title="Who decided what, and when">{line.decision} · {line.decided_by}{line.decided_at ? ` · ${when(line.decided_at)}` : ''}</button>
-          : <button onClick={() => setHistory(!history)} className="ml-auto text-xs text-[#646A75] hover:text-[#ECEDEF]">history</button>}
+      </div>
+      {/* Who decided, on a line of its own with a fixed height: a decision never changes the card's size, so nothing below it moves. */}
+      <div className="-mt-1 mb-1 flex h-5 items-center justify-end text-xs">
+        <button onClick={() => setHistory(!history)} className={cn('truncate underline-offset-2 hover:text-[#ECEDEF] hover:underline', line.decided_by && line.decision ? 'text-[#858B96]' : 'text-[#646A75]')} title="Who decided what, and when">
+          {line.decided_by && line.decision ? `${line.decision} · ${line.decided_by}${line.decided_at ? ` · ${when(line.decided_at)}` : ''}` : 'history'}
+        </button>
       </div>
 
       {editing ? (
@@ -1358,6 +1369,16 @@ function AuthMedia({ path, video, className, alt }: { path: string; video?: bool
   return video ? <video src={url} controls preload="metadata" className={cn('rounded-lg bg-black', className)} /> : <img src={url} alt={alt || ''} className={cn('rounded-lg object-contain bg-[#101216]', className)} />;
 }
 
+/** Codes grouped by the visual they run on (codes sharing an upload together), in list order. */
+function byVisual(ss: PfStub[]): Array<[string, PfStub[]]> {
+  const groups = new Map<string, PfStub[]>();
+  for (const s of ss) {
+    const k = s.upload ? `u:${s.upload.id}` : `s:${s.stub}`;
+    groups.set(k, [...(groups.get(k) || []), s]);
+  }
+  return [...groups.entries()].map(([k, g]) => [k.startsWith('u:') ? g[0].upload!.files.map(f => f.filename).join(', ') : '', g]);
+}
+
 function stubState(s: PfStub): { words: string; tone: 'grey' | 'amber' | 'red' | 'outline'; className?: string } {
   if (s.status.status === 'ready') return { words: 'Ready to traffic', tone: 'outline', className: 'border-emerald-500 text-emerald-300' };
   if (!s.upload) return { words: 'not uploaded', tone: 'grey' };
@@ -1397,11 +1418,11 @@ function Preflight({ meta }: { meta: Meta }) {
 
   if (!enabled) return <div className="max-w-3xl rounded-xl border border-[#272B34] bg-[#16181D] p-6 text-base text-[#A3A8B1]">Pre-flight needs the database: in <code>backend/</code>, run <code>npx tsx scripts/studio.ts serve --store pg --database-url …</code> (hosted Studio has it on).</div>;
 
-  async function upload() {
+  async function upload(also: string[]) {
     if (!sel || !files.length) return;
     setError(''); setProgress('Uploading…');
     try {
-      const r = await studio.pfUpload(sel, files);
+      const r = await studio.pfUpload(sel, files, also);
       setPending({ upload_id: r.upload_id, estimate: r.estimate });
       setFiles([]); setProgress('');
       await refresh();
@@ -1460,10 +1481,11 @@ function Preflight({ meta }: { meta: Meta }) {
               <section key={k} className="rounded-xl border border-[#272B34] bg-[#16181D] p-3">
                 <div className="mb-2 px-1 text-sm font-semibold">{meta.personas[ss[0].persona]?.name || ss[0].persona} · {meta.territories[ss[0].territory]?.name || ss[0].territory}</div>
                 <ul className="space-y-1.5">
-                  {ss.map(s => {
+                  {byVisual(ss).map(([visual, group]) => group.map((s, gi) => {
                     const st = stubState(s);
                     return (
-                      <li key={s.stub}>
+                      <li key={s.stub} className={cn(visual && group.length > 1 && gi > 0 && '-mt-1 ml-3 border-l-2 border-[#343946] pl-2')}>
+                        {visual && gi === 0 && group.length > 1 && <div className="mb-1 px-1 text-xs text-[#858B96]">One visual, {group.length} codes: {visual}</div>}
                         <button onClick={() => setSel(s.stub)} className={cn('w-full rounded-lg border px-3 py-2 text-left transition', sel === s.stub ? 'border-[#D94D8F] bg-[#D94D8F]/10' : 'border-[#272B34] hover:border-[#4A505D]')}>
                           <div className="flex items-center gap-2">
                             <span className="truncate font-mono text-sm">{s.stub}</span>
@@ -1473,7 +1495,7 @@ function Preflight({ meta }: { meta: Meta }) {
                         </button>
                       </li>
                     );
-                  })}
+                  }))}
                 </ul>
               </section>
             ))}
@@ -1481,7 +1503,7 @@ function Preflight({ meta }: { meta: Meta }) {
 
           <main className="min-w-0 space-y-4">
             {!report && <div className="text-base text-[#858B96]">Loading…</div>}
-            {report && <PreflightReport meta={meta} report={report} canReady={canReady} progress={progress} pending={pending} files={files} setFiles={setFiles}
+            {report && <PreflightReport meta={meta} report={report} stubs={stubs} canReady={canReady} progress={progress} pending={pending} files={files} setFiles={setFiles}
               onUpload={upload} onAudit={runAudit} onChanged={refresh} onError={setError} />}
           </main>
         </div>
@@ -1490,12 +1512,14 @@ function Preflight({ meta }: { meta: Meta }) {
   );
 }
 
-function PreflightReport({ meta, report, canReady, progress, pending, files, setFiles, onUpload, onAudit, onChanged, onError }: {
-  meta: Meta; report: PfReport; canReady: boolean; progress: string;
+function PreflightReport({ meta, report, stubs, canReady, progress, pending, files, setFiles, onUpload, onAudit, onChanged, onError }: {
+  meta: Meta; report: PfReport; stubs: PfStub[]; canReady: boolean; progress: string;
   pending: { upload_id: string; estimate: { usd: number; seconds: number } } | null;
-  files: File[]; setFiles: (f: File[]) => void; onUpload: () => void; onAudit: (uploadId: string) => void;
+  files: File[]; setFiles: (f: File[]) => void; onUpload: (also: string[]) => void; onAudit: (uploadId: string) => void;
   onChanged: () => Promise<void>; onError: (m: string) => void;
 }) {
+  // Tolerate a server from before shared visuals / post copy (fields missing).
+  report = { ...report, same_visual_as: report.same_visual_as ?? [], on_asset_copy: report.on_asset_copy ?? report.copy, post_copy: report.post_copy ?? [] };
   const a = report.audit;
   const res = a?.result || null;
   const up = report.upload;
@@ -1509,7 +1533,11 @@ function PreflightReport({ meta, report, canReady, progress, pending, files, set
   const ready = report.status.status === 'ready';
   const readyBlock = !up ? 'Upload the asset first.' : !auditForLatest ? 'Run the audit on this upload first.' : !a ? 'Run the audit first.' : a.status === 'running' || a.status === 'queued' ? 'The audit is still running.' : a.status === 'failed' ? 'The audit failed; run it again.' : openRed ? `${openRed} red flag${openRed === 1 ? '' : 's'} to fix (a new upload) or override.` : '';
   const act = async (fn: () => Promise<unknown>) => { try { await fn(); await onChanged(); } catch (e: any) { onError(e.body?.blocking ? `${e.message}: ${e.body.blocking.map((b: any) => b.label || b.rule).join('; ')}` : e.message); } };
-  const copyRows = res?.report?.copy_match;
+  const copyRows = res?.copy_match ?? res?.report?.copy_match;
+  const [also, setAlso] = useState<string[]>([]);
+  useEffect(() => { setAlso([]); }, [report.stub]);
+  // Other signed-off codes in the same set: 2-3 copy lines often run on one visual.
+  const siblings = stubs.filter(s => s.stub !== report.stub && s.persona === report.persona && s.territory === report.territory);
   const secs = (n: number) => (n >= 90 ? `${Math.round(n / 60)} min` : `${Math.round(n)} s`);
   const tagged = res ? Object.entries(res.features || {}).filter(([, p]) => p >= 0.5).sort((x, y) => y[1] - x[1]) : [];
 
@@ -1531,11 +1559,20 @@ function PreflightReport({ meta, report, canReady, progress, pending, files, set
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
         <div className="space-y-4">
-          <section className="rounded-xl border border-[#272B34] bg-[#16181D] p-4">
-            <Label>Signed-off copy</Label>
-            <ul className="space-y-2">
-              {report.copy.map(c => <li key={c.line_id}><div className="text-xs text-[#858B96]">{c.label} · v{c.version}</div><div className="text-base leading-snug text-[#F2F3F5]">{c.text}</div></li>)}
-            </ul>
+          <section className="space-y-3 rounded-xl border border-[#272B34] bg-[#16181D] p-4">
+            {report.same_visual_as.length > 0 && <p className="text-sm text-[#A3A8B1]">Same visual as <span className="font-mono">{report.same_visual_as.join(', ')}</span>. Checked once; copy match is for this code’s own lines.</p>}
+            <div>
+              <Label>On the asset (checked against it)</Label>
+              {report.on_asset_copy.length
+                ? <ul className="space-y-2">{report.on_asset_copy.map(c => <li key={c.line_id}><div className="text-xs text-[#858B96]">{c.label} · v{c.version}</div><div className="text-base leading-snug text-[#F2F3F5]">{c.text}</div></li>)}</ul>
+                : <p className="text-sm text-[#858B96]">None: this code’s copy all runs in the post.</p>}
+            </div>
+            {report.post_copy.length > 0 && (
+              <div>
+                <Label>Post copy (travels with the ad, not checked against the asset)</Label>
+                <ul className="space-y-2">{report.post_copy.map(c => <li key={c.line_id}><div className="text-xs text-[#858B96]">{c.label} · v{c.version}</div><div className="text-base leading-snug text-[#C9CCD2]">{c.text}</div></li>)}</ul>
+              </div>
+            )}
           </section>
 
           <section className="rounded-xl border border-[#272B34] bg-[#16181D] p-4">
@@ -1556,8 +1593,20 @@ function PreflightReport({ meta, report, canReady, progress, pending, files, set
             <div className="mt-3 space-y-2 border-t border-[#272B34] pt-3">
               <input key={up?.id || 'none'} type="file" multiple accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime" onChange={e => setFiles([...(e.target.files || [])])} className="text-sm" />
               <p className="text-xs text-[#646A75]">One image (static), several images (carousel cards, in order), or one video (MP4, MOV). A new upload replaces the asset and reopens it for review.</p>
+              {siblings.length > 0 && files.length > 0 && (
+                <fieldset className="rounded-lg border border-[#272B34] px-3 py-2">
+                  <legend className="px-1 text-xs text-[#858B96]">Also use this visual for (the same asset, another copy line)</legend>
+                  {siblings.map(s => (
+                    <label key={s.stub} className="flex cursor-pointer items-center gap-2 py-0.5 text-sm">
+                      <input type="checkbox" className="h-4 w-4 accent-[#D94D8F]" checked={also.includes(s.stub)} onChange={e => setAlso(cur => e.target.checked ? [...cur, s.stub] : cur.filter(x => x !== s.stub))} />
+                      <span className="font-mono">{s.stub}</span>
+                      <span className="truncate text-[#858B96]">{s.copy.map(c => c.text).join(' · ')}</span>
+                    </label>
+                  ))}
+                </fieldset>
+              )}
               <div className="flex flex-wrap items-center gap-2">
-                <PinkButton className="px-4 py-1.5 text-base" disabled={!files.length || !!progress} onClick={onUpload}>{up ? 'Upload a new version' : 'Upload'}</PinkButton>
+                <PinkButton className="px-4 py-1.5 text-base" disabled={!files.length || !!progress} onClick={() => onUpload(also)}>{up ? 'Upload a new version' : 'Upload'}</PinkButton>
                 {files.length > 0 && <span className="text-sm text-[#858B96]">{files.length} file{files.length === 1 ? '' : 's'}</span>}
               </div>
               {(pending || (up && !auditForLatest)) && !progress && (
@@ -1602,7 +1651,7 @@ function PreflightReport({ meta, report, canReady, progress, pending, files, set
           <section className="rounded-xl border-2 bg-[#16181D] p-4" style={{ borderColor: PINK }}>
             <h2 className="mb-2 text-lg font-semibold">Copy match</h2>
             <p className="mb-3 text-sm text-[#A3A8B1]">Does the asset carry the signed-off wording? A missing caveat is red.</p>
-            {!auditedLatest && <p className="text-sm text-[#858B96]">Run the audit to check.</p>}
+            {!auditedLatest && <p className="text-sm text-[#858B96]">{report.on_asset_copy.length ? 'Run the audit to check.' : 'Nothing to compare: this code’s copy runs in the post, not on the asset.'}</p>}
             {auditedLatest && copyRows && copyRows.length > 0 && (
               <table className="w-full text-left text-sm">
                 <thead><tr className="text-xs uppercase text-[#858B96]"><th className="pb-1 pr-3">Field</th><th className="pb-1 pr-3">Signed off</th><th className="pb-1 pr-3">On the asset</th><th className="pb-1">Result</th></tr></thead>
@@ -1616,7 +1665,8 @@ function PreflightReport({ meta, report, canReady, progress, pending, files, set
                 ))}</tbody>
               </table>
             )}
-            {auditedLatest && !copyRows && (main.some(f => f.check === 'copy_match')
+            {auditedLatest && (!copyRows || !copyRows.length) && !report.on_asset_copy.length && <p className="text-sm text-[#858B96]">Nothing to compare: this code’s copy runs in the post, not on the asset.</p>}
+            {auditedLatest && !copyRows && report.on_asset_copy.length > 0 && (main.some(f => f.check === 'copy_match')
               ? <p className="text-sm text-red-200">See the copy-match flag{main.filter(f => f.check === 'copy_match').length === 1 ? '' : 's'} below.</p>
               : <p className="text-sm text-emerald-200">The signed-off wording is on the asset.</p>)}
           </section>

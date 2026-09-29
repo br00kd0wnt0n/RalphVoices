@@ -47,7 +47,7 @@ export function b2Engine(opts: { tpm?: number; capUsd?: () => Promise<number>; f
     estimate(i) {
       // Sync in B2; needs the file bytes (it probes video duration). Rules and rubric are passed in by Preflight.
       const files: AuditFile[] = i.files.map((f, n) => ({ name: b2Name(n, f.filename), mime: f.contentType, data: f.data || Buffer.alloc(0) }));
-      const e = estimateAudit({ stub: i.stub, persona: i.persona, files, copy: signedOffCopy(i.copy) }, { rules: i.rules, rubric: i.rubric, ffmpegPath: opts.ffmpegPath, tpm: opts.tpm });
+      const e = estimateAudit({ stub: i.stub, persona: i.persona, files }, { rules: i.rules, rubric: i.rubric, ffmpegPath: opts.ffmpegPath, tpm: opts.tpm });
       return { usd: e.usd, seconds: e.seconds };
     },
     async run(i: AuditInput, progress) {
@@ -58,7 +58,8 @@ export function b2Engine(opts: { tpm?: number; capUsd?: () => Promise<number>; f
       const files: AuditFile[] = i.files.map((f, n) => ({ name: b2Name(n, f.filename), mime: f.contentType, data: fs.readFileSync(f.path) }));
       const capUsd = opts.capUsd ? await opts.capUsd() : undefined;
       const report = await runAudit(
-        { stub: i.stub, persona: i.persona, files, copy: signedOffCopy(i.copy) },
+        // No copy: the lines were checked at sign-off, and copy match runs in Studio per stub the visual serves.
+        { stub: i.stub, persona: i.persona, files },
         {
           rules: i.rules, rubric, openai, personas, ffmpegPath: opts.ffmpegPath, tesseractPath: opts.tesseractPath, tpm: opts.tpm, capUsd,
           onProgress: e => progress(`${e.message}${e.calls_estimated ? ` (${e.calls_done}/${e.calls_estimated})` : ''}`),
@@ -82,6 +83,7 @@ export function fromReport(r: AuditReport): AuditResult {
     engine: `b2 (report v${r.report_version})`,
     flags: [...r.flags.map(flag), ...r.cross_persona.map(f => ({ ...flag(f), cross_persona: true }))],
     text_found: r.frames.map(f => `${f.label}: ${f.text}`).join('\n'),
+    asset_text: [...r.frames.map(f => ({ where: f.label, text: f.text })), ...(r.transcript?.text ? [{ where: 'voice-over', text: r.transcript.text }] : [])],
     transcript: r.transcript?.text,
     features: r.features,
     objection: r.objection,

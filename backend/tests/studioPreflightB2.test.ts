@@ -10,6 +10,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { loadRules, loadRubric } from '../src/services/audit/rules.js';
 import { b2Engine, signedOffCopy } from '../src/services/studio/preflightB2.js';
+import { copyMatchForStub } from '../src/services/studio/preflight.js';
 
 const FX = path.join(__dirname, 'fixtures/audit');
 const hasFfmpeg = (() => { try { execFileSync('which', ['ffmpeg'], { stdio: 'ignore' }); return true; } catch { return false; } })();
@@ -36,7 +37,7 @@ test('Studio fields map to B2 signed-off copy fields', () => {
   assert.deepEqual(c, { hook: 'Your vet gets paid, at participating hospitals.', primary_text: 'Primary.' });
 });
 
-test('a hook with its caveat dropped from the asset: copy match is the first flag, on card 1', { skip: !hasFfmpeg && 'needs ffmpeg' }, async () => {
+test('B2 reads the asset; Studio’s per-stub copy match finds the dropped caveat (red, on card 1); post copy is never compared', { skip: !hasFfmpeg && 'needs ffmpeg' }, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-b2-'));
   const img = path.join(dir, 'card.png');
   execFileSync('ffmpeg', ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=320x320', '-frames:v', '1', img]);
@@ -52,11 +53,16 @@ test('a hook with its caveat dropped from the asset: copy match is the first fla
   const msgs: string[] = [];
   const r = await engine.run(input, m => msgs.push(m));
   assert.ok(msgs.length, 'progress reported');
-  assert.equal(r.flags[0].check, 'copy_match', JSON.stringify(r.flags.map(f => f.rule)));
-  assert.equal(r.flags[0].severity, 'red');
-  assert.match(r.flags[0].quote || r.flags[0].why || '', /participating hospital/);
-  assert.equal(r.flags[0].frame?.asset_position ?? 0, 0);
+  assert.equal(r.flags.some(f => f.check === 'copy_match'), false, 'the engine only reads the asset; copy match is Studio’s');
   assert.match(r.text_found, /Your vet can be paid directly/);
+  assert.deepEqual(r.asset_text?.map(t => t.where), ['image']);
+  const cm = copyMatchForStub(copy, r.asset_text!, rules, 'static');
+  const red = cm.flags.find(f => f.severity === 'red')!;
+  assert.equal(red.rule, 'COPY_CAVEAT');
+  assert.match(red.quote || '', /participating hospital/);
+  // Post copy (the Meta primary text) is never compared, even though it isn't on the image.
+  const post = copyMatchForStub([{ line_id: 'P', field: 'meta_primary', label: 'Meta primary text', text: 'Only in the post.', version: 1 }], r.asset_text!, rules, 'static');
+  assert.deepEqual([post.rows.length, post.flags.length], [0, 0]);
   assert.equal(r.objection, 'Sounds nice, but what does it cost?');
   assert.ok(r.report && r.report.report_version === 1);
   fs.rmSync(dir, { recursive: true, force: true });
