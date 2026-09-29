@@ -15,7 +15,8 @@ import os from 'node:os';
 import path from 'node:path';
 import type pg from 'pg';
 import * as S from './engine.js';
-import type { Signoff } from './ready.js';
+import { latestSignoffs, type Signoff } from './ready.js';
+import { DEFAULT_REGION, parseCode, visualKey, type Region } from '../../utils/namingCode.js';
 import { downloadPrivateObject, getPrivateObject, getPrivateObjectStream, isR2Enabled, putPrivateObject } from '../r2.js';
 import { FatalError } from '../audit/api.js';
 import type { AssetKind, AuditEngine, AuditFlag, AuditResult, SignedCopy } from './preflightEngine.js';
@@ -56,7 +57,12 @@ export interface UploadFile { buffer?: Buffer; path?: string; size?: number; fil
 const sizeOf = (f: UploadFile) => f.buffer ? f.buffer.length : f.size ?? fs.statSync(f.path!).size;
 const bytesOf = (f: UploadFile) => f.buffer ?? fs.readFileSync(f.path!);
 export interface StubRow {
-  stub: string; persona: string; territory: string; signoff_id: string; ready_by: string; ready_at: string;
+  stub: string; persona: string; territory: string;
+  /** US or CA (v# codes and sign-offs from before regions: US). */
+  region: Region;
+  /** Codes on the same visual share this (the code without its line number); null for a v# code. Pre-flight suggests them as one upload. */
+  visual_key: string | null;
+  signoff_id: string; ready_by: string; ready_at: string;
   copy: SignedCopy[];
   upload: { id: string; kind: AssetKind; files: Array<{ position: number; filename: string; content_type: string; size: number }>; uploaded_by: string; uploaded_at: string; stubs: string[] } | null;
   audit: { id: string; status: string; usd: number; red: number; amber: number; grey: number; open_red: number; finished_at: string | null; error: string | null; stale: string | null } | null;
@@ -76,14 +82,15 @@ const kindOf = (files: UploadFile[]): AssetKind => {
 const fmtMb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`;
 /**
  * Does the uploaded kind fit the naming code's format? A note, never a block
- * (formats in codes: STATIC/ST, CAROUSEL/CAR, VIDEO/VID, UGC).
+ * (formats in codes, either form: ST, CAR, VID, UGC; STATIC etc. read the same).
  */
 export function formatNote(stub: string, kind: AssetKind): string | null {
-  const fmt = /_(STATIC|ST|CAROUSEL|CAR|VIDEO|VID|UGC)_v\d+_/i.exec(stub)?.[1]?.toUpperCase();
-  if (!fmt) return null;
-  const want: AssetKind[] = /^(STATIC|ST)$/.test(fmt) ? ['static'] : /^(CAROUSEL|CAR)$/.test(fmt) ? ['carousel'] : ['video'];
+  const p = parseCode(stub, null);
+  const fmt = 'error' in p ? null : p.format;
+  if (!fmt || fmt === 'TT') return null;
+  const want: AssetKind[] = fmt === 'ST' ? ['static'] : fmt === 'CAR' ? ['carousel'] : ['video'];
   if (want.includes(kind)) return null;
-  const name = { STATIC: 'a static image', ST: 'a static image', CAROUSEL: 'carousel cards', CAR: 'carousel cards', VIDEO: 'a video', VID: 'a video', UGC: 'a video (UGC)' }[fmt];
+  const name = ({ ST: 'a static image', CAR: 'carousel cards', VID: 'a video', UGC: 'a video (UGC)' } as Record<string, string>)[fmt];
   return `This code is for ${name}, but a ${kind} was uploaded. Check it’s the right asset, or that the code’s format is right.`;
 }
 
@@ -172,14 +179,7 @@ export class Preflight {
 
   // ---------- what can be uploaded: the latest sign-off per persona × territory ----------
 
-  private async latestSignoffs(): Promise<Signoff[]> {
-    const latest = new Map<string, Signoff>();
-    for (const s of (await S.getStore().listSignoffs()) as Signoff[]) {
-      const k = `${s.persona}|${s.territory}`;
-      if (!latest.has(k) || latest.get(k)!.version < s.version) latest.set(k, s);
-    }
-    return [...latest.values()].sort((a, b) => a.territory.localeCompare(b.territory));
-  }
+  private latestSignoffs(): Promise<Signoff[]> { return latestSignoffs(); }
 
   /** The signed-off copy for a stub, with field labels. */
   private copyFor(s: Signoff, stub: string): SignedCopy[] {
@@ -187,15 +187,13 @@ export class Preflight {
     return s.lines.filter(l => l.stub === stub).map(l => ({ line_id: l.line_id, field: l.field, label: r.fields[l.field]?.label || l.field, text: l.text, version: l.version }));
   }
 
-  async stubs(filter: { persona?: string; territory?: string } = {}): Promise<StubRow[]> {
+  async stubs(filter: { persona?: string; territory?: string; region?: string } = {}): Promise<StubRow[]> {
     await this.expireStuck();
     const out: StubRow[] = [];
-    for (const s of await this.latestSignoffs()) {
-      if (filter.persona && s.persona !== filter.persona) continue;
-      if (filter.territory && s.territory !== filter.territory) continue;
+    for (const s of await latestSignoffs(filter)) {
       for (const stub of [...new Set(s.lines.map(l => l.stub))].sort()) {
         out.push({
-          stub, persona: s.persona, territory: s.territory, signoff_id: s.id, ready_by: s.ready_by, ready_at: s.ready_at,
+          stub, persona: s.persona, territory: s.territory, region: s.region || DEFAULT_REGION, visual_key: visualKey(stub), signoff_id: s.id, ready_by: s.ready_by, ready_at: s.ready_at,
           copy: this.copyFor(s, stub),
           upload: await this.latestUpload(stub), audit: await this.latestAuditSummary(stub), status: await this.status(stub),
         });
@@ -216,10 +214,15 @@ export class Preflight {
     if (!files.length) throw new Error('Choose a file to upload');
     const { signoff } = await this.findStub(stub);
     const stubs = [stub, ...new Set(also.filter(x => x && x !== stub))];
+    const notes: string[] = [];
     for (const x of stubs.slice(1)) {
       // One visual, several copy lines, in one ad set: the audit runs once, for this persona, so the codes must share it.
       const o = (await this.findStub(x)).signoff;
       if (o.persona !== signoff.persona || o.territory !== signoff.territory) throw new Error(`${x} is for another persona or territory: the same visual can serve codes of the same persona and territory only (upload it to ${x} separately so it's audited for that persona)`);
+      // US and Canada run as separate ads: a Canadian version is its own visual.
+      if ((o.region || DEFAULT_REGION) !== (signoff.region || DEFAULT_REGION)) throw new Error(`${x} is for ${o.region === 'CA' ? 'Canada' : 'the US'}: US and Canadian ads are separate visuals (upload it to ${x} separately)`);
+      // The visual letter was fixed at sign-off; a shared upload across letters is allowed, with a note.
+      if (visualKey(x) && visualKey(stub) && visualKey(x) !== visualKey(stub)) notes.push(`${x} was signed off on another visual than ${stub} (the letters differ). The codes stay as signed off; check the same asset is meant for both.`);
     }
     const kind = kindOf(files);
     const cap = this.storage === 'r2' ? R2_FILE_CAP : DB_FILE_CAP;
@@ -239,7 +242,7 @@ export class Preflight {
     // The estimate is worked out now, from the files already here, and reused by the audit (no second download).
     const estimate = await this.estimateFrom({ stub, persona: signoff.persona, territory: signoff.territory, kind }, files);
     await this.db.query(`UPDATE studio_asset_uploads SET estimate = $2 WHERE id = $1`, [uploadId, estimate]);
-    return { upload_id: uploadId, kind, storage: this.storage, stubs, format_notes: stubs.map(x => formatNote(x, kind)).filter(Boolean) as string[], estimate };
+    return { upload_id: uploadId, kind, storage: this.storage, stubs, format_notes: [...stubs.map(x => formatNote(x, kind)).filter(Boolean) as string[], ...notes], estimate };
   }
 
   private async putFile(uploadId: string, stub: string, position: number, f: UploadFile, role: 'asset' | 'frame') {
@@ -454,7 +457,7 @@ export class Preflight {
          FROM studio_asset_uploads u JOIN studio_upload_stubs us ON us.upload_id = u.id WHERE us.stub = $1 ORDER BY u.uploaded_at DESC`, [stub])).rows.map(x => ({ ...x, files: Number(x.files), uploaded_at: new Date(x.uploaded_at).toISOString() }));
     const result = a?.result ? { ...a.result, copy_match: a.result.copy_match_by_stub?.[stub] ?? a.result.report?.copy_match } : null;
     return {
-      stub, persona: signoff.persona, territory: signoff.territory, signoff_id: signoff.id, copy, upload, history,
+      stub, persona: signoff.persona, territory: signoff.territory, region: signoff.region || DEFAULT_REGION, visual_key: visualKey(stub), signoff_id: signoff.id, copy, upload, history,
       same_visual_as: upload ? upload.stubs.filter(x => x !== stub) : [],
       format_note: upload ? formatNote(stub, upload.kind) : null,
       on_asset_copy: copy.filter(c => !POST_COPY_FIELDS.has(c.field)), post_copy: copy.filter(c => POST_COPY_FIELDS.has(c.field)),
@@ -573,7 +576,7 @@ export class Preflight {
 
   /** The asset handoff list: stub, file, status, open flags. */
   async handoffCsv(): Promise<string> {
-    const rows = [['Naming code', 'Persona', 'Territory', 'Kind', 'File', 'Same visual as', 'Status', 'Ready to traffic by', 'Ready to traffic at', 'Open red flags', 'Amber flags', 'Overridden red flags']];
+    const rows = [['Naming code', 'Region', 'Persona', 'Territory', 'Kind', 'File', 'Same visual as', 'Status', 'Ready to traffic by', 'Ready to traffic at', 'Open red flags', 'Amber flags', 'Overridden red flags']];
     for (const s of await this.stubs()) {
       let open = '', amber = '', overridden = '';
       if (s.audit) {
@@ -583,7 +586,7 @@ export class Preflight {
         overridden = f.filter(x => x.severity === 'red' && x.override).map(x => `${x.body.label || x.rule} (overridden by ${x.override.by}: “${x.override.reason}”)`).join('; ');
       }
       const status = s.status.status === 'ready' ? 'Ready to traffic' : !s.upload ? 'Not uploaded' : s.audit?.status === 'done' ? 'Needs review' : s.audit ? `Audit ${s.audit.status}` : 'Not audited';
-      rows.push([s.stub, s.persona, s.territory, s.upload?.kind || '', s.upload?.files.map(f => f.filename).join(' | ') || '', s.upload?.stubs.filter(x => x !== s.stub).join(' | ') || '', status, s.status.ready_by || '', s.status.ready_at || '', open, amber, overridden]);
+      rows.push([s.stub, s.region, s.persona, s.territory, s.upload?.kind || '', s.upload?.files.map(f => f.filename).join(' | ') || '', s.upload?.stubs.filter(x => x !== s.stub).join(' | ') || '', status, s.status.ready_by || '', s.status.ready_at || '', open, amber, overridden]);
     }
     return S.toCsv(rows);
   }

@@ -18,6 +18,8 @@ import { probabilityYes } from '../../utils/probes.js';
 import { mockClient } from './mock.js';
 import { claudeWrite, isClaude } from './claude.js';
 import { FileStore, type StudioStore } from './store.js';
+import { CURRENT_PATTERN, DEFAULT_REGION, REGIONS, type Region } from '../../utils/namingCode.js';
+import { CodeBook, regionOf } from './codes.js';
 
 // ---------- paths ----------
 
@@ -55,6 +57,8 @@ export interface Brief {
   name: string;
   persona: string;
   territory: string;
+  /** Where the ads run: US (default) or CA. US and Canada are separate ads; it goes into the naming code. */
+  region?: Region;
   fields: string[];
   tone: Tone;
   banned_words: string[];
@@ -84,6 +88,8 @@ export interface Line {
   batch: string;
   persona: string;
   territory: string;
+  /** From the run's brief; lines written before regions have none and read as US. */
+  region?: Region;
   field: string;
   text: string;
   chars: number;
@@ -609,9 +615,11 @@ export function makeBrief(input: Partial<Brief>): Brief {
   const fields = (input.fields && input.fields.length ? input.fields : pr.default_fields);
   for (const f of fields) if (!r.fields[f]) throw new Error(`Unknown field ${f}. Known: ${Object.keys(r.fields).join(', ')}`);
   const tone = { dry_warm: 3, playful_plain: 3, short_long: 2, ...(input.tone || {}) };
+  const region = String(input.region || DEFAULT_REGION).toUpperCase() as Region;
+  if (!REGIONS.includes(region)) throw new Error(`Region must be ${REGIONS.join(' or ')}`);
   return {
-    name: input.name || `${territory}-${stamp()}`,
-    persona, territory, fields,
+    name: input.name || `${territory}-${region === DEFAULT_REGION ? '' : `${region}-`}${stamp()}`,
+    persona, territory, region, fields,
     tone: { dry_warm: clamp15(tone.dry_warm), playful_plain: clamp15(tone.playful_plain), short_long: clamp15(tone.short_long) },
     banned_words: (input.banned_words || []).map(s => s.trim()).filter(Boolean),
     banned_ideas: (input.banned_ideas || []).map(s => s.trim()).filter(Boolean),
@@ -710,7 +718,7 @@ Real owners' words, for inspiration only (never copy more than four words in a r
 ${pr.verbatims.map(v => `- "${v.text}"`).join('\n')}
 
 TERRITORY: ${t.name} ${t.premise}
-
+${regionBlock(regionOf({}, b))}
 RULES THAT BIND EVERY LINE:
 ${modelRules.map(c => `- ${c.rule}`).join('\n')}
 - Primary text and captions must make clear what is being sold: Trupanion, medical insurance for cats and dogs. Headlines and hooks can lean on the primary text.
@@ -725,6 +733,22 @@ ${b.fields.map(f => `- ${f}: ${r.fields[f].label}, ${r.fields[f].visible} charac
 ${b.banned_words.length ? `\nBANNED WORDS (the creative director's): ${b.banned_words.join(', ')}` : ''}${b.banned_ideas.length ? `\nIDEAS THAT ARE OFF LIMITS: ${b.banned_ideas.join('; ')}` : ''}${own.length ? `\nTHE CREATIVE DIRECTOR'S OWN LINES for this brief. This is the voice to match most closely. Build around them: never repeat or paraphrase them, and take the angles and structures they haven't used:\n${own.map(x => `- ${x}`).join('\n')}` : ''}${b.reference_lines.length ? `\nREFERENCE LINES in the voice the creative director wants (match the voice, don't copy):\n${b.reference_lines.map(x => `- ${x}`).join('\n')}` : ''}${keeps.length ? `\nTHE CREATIVE DIRECTOR'S TASTE: lines they kept or rewrote, with their notes. Learn from the edits and notes:\n${keeps.map(x => `- [${x.field}, ${x.structure}] ${x.original && x.original !== x.text ? `"${x.original}" → rewritten as "${x.text}"` : `"${x.text}"`}${x.note ? ` (note: ${x.note})` : ''}`).join('\n')}` : ''}${cuts.length ? `\nLINES THEY CUT, and why (avoid these moves):\n${cuts.map(x => `- "${x.text}" (note: ${x.note})`).join('\n')}` : ''}
 
 Write exactly one line per cell you are given, fitting its angle, structure, tone and field. Make lines in the same request differ from each other in wording, rhythm and idea. Plain text only: no hashtags, no emoji, no quotation marks around the line, no labels. Return JSON: {"lines":[{"cell":"<cell id>","text":"<the line>"}]}`;
+}
+
+/**
+ * Where the ads run. Canada gets its own ads, written in Canadian English and
+ * meant to feel Canadian, not a US ad with a maple leaf. Kept modest: no facts
+ * about Canada beyond the facts list (Canadian rules come in a later rules version).
+ */
+export function regionBlock(region: Region): string {
+  if (region !== 'CA') return '';
+  return `
+REGION: CANADA. These ads run in Canada, as separate ads from the US ones.
+- Use Canadian English spelling: colour, favourite, centre, neighbour, cheque.
+- Make each line feel distinctly Canadian in its voice and everyday detail, not a US ad with a maple leaf added. Don't reach for flags, maple leaves, "eh", hockey or other clichés.
+- Avoid US-only references: US states or cities, the Fourth of July, US-only brands or chains, "ZIP code".
+- Don't state anything about Canada (prices, laws, coverage, statistics, where Trupanion is available) unless it's in the facts list above.
+`;
 }
 
 function writerUser(r: Rules, b: Brief, cells: Cell[], guidance?: string, sibling?: string): string {
@@ -749,7 +773,7 @@ export async function batchExists(id: string): Promise<boolean> { return getStor
 export async function loadBatch(id: string): Promise<Batch> { return getStore().getBatch(id); }
 export async function saveBatch(b: Batch): Promise<void> { b.updated = new Date().toISOString(); await getStore().saveBatch(b); }
 export interface RunSummary {
-  id: string; name: string; persona: string; territory: string; created: string; updated: string; created_by: string;
+  id: string; name: string; persona: string; territory: string; region: Region; created: string; updated: string; created_by: string;
   lines: number; yours: number; kept: number; undecided: number; usd: number;
   /** Lines not yet checked (a run interrupted by a restart); resume checks them. */
   unchecked: number;
@@ -763,7 +787,7 @@ export async function listBatches(user?: string): Promise<RunSummary[]> {
   for (const x of ids) {
     const b: Batch = await st.getBatch(x);
     out.push({
-      id: b.id, name: b.brief.name, persona: b.brief.persona, territory: b.brief.territory,
+      id: b.id, name: b.brief.name, persona: b.brief.persona, territory: b.brief.territory, region: regionOf({}, b.brief),
       created: b.created, updated: b.updated || b.created, created_by: b.created_by || '',
       lines: b.lines.length, yours: b.lines.filter(l => l.model === 'human').length,
       kept: b.lines.filter(l => l.decision === 'keep' || l.decision === 'edit').length,
@@ -840,11 +864,11 @@ function newLine(b: Brief, r: Rules, batchId: string, idx: number, cell: Cell, t
   const pr = r.personas[b.persona];
   return {
     id: `${batchId}-L${String(idx).padStart(2, '0')}`,
-    batch: batchId, persona: b.persona, territory: b.territory, field: cell.field,
+    batch: batchId, persona: b.persona, territory: b.territory, region: regionOf({}, b), field: cell.field,
     text, chars: [...text].length, cell: cell.cell,
     angle: cell.angle, angle_label: pr.triggers.find(t => t.id === cell.angle)?.label || cell.angle,
     structure: cell.structure, tone: cell.tone, tone_label: toneLabel(cell.tone),
-    features: [], flags: [], status: 'generated', model, prompt_version: PROMPT_VERSION,
+    features: [], flags: [], status: 'generated', model, prompt_version: regionOf({}, b) === 'CA' ? `${PROMPT_VERSION}+ca` : PROMPT_VERSION,
     decision: '', edited_text: '', note: '',
   };
 }
@@ -903,17 +927,18 @@ export async function newBatchId(territory: string): Promise<string> {
 }
 
 /**
- * Lines only go into a run of the same persona and territory: a brief for
- * another one is refused, never quietly given the run's persona (lines written
- * for DINKs once landed in a Curators run). Null when it fits or there's no run.
+ * Lines only go into a run of the same persona, territory and region: a brief
+ * for another one is refused, never quietly given the run's persona (lines
+ * written for DINKs once landed in a Curators run), and a Canadian line never
+ * lands in a US run. Null when it fits or there's no run.
  */
-export async function runMismatch(batchId: string | undefined, b: Pick<Brief, 'persona' | 'territory'>): Promise<string | null> {
+export async function runMismatch(batchId: string | undefined, b: Pick<Brief, 'persona' | 'territory' | 'region'>): Promise<string | null> {
   if (!batchId || !(await batchExists(batchId))) return null;
   const run = (await loadBatch(batchId)).brief;
-  if (run.persona === b.persona && run.territory === b.territory) return null;
+  if (run.persona === b.persona && run.territory === b.territory && regionOf({}, run) === regionOf({}, b)) return null;
   const r = loadRules();
-  const name = (p: string, t: string) => `${r.personas[p]?.name || p} · ${(r.territories[t]?.name || t).replace(/\.$/, '')}`;
-  return `This run is for ${name(run.persona, run.territory)}. Start a new run for ${name(b.persona, b.territory)}.`;
+  const name = (x: Pick<Brief, 'persona' | 'territory' | 'region'>) => `${r.personas[x.persona]?.name || x.persona} · ${(r.territories[x.territory]?.name || x.territory).replace(/\.$/, '')}${regionOf({}, x) === 'CA' ? ' · Canada' : ''}`;
+  return `This run is for ${name(run)}. Start a new run for ${name(b)}.`;
 }
 
 export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: { check?: boolean; batchId?: string; ownOnly?: boolean; user?: string } = {}): Promise<Batch> {
@@ -1548,23 +1573,41 @@ export async function lineHistory(lineId: string) { return getStore().listEdits(
 
 // ---------- shortlist ----------
 
-export interface ShortRow { stub: string; id: string; persona: string; territory: string; field: string; platform: string; format: string; text: string; angle: string; structure: string; tone: string; features: string; flags: string; note: string; compliance_flags: string[]; warn_flags: string[] }
+export interface ShortRow { stub: string; id: string; persona: string; territory: string; region: Region; field: string; platform: string; format: string; text: string; angle: string; structure: string; tone: string; features: string; flags: string; note: string; compliance_flags: string[]; warn_flags: string[] }
+
+/** Kept and edited lines in every run, each with its region (the run's), oldest first within a persona and territory. */
+export async function keptLines(): Promise<Line[]> {
+  const lines: Line[] = [];
+  for (const b of await listBatches()) {
+    const batch = await loadBatch(b.id);
+    lines.push(...batch.lines.filter(l => l.decision === 'keep' || l.decision === 'edit').map(l => ({ ...l, region: regionOf(l, batch.brief) })));
+  }
+  // US before Canada within a persona and territory.
+  const key = (l: Line) => `${l.persona}|${l.territory}|${l.region === DEFAULT_REGION ? 0 : 1}${l.region}|${l.id}`;
+  return lines.sort((a, b) => key(a).localeCompare(key(b), undefined, { numeric: true }));
+}
+
+/** What goes into a line's naming code, from the rules (format from the territory, platform from the field). */
+export function codeInput(l: Pick<Line, 'persona' | 'territory' | 'field' | 'region'>) {
+  const r = loadRules();
+  return { persona: l.persona, territory: l.territory, format: r.territories[l.territory]?.format || 'STATIC', platform: r.fields[l.field]?.platform || 'META', region: regionOf(l) };
+}
+
+/** Every naming code signed off so far (they're never handed out again). */
+export async function signedCodes(): Promise<string[]> {
+  return ((await getStore().listSignoffs()) as Array<{ lines: Array<{ stub: string }> }>).flatMap(s => s.lines.map(x => x.stub));
+}
 
 export async function shortlist(): Promise<ShortRow[]> {
   const r = loadRules();
-  const lines: Line[] = [];
-  for (const b of await listBatches()) lines.push(...(await loadBatch(b.id)).lines.filter(l => l.decision === 'keep' || l.decision === 'edit'));
-  lines.sort((a, b) => `${a.persona}|${a.territory}|${a.id}`.localeCompare(`${b.persona}|${b.territory}|${b.id}`));
-  const counters = new Map<string, number>();
+  const lines = await keptLines();
+  // A signed-off line shows its own code; the others, the code they'd get if signed off now.
+  const book = new CodeBook(await signedCodes());
   return lines.map(l => {
     const t = r.territories[l.territory];
     const platform = r.fields[l.field]?.platform || 'META';
-    const short = l.territory.startsWith(l.persona + '_') ? l.territory.slice(l.persona.length + 1) : l.territory;
-    const key = `${l.persona}_${short}_${t?.format || 'STATIC'}_${platform}`;
-    const v = (counters.get(key) || 0) + 1;
-    counters.set(key, v);
     return {
-      stub: `${l.persona}_${short}_${t?.format || 'STATIC'}_v${v}_${platform}`, id: l.id, persona: l.persona, territory: l.territory, field: l.field,
+      stub: l.ready?.stub || book.assign(codeInput(l)), id: l.id, persona: l.persona, territory: l.territory, region: regionOf(l), field: l.field,
       platform, format: t?.format || '', text: l.decision === 'edit' && l.edited_text ? l.edited_text : l.text,
       angle: `${l.angle} ${l.angle_label}`, structure: l.structure, tone: l.tone_label, features: l.features.join('; '),
       flags: l.flags.map(flagText).join(' | '), note: l.note || '',
@@ -1576,12 +1619,12 @@ export async function shortlist(): Promise<ShortRow[]> {
 
 export async function writeShortlist(): Promise<{ count: number; path: string; mdPath: string; csv: string; md: string }> {
   const rows = await shortlist();
-  const cols: Array<keyof ShortRow> = ['stub', 'id', 'persona', 'territory', 'field', 'platform', 'format', 'text', 'angle', 'structure', 'tone', 'features', 'flags', 'note'];
+  const cols: Array<keyof ShortRow> = ['stub', 'id', 'persona', 'territory', 'region', 'field', 'platform', 'format', 'text', 'angle', 'structure', 'tone', 'features', 'flags', 'note'];
   const csv = toCsv([cols as string[], ...rows.map(x => cols.map(c => String(x[c])))]);
-  const md = ['# Shortlist', '', 'Naming stubs follow PERSONA_TERRITORY_FORMAT_v#_PLATFORM (add _YYMMDD at trafficking).', ''];
+  const md = ['# Shortlist', '', `Naming codes follow ${CURRENT_PATTERN} (add _YYMMDD at trafficking). Codes signed off before 30 Sep keep the earlier PERSONA_TERRITORY_FORMAT_v#_PLATFORM. The visual letter is settled at Ready for production.`, ''];
   let last = '';
   for (const x of rows) {
-    const g = `${x.persona} · ${x.territory}`;
+    const g = `${x.persona} · ${x.territory}${x.region === 'CA' ? ' · Canada' : ''}`;
     if (g !== last) { md.push(`## ${g}`, ''); last = g; }
     const oneLine = (t: string) => t.replace(/\s*\n\s*/g, ' ');
     md.push(`- \`${x.stub}\` (${x.field}): ${oneLine(x.text)}${x.note ? ` *(${oneLine(x.note)})*` : ''}`);
@@ -1703,6 +1746,9 @@ export async function meta() {
       .filter((i: any) => i.what_to_do).map((i: any) => [i.id, i.what_to_do])),
     territories: r.territories,
     formats: FORMATS,
+    // Where ads run, and the naming code's pattern (utils/namingCode.ts), for the page's help text.
+    regions: REGIONS,
+    code_pattern: CURRENT_PATTERN,
     fields: r.fields,
     structures: r.structures,
     tone_controls: r.tone_controls,

@@ -270,9 +270,10 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   assert.equal(feats[1][0], stub);
   assert.equal(feats[1][1], 'direct_vet_pay');
   const hand = S.parseCsv(await pf.handoffCsv());
-  assert.equal(hand[0][6], 'Status');
-  assert.equal(hand.find(r => r[0] === stub)![6], 'Ready to traffic');
-  assert.equal(hand.find(r => r[0] === postStub)![6], 'Not uploaded');
+  assert.deepEqual(hand[0].slice(0, 2), ['Naming code', 'Region']);
+  assert.equal(hand[0][7], 'Status');
+  assert.equal(hand.find(r => r[0] === stub)![7], 'Ready to traffic');
+  assert.equal(hand.find(r => r[0] === postStub)![7], 'Not uploaded');
   assert.equal(/approved/i.test(await pf.handoffCsv()), false);
 
   // 6. Carousel and video kinds.
@@ -302,7 +303,7 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   (other as any).findStub = async (x: string) => x === postStub ? { ...(await realFind(x)), signoff: { ...(await realFind(x)).signoff, persona: 'DINK', territory: 'DINK_NEVER' } } : realFind(x);
   await assert.rejects(() => other.upload(headlineStub, [{ buffer: png('x'), filename: 'x.png', contentType: 'image/png' }], 'nick', [postStub]), /same persona and territory only/);
   const hand2 = S.parseCsv(await pf.handoffCsv());
-  assert.equal(hand2.find(r => r[0] === postStub)![5], headlineStub, 'the handoff says which codes share the visual');
+  assert.equal(hand2.find(r => r[0] === postStub)![6], headlineStub, 'the handoff says which codes share the visual');
 
   // An OpenAI outage fails the audit as retryable; running it again on the same upload works.
   const { FatalError } = await import('../src/services/audit/api.js');
@@ -362,4 +363,49 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
     assert.equal(ready.status, 403, 'only the creative lead or an admin sets Ready to traffic');
     assert.equal(((await (await fetch(`${base}/meta`)).json()) as any).preflight.enabled, true);
   } finally { server.close(); }
+});
+
+test('Pre-flight by region: US and Canadian codes listed apart, same-visual codes share a key, a US visual never serves a Canadian code', { skip }, async () => {
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const R = await import('../src/services/studio/ready.js');
+  const tables = ['studio_asset_status', 'studio_audit_agreements', 'studio_audit_flags', 'studio_audits', 'studio_upload_files', 'studio_asset_uploads', 'studio_expectations', 'studio_line_versions', 'studio_signoffs', 'studio_edits', 'studio_line_embeddings', 'studio_lines', 'studio_batches', 'studio_taste', 'studio_spend'];
+  await (store as any).db.query(`TRUNCATE ${tables.join(', ')} RESTART IDENTITY CASCADE`);
+  const api = new S.Api({ mock: true });
+  const signOffRegion = async (region: 'US' | 'CA', texts: string[]) => {
+    const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: `pf-${region}`, region, own_lines: texts.map(text => ({ text, field: 'meta_headline' })) }), api, () => {}, { ownOnly: true, user: 'nick' });
+    for (const l of run.lines) {
+      await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+      for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find(x => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'Test line for regions', 'nick');
+    }
+    // Four lines: the fourth goes on visual B.
+    return (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region, line_ids: run.lines.map(l => l.id), visuals: { [run.lines[3]?.id ?? '-']: 'B' }, expectation: { line_ids: [run.lines[0].id], reason: 'The plain one.' } }, 'nick')).signoff;
+  };
+  await signOffRegion('US', ['Calm at the counter.', 'One less worry.', 'Home by nine.', 'Calm on a Sunday.']);
+  await signOffRegion('CA', ['Calm at the counter, in colour.', 'Your favourite kind of calm.']);
+
+  const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
+  const rows = await pf.stubs();
+  assert.deepEqual(rows.map(r => `${r.stub} ${r.region}`).sort(), [
+    'OWN_CALM_UGC_A1_CA_META CA', 'OWN_CALM_UGC_A1_US_META US', 'OWN_CALM_UGC_A2_CA_META CA', 'OWN_CALM_UGC_A2_US_META US', 'OWN_CALM_UGC_A3_US_META US', 'OWN_CALM_UGC_B1_US_META US',
+  ]);
+  const key = (s: string) => rows.find(r => r.stub === s)!.visual_key;
+  assert.equal(key('OWN_CALM_UGC_A1_US_META'), key('OWN_CALM_UGC_A3_US_META'));
+  assert.notEqual(key('OWN_CALM_UGC_A1_US_META'), key('OWN_CALM_UGC_B1_US_META'));
+  assert.equal((await pf.stubs({ region: 'CA' })).length, 2);
+
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from('fake image VOICES_TEXT: Calm at the counter.')]);
+  const file = () => [{ buffer: png, filename: 'a.png', contentType: 'image/png' }];
+  // One visual for A1-A3: fine. Canada is a separate visual: refused.
+  const up = await pf.upload('OWN_CALM_UGC_A1_US_META', file(), 'nick', ['OWN_CALM_UGC_A2_US_META', 'OWN_CALM_UGC_A3_US_META']);
+  assert.equal(up.stubs.length, 3);
+  assert.equal(up.format_notes.some(n => /another visual/.test(n)), false);
+  await assert.rejects(() => pf.upload('OWN_CALM_UGC_A1_US_META', file(), 'nick', ['OWN_CALM_UGC_A1_CA_META']), /US and Canadian ads are separate visuals/);
+  // Sharing across letters is allowed, with a note; the codes stay as signed off.
+  const across = await pf.upload('OWN_CALM_UGC_A1_US_META', file(), 'nick', ['OWN_CALM_UGC_B1_US_META']);
+  assert.ok(across.format_notes.some(n => /OWN_CALM_UGC_B1_US_META was signed off on another visual/.test(n)));
+  const rep = await pf.report('OWN_CALM_UGC_A1_CA_META');
+  assert.equal(rep.region, 'CA');
+  const hand = S.parseCsv(await pf.handoffCsv());
+  assert.equal(hand.find(r => r[0] === 'OWN_CALM_UGC_A1_CA_META')![1], 'CA');
 });
