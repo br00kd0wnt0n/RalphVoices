@@ -63,7 +63,7 @@ months, billed via Add3). Month 1 items are included at Ralph's cost.
 | Testing architecture | Month 1 | The naming convention (proposed to Add3 on 24 Sep); one ad set per persona; equal-budget or A/B cells for learning tests | none (agreement) |
 | Persona intelligence readout | Month 1 full, then a monthly refresh | Evidence pack → persona codex with sources; the monthly refresh adds live learnings from B4 | B4 feeds it |
 | Audience twins setup | Month 1 | The three Trupanion personas (seed v3, lived voices), used as a writing partner and stress test | done |
-| Pre-testing (about 20 copy and tone options per run: one persona × territory) | Months 1–3 | Copy Studio (B1) and pre-flight audit (B2) | B1, B2 |
+| Pre-testing (~20 copy and tone variants per persona, as sold; delivered as about 20 per run, one persona × territory) | Months 1–3 | Copy Studio (B1) and pre-flight audit (B2) | B1, B2 |
 | Weekly performance reads | Months 2–3 | Ingestion and weekly read (B3) | B3 |
 | Round-close report and next-round brief | Months 2–3 | Expectations record, round close and learning ledger (B4) | B4 |
 
