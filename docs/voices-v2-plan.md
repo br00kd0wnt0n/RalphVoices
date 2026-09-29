@@ -63,7 +63,7 @@ months, billed via Add3). Month 1 items are included at Ralph's cost.
 | Testing architecture | Month 1 | The naming convention (proposed to Add3 on 24 Sep); one ad set per persona; equal-budget or A/B cells for learning tests | none (agreement) |
 | Persona intelligence readout | Month 1 full, then a monthly refresh | Evidence pack → persona codex with sources; the monthly refresh adds live learnings from B4 | B4 feeds it |
 | Audience twins setup | Month 1 | The three Trupanion personas (seed v3, lived voices), used as a writing partner and stress test | done |
-| Pre-testing (~20 copy and tone options per persona per batch) | Months 1–3 | Copy Studio (B1) and pre-flight audit (B2) | B1, B2 |
+| Pre-testing (~20 copy and tone variants per persona, as sold; delivered as about 20 per run, one persona × territory) | Months 1–3 | Copy Studio (B1) and pre-flight audit (B2) | B1, B2 |
 | Weekly performance reads | Months 2–3 | Ingestion and weekly read (B3) | B3 |
 | Round-close report and next-round brief | Months 2–3 | Expectations record, round close and learning ledger (B4) | B4 |
 
@@ -78,7 +78,7 @@ Not built by VOICES:
 
 ### B1. Copy Studio (build 1)
 
-The creative director and AI write the ~20 options per persona together, and
+The creative director and AI write about 20 options per run together, and
 each line is stress-tested as it's written. This delivers the pre-testing line
 item.
 
@@ -299,7 +299,7 @@ are in progress. 009–014 stay unused.
 |---|---|---|
 | Fri 25 – Sun 27 Sep | **B1-lite** (script-only Copy Studio) built; Brook reviews the rules file | Demo-ready Mon 9am |
 | Mon 28 Sep | Creative director kickoff (Brook in the room): brief, framework read, B1-lite demo, blind model comparison. Concept board to the client, stress-tested, not ranked | Writing model chosen |
-| Date TBC (after the creative lead is up to speed) | First copy session on B1-lite: about 20 lines per persona → 2–3 per visual; expectations recorded | Month 1 pre-test delivered |
+| Date TBC (after the creative lead is up to speed) | First copy session on B1-lite: about 20 lines per run → 2–3 per visual; expectations recorded | Month 1 pre-test delivered |
 | Early October | Full **B1 Studio** build, shaped by the creative lead's feedback on the demo and the first session | |
 | Week of 5 Oct | **B3** ingestion and model on Add3's historic export (parallel session). **B2** on the first production assets. Decision gate if the data has arrived | |
 | Week of 12 Oct | B3 ready before go-live. Month 1 expectations locked (B4 record) | Month 1 creative live (mid-Oct target) |
