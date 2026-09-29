@@ -14,7 +14,7 @@ Branch `voices/b1-studio-preflight`, draft PR #15. It is on hold because it cont
   - A failed audit (for example an OpenAI outage) can be run again; "Audit again" re-checks after a rules change.
   - Exports: the features CSV in B2's format for B3's `weekly.ts features`, and the asset handoff list.
 - **Storage:**
-  - Production: R2, under `studio/preflight/<stub>/<upload id>/…`, served only through the signed-in API and never by public URL. `STUDIO_R2_BUCKET` optionally moves these files to a private bucket.
+  - Production: the private R2 bucket in `STUDIO_R2_BUCKET` (required; never the public `R2_BUCKET_NAME`), under `studio/preflight/<stub>/<upload id>/…`, served only through the signed-in API. Without it, uploads are refused.
   - Local and dev: Postgres, 25 MB per file.
 - **Migration 017** (additive, idempotent): the Pre-flight tables, plus `studio_rules.activated_by`/`activated_at` for the Rules view.
 - **Also:**
@@ -54,7 +54,7 @@ Branch `voices/b1-studio-preflight`, draft PR #15. It is on hold because it cont
 
 Screenshots are in `Claude outputs/voices-r1/studio/screens/` (client material): `9-preflight-red.png`, `10-preflight-video-ready.png`, `11-preflight-carousel.png`. They use test ads on the local database.
 
-**Tests:** 101 backend tests pass, covering the whole flow on Postgres and B2's real engine with a stand-in OpenAI client. Type checks are clean.
+**Tests:** 107 backend tests pass (after the UX round), covering the whole flow on Postgres and B2's real engine with a stand-in OpenAI client. Type checks are clean.
 
 ## Deploy checklist for Brook
 
@@ -81,10 +81,6 @@ Screenshots are in `Claude outputs/voices-r1/studio/screens/` (client material):
 
 **Rollback:** `ENABLE_STUDIO=false` hides the whole Studio. Migration 017 is additive, so its tables can stay.
 
-## Next (UX review, 29 Sep, approved by Brook)
+## UX review (29 Sep, approved by Brook): done
 
-The coordination session's 18-item list. The first priorities:
-1. Compare only on-asset fields in copy match (the mock marked post copy red; B2's engine already compares only on-asset fields) and show post copy separately.
-2. One visual serving several codes.
-3. Stop Review from reflowing after Keep.
-4. Fix the step bar at 1440 px.
+All 18 items, plus the coordination session's notes A (private bucket required) and B (stale audits), are in commits a543239, c03be08 and 08164bd. Screenshots: `Claude outputs/voices-r1/studio/screens/ux-29sep/`.
