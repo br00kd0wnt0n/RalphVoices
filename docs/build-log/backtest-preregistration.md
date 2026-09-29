@@ -77,6 +77,17 @@ It did not show any copy text, any feature tag, or any outcome broken down by co
 
 About 20 Meta copies means about 13 in the fit set and 7 in the test set. Only large copy effects, on the order of ±30% or more, can come back clear. Most features are expected to be "not enough data" or "not supported". That is an honest answer about what this history can show, not a failure.
 
+## Amendment 1 (29 Sep 2026, before any copy was tagged or any outcome looked at by feature)
+
+Found by testing the method on made-up data with planted effects (`backend/tests/backtest.test.ts`), not by looking at Trupanion's results:
+
+- **Step 1 now fits the controls within copies (a fixed effect per copy).** A copy's effect is still "what is left after the controls", as above, averaged over its ads. Fitted across copies instead, the control model had soaked up the real differences between copies into the between-ad variance, so the between-copy variance came out near zero, the ranges were too narrow, and null features were called clear in 2 of 12 checks. The between-ad variance is now the spread among ads carrying the same copy.
+- **The between-copy variance uses the standard DerSimonian–Laird estimator** for a meta-regression, instead of a simpler moment estimate.
+- **Also fixed now:** tagging uses the rules file on disk at run time (v2.7 on 29 Sep), and the optional synthetic stage (2c) is skipped in this pass (Brook, 29 Sep).
+- **This is also a pipeline check:** the same steps run again when Add3's monthly re-pull and creative files arrive.
+
+With these changes, on six made-up worlds with 21 copies, a planted ×1.6 copy feature was "supported" in all six, with ranges covering the truth. Null features were never "supported". With no copy effects at all, nothing was supported.
+
 ## Known limits
 
 - **Observational, not randomised:** Meta's delivery chooses who sees which ad, and copy is confounded with image, audience and timing.
