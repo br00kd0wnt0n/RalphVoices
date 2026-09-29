@@ -109,7 +109,7 @@ async function main() {
   const copies = assignCopies(ads);
   if (command === 'copies') {
     fs.writeFileSync(path.join(DIR, 'copies.csv'), toCsv(['copy_id', 'platform', 'set', 'ads', 'impressions', 'headline', 'body'], copies.map(c => [c.id, c.platform, c.set, c.ads, c.impressions, c.headline, c.body])));
-    fs.writeFileSync(path.join(DIR, 'ads.csv'), toCsv(['platform', 'copy_id', 'ad_name', 'campaign', 'region', 'format', 'wave', 'placement_share', 'spend', 'impressions', 'link_clicks', 'plays', 'checkouts_ASSUMED_quotes', 'purchases_ASSUMED_enrollments'],
+    fs.writeFileSync(path.join(DIR, 'ads.csv'), toCsv(['platform', 'copy_id', 'ad_name', 'campaign', 'region', 'format', 'wave', 'placement_share', 'spend', 'impressions', 'link_clicks', 'plays', 'checkouts_quotes', 'purchases_enrollments'],
       ads.map(a => [a.platform, a.copy, a.ad_name, a.campaign, a.region, a.format, a.wave, a.placement_share.toFixed(3), a.spend.toFixed(2), a.impressions, a.clicks, a.plays ?? '', a.checkouts ?? '', a.purchases ?? ''])));
     const by = (p: string) => copies.filter(c => c.platform === p);
     console.log(`Units: ${ads.filter(a => a.platform === 'meta').length} Meta and ${ads.filter(a => a.platform === 'tiktok').length} TikTok prospecting ads with ≥${MIN_IMPRESSIONS.toLocaleString()} impressions.`);
@@ -148,8 +148,8 @@ async function main() {
     const outcomes: Array<{ id: string; label: string; ev: (a: AdRow) => number | null; platforms: Array<'meta' | 'tiktok'> }> = [
       { id: 'link_ctr', label: 'link CTR', ev: a => a.clicks, platforms: ['meta', 'tiktok'] },
       { id: 'hook_rate', label: 'hook rate (Meta 3-s plays; TikTok 2-s views) / impressions, video ads', ev: a => a.plays, platforms: ['meta', 'tiktok'] },
-      { id: 'checkouts_per_1k', label: 'checkouts per 1,000 impressions (ASSUMED ≈ quotes)', ev: a => a.checkouts, platforms: ['meta'] },
-      { id: 'purchases_per_1k', label: 'purchases per 1,000 impressions (ASSUMED ≈ enrollments)', ev: a => a.purchases, platforms: ['meta', 'tiktok'] },
+      { id: 'quotes_per_1k', label: 'quotes per 1,000 impressions (Checkouts initiated; confirmed by Add3, 29 Sep)', ev: a => a.checkouts, platforms: ['meta'] },
+      { id: 'enrollments_per_1k', label: 'enrollments per 1,000 impressions (Meta Purchases, confirmed by Add3 29 Sep; TikTok Purchases (website), ASSUMED)', ev: a => a.purchases, platforms: ['meta', 'tiktok'] },
     ];
     const results: Array<{ platform: string; o: typeof outcomes[number]; r: BtResult }> = [];
     for (const p of ['meta', 'tiktok'] as const) {
@@ -171,7 +171,7 @@ function writeReport(results: Array<{ platform: string; o: { id: string; label: 
   const pct = (x: number | null) => (x === null ? '–' : `${x >= 1 ? '+' : '−'}${Math.abs(Math.round((x - 1) * 100))}%`);
   const rng = (lo: number | null, hi: number | null) => (lo === null ? '' : ` (range ${pct(lo)} to ${pct(hi)})`);
   const L: string[] = ['# Back-test: copy features against Trupanion\'s own results', '',
-    `*${new Date().toISOString().slice(0, 10)}. Pre-registered in docs/build-log/backtest-preregistration.md (commits 054b633, c15d8b1). Client material. Observational, not randomised; text only (no images); Meta totals are whole-period. "Checkouts initiated" ≈ quote and "Purchases" ≈ enrollment are ASSUMPTIONS pending Add3. Ranges are 90%; "clear" allows for the number of features tested per outcome.*`, '',
+    `*${new Date().toISOString().slice(0, 10)}. Pre-registered in docs/build-log/backtest-preregistration.md (commits 054b633, c15d8b1). Client material. Observational, not randomised; text only (no images); Meta totals are whole-period. Meta conversions confirmed by Add3 (29 Sep): Checkouts initiated = a quote started, Purchases = an enrollment; attribution window unknown. TikTok Purchases (website) ≈ enrollments is an ASSUMPTION. Ranges are 90%; "clear" allows for the number of features tested per outcome.*`, '',
     `Units: ${ads.filter(a => a.platform === 'meta').length} Meta prospecting ads in ${copies.filter(c => c.platform === 'meta').length} copies (${copies.filter(c => c.set === 'fit').length} fit, ${copies.filter(c => c.set === 'test').length} test); ${ads.filter(a => a.platform === 'tiktok').length} TikTok ads in ${copies.filter(c => c.platform === 'tiktok').length} copies (descriptive). Features: ${fpath}.`, ''];
   const effRows: unknown[][] = [], ctlRows: unknown[][] = [], ceRows: unknown[][] = [];
   for (const { platform, o, r } of results) {
@@ -194,7 +194,7 @@ function writeReport(results: Array<{ platform: string; o: { id: string; label: 
     L.push('');
   }
   // Cost per purchase, descriptive only.
-  L.push('## Cost per purchase by copy (descriptive only, never a test; purchases ASSUMED ≈ enrollments)', '', '| Copy | Platform | Ads | Spend | Purchases | Cost per purchase |', '|---|---|---|---|---|---|');
+  L.push('## Cost per enrollment by copy (descriptive only, never a test; TikTok enrollments are an ASSUMPTION)', '', '| Copy | Platform | Ads | Spend | Enrollments | Cost per enrollment |', '|---|---|---|---|---|---|');
   for (const c of copies) {
     const mine = ads.filter(a => a.copy === c.id && a.platform === c.platform);
     const spend = mine.reduce((s, a) => s + a.spend, 0), pur = mine.reduce((s, a) => s + (a.purchases ?? 0), 0);

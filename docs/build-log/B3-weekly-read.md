@@ -200,24 +200,24 @@ Matched case-insensitively, ignoring punctuation. A trailing `*` in the config i
 | ThruPlays | ThruPlays | 6-second video views |
 | link clicks | Link clicks | Clicks (destination) |
 | landing page views | Landing page views | Landing page views |
-| quotes | **to confirm** (guesses: Quotes, Quote starts, Website quotes, Custom conversions: quote…) | to confirm |
-| enrollments | **to confirm** (guesses: Enrollments, Website enrollments, Custom conversions: enroll…) | to confirm |
+| quotes | **Checkouts initiated** (a quote started; confirmed by Add3, 29 Sep), then fallbacks (Quotes, Quote starts…) | none in the export |
+| enrollments | **Purchases** (an enrollment; confirmed by Add3, 29 Sep) | Purchases (website): **assumed** to be enrollments, not confirmed |
 
 `ingest` prints what mapped, what's missing and which headers went unused. With no quote column, the read runs on clicks: cuts are allowed, scales are not, and the note says so.
 
 ## Open items for Add3
 
-1. **Conversion column names** for quotes and enrollments in their Meta export: custom conversion names, and the attribution window. Add them to `columns.meta.quotes` / `enrollments`.
-2. **Ad names exactly as agreed**, including 2–3 copy lines per asset as separate ads. Studio's shortlist gives each line its own `v#`, so a line is `PERSONA_TERRITORY_FORMAT_vN_PLATFORM_YYMMDD`. Confirm Add3 will use the Studio stub's v# for the line, not their own counter.
+1. **Conversions (resolved 29 Sep):** Meta's "Checkouts initiated" is a quote started and "Purchases" is an enrollment (config v6). **Still open:** the attribution window, and whether TikTok's "Purchases (website)" is the same event.
+2. **Ad names exactly as agreed**, with 3 copy lines per visual as separate ads and US/CA as separate ads: `PERSONA_TERRITORY_FORMAT_[visual][line]_REGION_PLATFORM_YYMMDD` (proposed 29 Sep, confirmation pending; see Naming).
 3. **Campaign or ad set names that say prospecting or retargeting** (or tell us their words for them, for `audience.*_pattern`).
 4. **SuperAds export shape:** if SuperAds is the source rather than Ads Manager, a sample file so the mapping can be checked.
 5. **TikTok export:** Ads Manager ad-level daily, or whatever they can give, and at what cadence. The TikTok mapping above is a guess.
 6. **Daily breakdown, not placement or age.** Breakdown rows are summed, but reach and frequency are lost.
-7. **The historic export** for the back-test (below).
+7. **Historic data (done 29 Sep; see `B3-backtest.md`).** Add3 can't export month by month, so historic data stays whole-period. The weekly read builds its own time series from launch on, from the daily Google Sheet.
 
-## Item 5: Add3's historic export (not arrived)
+## Add3's historic export (arrived and run 29 Sep)
 
-When Brook says where it is:
+How it was run (Step 1 and the back-test are in `docs/build-log/B3-backtest.md`):
 
 ```bash
 cd backend

@@ -1,12 +1,13 @@
 {
   "_note": "B3 weekly read (VOICES v2, Trupanion). Written 28 Sep 2026, before any live data. Change a threshold only with a dated entry in `changes` and a reason; the weekly note prints the config version it ran with.",
-  "version": 5,
+  "version": 6,
   "changes": [
     { "date": "2026-09-28", "version": 1, "by": "B3 build", "what": "First version, set before Month 1 goes live." },
     { "date": "2026-09-28", "version": 2, "by": "B3 build, asked by Brook", "what": "Hold bars on calls (calls.hold): a call made last week stays until the evidence falls well back, so ads near a threshold don't flip between scale and keep testing week to week. Still before any live data." },
     { "date": "2026-09-28", "version": 3, "by": "B3 build, fixes approved by Brook after review", "what": "(1) Ties and calls use the same draws: tied = fewer than 9 in 10 draws put one ad ahead (calls.tie_bar); a scale must be clear of every ad outside its group, a cut must be clear of the ad set's leader. Ties were judged by 90% range overlap before, so an ad could be tied with an ad and cut. (2) min_ads_in_cell 2 -> 3: with two ads the rules produced a scale and a cut every week, a coin toss. (3) Note: one-screen plain-English front, appendix, client variant; cost per enrollment hidden below 5 enrollments. Still before any live data." },
     { "date": "2026-09-29", "version": 4, "by": "B3 historic run", "what": "Audience rule: RET (Add3's retargeting prefix, e.g. Add3_RET_Trupanion_US_...) now reads as retargeting. Seen in Add3's historic Meta and TikTok exports; before this, RET campaigns fell to 'unknown' and were left out anyway, so no call changes." },
-    { "date": "2026-09-29", "version": 5, "by": "B3, naming update from Brook (proposed to Add3, confirmation pending)", "what": "New ad-name form PERSONA_TERRITORY_FORMAT_[visual][line]_REGION_PLATFORM_YYMMDD (e.g. FAM_SUMMER_ST_A2_US_META_261013): US and Canada run as separate ads, 3 copy lines per visual. The older _v#_ form is still accepted. Region joins the cell (persona x platform x region) and the feature strata (features pool across regions with region as a control)." }
+    { "date": "2026-09-29", "version": 5, "by": "B3, naming update from Brook (proposed to Add3, confirmation pending)", "what": "New ad-name form PERSONA_TERRITORY_FORMAT_[visual][line]_REGION_PLATFORM_YYMMDD (e.g. FAM_SUMMER_ST_A2_US_META_261013): US and Canada run as separate ads, 3 copy lines per visual. The older _v#_ form is still accepted. Region joins the cell (persona x platform x region) and the feature strata (features pool across regions with region as a control)." },
+    { "date": "2026-09-29", "version": 6, "by": "B3, Add3 confirmation via Brook", "what": "Meta conversion columns confirmed by Add3 (29 Sep): 'Checkouts initiated' = a quote started, 'Purchases' = an enrollment. Mapped first in columns.meta.quotes / enrollments. The attribution window is still unknown. TikTok's 'Purchases (website)' is mapped to enrollments as an unconfirmed assumption." }
   ],
 
   "naming": {
@@ -37,7 +38,7 @@
   },
 
   "columns": {
-    "_why": "Header aliases per field, matched case-insensitively ignoring punctuation and spacing. A trailing * is a prefix match (e.g. 'Amount spent (USD)'). The quote and enrollment names are guesses until Add3 confirms them; if none match, the read runs without quotes and says so.",
+    "_why": "Header aliases per field, matched case-insensitively ignoring punctuation and spacing. A trailing * is a prefix match (e.g. 'Amount spent (USD)'). Meta's quote and enrollment columns are confirmed (see _conversions); if none match, the read runs without quotes and says so.",
     "meta": {
       "ad_name": ["Ad name"],
       "ad_id": ["Ad ID"],
@@ -54,8 +55,9 @@
       "thruplays": ["ThruPlays", "ThruPlay"],
       "link_clicks": ["Link clicks"],
       "landing_page_views": ["Landing page views", "Website landing page views"],
-      "quotes": ["Quotes", "Quote starts", "Website quotes", "Get quote", "Custom conversions: quote*", "Quote*"],
-      "enrollments": ["Enrollments", "Enrolments", "Website enrollments", "Custom conversions: enroll*", "Enroll*"]
+      "quotes": ["Checkouts initiated", "Quotes", "Quote starts", "Website quotes", "Get quote", "Custom conversions: quote*", "Quote*"],
+      "enrollments": ["Purchases", "Enrollments", "Enrolments", "Website enrollments", "Custom conversions: enroll*", "Enroll*"],
+      "_conversions": "Confirmed by Add3 (29 Sep 2026, via Brook): in the Meta export, 'Checkouts initiated' = a quote started and 'Purchases' = an enrollment. The attribution window is still unknown (open item)."
     },
     "tiktok": {
       "_note": "Unconfirmed: Add3 hasn't said what TikTok export they can give. These are TikTok Ads Manager's standard names. TikTok's closest hook metric is 2-second views, which is not the same as Meta's 3-second plays; it's read as hook rate but never pooled with Meta's.",
@@ -75,7 +77,8 @@
       "link_clicks": ["Clicks (destination)", "Clicks"],
       "landing_page_views": ["Landing page views", "Landing page view"],
       "quotes": ["Quotes", "Quote*", "Complete registration"],
-      "enrollments": ["Enrollments", "Enroll*", "Complete payment"]
+      "enrollments": ["Purchases (website)", "Enrollments", "Enroll*", "Complete payment"],
+      "_conversions": "'Purchases (website)' is mapped to enrollments as an ASSUMPTION: likely the same event as Meta's Purchases, but Add3 hasn't confirmed it for TikTok."
     }
   },
 
