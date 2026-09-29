@@ -10,7 +10,7 @@ export interface MetricRow {
   campaign?: string;
   ad_set?: string;
   audience: Audience;
-  parsed: { stub: string; asset: string; persona: string; territory: string; format: string; platform: string; version: number } | null;
+  parsed: { stub: string; asset: string; persona: string; territory: string; format: string; platform: string; version: number; visual?: string | null; region?: string | null } | null;
   quarantine_reason: string | null;
   features: string[] | null;
   period_start: string;
@@ -97,7 +97,7 @@ export function aggregate(rows: MetricRow[], from: string, to: string, opts: { h
     const sum = (k: keyof MetricRow) => g.reduce((s, r) => s + (Number(r[k]) || 0), 0);
     const p = parsed;
     res.ads.push({
-      key: f.key, ad_name: f.ad_name, campaign: f.campaign, ad_set: f.ad_set, stub: p.stub, asset: p.asset, persona: p.persona, territory: p.territory, format: p.format, platform: p.platform, version: p.version,
+      key: f.key, ad_name: f.ad_name, campaign: f.campaign, ad_set: f.ad_set, stub: p.stub, asset: p.asset, persona: p.persona, territory: p.territory, format: p.format, platform: p.platform, version: p.version, visual: p.visual ?? null, region: p.region ?? '',
       features: f.features, first_day: first, last_day: last, days_live: days(first, last),
       live_now: delivered.some(r => r.period_end >= liveFrom),
       spend: sum('spend'), impressions: imps, video_3s: sum('video_3s'), link_clicks: sum('link_clicks'),
@@ -116,7 +116,7 @@ export function aggregate(rows: MetricRow[], from: string, to: string, opts: { h
 export function historicParse(adName: string, campaign: string, hasPlays: boolean, platform: string): NonNullable<MetricRow['parsed']> {
   const region = /(?:^|_)(US|CA)(?:_|$)/.exec(adName)?.[1] ?? /(?:^|_)(US|CA)(?:_|$)/.exec(campaign)?.[1] ?? 'HIST';
   const format = /ugc/i.test(adName) ? 'UGC' : /carousel/i.test(adName) ? 'CAR' : /single[-_ ]?image/i.test(adName) ? 'ST' : /video|reel|animated/i.test(adName) || hasPlays ? 'VID' : 'ST';
-  return { stub: adName, asset: adName, persona: region, territory: adName, format, platform, version: 1 };
+  return { stub: adName, asset: adName, persona: region, territory: adName, format, platform, version: 1, visual: null, region: region === 'HIST' ? null : region };
 }
 
 // IngestRow (straight from a file, no database) → MetricRow.
@@ -124,7 +124,7 @@ export function fromIngest(r: import('./ingest.js').IngestRow): MetricRow {
   const n = r.name;
   return {
     key: `${r.source_platform}|${r.ad_name}|${r.campaign}|${r.ad_set}`, ad_name: r.ad_name, campaign: r.campaign, ad_set: r.ad_set, audience: r.audience,
-    parsed: n.ok ? { stub: n.stub, asset: n.asset, persona: n.persona, territory: n.territory, format: n.format, platform: n.platform, version: n.version } : null,
+    parsed: n.ok ? { stub: n.stub, asset: n.asset, persona: n.persona, territory: n.territory, format: n.format, platform: n.platform, version: n.version, visual: n.visual, region: n.region } : null,
     quarantine_reason: r.quarantine_reason, features: r.features,
     period_start: r.period_start, period_end: r.period_end, spend: r.spend, impressions: r.impressions, video_3s: r.video_3s,
     link_clicks: r.link_clicks, landing_page_views: r.landing_page_views, quotes: r.quotes, enrollments: r.enrollments,

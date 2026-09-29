@@ -28,6 +28,8 @@ export interface AdData {
   asset: string;
   persona: string;
   territory: string;
+  region?: string;         // US / CA from the newer name form ('' when the name has none)
+  visual?: string | null;  // the visual letter, newer form only
   format: string;
   platform: string;        // from the name: META | TT
   version: number;
@@ -121,7 +123,7 @@ export interface Read {
 const EVENTS: Record<MetricKey, keyof AdData> = { hook_rate: 'video_3s', link_ctr: 'link_clicks', quotes_per_1k: 'quotes' };
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const fieldOf = (a: AdData, f: string) => String((a as any)[f] ?? '');
-export const cellOf = (a: AdData, cfg: WeeklyConfig) => cfg.model.cell_by.map(f => fieldOf(a, f)).join('_');
+export const cellOf = (a: AdData, cfg: WeeklyConfig) => cfg.model.cell_by.map(f => fieldOf(a, f)).filter(Boolean).join('_');
 
 function eligible(a: AdData, m: MetricKey, cfg: WeeklyConfig): boolean {
   if (a.impressions <= 0) return false;

@@ -1,18 +1,27 @@
 {
   "_note": "B3 weekly read (VOICES v2, Trupanion). Written 28 Sep 2026, before any live data. Change a threshold only with a dated entry in `changes` and a reason; the weekly note prints the config version it ran with.",
-  "version": 4,
+  "version": 5,
   "changes": [
     { "date": "2026-09-28", "version": 1, "by": "B3 build", "what": "First version, set before Month 1 goes live." },
     { "date": "2026-09-28", "version": 2, "by": "B3 build, asked by Brook", "what": "Hold bars on calls (calls.hold): a call made last week stays until the evidence falls well back, so ads near a threshold don't flip between scale and keep testing week to week. Still before any live data." },
     { "date": "2026-09-28", "version": 3, "by": "B3 build, fixes approved by Brook after review", "what": "(1) Ties and calls use the same draws: tied = fewer than 9 in 10 draws put one ad ahead (calls.tie_bar); a scale must be clear of every ad outside its group, a cut must be clear of the ad set's leader. Ties were judged by 90% range overlap before, so an ad could be tied with an ad and cut. (2) min_ads_in_cell 2 -> 3: with two ads the rules produced a scale and a cut every week, a coin toss. (3) Note: one-screen plain-English front, appendix, client variant; cost per enrollment hidden below 5 enrollments. Still before any live data." },
-    { "date": "2026-09-29", "version": 4, "by": "B3 historic run", "what": "Audience rule: RET (Add3's retargeting prefix, e.g. Add3_RET_Trupanion_US_...) now reads as retargeting. Seen in Add3's historic Meta and TikTok exports; before this, RET campaigns fell to 'unknown' and were left out anyway, so no call changes." }
+    { "date": "2026-09-29", "version": 4, "by": "B3 historic run", "what": "Audience rule: RET (Add3's retargeting prefix, e.g. Add3_RET_Trupanion_US_...) now reads as retargeting. Seen in Add3's historic Meta and TikTok exports; before this, RET campaigns fell to 'unknown' and were left out anyway, so no call changes." },
+    { "date": "2026-09-29", "version": 5, "by": "B3, naming update from Brook (proposed to Add3, confirmation pending)", "what": "New ad-name form PERSONA_TERRITORY_FORMAT_[visual][line]_REGION_PLATFORM_YYMMDD (e.g. FAM_SUMMER_ST_A2_US_META_261013): US and Canada run as separate ads, 3 copy lines per visual. The older _v#_ form is still accepted. Region joins the cell (persona x platform x region) and the feature strata (features pool across regions with region as a control)." }
   ],
 
   "naming": {
-    "_why": "PERSONA_TERRITORY_FORMAT_v#_PLATFORM_YYMMDD, agreed with Add3 (tagging email, Sep 2026). Aliases absorb Studio's long format names (STATIC, CAROUSEL) and common slips; anything else is quarantined with a reason.",
+    "_why": "The convention agreed with Add3 (tagging email, Sep 2026; region and visual letter added 29 Sep, see forms). Aliases absorb Studio's long format names (STATIC, CAROUSEL) and common slips; anything else is quarantined with a reason.",
     "personas": ["DINK", "CUR", "FAM"],
     "formats": { "ST": ["ST", "STATIC"], "VID": ["VID", "VIDEO"], "CAR": ["CAR", "CAROUSEL"], "TT": ["TT", "TIKTOK"], "UGC": ["UGC"] },
     "platforms": { "META": ["META", "FB", "IG"], "TT": ["TT", "TIKTOK"] },
+    "regions": { "US": ["US", "USA"], "CA": ["CA", "CAN", "CANADA"] },
+    "forms": [
+      ["PERSONA", "TERRITORY", "FORMAT", "VISUALLINE", "REGION", "PLATFORM"],
+      ["PERSONA", "TERRITORY", "FORMAT", "VERSION", "PLATFORM"]
+    ],
+    "_forms": "The naming convention, in one place. Each form is a list of slots tried in order; the delivery date (YYMMDD) and any suffix follow the last slot. VISUALLINE is a visual letter and copy line (A2 = visual A, line 2); VERSION is the older v#. If Add3 changes the format, edit this list (and the two patterns below if the tokens change).",
+    "visual_line_pattern": "^([A-Z])([1-9][0-9]?)$",
+    "version_pattern": "^V([0-9]{1,3})$",
     "video_formats": ["VID", "TT", "UGC"],
     "territories": [],
     "_territories": "Optional list of known territory codes (without the persona prefix). Empty = accept any; an unknown code is a warning, not a quarantine, because new territories arrive every month."
@@ -80,9 +89,9 @@
     "_between_ad_cv": "How much ads' true rates differ within a persona x format group, as a coefficient of variation. Estimated from the data once there are 6+ ads with enough impressions; before that 0.25 (a typical spread between creatives in the same ad set). It sets how hard each ad is pulled towards its group mean.",
     "group_prior_ads": 2,
     "_group_prior_ads": "Each persona x format mean is pulled towards its persona mean as if the persona mean were worth 2 more ads; each persona mean towards the overall mean the same way. With 1-2 ads in a group (the Month-1 norm) the group mean leans on the persona.",
-    "pool_by": ["persona", "platform", "format"],
-    "cell_by": ["persona", "platform"],
-    "_cell_by": "A cell is what Add3 can act on: one ad set per persona per platform. P(best) and the cell median are computed within it."
+    "pool_by": ["persona", "platform", "region", "format"],
+    "cell_by": ["persona", "platform", "region"],
+    "_cell_by": "A cell is what Add3 can act on: one ad set per persona per platform, and (from v5) per region, since US and Canada run as separate ads. P(best) and the cell median are computed within it. Older names without a region form one cell per persona and platform."
   },
 
   "metrics": {
@@ -118,7 +127,7 @@
   "features": {
     "min_ads_with": 3,
     "min_ads_without": 3,
-    "strata": ["persona", "platform"],
+    "strata": ["persona", "platform", "region"],
     "_strata": "Ads with a feature are compared with ads without it in the same persona and platform, in one weighted regression on the log rate that also adjusts for format and for the other features, so a feature that only ever appears in video doesn't take credit for video, and two features that travel together don't take each other's credit. Ads whose features are unknown (no Studio or audit record) are left out, not counted as 'without'. 'Clear' needs the range to exclude no effect after a Bonferroni allowance for the number of features checked together (about 1 false 'clear' a week otherwise, at 90% ranges and a dozen features); the range printed is the plain 90% one.",
     "include_tags": ["angle", "structure"],
     "_include_tags": "Besides the content features, angle and structure from the Studio shortlist are tagged as 'angle:<id>' and 'structure:<name>'.",

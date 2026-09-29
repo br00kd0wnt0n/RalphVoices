@@ -531,7 +531,7 @@ test('client labels: persona · territory name · format in words v# (platform),
 });
 
 test('historic names: region stands in for persona, format from the name or from video plays', () => {
-  assert.deepEqual(historicParse('PRO_EN_US_UGC-Video-Example-Dog', 'Add3_PRO_X', true, 'META'), { stub: 'PRO_EN_US_UGC-Video-Example-Dog', asset: 'PRO_EN_US_UGC-Video-Example-Dog', persona: 'US', territory: 'PRO_EN_US_UGC-Video-Example-Dog', format: 'UGC', platform: 'META', version: 1 });
+  assert.deepEqual(historicParse('PRO_EN_US_UGC-Video-Example-Dog', 'Add3_PRO_X', true, 'META'), { stub: 'PRO_EN_US_UGC-Video-Example-Dog', asset: 'PRO_EN_US_UGC-Video-Example-Dog', persona: 'US', territory: 'PRO_EN_US_UGC-Video-Example-Dog', format: 'UGC', platform: 'META', version: 1, visual: null, region: 'US' });
   assert.equal(historicParse('PRO_EN_CA_Group-B-V1-Example_SingleImage_Q2-Refresh', '', false, 'META').format, 'ST');
   assert.equal(historicParse('PRO_EN_CA_Group-A-Example_Carousel_Q3', '', false, 'META').persona, 'CA');
   assert.equal(historicParse('PRO_EN_CA_Group-A-Example_Carousel_Q3', '', false, 'META').format, 'CAR');
@@ -566,4 +566,62 @@ test('several ad sets per persona and platform: the note names the ad set and su
   assert.match(head, /ads are clearly ahead in 3 ad sets/);
   const acts = actions(r.ads, c2);
   assert.ok(acts.some(x => /Meta ad set “Set (One|Two|Three)”/.test(x)), acts.join('\n'));
+});
+
+// ---------- naming, newer form (29 Sep): visual letter + copy line, region ----------
+
+test('the newer form: visual letter, copy line and region, alongside the older v# form', () => {
+  const r = parseAdName('FAM_SUMMER_ST_A2_US_META_261013', N);
+  assert.ok(r.ok);
+  assert.deepEqual({ v: r.visual, l: r.line, ver: r.version, reg: r.region, stub: r.stub, asset: r.asset, d: r.date, form: r.form },
+    { v: 'A', l: 2, ver: 2, reg: 'US', stub: 'FAM_SUMMER_ST_A2_US_META', asset: 'FAM_SUMMER_ST_A', d: '2026-10-13', form: 0 });
+  assert.deepEqual(r.warnings, []);
+  for (const v of ['fam_summer_st_a2_us_meta_261013', 'FAM _ SUMMER_STATIC_A2_US_META_261013', 'FAM_SUMMER_ST_A2_US_META_261013_X9', 'FAM_SUMMER_ST_A2_USA_META_261013 - Copy', 'FAM_ASK_YOUR_VET_ST_A2_US_META_261013'.replace('ASK_YOUR_VET', 'SUMMER')]) {
+    const x = parseAdName(v, N);
+    assert.ok(x.ok && x.stub === 'FAM_SUMMER_ST_A2_US_META', `${v}: ${x.ok ? x.stub : x.reason}`);
+  }
+  const ca = parseAdName('CUR_ASK_YOUR_VET_TT_B3_CA_TT_261020', N);
+  assert.ok(ca.ok && ca.territory === 'ASK_YOUR_VET' && ca.region === 'CA' && ca.format === 'TT' && ca.platform === 'TT' && ca.visual === 'B' && ca.line === 3);
+  const old = parseAdName('FAM_SUMMER_ST_v2_META_261013', N);
+  assert.ok(old.ok && old.region === null && old.visual === null && old.stub === 'FAM_SUMMER_ST_v2_META' && old.form === 1);
+  assert.equal(normalizeStub('FAM_SUMMER_STATIC_A2_US_META', N), 'FAM_SUMMER_ST_A2_US_META');
+});
+
+test('newer-form names that are wrong are quarantined with a reason', () => {
+  const bad: Array<[string, RegExp]> = [
+    ['FAM_SUMMER_ST_A2_UK_META_261013', /region "UK" isn't one of US, CA/],
+    ['FAM_SUMMER_ST_A2_US_YT_261013', /platform "YT"/],
+    ['FAM_SUMMER_GIF_A2_US_META_261013', /format "GIF"/],
+    ['FAM_SUMMER_ST_US_META_261013', /no version \(v#\) or visual and line/],
+    ['FAM_SUMMER_ST_A2_US_META_261341', /date "261341"/],
+  ];
+  for (const [name, re] of bad) {
+    const r = parseAdName(name, N);
+    assert.equal(r.ok, false, name);
+    assert.match((r as any).reason, re, name);
+  }
+});
+
+test('the convention lives in config: a changed form is a config edit, not code', () => {
+  // Say Add3 puts region before format: PERSONA_TERRITORY_REGION_FORMAT_A2_PLATFORM.
+  const alt = { ...N, forms: [['PERSONA', 'TERRITORY', 'REGION', 'FORMAT', 'VISUALLINE', 'PLATFORM']] };
+  const r = parseAdName('FAM_SUMMER_US_ST_A2_META_261013', alt);
+  assert.ok(r.ok && r.region === 'US' && r.territory === 'SUMMER' && r.stub === 'FAM_SUMMER_ST_A2_US_META');
+  assert.equal(parseAdName('FAM_SUMMER_ST_A2_US_META_261013', alt).ok, false);
+});
+
+test('region splits the ad sets: US and CA ads are compared within their own region', () => {
+  const mk = (name: string, q: number): AdData => {
+    const p = parseAdName(name, N); assert.ok(p.ok);
+    return { ...hAd(p.stub, q), stub: p.stub, persona: p.persona, territory: p.territory, format: p.format, platform: p.platform, version: p.version, visual: p.visual, region: p.region ?? '' };
+  };
+  const ads = [mk('FAM_SUMMER_ST_A1_US_META_261013', 70), mk('FAM_SUMMER_ST_A2_US_META_261013', 30), mk('FAM_SUMMER_ST_A3_US_META_261013', 30),
+    mk('FAM_SUMMER_ST_A1_CA_META_261013', 30), mk('FAM_SUMMER_ST_A2_CA_META_261013', 30), mk('FAM_SUMMER_ST_A3_CA_META_261013', 70)];
+  const r = readWeek(ads, cfg, hOpts);
+  assert.deepEqual([...new Set(r.ads.map(a => a.cell))].sort(), ['FAM_META_CA', 'FAM_META_US']);
+  assert.equal(r.ads.find(a => a.stub === 'FAM_SUMMER_ST_A1_US_META')!.headline.call, 'scale');
+  assert.equal(r.ads.find(a => a.stub === 'FAM_SUMMER_ST_A3_CA_META')!.headline.call, 'scale');
+  const acts = actions(r.ads, cfg).join('\n');
+  assert.match(acts, /the US Meta ad set/);
+  assert.equal(readableLabel(r.ads.find(a => a.stub === 'FAM_SUMMER_ST_A1_US_META')!, { FAM_SUMMER: 'One Bill.' }), 'FAM · One Bill · static A1 (US, Meta)');
 });

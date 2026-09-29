@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS live_ads (
   territory TEXT,
   format TEXT,
   version INTEGER,
+  visual TEXT,
+  copy_line INTEGER,
+  region TEXT,
   name_platform TEXT,
   delivered_on DATE,
   name_suffix TEXT,
@@ -58,6 +61,10 @@ CREATE TABLE IF NOT EXISTS live_ads (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (source_platform, ad_name, campaign_name, ad_set_name)
 );
+-- Region and visual letter (naming update, 29 Sep): for local databases made before they were added.
+ALTER TABLE live_ads ADD COLUMN IF NOT EXISTS visual TEXT;
+ALTER TABLE live_ads ADD COLUMN IF NOT EXISTS copy_line INTEGER;
+ALTER TABLE live_ads ADD COLUMN IF NOT EXISTS region TEXT;
 CREATE INDEX IF NOT EXISTS idx_live_ads_stub ON live_ads (stub);
 CREATE INDEX IF NOT EXISTS idx_live_ads_persona ON live_ads (persona, name_platform);
 
@@ -92,6 +99,7 @@ CREATE TABLE IF NOT EXISTS live_reads (
   ad_id INTEGER NOT NULL REFERENCES live_ads(id) ON DELETE CASCADE,
   stub TEXT NOT NULL,
   persona TEXT,
+  region TEXT,
   name_platform TEXT,
   week_start DATE NOT NULL,
   week_end DATE NOT NULL,
@@ -112,6 +120,7 @@ CREATE TABLE IF NOT EXISTS live_reads (
   read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (ad_id, week_end, since)
 );
+ALTER TABLE live_reads ADD COLUMN IF NOT EXISTS region TEXT;
 CREATE INDEX IF NOT EXISTS idx_live_reads_stub ON live_reads (stub, week_end DESC);
 
 CREATE OR REPLACE VIEW live_latest_reads AS

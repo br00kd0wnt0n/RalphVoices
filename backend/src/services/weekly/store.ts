@@ -34,19 +34,19 @@ export async function saveExport(pool: Pool, file: { name: string; sha256: strin
       if (id === undefined) {
         const n = r.name;
         const a = await c.query(
-          `INSERT INTO live_ads (source_platform, ad_name, campaign_name, ad_set_name, external_ad_id, parse_status, parse_error, name_warnings, stub, asset, persona, territory, format, version, name_platform, delivered_on, name_suffix, audience, features, features_source)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+          `INSERT INTO live_ads (source_platform, ad_name, campaign_name, ad_set_name, external_ad_id, parse_status, parse_error, name_warnings, stub, asset, persona, territory, format, version, name_platform, delivered_on, name_suffix, audience, features, features_source, visual, copy_line, region)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
            ON CONFLICT (source_platform, ad_name, campaign_name, ad_set_name) DO UPDATE SET
              external_ad_id = COALESCE(EXCLUDED.external_ad_id, live_ads.external_ad_id), parse_status = EXCLUDED.parse_status, parse_error = EXCLUDED.parse_error,
              name_warnings = EXCLUDED.name_warnings, stub = EXCLUDED.stub, asset = EXCLUDED.asset, persona = EXCLUDED.persona, territory = EXCLUDED.territory,
              format = EXCLUDED.format, version = EXCLUDED.version, name_platform = EXCLUDED.name_platform, delivered_on = EXCLUDED.delivered_on,
-             name_suffix = EXCLUDED.name_suffix, audience = EXCLUDED.audience,
+             name_suffix = EXCLUDED.name_suffix, audience = EXCLUDED.audience, visual = EXCLUDED.visual, copy_line = EXCLUDED.copy_line, region = EXCLUDED.region,
              features = COALESCE(EXCLUDED.features, live_ads.features), features_source = COALESCE(EXCLUDED.features_source, live_ads.features_source), updated_at = NOW()
            RETURNING id, (xmax = 0) AS inserted`,
           [r.source_platform, r.ad_name, r.campaign, r.ad_set, r.ad_id, r.quarantine_reason ? 'quarantined' : 'ok', r.quarantine_reason, JSON.stringify(n.ok ? n.warnings : []),
             n.ok ? n.stub : null, n.ok ? n.asset : null, n.ok ? n.persona : null, n.ok ? n.territory : null, n.ok ? n.format : null, n.ok ? n.version : null,
             n.ok ? n.platform : null, n.ok ? n.date : null, n.ok && n.suffix.length ? n.suffix.join('_') : null, r.audience,
-            r.features ? JSON.stringify(r.features) : null, r.features_source]);
+            r.features ? JSON.stringify(r.features) : null, r.features_source, n.ok ? n.visual : null, n.ok ? n.line : null, n.ok ? n.region : null]);
         id = a.rows[0].id as number;
         adIds.set(k, id);
         if (a.rows[0].inserted) out.ads_inserted++; else out.ads_updated++;
@@ -86,7 +86,7 @@ const iso = (d: unknown) => (d instanceof Date ? new Date(Date.UTC(d.getFullYear
 
 export async function loadRows(pool: Pool, to?: string): Promise<MetricRow[]> {
   const r = await pool.query(
-    `SELECT a.id, a.source_platform, a.ad_name, a.campaign_name, a.ad_set_name, a.parse_status, a.parse_error, a.stub, a.asset, a.persona, a.territory, a.format, a.version,
+    `SELECT a.id, a.source_platform, a.ad_name, a.campaign_name, a.ad_set_name, a.parse_status, a.parse_error, a.stub, a.asset, a.persona, a.territory, a.format, a.version, a.visual, a.region,
             a.name_platform, a.audience, a.features, m.period_start, m.period_end, ${COUNT_FIELDS.map(f => `m.${f}`).join(', ')}
        FROM live_metrics m JOIN live_ads a ON a.id = m.ad_id
       ${to ? 'WHERE m.period_end <= $1' : ''}
@@ -95,7 +95,7 @@ export async function loadRows(pool: Pool, to?: string): Promise<MetricRow[]> {
     key: `${x.source_platform}|${x.ad_name}|${x.campaign_name}|${x.ad_set_name}`,
     campaign: x.campaign_name, ad_set: x.ad_set_name,
     ad_name: x.ad_name, audience: x.audience,
-    parsed: x.parse_status === 'ok' ? { stub: x.stub, asset: x.asset, persona: x.persona, territory: x.territory, format: x.format, platform: x.name_platform, version: x.version } : null,
+    parsed: x.parse_status === 'ok' ? { stub: x.stub, asset: x.asset, persona: x.persona, territory: x.territory, format: x.format, platform: x.name_platform, version: x.version, visual: x.visual ?? null, region: x.region ?? null } : null,
     quarantine_reason: x.parse_status === 'ok' ? null : x.parse_error || 'name did not parse',
     features: Array.isArray(x.features) ? x.features : null,
     period_start: iso(x.period_start), period_end: iso(x.period_end),
@@ -127,13 +127,13 @@ export async function saveReads(pool: Pool, read: Read, week: { start: string; e
         p_worse_than_median: v!.p_worse_than_median, tied_with: v!.tied_with, call: v!.call, reason: v!.reason,
       }]));
       await c.query(
-        `INSERT INTO live_reads (ad_id, stub, persona, name_platform, week_start, week_end, since, config_version, impressions, live_now, call, call_metric, reason, rate, range_lo, range_hi, p_best, p_worse_than_median, tied_with, metrics)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
-         ON CONFLICT (ad_id, week_end, since) DO UPDATE SET stub = EXCLUDED.stub, persona = EXCLUDED.persona, name_platform = EXCLUDED.name_platform, week_start = EXCLUDED.week_start,
+        `INSERT INTO live_reads (ad_id, stub, persona, region, name_platform, week_start, week_end, since, config_version, impressions, live_now, call, call_metric, reason, rate, range_lo, range_hi, p_best, p_worse_than_median, tied_with, metrics)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+         ON CONFLICT (ad_id, week_end, since) DO UPDATE SET stub = EXCLUDED.stub, persona = EXCLUDED.persona, region = EXCLUDED.region, name_platform = EXCLUDED.name_platform, week_start = EXCLUDED.week_start,
            config_version = EXCLUDED.config_version, impressions = EXCLUDED.impressions, live_now = EXCLUDED.live_now, call = EXCLUDED.call, call_metric = EXCLUDED.call_metric,
            reason = EXCLUDED.reason, rate = EXCLUDED.rate, range_lo = EXCLUDED.range_lo, range_hi = EXCLUDED.range_hi, p_best = EXCLUDED.p_best,
            p_worse_than_median = EXCLUDED.p_worse_than_median, tied_with = EXCLUDED.tied_with, metrics = EXCLUDED.metrics, read_at = NOW()`,
-        [id, a.stub, a.persona, a.platform, week.start, week.end, since, configVersion, a.impressions, a.live_now, a.headline.call, m, a.headline.reason,
+        [id, a.stub, a.persona, a.region || null, a.platform, week.start, week.end, since, configVersion, a.impressions, a.live_now, a.headline.call, m, a.headline.reason,
           r?.rate ?? null, r?.lo ?? null, r?.hi ?? null, r?.p_best ?? null, r?.p_worse_than_median ?? null, JSON.stringify(r?.tied_with ?? []), JSON.stringify(metrics)]);
       n++;
     }

@@ -171,7 +171,21 @@ npx tsx scripts/weekly.ts simulate --scenario month1 --seed 42 --check
 npx tsx scripts/weekly.ts read --file "<dir>/meta-export.csv" --platform meta --features "<dir>/shortlist.csv" --note
 ```
 
-## Column mapping (Meta Ads Manager, ad level, daily breakdown)
+## Naming (config v5, 29 Sep; proposed to Add3, confirmation pending)
+
+The convention lives in one place: `naming.forms` in `backend/config/weekly-read.json`. Each form is a list of slots, tried in order; the date and any suffix follow the last slot. If Add3 tweaks the format, edit that list.
+
+| Form | Example | Stub (join key) | Asset (the visual) |
+|---|---|---|---|
+| Newer: `PERSONA_TERRITORY_FORMAT_[visual][line]_REGION_PLATFORM_YYMMDD` | `FAM_SUMMER_ST_A2_US_META_261013` | `FAM_SUMMER_ST_A2_US_META` | `FAM_SUMMER_ST_A` |
+| Older, still accepted: `PERSONA_TERRITORY_FORMAT_v#_PLATFORM_YYMMDD` | `FAM_SUMMER_ST_v2_META_261013` | `FAM_SUMMER_ST_v2_META` | `FAM_SUMMER_ST` |
+
+- **Stored fields:** `live_ads` gains `visual`, `copy_line` and `region` (inside 016, with `ADD COLUMN IF NOT EXISTS` for local databases made earlier); `live_reads` gains `region`. Historic mode keeps its region from Add3's names.
+- **Model:** the cell is persona × platform × region, so US and Canada ads are compared within their own ad sets. Pooling runs persona → platform → region → format. Features pool across regions, with region as a stratum (a control).
+- **Labels:** notes name ad sets as "the US Meta ad set". The client label is "FAM · territory name · static A2 (US, Meta) (FAM_TERR_ST_A2_US_META)".
+- **Matching the Studio:** the Studio session is implementing the same format (`docs/build-log/studio-region-naming.md`, not written yet on 29 Sep). Check the two agree when it lands; any difference should be a config edit here.
+
+
 
 Matched case-insensitively, ignoring punctuation. A trailing `*` in the config is a prefix match.
 
@@ -213,6 +227,13 @@ npx tsx scripts/weekly.ts read --file "<path>" --platform meta --historic --note
 - `--historic` keeps ads whose names predate the convention as their own ads. B2 audit features can join by an `ad_name` column.
 - Report which columns mapped, what was quarantined, and the read. The ledger CSV (per ad: hook rate, CTR, quotes per 1,000 with ranges) is what the decision gate needs.
 - The gate's rules are in the v2 plan and must be written down before looking at the data.
+
+## From the Add3 call (29 Sep), for later
+
+- **The weekly export will be a daily-refreshed Google Sheet.** It needs an adapter in front of `ingest`; the column mapping stays in config.
+- **Budget:** about $250k Meta and $100k TikTok a month, with 50–70% in persona ad sets. That is well above the simulation's $41k, so quote reads come sooner than the handoff assumed.
+- **No state-level results:** the PAC-by-state benchmark plan is dropped. `cost_benchmarks.cost_per_quote` stays null unless an account-level target arrives.
+- **Advantage+ in the special ads category means no persona audience targeting.** A "persona" cell means creative written for that persona, not people in it. The note's wording should say so when it's next revised.
 
 ## Known gaps
 

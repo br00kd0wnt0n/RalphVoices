@@ -31,6 +31,10 @@ export interface WeeklyConfig {
     platforms: Record<string, string[]>;
     video_formats: string[];
     territories: string[];
+    regions?: Record<string, string[]>;
+    forms?: string[][];
+    visual_line_pattern?: string;
+    version_pattern?: string;
   };
   audience: {
     retargeting_pattern: string;

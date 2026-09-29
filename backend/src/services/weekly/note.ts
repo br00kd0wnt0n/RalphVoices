@@ -41,19 +41,23 @@ const fmtRatio = (e: Effect) => {
 const CALL_ORDER: Record<Call, number> = { scale: 0, 'scale (tied)': 1, cut: 2, 'keep testing': 3, 'too early to call': 4 };
 
 const PLATFORM_NAME: Record<string, string> = { META: 'Meta', TT: 'TikTok' };
-const plat = (a: AdRead) => PLATFORM_NAME[a.platform] || a.platform;
+// "Meta", or "US Meta" when the ad's name carries a region (historic mode already uses region as the persona).
+const plat = (a: Pick<AdRead, 'platform' | 'region' | 'persona'>) => `${a.region && a.region !== a.persona ? `${a.region} ` : ''}${PLATFORM_NAME[a.platform] || a.platform}`;
 const FORMAT_NAME: Record<string, string> = { ST: 'statics', VID: 'hero videos', CAR: 'carousels', TT: 'TikTok builds', UGC: 'creator (UGC) videos' };
 const fmtName = (f: string) => FORMAT_NAME[f] || f;
 const plural = (n: number, w: string, ws = `${w}s`) => `${n} ${n === 1 ? w : ws}`;
 
 // How the first screen names an ad. Internal: the naming stub. Client: a readable
-// label, "DINK · Territory name · carousel v2 (Meta) (DINK_TERR_CAR_v2_META)".
+// label, "FAM · Territory name · static A2 (US, Meta) (FAM_TERR_ST_A2_US_META)", or for the
+// older form "DINK · Territory name · carousel v2 (Meta) (DINK_TERR_CAR_v2_META)".
 export type Namer = (a: AdRead, short?: boolean) => string;
 const stubName: Namer = a => a.stub;
 const FORMAT_WORD: Record<string, string> = { ST: 'static', VID: 'video', CAR: 'carousel', TT: 'TikTok-native', UGC: 'creator video' };
-export function readableLabel(a: Pick<AdRead, 'persona' | 'territory' | 'format' | 'version' | 'platform'>, territoryNames: Record<string, string> = {}): string {
+export function readableLabel(a: Pick<AdRead, 'persona' | 'territory' | 'format' | 'version' | 'platform'> & { visual?: string | null; region?: string }, territoryNames: Record<string, string> = {}): string {
   const name = territoryNames[`${a.persona}_${a.territory}`] ?? territoryNames[a.territory] ?? a.territory;
-  return `${a.persona} · ${name.replace(/[.\s]+$/, '')} · ${FORMAT_WORD[a.format] || a.format} v${a.version} (${PLATFORM_NAME[a.platform] || a.platform})`;
+  const id = a.visual ? `${a.visual}${a.version}` : `v${a.version}`;
+  const where = [a.region, PLATFORM_NAME[a.platform] || a.platform].filter(Boolean).join(', ');
+  return `${a.persona} · ${name.replace(/[.\s]+$/, '')} · ${FORMAT_WORD[a.format] || a.format} ${id} (${where})`;
 }
 export function clientNamer(territoryNames: Record<string, string> = {}): Namer {
   // Plain brackets, not HTML: the client note gets pasted into email and Google Docs.
