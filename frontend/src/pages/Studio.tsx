@@ -439,7 +439,7 @@ function Home({ onStart }: { onStart: () => void }) {
     <div className="mx-auto max-w-6xl space-y-7">
       <section className="space-y-3">
         <h1 className="text-4xl font-bold leading-tight tracking-tight" style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>
-          Twenty options per persona, stress-tested as you write.
+          Write your lines. Studio adds alternatives from angles you haven’t tried, and checks every one.
         </h1>
         <p className="text-lg text-[#A3A8B1]">You bring the taste. Studio brings range, the rules, and the audience’s pushback. The market decides what wins.</p>
         <PinkButton className="mt-1" onClick={onStart}>Start: pick a territory →</PinkButton>
