@@ -11,7 +11,7 @@
 //   npx tsx scripts/weekly.ts migrate                                   (apply 016 only; idempotent)
 //   npx tsx scripts/weekly.ts ingest   --file EXPORT.csv --platform meta|tiktok [--features SHORTLIST.csv]... [--no-features] [--dry-run]
 //   npx tsx scripts/weekly.ts features --file SHORTLIST_OR_AUDIT.csv     (refresh features on stored ads by stub)
-//   npx tsx scripts/weekly.ts note     --week 2026-10-19 [--since 2026-10-12] [--audience client] [--prose] [--labels studio-rules.json] [--territories FILE] [--out DIR]
+//   npx tsx scripts/weekly.ts note     --week 2026-10-19 [--since 2026-10-12] [--historic] [--audience client] [--prose] [--labels studio-rules.json] [--territories FILE] [--out DIR]
 //                                      (internal note: first screen + appendix + ledger, and the per-ad results saved to live_reads;
 //                                       --audience client: the first screen only)
 //   npx tsx scripts/weekly.ts latest   [--stub STUB]...                 (latest stored read per naming stub)
@@ -133,7 +133,7 @@ function printRead(read: Read) {
 
 function writeNote(read: Read, prev: Read | null, win: ReturnType<typeof aggregate>, weekImps: Map<string, number>, week: { start: string; end: string }, since: string, sources: string[], outDir: string) {
   const client = opt('audience') === 'client';
-  const { markdown, ledger } = draftNote(read, { week, since, window: win, prev, week_impressions: weekImps, sources }, cfg, { audience: client ? 'client' : 'internal', featureLabels: featureLabels(), territoryNames: client ? territoryNames() : undefined });
+  const { markdown, ledger } = draftNote(read, { week, since, window: win, prev, week_impressions: weekImps, sources }, cfg, { audience: client ? 'client' : 'internal', featureLabels: featureLabels(), territoryNames: client ? territoryNames() : undefined, historic: flag('historic') });
   fs.mkdirSync(outDir, { recursive: true });
   const base = path.join(outDir, `weekly-${week.start}${client ? '-client' : ''}`);
   fs.writeFileSync(`${base}.md`, markdown);
@@ -240,10 +240,11 @@ async function main() {
       if (!rows.length) throw new Error('no live_metrics rows up to that week; ingest first');
       const since = opt('since') || rows.map(r => r.period_start).sort()[0];
       const qa = rows.some(r => r.quotes !== null);
-      const { read, prev, win, weekImps } = doRead(rows, week, since, qa);
+      const { read, prev, win, weekImps } = doRead(rows, week, since, qa, flag('historic'));
       printRead(read);
       const sources = await ingestSources(p, since, week.end);
-      if (opt('audience') !== 'client') console.log(`Stored ${await saveReads(p, read, week, since, cfg.version)} per-ad results in live_reads (week ${week.start}).`);
+      if (flag('historic')) console.log('--historic: reads not stored in live_reads (ads outside the naming convention).');
+      else if (opt('audience') !== 'client') console.log(`Stored ${await saveReads(p, read, week, since, cfg.version)} per-ad results in live_reads (week ${week.start}).`);
       await p.end();
       const { path: mdPath } = writeNote(read, prev, win, weekImps, week, since, sources, OUT);
       if (flag('prose')) await prose(mdPath);

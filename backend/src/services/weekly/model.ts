@@ -22,6 +22,8 @@ import { rng, hashSeed, beta, quantile, zQuantile } from './stats.js';
 export interface AdData {
   key: string;             // unique per ad (name + campaign + ad set)
   ad_name: string;
+  campaign?: string;
+  ad_set?: string;
   stub: string;
   asset: string;
   persona: string;
@@ -41,6 +43,7 @@ export interface AdData {
   landing_page_views: number;
   quotes: number;
   enrollments: number;
+  has_quotes?: boolean;    // false when the ad's export had no quote column (not the same as 0 quotes)
 }
 
 export type Call = 'scale' | 'scale (tied)' | 'cut' | 'keep testing' | 'too early to call';
@@ -123,6 +126,7 @@ export const cellOf = (a: AdData, cfg: WeeklyConfig) => cfg.model.cell_by.map(f 
 function eligible(a: AdData, m: MetricKey, cfg: WeeklyConfig): boolean {
   if (a.impressions <= 0) return false;
   if (cfg.metrics[m].video_only && !cfg.naming.video_formats.includes(a.format)) return false;
+  if (m === 'quotes_per_1k' && a.has_quotes === false) return false;
   return true;
 }
 

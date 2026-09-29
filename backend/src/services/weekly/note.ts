@@ -64,6 +64,7 @@ export interface NoteOptions {
   audience?: 'internal' | 'client';
   featureLabels?: Record<string, string>; // feature id → plain description (Studio rules), for the front page
   territoryNames?: Record<string, string>; // PERSONA_TERRITORY (or TERRITORY) → name, for the client variant's labels
+  historic?: boolean; // Add3's history: whole-period totals, names outside the convention
 }
 export const APPENDIX_MARKER = '<!-- appendix: internal terms allowed below -->';
 
@@ -76,18 +77,25 @@ function rateOf(a: AdRead, cfg: WeeklyConfig): string {
     ? `${fmtRate(m, r.rate, cfg)} quotes per 1,000 impressions (range ${fmtRate(m, r.lo, cfg)}–${fmtRate(m, r.hi, cfg)})`
     : `${cfg.metrics[m].label} ${fmtWithRange(m, r, cfg)}`;
 }
-const onWhat = (a: AdRead, cfg: WeeklyConfig) => (a.headline.metric === cfg.calls.primary_metric ? 'on quotes' : `on ${cfg.metrics[a.headline.metric!].label}, while quotes are still too thin to read`);
+const onWhat = (a: AdRead, cfg: WeeklyConfig) => (a.headline.metric === cfg.calls.primary_metric ? 'on quotes'
+  : `on ${cfg.metrics[a.headline.metric!].label}${a.metrics[cfg.calls.primary_metric] ? ', while quotes are still too thin to read' : ' (this export has no quote column)'}`);
 const isHeld = (a: AdRead) => /held from last week/.test(a.headline.reason);
+// "the Meta ad set", or "the Meta ad set “name”" when this persona runs several ad sets on that platform.
+function setName(a: AdRead, ads: AdRead[]): string {
+  const many = new Set(ads.filter(b => b.platform === a.platform).map(b => b.cell)).size > 1;
+  return many ? `${plat(a)} ad set “${a.ad_set || a.cell}”` : `${plat(a)} ad set`;
+}
 const smallAdSets = (ads: AdRead[], cfg: WeeklyConfig) => {
   const m = cfg.calls.primary_metric;
-  const out: Array<{ plat: string; n: number }> = [];
+  const out: Array<{ name: string; n: number }> = [];
   for (const c of [...new Set(ads.map(a => a.cell))].sort()) {
     const g = ads.filter(a => a.cell === c);
     const n = g.filter(a => a.metrics[m]?.readable || a.metrics[cfg.calls.fallback_metric ?? m]?.readable).length;
-    if (n > 0 && n < cfg.calls.min_ads_in_cell) out.push({ plat: plat(g[0]), n });
+    if (n > 0 && n < cfg.calls.min_ads_in_cell) out.push({ name: setName(g[0], ads), n });
   }
   return out;
 };
+const listSome = (xs: string[], k = 3) => (xs.length <= k ? xs.join(', ') : `${xs.slice(0, k).join(', ')} and ${xs.length - k} more`);
 
 // One line per persona, plain English: ahead, behind, tied, too early to call, keep testing.
 export function personaHeadline(ads: AdRead[], cfg: WeeklyConfig, nm: Namer = stubName): string {
@@ -95,18 +103,24 @@ export function personaHeadline(ads: AdRead[], cfg: WeeklyConfig, nm: Namer = st
   const cut = ads.filter(a => a.headline.call === 'cut');
   const early = ads.filter(a => a.headline.call === 'too early to call');
   const parts: string[] = [];
-  for (const c of [...new Set(ads.map(a => a.cell))].sort()) {
+  const cells = [...new Set(ads.map(a => a.cell))].sort();
+  for (const c of cells) {
     const g = ads.filter(a => a.cell === c);
     const single = g.filter(a => a.headline.call === 'scale');
     const tied = g.filter(a => a.headline.call === 'scale (tied)');
-    for (const a of single) parts.push(`${nm(a)} is clearly ahead in the ${plat(a)} ad set`);
-    if (tied.length) parts.push(`${tied.map(a => nm(a)).join(' and ')} are ahead of the rest of the ${plat(tied[0])} ad set, tied with each other`);
+    for (const a of single) parts.push(`${nm(a)} is clearly ahead in the ${setName(a, ads)}`);
+    if (tied.length) parts.push(`${tied.map(a => nm(a)).join(' and ')} are ahead of the rest of the ${setName(tied[0], ads)}, tied with each other`);
   }
   const behind = cut.length ? `${plural(cut.length, 'ad is', 'ads are')} behind.` : '';
+  const small = smallAdSets(ads, cfg);
+  const smallTxt = !small.length ? '' : small.length === 1 ? ` The ${small[0].name} has too few ads to call.` : ` ${small.length} ad sets have too few ads to call.`;
+  if (parts.length > 2) {
+    const up = ads.filter(a => a.headline.call.startsWith('scale'));
+    const sets = new Set(up.map(a => a.cell)).size;
+    return `${plural(up.length, 'ad is', 'ads are')} clearly ahead in ${plural(sets, 'ad set')} (the top three are in the actions).${behind ? ` ${behind}` : ''}`;
+  }
   if (parts.length) { const t = parts.join('; '); return `${t[0].toUpperCase()}${t.slice(1)}.${behind ? ` ${behind}` : ''}`; }
   if (early.length === ads.length) return `Too early to call: none of the ${ads.length} ads has enough data yet.`;
-  const small = smallAdSets(ads, cfg);
-  const smallTxt = small.length ? ` The ${small.map(s => s.plat).join(' and ')} ad set${small.length > 1 ? 's have' : ' has'} too few ads to call.` : '';
   if (cut.length) return `Nothing clearly ahead yet; ${behind[0].toLowerCase()}${behind.slice(1)}${smallTxt}`;
   return `No ad is clearly ahead or behind yet: keep testing.${smallTxt}`;
 }
@@ -116,23 +130,27 @@ export function actions(ads: AdRead[], cfg: WeeklyConfig, nm: Namer = stubName):
   const out: string[] = [];
   const held = (a: AdRead) => (isHeld(a) ? ' Held from last week: its lead has narrowed but still holds.' : '');
   for (const a of ads.filter(a => a.headline.call === 'scale'))
-    out.push(`**Scale** ${nm(a)}: clearly ahead of every other ad in the ${plat(a)} ad set ${onWhat(a, cfg)}, ${rateOf(a, cfg)}.${held(a)}`);
+    out.push(`**Scale** ${nm(a)}: clearly ahead of every other ad in the ${setName(a, ads)} ${onWhat(a, cfg)}, ${rateOf(a, cfg)}.${held(a)}`);
   const tiedCells = [...new Set(ads.filter(a => a.headline.call === 'scale (tied)').map(a => a.cell))];
   for (const c of tiedCells) {
     const g = ads.filter(a => a.cell === c && a.headline.call === 'scale (tied)');
-    out.push(`**Scale both** ${g.map(a => nm(a)).join(' and ')}: ahead of the rest of the ${plat(g[0])} ad set and tied with each other ${onWhat(g[0], cfg)} (${g.map(a => `${nm(a, true)}: ${rateOf(a, cfg)}`).join('; ')}).${held(g[0])}`);
+    out.push(`**Scale both** ${g.map(a => nm(a)).join(' and ')}: ahead of the rest of the ${setName(g[0], ads)} and tied with each other ${onWhat(g[0], cfg)} (${g.map(a => `${nm(a, true)}: ${rateOf(a, cfg)}`).join('; ')}).${held(g[0])}`);
   }
   const cuts = ads.filter(a => a.headline.call === 'cut').sort((a, b) => (a.metrics[a.headline.metric!]?.rate ?? 0) - (b.metrics[b.headline.metric!]?.rate ?? 0));
-  const cutLine = (a: AdRead) => `**Cut** ${nm(a)}: behind most of the ${plat(a)} ad set and clearly behind its top ad ${onWhat(a, cfg)}, ${rateOf(a, cfg)}.${isHeld(a) ? ' Held from last week.' : ''}`;
+  const cutLine = (a: AdRead) => `**Cut** ${nm(a)}: behind most of the ${setName(a, ads)} and clearly behind its top ad ${onWhat(a, cfg)}, ${rateOf(a, cfg)}.${isHeld(a) ? ' Held from last week.' : ''}`;
   // At most two cuts up front when there's something else to say; the rest follow the other actions.
   for (const a of cuts.slice(0, 2)) out.push(cutLine(a));
-  for (const s of smallAdSets(ads, cfg))
-    out.push(`**Keep testing** the ${s.plat} ad set: only ${s.n} ad${s.n === 1 ? '' : 's'} with enough data, too few to call one ahead of another. A third ad would make a call possible.`);
+  const small = smallAdSets(ads, cfg);
+  if (small.length === 1)
+    out.push(`**Keep testing** the ${small[0].name}: only ${small[0].n} ad${small[0].n === 1 ? '' : 's'} with enough data, too few to call one ahead of another. A third ad would make a call possible.`);
+  else if (small.length > 1)
+    out.push(`**Keep testing** in the ${small.length} ad sets with fewer than ${cfg.calls.min_ads_in_cell} ads with enough data (${listSome(small.map(s => s.name.replace(/^\S+ ad set /, '')))}): too few to call one ad ahead of another.`);
   const prim = cfg.calls.primary_metric;
-  const kt = ads.filter(a => a.headline.call === 'keep testing' && a.metrics[prim]?.readable && !smallAdSets([a], cfg).length)
+  const smallCells = new Set(small.map(s => s.name));
+  const kt = ads.filter(a => a.headline.call === 'keep testing' && a.metrics[prim]?.readable && !smallCells.has(setName(a, ads)))
     .sort((a, b) => (b.metrics[prim]?.p_best ?? 0) - (a.metrics[prim]?.p_best ?? 0));
   for (const a of cuts.slice(2)) out.push(cutLine(a));
-  for (const a of kt.slice(0, 1)) out.push(`**Keep testing** ${nm(a)}: nearest to a call, ${rateOf(a, cfg)}, not yet clearly ahead of the rest.`);
+  for (const a of kt.slice(0, 1)) out.push(`**Keep testing** ${nm(a)}: nearest to a call in the ${setName(a, ads)}, ${rateOf(a, cfg)}, not yet clearly ahead of the rest.`);
   const early = ads.filter(a => a.headline.call === 'too early to call');
   if (early.length) {
     const need = cfg.metrics[prim].min_impressions;
@@ -164,8 +182,9 @@ export function accountLine(read: Read, cfg: WeeklyConfig, labels?: Record<strin
   if (open.length) waiting.push(`whether ads tagged ${open.map(e => featName(e.label, labels)).join(' or ')} get more quotes`);
   const fmtNd = [...new Set(read.formats.filter(e => e.verdict === 'not enough data').map(e => e.label.split(' vs ')[0]))];
   if (fmtNd.length) waiting.push(`how ${fmtNd.map(fmtName).join(' and ')} compare with other formats (too few so far)`);
-  const small = new Set(read.ads.flatMap(a => smallAdSets([...read.ads.filter(b => b.cell === a.cell)], cfg).map(s => `${a.persona} ${s.plat}`)));
-  if (small.size) waiting.push(`calls in ad sets with fewer than ${cfg.calls.min_ads_in_cell} ads (${[...small].sort().join(', ')})`);
+  const smallCells = [...new Set(read.ads.map(a => a.cell))].filter(c => smallAdSets(read.ads.filter(b => b.cell === c), cfg).length);
+  const smallLabels = [...new Set(smallCells.map(c => { const a = read.ads.find(b => b.cell === c)!; return `${a.persona} ${plat(a)}`; }))].sort();
+  if (smallCells.length) waiting.push(`calls in ${smallCells.length === 1 ? 'an ad set' : `${smallCells.length} ad sets`} with fewer than ${cfg.calls.min_ads_in_cell} ads (${listSome(smallLabels, 4)})`);
   return `**Across the account:** ${clear.length ? `clear so far: ${clear.join('; ')}. ` : 'nothing clear yet across ads. '}Still waiting to learn: ${waiting.length ? waiting.join('; ') : 'nothing outstanding'}.`;
 }
 
@@ -257,17 +276,20 @@ function effectLines(effects: Effect[], cfg: WeeklyConfig): string[] {
 
 export function draftNote(read: Read, ctx: NoteContext, cfg: WeeklyConfig, opts: NoteOptions = {}): { markdown: string; ledger: string } {
   const client = opts.audience === 'client';
-  const nm: Namer = client ? clientNamer(opts.territoryNames) : stubName;
+  // Historic names predate the convention: there's no territory to label, so they stay as they ran.
+  const nm: Namer = client && !opts.historic ? clientNamer(opts.territoryNames) : stubName;
   const L: string[] = [];
   const iv = Math.round(read.interval * 100);
   const all = read.ads;
-  L.push(`# Weekly read: ${fmtDate(ctx.week.start)} to ${fmtDate(ctx.week.end)} ${ctx.week.end.slice(0, 4)}`, '');
+  L.push(opts.historic ? `# Historic read: ${fmtDate(ctx.since)} to ${fmtDate(ctx.week.end)} ${ctx.week.end.slice(0, 4)} (dry run)` : `# Weekly read: ${fmtDate(ctx.week.start)} to ${fmtDate(ctx.week.end)} ${ctx.week.end.slice(0, 4)}`, '');
+  if (opts.historic) L.push('*Dry run on past results. Where the export gives totals for the whole period rather than by week, these are the calls the rules would make on the whole period, not actions for this week, and ads that have since stopped still appear. Regions (US, CA) stand in for personas; the ad names predate the naming convention.*', '');
   L.push(client
-    ? `*Live results from prospecting ads, ${fmtDate(ctx.since)} to ${fmtDate(ctx.week.end)}. Each figure comes with a range: where the true figure most likely sits (${iv}%). "Too early to call" means there isn't enough data yet to say.*`
+    ? `*${opts.historic ? 'Results' : 'Live results'} from prospecting ads, ${fmtDate(ctx.since)} to ${fmtDate(ctx.week.end)}. Each figure comes with a range: where the true figure most likely sits (${iv}%). "Too early to call" means there isn't enough data yet to say.*`
     : `*Draft for Brook to edit before the Wednesday read (config v${cfg.version}; ranges are ${iv}%; data ${fmtDate(ctx.since)} to ${fmtDate(ctx.week.end, true)}, prospecting ads only). The first screen is for the call; the appendix is the working.*`, '');
 
   for (const p of cfg.naming.personas) {
     const ads = all.filter(a => a.persona === p);
+    if (opts.historic && !ads.length) continue;
     L.push(`## ${p}`, '', `**${personaHeadline(ads, cfg, nm)}**`, '');
     if (ads.length) L.push(...actions(ads, cfg, nm).map((x, i) => `${i + 1}. ${x}`), '');
   }

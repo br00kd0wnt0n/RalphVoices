@@ -93,6 +93,7 @@ export async function loadRows(pool: Pool, to?: string): Promise<MetricRow[]> {
       ORDER BY a.id, m.period_start`, to ? [to] : []);
   return r.rows.map(x => ({
     key: `${x.source_platform}|${x.ad_name}|${x.campaign_name}|${x.ad_set_name}`,
+    campaign: x.campaign_name, ad_set: x.ad_set_name,
     ad_name: x.ad_name, audience: x.audience,
     parsed: x.parse_status === 'ok' ? { stub: x.stub, asset: x.asset, persona: x.persona, territory: x.territory, format: x.format, platform: x.name_platform, version: x.version } : null,
     quarantine_reason: x.parse_status === 'ok' ? null : x.parse_error || 'name did not parse',

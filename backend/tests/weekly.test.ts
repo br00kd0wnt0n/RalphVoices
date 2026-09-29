@@ -6,10 +6,10 @@ import { loadConfig } from '../src/services/weekly/config.js';
 import { parseAdName, normalizeStub } from '../src/services/weekly/naming.js';
 import { parseCsv, toCsv } from '../src/services/weekly/csv.js';
 import { mapColumns, parseExport, classifyAudience, loadFeatureCsv, parseNumber, parseDay } from '../src/services/weekly/ingest.js';
-import { aggregate, fromIngest, weekOf, addDays, type MetricRow } from '../src/services/weekly/window.js';
+import { aggregate, fromIngest, weekOf, addDays, historicParse, type MetricRow } from '../src/services/weekly/window.js';
 import { readWeek, type AdData, type Read } from '../src/services/weekly/model.js';
 import { simulate, checkRecovery } from '../src/services/weekly/simulate.js';
-import { draftNote, lintNote, newNumbers, APPENDIX_MARKER, readableLabel } from '../src/services/weekly/note.js';
+import { draftNote, lintNote, newNumbers, APPENDIX_MARKER, readableLabel, personaHeadline, actions } from '../src/services/weekly/note.js';
 import { rng, beta } from '../src/services/weekly/stats.js';
 import { readSeries } from '../src/services/weekly/series.js';
 
@@ -367,7 +367,7 @@ test('historic mode keeps ads outside the convention for the back-test, and join
   const rows = r.rows.map(fromIngest);
   assert.equal(aggregate(rows, '2026-03-01', '2026-03-31').ads.length, 0);
   const h = aggregate(rows, '2026-03-01', '2026-03-31', { historic: true });
-  assert.deepEqual(h.ads.map(a => [a.persona, a.format, a.stub]).sort(), [['HIST', 'ST', 'Zoomie Wipeouts'], ['HIST', 'VID', 'Vet Bills UGC']]);
+  assert.deepEqual(h.ads.map(a => [a.persona, a.format, a.stub]).sort(), [['HIST', 'ST', 'Zoomie Wipeouts'], ['HIST', 'UGC', 'Vet Bills UGC']]);
   assert.equal(rows[0].parsed, null, 'input rows are not modified');
 });
 
@@ -528,4 +528,42 @@ test('client labels: persona · territory name · format in words v# (platform),
   assert.deepEqual(lintNote(md, cfg), []);
   const internal = draftNote(read, { week: { start: '2026-11-02', end: '2026-11-08' }, since: '2026-10-12', window: w, prev: null, week_impressions: new Map(), sources: [] }, cfg, { territoryNames: names }).markdown;
   assert.ok(internal.includes('**Scale** FAM_SIME_ST_v2_META'), 'the internal note keeps the stub');
+});
+
+test('historic names: region stands in for persona, format from the name or from video plays', () => {
+  assert.deepEqual(historicParse('PRO_EN_US_UGC-Video-Example-Dog', 'Add3_PRO_X', true, 'META'), { stub: 'PRO_EN_US_UGC-Video-Example-Dog', asset: 'PRO_EN_US_UGC-Video-Example-Dog', persona: 'US', territory: 'PRO_EN_US_UGC-Video-Example-Dog', format: 'UGC', platform: 'META', version: 1 });
+  assert.equal(historicParse('PRO_EN_CA_Group-B-V1-Example_SingleImage_Q2-Refresh', '', false, 'META').format, 'ST');
+  assert.equal(historicParse('PRO_EN_CA_Group-A-Example_Carousel_Q3', '', false, 'META').persona, 'CA');
+  assert.equal(historicParse('PRO_EN_CA_Group-A-Example_Carousel_Q3', '', false, 'META').format, 'CAR');
+  assert.equal(historicParse('Creatorname_Dec19', 'Add3_PRO_Trupanion_US-CA_Boosts', true, 'META').format, 'VID');
+  assert.equal(historicParse('Creatorname_Dec19', 'Add3_PRO_Trupanion_US_Boosts', true, 'META').persona, 'US');
+});
+
+test("Add3's RET campaigns read as retargeting", () => {
+  assert.equal(classifyAudience('Add3_RET_Trupanion_US_Consolidated_ENRL_Q4-2025', 'Add3_RET_Trupanion_US_Consolidated_ENRL', cfg.audience), 'retargeting');
+  assert.equal(classifyAudience('Add3_PRO_Trupanion_US_HighPAC_ENRL_Q4-2025', 'x', cfg.audience), 'prospecting');
+});
+
+test('an ad whose export has no quote column is not read as zero quotes', () => {
+  const base = (k: string, q: number | null): MetricRow => ({ key: k, ad_name: k, audience: 'prospecting', quarantine_reason: null, features: null,
+    parsed: { stub: k, asset: k, persona: 'DINK', territory: 'X', format: 'ST', platform: 'META', version: 1 },
+    period_start: '2026-10-12', period_end: '2026-10-25', spend: 300, impressions: 60000, video_3s: null, link_clicks: 900, landing_page_views: null, quotes: q, enrollments: null });
+  const w = aggregate([base('A', 40), base('B', 38), base('C', null)], '2026-10-12', '2026-10-25');
+  const r = readWeek(w.ads, cfg, { from: '2026-10-12', to: '2026-10-25', quotesAvailable: true });
+  assert.equal(r.ads.find(a => a.key === 'C')!.metrics.quotes_per_1k, undefined);
+  assert.ok(r.ads.find(a => a.key === 'A')!.metrics.quotes_per_1k);
+});
+
+test('several ad sets per persona and platform: the note names the ad set and summarises a long headline', () => {
+  const c2 = { ...cfg, model: { ...cfg.model, cell_by: ['persona', 'platform', 'ad_set'] } };
+  const mk = (k: string, set: string, q: number): AdData => ({ ...hAd(k, q), ad_set: set });
+  const ads = [mk('A1', 'Set One', 70), mk('A2', 'Set One', 36), mk('A3', 'Set One', 30), mk('B1', 'Set Two', 72), mk('B2', 'Set Two', 30), mk('B3', 'Set Two', 30),
+    mk('C1', 'Set Three', 80), mk('C2', 'Set Three', 30), mk('C3', 'Set Three', 30), mk('D1', 'Set Four', 40)];
+  const r = readWeek(ads, c2, hOpts);
+  const scaled = r.ads.filter(a => a.headline.call.startsWith('scale'));
+  assert.ok(scaled.length >= 3, `${scaled.length} scaled`);
+  const head = personaHeadline(r.ads, c2);
+  assert.match(head, /ads are clearly ahead in 3 ad sets/);
+  const acts = actions(r.ads, c2);
+  assert.ok(acts.some(x => /Meta ad set “Set (One|Two|Three)”/.test(x)), acts.join('\n'));
 });

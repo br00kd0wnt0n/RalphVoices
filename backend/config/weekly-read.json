@@ -1,10 +1,11 @@
 {
   "_note": "B3 weekly read (VOICES v2, Trupanion). Written 28 Sep 2026, before any live data. Change a threshold only with a dated entry in `changes` and a reason; the weekly note prints the config version it ran with.",
-  "version": 3,
+  "version": 4,
   "changes": [
     { "date": "2026-09-28", "version": 1, "by": "B3 build", "what": "First version, set before Month 1 goes live." },
     { "date": "2026-09-28", "version": 2, "by": "B3 build, asked by Brook", "what": "Hold bars on calls (calls.hold): a call made last week stays until the evidence falls well back, so ads near a threshold don't flip between scale and keep testing week to week. Still before any live data." },
-    { "date": "2026-09-28", "version": 3, "by": "B3 build, fixes approved by Brook after review", "what": "(1) Ties and calls use the same draws: tied = fewer than 9 in 10 draws put one ad ahead (calls.tie_bar); a scale must be clear of every ad outside its group, a cut must be clear of the ad set's leader. Ties were judged by 90% range overlap before, so an ad could be tied with an ad and cut. (2) min_ads_in_cell 2 -> 3: with two ads the rules produced a scale and a cut every week, a coin toss. (3) Note: one-screen plain-English front, appendix, client variant; cost per enrollment hidden below 5 enrollments. Still before any live data." }
+    { "date": "2026-09-28", "version": 3, "by": "B3 build, fixes approved by Brook after review", "what": "(1) Ties and calls use the same draws: tied = fewer than 9 in 10 draws put one ad ahead (calls.tie_bar); a scale must be clear of every ad outside its group, a cut must be clear of the ad set's leader. Ties were judged by 90% range overlap before, so an ad could be tied with an ad and cut. (2) min_ads_in_cell 2 -> 3: with two ads the rules produced a scale and a cut every week, a coin toss. (3) Note: one-screen plain-English front, appendix, client variant; cost per enrollment hidden below 5 enrollments. Still before any live data." },
+    { "date": "2026-09-29", "version": 4, "by": "B3 historic run", "what": "Audience rule: RET (Add3's retargeting prefix, e.g. Add3_RET_Trupanion_US_...) now reads as retargeting. Seen in Add3's historic Meta and TikTok exports; before this, RET campaigns fell to 'unknown' and were left out anyway, so no call changes." }
   ],
 
   "naming": {
@@ -19,7 +20,7 @@
 
   "audience": {
     "_why": "Creative reads use prospecting only; retargeting audiences have already met the brand and convert at several times the prospecting rate (Add3's May report). Rows that match neither pattern are 'unknown' and left out of the read, and listed, so a new campaign name can't slip retargeting into a creative call.",
-    "retargeting_pattern": "retarget|remarket|\\bRT\\b|\\bRTG\\b|\\bRMKT?\\b|\\bwarm\\b|\\bBOF\\b",
+    "retargeting_pattern": "retarget|remarket|\\bRET\\b|\\bRT\\b|\\bRTG\\b|\\bRMKT?\\b|\\bwarm\\b|\\bBOF\\b",
     "prospecting_pattern": "prospect|\\bPRO\\b|\\bPROS\\b|\\bTOF\\b|\\bcold\\b|\\bacq",
     "match_on": ["campaign", "ad_set"],
     "_match": "Underscores and hyphens are read as spaces before matching, so RT in Trupanion_RT_Meta counts as a word. Retargeting wins if both patterns match.",
