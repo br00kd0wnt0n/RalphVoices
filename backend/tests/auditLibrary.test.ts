@@ -154,3 +154,29 @@ test('an outage stops the audit after a few failed calls instead of backing off 
   assert.ok(n <= 6, `stopped after ${n} calls`);
   assert.equal(fs.readdirSync(work).filter(x => x.startsWith('voices-audit-')).length, 0, 'temp files removed on failure too');
 });
+
+test('files by path: nothing copied into memory, extensionless names work, cards stay in order, caller files untouched', { skip: !hasFfmpeg && 'needs ffmpeg' }, async () => {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-lib-path-'));
+  // Like multer's disk storage: random names with no extension, here also the same basename in two folders.
+  fs.mkdirSync(path.join(work, 'a')); fs.mkdirSync(path.join(work, 'b'));
+  const p1 = path.join(work, 'a', 'upload'), p2 = path.join(work, 'b', 'upload');
+  fs.writeFileSync(p1, png(work, 'one.png', 'blue'));
+  fs.writeFileSync(p2, png(work, 'two.png', 'red'));
+  const tmpDir = path.join(work, 'tmp');
+  fs.mkdirSync(tmpDir);
+  const input: AuditInput = { stub: 'DINK_JOKE_CAR_v1_META', files: [{ name: '2', mime: 'image/png', path: p2 }, { name: '1', mime: 'image/png', path: p1 }] };
+  const openai = fakeOpenAI({ reads: ['first card', 'second card'] });
+  const r = await runAudit(input, { rules, rubric, openai, tmpDir });
+  assert.deepEqual(r.frames.map(f => [f.label, f.text]), [['card 1', 'first card'], ['card 2', 'second card']]);
+  // Both cards reached vision as PNGs (the MIME type came from `mime`, not a missing extension).
+  const imgs = openai.calls.filter(c => String(c.messages[0].content).startsWith('You transcribe')).map(c => c.messages[1].content.find((x: any) => x.type === 'image_url').image_url.url.slice(0, 22));
+  assert.deepEqual(imgs, ['data:image/png;base64,', 'data:image/png;base64,']);
+  assert.ok(fs.existsSync(p1) && fs.existsSync(p2), "the caller's files are never deleted");
+  assert.deepEqual(fs.readdirSync(tmpDir), []);
+
+  const est = estimateAudit(input, { rules, rubric, tmpDir });
+  assert.ok(est.calls > 10 && est.usd > 0);
+  assert.ok(fs.existsSync(p1));
+  await assert.rejects(runAudit({ stub: 'DINK_JOKE_ST_v1_META', files: [{ name: 'x.png', mime: 'image/png' }] }, { rules, rubric, openai, tmpDir }), /give either data or path/);
+  await assert.rejects(runAudit({ stub: 'DINK_JOKE_ST_v1_META', files: [{ name: 'x.png', mime: 'image/png', path: path.join(work, 'nope') }] }, { rules, rubric, openai, tmpDir }), /File not found/);
+});
