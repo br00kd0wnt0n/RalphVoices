@@ -1,0 +1,18 @@
+{
+  "_note": "B2 pre-flight audit settings. Thresholds only; the rules themselves live in the Studio rules file.",
+  "text_load": {
+    "max_words": 20,
+    "source": "HOUSE: 20 words on the first frame or card (confirmed by Brook 28 Sep); TM Busy Families \"give you 1.5 seconds\"",
+    "_why": "Words on the first frame or card above max_words are an amber flag."
+  },
+  "feature_threshold": 0.5,
+  "lone_yesno_min": 0.8,
+  "_lone_yesno_min": "A yes/no read with no rule match and no reviewer quote needs at least this P(Yes) to flag (amber). Compliance ones are then confirmed on gpt-4o.",
+  "models": { "vision": "gpt-4o", "yesno": "gpt-4o", "compliance": "gpt-4o-mini", "reviewer": "gpt-4o", "objection": "gpt-4o", "transcribe": "gpt-4o-transcribe" },
+  "tpm_default": 15000,
+  "_tpm_default": "gpt-4o tokens per minute. The account's 30k is shared with Studio.",
+  "transcribe_usd_per_minute": 0.006,
+  "_transcribe": "gpt-4o-transcribe, not whisper-1: on the planted clip whisper-1 stopped after the first pause (2 of 10 words); gpt-4o-transcribe got every word. Same list price per minute.",
+  "ask_over_usd": 2,
+  "cap_usd": 10
+}

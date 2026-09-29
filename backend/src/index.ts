@@ -13,6 +13,7 @@ import testRoutes, { testProgress } from './routes/tests.js';
 import uploadRoutes from './routes/uploads.js';
 import gwiRoutes from './routes/gwi.js';
 import anchorRoutes from './routes/anchors.js';
+import studioRoutes from './routes/studio.js';
 
 dotenv.config();
 
@@ -196,7 +197,7 @@ const corsOptions = {
     'http://localhost:3000',
   ],
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 };
 
@@ -280,6 +281,11 @@ app.use('/api/tests', testRoutes);
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/gwi', gwiRoutes);
 app.use('/api/anchors', anchorRoutes);
+// Copy Studio (VOICES v2 build 1): off unless ENABLE_STUDIO=true; see routes/studio.ts.
+if (process.env.ENABLE_STUDIO === 'true') {
+  app.use('/api/studio', studioRoutes);
+  console.log('[startup] Copy Studio: enabled at /api/studio (STUDIO_EMAILS allowlist)');
+}
 
 // WebSocket endpoint for test progress
 wsInstance.app.ws('/ws/tests/:id/progress', (ws, req) => {

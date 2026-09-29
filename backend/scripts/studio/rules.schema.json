@@ -29,6 +29,7 @@
         "wordings": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2, "description": "Two yes/no wordings for the logprob check (compliance items only)." },
         "status": { "type": "string", "description": "'pending' marks a rule awaiting client confirmation." },
         "needs_confirmation": { "type": "boolean" },
+        "applies_to": { "enum": ["text", "visual", "both"], "default": "text", "description": "What the rule is checked on. text (default): copy lines, in Studio. visual: images and video frames only, in B2's pre-flight audit; Studio ignores these. both: Studio's text checks and B2's visual checks." },
         "source": { "type": "string" }
       }
     }
@@ -42,7 +43,8 @@
     "structures": { "type": "object", "required": ["question", "stat", "testimony", "scenario", "joke", "plain_promise"], "additionalProperties": { "type": "string" } },
     "facts": { "type": "array", "items": { "type": "object", "required": ["id", "text", "numbers", "source"], "properties": {
       "id": { "type": "string" }, "text": { "type": "string" }, "numbers": { "type": "array", "items": { "type": "string" } },
-      "personas": { "type": "array", "items": { "type": "string" } }, "own": { "type": "boolean" }, "category": { "type": "boolean" }, "illustrative": { "type": "boolean" },
+      "rubric": { "type": "object", "description": "The M3 rubric (rubric.json): Pre-flight's feature wordings. Required hosted (v2.6+).", "required": ["items"], "properties": { "items": { "type": "array" }, "source": { "type": "string" } } },
+    "personas": { "type": "array", "items": { "type": "string" } }, "own": { "type": "boolean" }, "category": { "type": "boolean" }, "illustrative": { "type": "boolean" },
       "check_hint": { "type": "string" }, "misattribution_patterns": { "type": "array", "items": { "type": "string" } }, "source": { "type": "string" } } } },
     "figure_rule": { "type": "object", "required": ["id", "rule", "source"] },
     "compliance": { "type": "array", "items": { "$ref": "#/definitions/rule" } },
@@ -50,7 +52,7 @@
     "clarity": { "type": "array", "items": { "$ref": "#/definitions/rule" } },
     "features": { "type": "object", "required": ["items", "source"], "properties": { "items": { "type": "object", "additionalProperties": { "type": "string" } }, "source": { "type": "string" } } },
     "personas": { "type": "object", "additionalProperties": { "type": "object", "required": ["name", "default_fields", "triggers", "turn_offs", "language", "verbatims"], "properties": {
-      "name": { "type": "string" }, "platforms": { "type": "array", "items": { "type": "string" } }, "default_fields": { "type": "array", "items": { "type": "string" } },
+      "name": { "type": "string" }, "seed": { "type": "object", "description": "The persona seed (personas.json body): the skeptic's and writer's context. Required hosted (v2.6+)." }, "seed_source": { "type": "string" }, "voice": { "type": "string", "description": "A lived voice sample (the SM spike). Required hosted (v2.6+)." }, "voice_source": { "type": "string" }, "who": { "type": "string" }, "tension": { "type": "string" }, "who_source": { "type": "string" }, "platforms": { "type": "array", "items": { "type": "string" } }, "default_fields": { "type": "array", "items": { "type": "string" } },
       "triggers": { "type": "array", "items": { "type": "object", "required": ["id", "label", "detail", "source"] } },
       "turn_offs": { "type": "array", "items": { "$ref": "#/definitions/rule" } },
       "language": { "type": "array", "items": { "type": "object", "required": ["text", "source"] } },

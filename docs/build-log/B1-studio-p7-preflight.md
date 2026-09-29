@@ -1,0 +1,93 @@
+# B1 Studio, phase 7: Pre-flight (step 6), Live placeholder, Readout removed (28–29 Sep 2026)
+
+Branch `voices/b1-studio-preflight`, draft PR #15. It is on hold because it contains **migration 017**; merge only as a deploy with Brook. B2's audit library (PR #16) is already on `main`. Plan: `docs/b1-studio-plan.md`, section 4b, phase 7 and decisions 10–11.
+
+## What shipped
+
+- **Pre-flight, per signed-off naming code:**
+  - Upload a static image, carousel cards or a video.
+  - See the cost and time estimate, then run the audit as a background job with live progress. It runs on B2's engine (`services/studio/preflightB2.ts`), or on the mock with `STUDIO_MOCK` in dev.
+  - The report shows, in order: copy match first (the signed-off wording against what's on the asset); flags with quotes, the card or frame they sit on, and sources; cross-persona notes ("How it travels"); the text found and the transcript; features; and the skeptic.
+  - Agree or disagree on each flag, per person. The round's agreement rate counts every verdict, including those on uploads that were later replaced.
+  - Red flags are fixed by a new upload, or overridden with a reason. Overrides are allowed only for people who can mark Ready to traffic.
+  - Ready to traffic is set by admins and `STUDIO_READY_EMAILS`. A new upload reopens the code.
+  - A failed audit (for example an OpenAI outage) can be run again; "Audit again" re-checks after a rules change.
+  - Exports: the features CSV in B2's format for B3's `weekly.ts features`, and the asset handoff list.
+- **Storage:**
+  - Production: the private R2 bucket in `STUDIO_R2_BUCKET` (required; never the public `R2_BUCKET_NAME`), under `studio/preflight/<stub>/<upload id>/…`, streamed, and served only through the signed-in API. Without it, uploads are refused. 200 MB per file.
+  - Local and dev: Postgres, 25 MB per file.
+- **Migration 017** (additive, idempotent): the Pre-flight tables, plus `studio_rules.activated_by`/`activated_at` for the Rules view.
+- **Also:**
+  - Readout and reference docs removed (decision 10). The header shows a "Trupanion" wordmark when there's no logo.
+  - "Live · soon" in the nav.
+  - Rules view: "Live: vX, activated by …", "Upload and activate", and a banner after a draft upload.
+  - `db-import` carries the M3 rubric.
+  - ffmpeg is added to `backend/nixpacks.toml`.
+
+## Acceptance with real keys (29 Sep, local rehearsal database, hosted mode, B2's engine, rules v2.3)
+
+1. Brook uploaded and activated v2.3 through the admin endpoint ("activated by brook@ralph.world").
+2. Nick wrote a TikTok hook with the caveat ("Your vet can be paid directly, at participating hospitals.") and a Meta headline. Both passed the real checks, and he signed them off (set v2).
+3. **Dropped caveat:** a vertical static that says only "Your vet can be paid directly." Audit: 138 s, $0.09, estimate 182 s / $0.12.
+   - **COPY_CAVEAT red**, shown first, quoting the missing "…participating hospital…".
+   - COPY_MATCH amber, with both versions quoted.
+   - Direct-pay amber, on the image.
+   - Text read correctly; a feature tagged; the skeptic's objection.
+4. Nick and Vivan marked verdicts (Nick disagreed with a grey member-testimony note, since there's no person in the ad): 6 of 7 agree (86%).
+   - Vivan was refused both Ready to traffic and the override (403).
+   - Nick's Ready to traffic was blocked while the red was open (409, naming the flag).
+   - Nick overrode it with a reason and marked the asset ready.
+5. **Fixed asset** (caveat present): the code reopened on upload. Audit: 139 s, $0.09. Copy match: "match", no red. Ready without an override.
+6. **Carousel**, two cards, on the headline code: 202 s, $0.13. Cards read separately; the headline matches; a Curators turn-off came through as a cross-persona grey note on card 1. Ready.
+7. **Video**, 4 s with no audio, on the TikTok code: 432 s, $0.25. ffmpeg frames at 0.0 s and the 1.5 s hook were read; the hook matches; the transcript is empty (no sound). Ready.
+8. **Exports:**
+   - B3's own `loadFeatureCsv` read both rows with nothing unmatched (it normalises `…_TIKTOK` to `…_TT`); tags and angle came across.
+   - The handoff list shows the status, who marked it ready and when, and the remaining ambers.
+   - Spend was logged per audit, under Nick.
+
+**Cost:** $0.56 for the four audits, plus $0.02 of line checks.
+
+**Found and fixed during acceptance:**
+- the agreement rate dropped verdicts on replaced uploads
+- the copy-match label repeated "signed off"
+- the video had no poster frame
+
+Screenshots are in `Claude outputs/voices-r1/studio/screens/` (client material): `9-preflight-red.png`, `10-preflight-video-ready.png`, `11-preflight-carousel.png`. They use test ads on the local database.
+
+**Tests:** 107 backend tests pass (after the UX round), covering the whole flow on Postgres and B2's real engine with a stand-in OpenAI client. Type checks are clean.
+
+## Deploy checklist for Brook (final, 29 Sep)
+
+**Merge order:** PR #16 (B2's engine) is already on `main`, and this branch contains all of it: `main` is ahead only by #16's merge commit, and the merge is clean. Merge PR #15 at a deliberate deploy, because it carries **migration 017**.
+
+**Before the merge**, on the **backend** Railway service:
+
+| Variable | Value |
+|---|---|
+| `STUDIO_R2_BUCKET` | **Required.** A new private R2 bucket: no public URL, and the existing R2 token's scope extended to it. Without it, production refuses Pre-flight uploads with "Pre-flight storage isn't configured: set STUDIO_R2_BUCKET to a private bucket". It never falls back to `R2_BUCKET_NAME`, which has a public URL. |
+| `STUDIO_READY_EMAILS` | `nick.larson@ralph.world`. Who marks assets Ready to traffic and overrides red flags (admins in `ADMIN_EMAILS` can too). |
+| `STUDIO_COMPLIANCE_EMAILS` | `vivan@ralph.world`. Who sets compliance status on copy (admins can too); everyone else sees it read-only. |
+
+`ENABLE_R2_STORAGE=true` and the `R2_*` keys are already set (28 Sep). Don't set `STUDIO_MOCK` or `FFMPEG_PATH`.
+
+- **ffmpeg** is in both `backend/nixpacks.toml` and the root `nixpacks.toml` (the root `start` runs the backend), so it's in the image whichever Root Directory the backend service builds from. In the build log, look for `ffmpeg` among the Nix packages. Without it, videos are still audited on copy and voice-over, with a note that frames were unavailable.
+- **Migration 017** needs nothing new from the database: it's additive and idempotent (`IF NOT EXISTS` throughout). It adds the Pre-flight tables plus two columns: `studio_asset_uploads.estimate`, the estimate stored at upload, and `studio_audits.heartbeat_at`, which lets an audit orphaned by a restart become retryable. Migration 016 (B3) is separate.
+- **File size:** up to 200 MB per file. Uploads go to disk, stream to and from R2, and reach B2 by path (PR #17): no whole video is held in memory.
+
+**After the deploy:**
+1. The logs show "Database migrations applied." and "[studio] Pre-flight files: private R2 bucket reachable", with no warning.
+2. **Rules v2.6:** "Upload and activate" `Claude outputs/voices-r1/studio/studio-rules.json` in the Rules view. v2.6 carries everything the hosted Studio needs: the M3 rubric, and each persona's seed and voice for the skeptic. Nothing is imported from a laptop and there's no `db-import`. The hosted upload refuses a file without them ("v2.5 is missing rubric, personas.DINK.seed…"). If v2.6 was already activated before the deploy (Brook did, 29 Sep), there's nothing to do: the old code ignores the extra blocks and the new code reads them.
+3. **Smoke test:** upload one test static to a signed-off code, run the audit (about $0.10), check the copy-match table, then take the test asset back.
+
+**Acceptance of this, 29 Sep** (hosted mode, voices_rehearsal, real keys; the rubric, personas and voices store rows deleted first):
+- Brook's upload of v2.5 in the Rules view was refused, naming the seven missing blocks; v2.6 uploaded and went live.
+- Static with the dropped caveat on DINK_NEVER_UGC_v2_TIKTOK: 140 s, $0.085. COPY_CAVEAT red plus the direct-pay red; features came from the rubric in the rules (less_hassle); the skeptic used the persona from the rules.
+- Video with a voice-over (FAM_PLANTVO, 9 s): 438 s, $0.27. Five keyframes and the transcription came through async ffmpeg; the voice-over's "pay the whole vet bill" was flagged red. A health check every 100 ms (4,203 of them) never took more than 31 ms.
+- Vivan's override of a copy red flag: 403; `can_override` is false for Vivan and true for Nick.
+- Attached-run bug (Brook, production): with a Curators run attached, "Write for this" on Never the Choice now says "This starts a new run", and the checked line went into a new DINK run with DINK angles; the Curators run was untouched. The server refuses a brief for another persona or territory with a 409.
+
+**Rollback:** `ENABLE_STUDIO=false` hides the whole Studio. Migration 017 is additive, so its tables can stay.
+
+## UX review (29 Sep, approved by Brook): done
+
+All 18 items, plus the coordination session's notes A (private bucket required) and B (stale audits), are in commits a543239, c03be08 and 08164bd. The follow-ups after the re-walk (step highlight, springboard badge, who and tension in rules v2.5, plain sources, the Compare label) come next, and B2's review fixes are in f6d482f: bounded memory, one persona per shared visual, and orphaned audits. Screenshots: `Claude outputs/voices-r1/studio/screens/ux-29sep/`.

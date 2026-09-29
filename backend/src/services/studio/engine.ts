@@ -9,24 +9,35 @@
 // dotenv.config(), because that file's DATABASE_URL points at production).
 // Nothing imports src/db or src/routes.
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import OpenAI from 'openai';
-import { withRetry } from '../../src/utils/retry.js';
-import { probabilityYes } from '../../src/utils/probes.js';
+import { withRetry } from '../../utils/retry.js';
+import { probabilityYes } from '../../utils/probes.js';
 import { mockClient } from './mock.js';
 import { claudeWrite, isClaude } from './claude.js';
+import { FileStore, type StudioStore } from './store.js';
 
 // ---------- paths ----------
 
 export const INPUTS = '/Users/BD/ralph-voices/Claude outputs/voices-r1';
 let STUDIO = process.env.STUDIO_DIR || path.join(INPUTS, 'studio');
 export function studioDir() { return STUDIO; }
-export function setStudioDir(dir: string) { STUDIO = dir; }
+export function setStudioDir(dir: string) { STUDIO = dir; store = null; rulesCache = null; }
 const P = (...parts: string[]) => path.join(STUDIO, ...parts);
-function ensureDir(d: string) { fs.mkdirSync(d, { recursive: true }); }
 export function readJson<T = any>(p: string): T { return JSON.parse(fs.readFileSync(p, 'utf8')); }
-function writeJson(p: string, v: unknown) { ensureDir(path.dirname(p)); fs.writeFileSync(p, JSON.stringify(v, null, 2)); }
+
+// ---------- storage ----------
+
+// All work (runs, lines, decisions, territories, taste, compares, spend) goes
+// through a StudioStore: files by default (B1-lite), Postgres when hosted.
+let store: StudioStore | null = null;
+export function setStore(s: StudioStore) { store = s; rulesCache = null; }
+export function getStore(): StudioStore {
+  if (!store) store = new FileStore(STUDIO, { rulesPath: rulesPath || undefined, inputsDir: INPUTS, assets: localAssets() });
+  return store;
+}
 const round = (x: number, d = 3) => Math.round(x * 10 ** d) / 10 ** d;
 
 export const PROMPT_VERSION = 'b1-lite-1';
@@ -95,12 +106,32 @@ export interface Line {
   edited_text?: string;
   note?: string;
   decided_by?: string;
-  decided_at?: string;
+  decided_at?: string;   // the last human change to the line (decision, override, compliance, sign-off)
+  /** Red flags a person has overridden, with the written reason (Ready for production gate). */
+  overrides?: Override[];
+  /** Trupanion compliance review: pending (default), cleared or changes_requested. Doesn't block sign-off. */
+  compliance?: { status: ComplianceStatus; note?: string; by?: string; at?: string; sha256?: string };  // sha256: the wording it was reviewed on
+  /** The line's place in the latest Ready for production sign-off. */
+  ready?: { signoff_id: string; version: number; sha256: string; ready_by: string; ready_at: string; stub: string; changed_since?: boolean };
+  /** When the final wording was last fully re-checked (after an edit). */
+  rechecked_at?: string;
 }
+/** `label` is the rule in plain words, from the rules file (shown to Trupanion's reviewers; the reason and name never are). */
+export interface Override { rule: string; label?: string; reason: string; by: string; at: string }
+export type ComplianceStatus = 'pending' | 'cleared' | 'changes_requested';
+/** One wording of a line as it stood at a sign-off or after one. Never rewritten. */
+export interface LineVersion { line_id: string; batch_id: string; version: number; field: string; text: string; sha256: string; created_by: string; created_at: string; signoff_id?: string;
+  /** The naming code the line was signed off under (B3b joins live results on it). */
+  stub?: string }
+export const sha256 = (s: string) => crypto.createHash('sha256').update(s, 'utf8').digest('hex');
+/** The words that go to production: the edit when there is one. */
+export const finalText = (l: Pick<Line, 'decision' | 'edited_text' | 'text'>) => (l.decision === 'edit' && l.edited_text ? l.edited_text : l.text);
+export const lineHash = (l: Pick<Line, 'field' | 'decision' | 'edited_text' | 'text'>) => sha256(`${l.field}\n${finalText(l)}`);
 export interface Batch {
   id: string;
   brief: Brief;
   created: string;
+  rules_version?: string;  // the rules version the lines were last checked under
   created_by?: string;   // who started the run (local: the name the page asks for; hosted: the signed-in user)
   updated?: string;
   lines: Line[];
@@ -129,6 +160,7 @@ type Emit = (e: StudioEvent) => void;
 // ---------- rules ----------
 
 export interface Rules {
+  version?: string;
   sources: Record<string, any>;
   fields: Record<string, { platform: string; label: string; visible: number; max: number; source: string }>;
   tone_controls: Record<string, Record<string, string>>;
@@ -150,6 +182,8 @@ export interface RuleItem {
   patterns?: Pat[]; trigger_patterns?: string[]; requires_patterns?: string[];
   lead_fields?: string[];
   wordings?: [string, string]; structures?: string[]; min_words?: number; status?: string; needs_confirmation?: boolean;
+  /** What the rule is checked on: copy ('text', the default), images and frames only ('visual', B2's audit), or 'both'. */
+  applies_to?: 'text' | 'visual' | 'both';
 }
 export interface Fact {
   id: string; text: string; numbers: string[]; personas?: string[]; source: string;
@@ -173,34 +207,48 @@ export interface PersonaRules {
 }
 
 let rulesPath = '';
-export function setRulesPath(p: string) { rulesPath = p; }
-export function loadRules(): Rules {
-  const p = rulesPath || P('studio-rules.json');
-  if (!fs.existsSync(p)) throw new Error(`No rules file at ${p}`);
-  const r = readJson<Rules>(p);
+export function setRulesPath(p: string) { rulesPath = p; store = null; rulesCache = null; }
+
+// The rules, territories, persona seeds and voice samples are read from the
+// store into memory, because nearly every check needs them. refreshRules()
+// reloads them; call it at the start of each command or request.
+let rulesCache: Rules | null = null;
+let seedsCache: any = null;
+let voicesCache: Record<string, string> = {};
+export async function refreshRules(): Promise<Rules> {
+  const s = getStore();
+  const r = await s.getRules() as Rules;
+  // Studio checks words: rules for images and frames only (applies_to: 'visual', used by B2's
+  // audit) are left out here, so no text check, prompt or yes/no question ever sees them.
+  const forText = (x: RuleItem) => (x.applies_to || 'text') !== 'visual';
+  r.compliance = (r.compliance || []).filter(forText);
+  r.brand = (r.brand || []).filter(forText);
+  r.clarity = (r.clarity || []).filter(forText);
+  for (const pr of Object.values(r.personas || {})) if (pr.turn_offs) pr.turn_offs = pr.turn_offs.filter(forText);
   // Territory edits (the creative director's, from client feedback or taste)
-  // sit on top of the pitch versions in the rules file.
+  // sit on top of the pitch versions in the rules.
   for (const t of Object.values(r.territories)) t.origin = 'pitch';
-  const edits = loadTerritoryEdits();
-  for (const [code, t] of Object.entries(edits)) r.territories[code] = { ...(r.territories[code] || {}), ...t };
+  const edits = await s.getTerritoryEdits();
+  for (const [code, t] of Object.entries(edits)) r.territories[code] = { ...(r.territories[code] || {}), ...(t as Territory) };
+  seedsCache = await s.getInput('personas');
+  voicesCache = (await s.getInput('voices')) || {};
+  rulesCache = r;
   return r;
+}
+export function loadRules(): Rules {
+  if (!rulesCache) throw new Error('Studio rules not loaded; call refreshRules() first');
+  return rulesCache;
 }
 
 // ---------- territories: editable, with history ----------
-
-function territoryEditsPath() { return P('territories.json'); }
-function loadTerritoryEdits(): Record<string, Territory> {
-  const p = territoryEditsPath();
-  return fs.existsSync(p) ? readJson(p).territories || {} : {};
-}
 
 /**
  * Edit a territory, add a new one (no code), or retire/restore one
  * (patch.status). Every change records who made it, when and why; the pitch
  * version in the rules file is never changed.
  */
-export function saveTerritory(code: string | null, patch: Partial<Pick<Territory, 'persona' | 'name' | 'angle' | 'format' | 'premise' | 'status'>>, note: string, user?: string): { code: string; territory: Territory } {
-  const r = loadRules();
+export async function saveTerritory(code: string | null, patch: Partial<Pick<Territory, 'persona' | 'name' | 'angle' | 'format' | 'premise' | 'status'>>, note: string, user?: string): Promise<{ code: string; territory: Territory }> {
+  const r = await refreshRules();
   const current = code ? r.territories[code] : undefined;
   if (code && !current) throw new Error(`No territory ${code}`);
   const persona = patch.persona || current?.persona || '';
@@ -230,9 +278,8 @@ export function saveTerritory(code: string | null, patch: Partial<Pick<Territory
   next.updated_at = at;
   next.source = current ? current.source : `Added in Studio by ${by}, ${at.slice(0, 10)}${note.trim() ? `: ${note.trim()}` : ''}`;
   next.history = [...(current?.history || []), { at, by, note: note.trim(), before: current ? before : null }];
-  const all = loadTerritoryEdits();
-  all[newCode] = next;
-  writeJson(territoryEditsPath(), { _note: 'Territory edits made in Studio (client feedback, creative director preference). They override the pitch versions in studio-rules.json, which stay unchanged.', territories: all });
+  await getStore().saveTerritoryEdit(newCode, next);
+  await refreshRules();
   return { code: newCode, territory: next };
 }
 
@@ -249,16 +296,34 @@ function labelOf(i: RuleItem) {
 }
 
 // Persona seeds and lived voice samples (from the SM spike), for the writer and the objection.
+// From the rules file (v2.6+: personas.<code>.seed and .voice); the store's inputs
+// (db-import, or the local folder) are only a fallback for older rules files.
 function personaSeed(code: string): any {
-  const p = path.join(INPUTS, 'personas.json');
-  if (!fs.existsSync(p)) return null;
-  return readJson(p).personas.find((x: any) => x.code === code)?.body || null;
+  return (rulesCache?.personas?.[code] as any)?.seed || seedsCache?.personas?.find((x: any) => x.code === code)?.body || null;
 }
 function voiceSample(code: string): string {
-  for (const p of [P('voices.json'), path.join(INPUTS, 'sm-spike', 'voices.json')]) {
-    if (fs.existsSync(p)) { const v = readJson(p)[code]; if (v) return v; }
+  return (rulesCache?.personas?.[code] as any)?.voice || voicesCache[code] || '';
+}
+export { personaSeed, voiceSample };
+
+/**
+ * What a rules file must carry for the hosted Studio to need nothing else: the
+ * M3 rubric (Pre-flight's features) and each persona's seed and voice (the
+ * skeptic). Checked when an admin uploads it, never at audit time.
+ */
+export function hostedRulesGaps(body: any): string[] {
+  const gaps: string[] = [];
+  if (!Array.isArray(body?.rubric?.items) || !body.rubric.items.length) gaps.push('rubric');
+  for (const [code, p] of Object.entries<any>(body?.personas || {})) {
+    if (!p?.seed || typeof p.seed !== 'object') gaps.push(`personas.${code}.seed`);
+    if (!p?.voice || typeof p.voice !== 'string') gaps.push(`personas.${code}.voice`);
   }
-  return '';
+  return gaps;
+}
+
+/** The M3 rubric: from the rules file (v2.6+), else the store (local, or an older rules file). */
+export async function rubricFor(rules?: any): Promise<any | null> {
+  return (rules ?? await getStore().getRules())?.rubric || await getStore().getInput('rubric');
 }
 
 // ---------- OpenAI plumbing (after measurement-spike.ts) ----------
@@ -319,7 +384,7 @@ export class CapError extends Error {}
  * a request against the limit. A model's budget is the --tpm value if given
  * for it, else 90% of the limit its response headers report, else 20k.
  */
-class Pacer {
+export class Pacer {
   private windows = new Map<string, Array<{ t: number; tokens: number }>>();
   private learned = new Map<string, number>();
   private inflight = new Map<string, number>();
@@ -350,28 +415,41 @@ class Pacer {
   release(model: string) { this.inflight.set(model, Math.max(0, (this.inflight.get(model) || 1) - 1)); }
 }
 
-export interface ApiOptions { mock?: boolean; tpm?: Record<string, number>; cap?: number }
+export interface ApiOptions { mock?: boolean; tpm?: Record<string, number>; cap?: number; capWindow?: 'all' | 'month'; pacer?: Pacer; user?: string }
 
 export class Api {
   client: any;
   pacer: Pacer;
   mock: boolean;
   cap: number;
+  capWindow: 'all' | 'month';
   runUsd: Record<string, number> = {};
   runCalls: Record<string, number> = {};
   runTokens: Record<string, number> = {};
   stopped = false;
+  /** Who the spend is recorded against (the signed-in user, when hosted). */
+  user?: string;
   constructor(opts: ApiOptions = {}) {
     this.mock = !!opts.mock;
     this.cap = opts.cap ?? 15;
+    this.capWindow = opts.capWindow ?? 'all';
+    this.user = opts.user;
     loadKey(this.mock);
     this.client = this.mock ? mockClient() : new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     // The mock has no rate limit; pace it only when asked (STUDIO_PACE_MOCK=1) to rehearse live timing.
-    this.pacer = new Pacer(opts.tpm ?? {}, 8, this.mock && !process.env.STUDIO_PACE_MOCK);
+    // Pass a shared pacer when several jobs run at once (the hosted Studio makes one Api per job).
+    this.pacer = opts.pacer ?? new Pacer(opts.tpm ?? {}, 8, this.mock && !process.env.STUDIO_PACE_MOCK);
   }
-  spent(): number { return readSpend().total_usd; }
+  private spentBase = 0;
+  /** Spend so far across all runs, read once at the start of each run for the cap check. */
+  async loadSpent() {
+    const since = this.capWindow === 'month' ? new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString() : undefined;
+    this.spentBase = this.mock ? 0 : await getStore().spendTotal(since);
+    return this.spentBase;
+  }
+  spent(): number { return this.spentBase; }
   runTotal(): number { return Object.values(this.runUsd).reduce((a, b) => a + b, 0); }
-  resetRun() { this.runUsd = {}; this.runCalls = {}; this.runTokens = {}; }
+  async resetRun() { this.runUsd = {}; this.runCalls = {}; this.runTokens = {}; await this.loadSpent(); }
   private add(stage: string, usd: number, tokens: number) {
     this.runUsd[stage] = (this.runUsd[stage] || 0) + usd;
     this.runCalls[stage] = (this.runCalls[stage] || 0) + 1;
@@ -379,7 +457,7 @@ export class Api {
   }
   private guard() {
     if (this.stopped) throw new CapError('Stopped');
-    if (!this.mock && this.spent() + this.runTotal() > this.cap - 0.02) { this.stopped = true; throw new CapError(`Session cap of $${this.cap} reached`); }
+    if (!this.mock && this.spent() + this.runTotal() > this.cap - 0.02) { this.stopped = true; throw new CapError(this.capWindow === 'month' ? `This month's Studio budget of $${this.cap} is used up` : `Session cap of $${this.cap} reached`); }
   }
 
   async chat(o: {
@@ -457,17 +535,15 @@ export class Api {
   }
 
   /** Record this run's spend in the cumulative ledger (studio/spend.json). */
-  commit(label: string) {
+  async commit(label: string, user?: string) {
     if (this.mock || !this.runTotal()) return;
-    const s = readSpend();
-    s.runs.push({ label, usd: round(this.runTotal(), 4), by_stage: Object.fromEntries(Object.entries(this.runUsd).map(([k, v]) => [k, round(v, 4)])), calls: this.runCalls, at: new Date().toISOString() });
-    s.total_usd = round(s.runs.reduce((t: number, r: any) => t + (r.usd || 0), 0), 4);
-    writeJson(P('spend.json'), s);
+    await getStore().addSpend({ label, usd: round(this.runTotal(), 4), by_stage: Object.fromEntries(Object.entries(this.runUsd).map(([k, v]) => [k, round(v, 4)])), calls: this.runCalls, at: new Date().toISOString(), user: user ?? this.user });
   }
+
 }
-export function readSpend(): { total_usd: number; runs: any[] } {
-  const p = P('spend.json');
-  return fs.existsSync(p) ? readJson(p) : { total_usd: 0, runs: [] };
+export async function readSpend(): Promise<{ total_usd: number; runs: any[] }> {
+  const st = getStore();
+  return { total_usd: await st.spendTotal(), runs: await st.listSpend() };
 }
 
 // Small concurrency pool.
@@ -550,10 +626,11 @@ export function makeBrief(input: Partial<Brief>): Brief {
     created: input.created || new Date().toISOString(),
   };
 }
-export function saveBrief(b: Brief): string { const p = P('briefs', `${b.name}.json`); writeJson(p, b); return p; }
-export function loadBrief(nameOrPath: string): Brief {
-  const p = fs.existsSync(nameOrPath) ? nameOrPath : P('briefs', nameOrPath.endsWith('.json') ? nameOrPath : `${nameOrPath}.json`);
-  return makeBrief(readJson(p));
+export async function saveBrief(b: Brief): Promise<void> { await getStore().saveBrief(b); }
+export async function loadBrief(name: string): Promise<Brief> {
+  const raw = await getStore().getBrief(name);
+  if (!raw) throw new Error(`No brief ${name}`);
+  return makeBrief(raw);
 }
 
 // ---------- grid ----------
@@ -604,17 +681,17 @@ export interface TasteExample {
   id: string; persona: string; territory: string; field: string; angle: string; structure: string; tone_label: string;
   text: string; original?: string; decision: 'keep' | 'edit' | 'cut'; note: string; batch: string; at: string;
 }
-export function loadTaste(): TasteExample[] { const p = P('taste.json'); return fs.existsSync(p) ? readJson(p).examples || [] : []; }
+export async function loadTaste(): Promise<TasteExample[]> { return getStore().getTaste(); }
 
 // ---------- writer prompt ----------
 
-function writerSystem(b: Brief, r: Rules, own: string[] = []): string {
+function writerSystem(b: Brief, r: Rules, own: string[] = [], allTaste: TasteExample[] = []): string {
   const pr = r.personas[b.persona];
   const t = r.territories[b.territory];
   const seed = personaSeed(b.persona);
   const facts = r.facts.filter(f => !f.personas || f.personas.includes(b.persona));
   const modelRules = [...r.compliance.filter(c => c.check !== 'structure'), ...r.brand.filter(c => !c.status)];
-  const taste = loadTaste().filter(x => x.persona === b.persona);
+  const taste = allTaste.filter(x => x.persona === b.persona);
   const keeps = taste.filter(x => x.decision !== 'cut').sort((x, y) => Number(y.territory === b.territory) - Number(x.territory === b.territory)).slice(0, 8);
   const cuts = taste.filter(x => x.decision === 'cut' && x.note).slice(0, 4);
 
@@ -667,36 +744,40 @@ function parseLines(text: string): Array<{ cell: string; text: string }> {
 
 // ---------- batches on disk ----------
 
-export function batchPath(id: string) { return P('batches', id, 'batch.json'); }
-export function loadBatch(id: string): Batch { return readJson<Batch>(batchPath(id)); }
-export function saveBatch(b: Batch) { b.updated = new Date().toISOString(); writeJson(batchPath(b.id), b); }
+export async function batchExists(id: string): Promise<boolean> { return getStore().batchExists(id); }
+export async function loadBatch(id: string): Promise<Batch> { return getStore().getBatch(id); }
+export async function saveBatch(b: Batch): Promise<void> { b.updated = new Date().toISOString(); await getStore().saveBatch(b); }
 export interface RunSummary {
   id: string; name: string; persona: string; territory: string; created: string; updated: string; created_by: string;
   lines: number; yours: number; kept: number; undecided: number; usd: number;
+  /** Lines not yet checked (a run interrupted by a restart); resume checks them. */
+  unchecked: number;
 }
 /** Saved runs, newest activity first; pass a name to list one person's runs. */
-export function listBatches(user?: string): RunSummary[] {
-  const d = P('batches');
-  if (!fs.existsSync(d)) return [];
+export async function listBatches(user?: string): Promise<RunSummary[]> {
+  const st = getStore();
   // Planted-line checks (adhoc-*) are tests, not runs.
-  return fs.readdirSync(d).filter(x => !x.startsWith('adhoc-') && fs.existsSync(batchPath(x))).map(x => {
-    const b = loadBatch(x);
-    return {
+  const ids = (await st.listBatchIds()).filter(x => !x.startsWith('adhoc-'));
+  const out: RunSummary[] = [];
+  for (const x of ids) {
+    const b: Batch = await st.getBatch(x);
+    out.push({
       id: b.id, name: b.brief.name, persona: b.brief.persona, territory: b.brief.territory,
       created: b.created, updated: b.updated || b.created, created_by: b.created_by || '',
       lines: b.lines.length, yours: b.lines.filter(l => l.model === 'human').length,
       kept: b.lines.filter(l => l.decision === 'keep' || l.decision === 'edit').length,
       undecided: b.lines.filter(l => !l.decision).length, usd: b.stats.usd_total,
-    };
-  }).filter(r => !user || r.created_by.toLowerCase() === user.toLowerCase())
-    .sort((a, b) => b.updated.localeCompare(a.updated));
+      unchecked: b.lines.filter(l => l.status !== 'checked').length,
+    });
+  }
+  return out.filter(r => !user || r.created_by.toLowerCase() === user.toLowerCase()).sort((a, b) => b.updated.localeCompare(a.updated));
 }
-function embPath(id: string) { return P('batches', id, 'embeddings.json'); }
 
 // ---------- estimate ----------
 
 /** Rough cost of generating and checking a batch of n lines (no cache discount). */
 export function estimate(b: Brief, opts: { ownOnly?: boolean } = {}): { usd: number; calls: number; tokens: Record<string, number>; minutes_at_budget: Record<string, number> } {
+  // Token counts only; taste examples add a little to the writer prompt and aren't counted.
   const r = loadRules();
   const own = (b.own_lines || []).length;
   const g = opts.ownOnly ? 0 : b.n;          // lines Studio writes
@@ -731,7 +812,7 @@ const DUP = Number(process.env.STUDIO_DUP ?? 0.9);
 const SIMILAR = Number(process.env.STUDIO_SIMILAR ?? 0.85);
 
 async function writeCells(api: Api, r: Rules, b: Brief, cells: Cell[], model: string, stage: string, extra?: { guidance?: string; sibling?: string; own?: string[] }): Promise<Array<{ cell: Cell; text: string }>> {
-  const system = writerSystem(b, r, extra?.own);
+  const system = writerSystem(b, r, extra?.own, await loadTaste());
   const byAngle = new Map<string, Cell[]>();
   for (const c of cells) byAngle.set(c.angle, [...(byAngle.get(c.angle) || []), c]);
   const out: Array<{ cell: Cell; text: string }> = [];
@@ -806,17 +887,47 @@ Return JSON: {"tags":[{"i":<line number>,"angle":"<angle id>","structure":"<stru
  * an existing batch, new lines are added to it ("Generate around these").
  * With opts.ownOnly, only the creative director's lines are checked.
  */
-export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: { check?: boolean; batchId?: string; ownOnly?: boolean; user?: string } = {}): Promise<Batch> {
+// Ids handed out by this process, so two runs started in the same second never share one.
+const reservedIds = new Set<string>();
+/** A new run id, `TERRITORY-yymmdd-hhmmss`, with -2, -3… when that second is taken. */
+export async function newBatchId(territory: string): Promise<string> {
+  const base = `${territory}-${stamp()}`;
+  for (let n = 1; ; n++) {
+    const id = n === 1 ? base : `${base}-${n}`;
+    if (reservedIds.has(id)) continue;
+    reservedIds.add(id); // before the await, so a concurrent call skips it
+    if (reservedIds.size > 1000) reservedIds.delete(reservedIds.values().next().value!);
+    if (!(await batchExists(id))) return id;
+  }
+}
+
+/**
+ * Lines only go into a run of the same persona and territory: a brief for
+ * another one is refused, never quietly given the run's persona (lines written
+ * for DINKs once landed in a Curators run). Null when it fits or there's no run.
+ */
+export async function runMismatch(batchId: string | undefined, b: Pick<Brief, 'persona' | 'territory'>): Promise<string | null> {
+  if (!batchId || !(await batchExists(batchId))) return null;
+  const run = (await loadBatch(batchId)).brief;
+  if (run.persona === b.persona && run.territory === b.territory) return null;
   const r = loadRules();
-  const existing = opts.batchId && fs.existsSync(batchPath(opts.batchId)) ? loadBatch(opts.batchId) : null;
-  const id = existing?.id || opts.batchId || `${b.territory}-${stamp()}`;
+  const name = (p: string, t: string) => `${r.personas[p]?.name || p} · ${(r.territories[t]?.name || t).replace(/\.$/, '')}`;
+  return `This run is for ${name(run.persona, run.territory)}. Start a new run for ${name(b.persona, b.territory)}.`;
+}
+
+export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: { check?: boolean; batchId?: string; ownOnly?: boolean; user?: string } = {}): Promise<Batch> {
+  const mismatch = await runMismatch(opts.batchId, b);
+  if (mismatch) throw Object.assign(new Error(mismatch), { status: 409 });
+  const r = loadRules();
+  const existing = opts.batchId && (await batchExists(opts.batchId)) ? await loadBatch(opts.batchId) : null;
+  const id = existing?.id || opts.batchId || (await newBatchId(b.territory));
   const started = Date.now();
   const batch: Batch = existing || { id, brief: b, created: new Date().toISOString(), lines: [], dropped: [], stats: { generated: 0, near_duplicates_removed: 0, similar_flagged: 0, timings_ms: {}, usd: {}, calls: {}, tokens: {}, usd_total: 0 } };
   if (existing) batch.brief = { ...b, own_lines: [...(existing.brief.own_lines || []), ...(b.own_lines || []).filter(o => !(existing.brief.own_lines || []).some(x => x.text === o.text))] };
   if (!batch.created_by && opts.user) batch.created_by = opts.user;
-  const embStore: Record<string, number[]> = existing && fs.existsSync(embPath(id)) ? readJson(embPath(id)) : {};
+  const embStore: Record<string, number[]> = existing ? await getStore().getEmbeddings(id) : {};
   const firstNew = batch.lines.length;
-  api.resetRun();
+  await api.resetRun();
 
   // 1. The creative director's lines.
   const already = new Set(batch.lines.filter(l => l.model === 'human').map(l => l.text));
@@ -863,9 +974,9 @@ export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: 
     }
     batch.stats.near_duplicates_removed = batch.dropped.length;
   }
-  writeJson(embPath(id), embStore);
   batch.stats.timings_ms.generate = (batch.stats.timings_ms.generate || 0) + (Date.now() - started);
-  saveBatch(batch);
+  await saveBatch(batch);
+  await getStore().saveEmbeddings(id, embStore); // after the lines exist (the database links embeddings to lines)
   const fresh = batch.lines.slice(firstNew);
   for (const l of fresh) emit({ type: 'line', line: l });
   emit({ type: 'status', message: `${fresh.length} lines ready${batch.dropped.length ? ` (${batch.dropped.length} near-duplicates removed)` : ''}. Checking…` });
@@ -874,8 +985,8 @@ export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: 
   const prevTotal = existing ? (batch.stats.timings_ms.total || 0) : 0;
   finishStats(batch, api, started);
   batch.stats.timings_ms.total += prevTotal;
-  saveBatch(batch);
-  api.commit(`${opts.ownOnly ? 'check-own' : 'generate'} ${id}`);
+  await saveBatch(batch);
+  await api.commit(`${opts.ownOnly ? 'check-own' : 'generate'} ${id}`);
   emit({ type: 'stats', stats: batch.stats });
   emit({ type: 'done', batch: id });
   return batch;
@@ -893,11 +1004,11 @@ function finishStats(batch: Batch, api: Api, started: number) {
 /** "More like this": k siblings of one line, same angle and field, with the note as guidance. */
 export async function moreLikeThis(batchId: string, lineId: string, guidance: string, k: number, api: Api, emit: Emit = () => {}): Promise<Line[]> {
   const r = loadRules();
-  const batch = loadBatch(batchId);
+  const batch = await loadBatch(batchId);
   const src = batch.lines.find(l => l.id === lineId);
   if (!src) throw new Error(`No line ${lineId}`);
   const started = Date.now();
-  api.resetRun();
+  await api.resetRun();
   const others = STRUCTURES.filter(s => s !== src.structure);
   const base = batch.lines.length;
   const cells: Cell[] = Array.from({ length: k }, (_, i) => ({
@@ -906,7 +1017,7 @@ export async function moreLikeThis(batchId: string, lineId: string, guidance: st
   }));
   const written = await writeCells(api, r, batch.brief, cells, batch.brief.model, 'more', { guidance, sibling: src.edited_text || src.text, own: batch.lines.filter(l => l.model === 'human').map(l => l.text) });
   const embs = await api.embed(written.map(w => w.text));
-  const embStore = fs.existsSync(embPath(batchId)) ? readJson<Record<string, number[]>>(embPath(batchId)) : {};
+  const embStore = await getStore().getEmbeddings(batchId);
   const added: Line[] = [];
   written.forEach((w, i) => {
     const best = Math.max(0, ...Object.values(embStore).map(e => cosine(e, embs[i])));
@@ -914,15 +1025,15 @@ export async function moreLikeThis(batchId: string, lineId: string, guidance: st
     const l = { ...newLine(batch.brief, r, batchId, batch.lines.length + 1, w.cell, w.text, batch.brief.model), parent: lineId, guidance };
     batch.lines.push(l); added.push(l); embStore[l.id] = embs[i];
   });
-  writeJson(embPath(batchId), embStore);
-  saveBatch(batch);
+  await saveBatch(batch);
+  await getStore().saveEmbeddings(batchId, embStore); // after the lines exist
   for (const l of added) emit({ type: 'line', line: l });
   await checkBatch(batch, api, emit, added.map(l => l.id));
   batch.stats.timings_ms.more = (batch.stats.timings_ms.more || 0) + (Date.now() - started);
   for (const [k2, v] of Object.entries(api.runUsd)) batch.stats.usd[k2] = round((batch.stats.usd[k2] || 0) + v, 4);
   batch.stats.usd_total = round(Object.values(batch.stats.usd).reduce((a, b) => a + b, 0), 4);
-  saveBatch(batch);
-  api.commit(`more ${lineId}`);
+  await saveBatch(batch);
+  await api.commit(`more ${lineId}`);
   emit({ type: 'stats', stats: batch.stats });
   emit({ type: 'done', batch: batchId });
   return added;
@@ -1147,10 +1258,11 @@ export async function checkBatch(batch: Batch, api: Api, emit: Emit = () => {}, 
   const b = batch.brief;
   const idx = ruleIndex(r, b.persona);
   const started = Date.now();
+  if (r.version) batch.rules_version = r.version;
   const lines = batch.lines.filter(l => !onlyIds || onlyIds.includes(l.id));
 
   // Deterministic first, for every line, so the grid fills with the hard flags at once.
-  const embs: Record<string, number[]> = fs.existsSync(embPath(batch.id)) ? readJson(embPath(batch.id)) : {};
+  const embs: Record<string, number[]> = await getStore().getEmbeddings(batch.id);
   for (const l of lines) {
     const text = l.decision === 'edit' && l.edited_text ? l.edited_text : l.text;
     const det = deterministicFlags({ ...l, text }, r, b);
@@ -1169,7 +1281,7 @@ export async function checkBatch(batch: Batch, api: Api, emit: Emit = () => {}, 
   }
   batch.stats.similar_flagged = batch.lines.filter(l => l.flags.some(f => f.rule === 'NEAR_DUP')).length;
   batch.stats.timings_ms.check_deterministic = Date.now() - started;
-  saveBatch(batch);
+  await saveBatch(batch);
 
   let saving = false;
   await pool(lines, 6, async l => {
@@ -1188,10 +1300,10 @@ export async function checkBatch(batch: Batch, api: Api, emit: Emit = () => {}, 
     }
     sortFlags(l);
     emit({ type: 'line', line: l });
-    if (!saving) { saving = true; saveBatch(batch); saving = false; }
+    if (!saving) { saving = true; await saveBatch(batch); saving = false; }
   });
   batch.stats.timings_ms.check = Date.now() - started;
-  saveBatch(batch);
+  await saveBatch(batch);
 }
 
 /**
@@ -1200,11 +1312,19 @@ export async function checkBatch(batch: Batch, api: Api, emit: Emit = () => {}, 
  * a lone model or logprob call can't turn a line red. Only for compliance items
  * that have wordings; everything else keeps its severity.
  */
-function reconcile(l: Line, r: Rules) {
+export function reconcile(l: Line, r: Rules) {
   for (const it of r.compliance) {
-    if (!it.wordings || (it.severity || 'compliance') !== 'compliance') continue;
+    if ((it.severity || 'compliance') !== 'compliance') continue;
     const f = l.flags.find(x => x.rule === it.id);
     if (!f) continue;
+    // "Price leads" can only be a breach when there's a price in the line (the rule's own patterns).
+    // Without one, a model judgement stays amber: a live check flagged "Cheap … can cost you more" red.
+    if (it.check === 'price_lead' && f.base !== 'compliance' && !(it.patterns || []).some(p0 => new RegExp(pat(p0).re, 'i').test(finalText(l)))) {
+      f.severity = 'warn';
+      if (!/no price in the line/.test(f.why || '')) f.why = `${f.why ? f.why + '; ' : ''}no price in the line, so not a breach of this rule`;
+      continue;
+    }
+    if (!it.wordings) continue;
     const hasModel = f.by.includes('model');
     const pr = l.probes?.[it.id]?.filter((x): x is number => x !== null) || [];
     if (f.p === undefined && pr.length) f.p = round(pr.reduce((a, b) => a + b, 0) / pr.length, 3);
@@ -1226,12 +1346,12 @@ export async function checkTexts(persona: string, territory: string, items: Arra
   const b = makeBrief({ persona, territory, name: 'adhoc', checker_model: models.checker, probe_model: models.probe, objection_model: models.objection });
   const batch: Batch = { id: `adhoc-${stamp()}`, brief: b, created: new Date().toISOString(), lines: [], dropped: [], stats: { generated: 0, near_duplicates_removed: 0, similar_flagged: 0, timings_ms: {}, usd: {}, calls: {}, tokens: {}, usd_total: 0 } };
   batch.lines = items.map((it, i) => newLine(b, r, batch.id, i + 1, { cell: `x${i + 1}`, angle: r.territories[territory].angle, structure: it.structure || 'plain_promise', tone: b.tone, field: it.field }, it.text, 'human'));
-  api.resetRun();
+  await api.resetRun();
   const started = Date.now();
   await checkBatch(batch, api);
   finishStats(batch, api, started);
-  saveBatch(batch);
-  api.commit(`check ${batch.id}`);
+  await saveBatch(batch);
+  await api.commit(`check ${batch.id}`);
   return batch.lines;
 }
 
@@ -1251,8 +1371,8 @@ export function flagText(f: Flag): string {
   return `${f.severity.toUpperCase()} ${f.rule}${f.quote ? ` "${f.quote}"` : ''}${f.why ? ` (${f.why})` : ''} [${how}; source: ${f.source}]`;
 }
 
-export function exportBatch(batchId: string): { csv: string; md: string; csvPath: string; mdPath: string } {
-  const batch = loadBatch(batchId);
+export async function exportBatch(batchId: string): Promise<{ csv: string; md: string; csvPath: string; mdPath: string }> {
+  const batch = await loadBatch(batchId);
   const r = loadRules();
   const rows = [CSV_COLUMNS, ...batch.lines.map(l => [
     l.id, l.persona, l.territory, l.field, l.text, String(l.chars), `${l.angle} ${l.angle_label}`, l.structure, l.tone_label,
@@ -1260,11 +1380,9 @@ export function exportBatch(batchId: string): { csv: string; md: string; csvPath
   ])];
   const csv = toCsv(rows);
   const md = markdownView(batch, r);
-  const csvPath = P('exports', `${batchId}.csv`);
-  const mdPath = P('exports', `${batchId}.md`);
-  ensureDir(path.dirname(csvPath));
-  fs.writeFileSync(csvPath, csv);
-  fs.writeFileSync(mdPath, md);
+  const st = getStore();
+  const csvPath = st.writeOutput ? await st.writeOutput(`exports/${batchId}.csv`, csv) : '';
+  const mdPath = st.writeOutput ? await st.writeOutput(`exports/${batchId}.md`, md) : '';
   return { csv, md, csvPath, mdPath };
 }
 
@@ -1322,7 +1440,7 @@ export function parseCsv(text: string): string[][] {
 
 export interface IngestResult { rows: number; matched: number; kept: number; edited: number; cut: number; unknown: string[]; taste_total: number; shortlist: number; shortlistPath: string }
 
-export function ingest(csvText: string): IngestResult {
+export async function ingest(csvText: string, user?: string): Promise<IngestResult> {
   const rows = parseCsv(csvText);
   if (!rows.length) throw new Error('Empty CSV');
   const head = rows[0].map(h => h.trim().toLowerCase());
@@ -1331,29 +1449,37 @@ export function ingest(csvText: string): IngestResult {
   const get = (r: string[], name: string) => { const i = col(name); return i >= 0 ? (r[i] ?? '').replace(/^'(?=[=+@])/, '').trim() : ''; };
 
   const batches = new Map<string, Batch>();
-  const tasteById = new Map(loadTaste().map(t => [t.id, t]));
+  const tasteById = new Map((await loadTaste()).map(t => [t.id, t]));
   const res: IngestResult = { rows: rows.length - 1, matched: 0, kept: 0, edited: 0, cut: 0, unknown: [], taste_total: 0, shortlist: 0, shortlistPath: '' };
+  const at = new Date().toISOString();
   for (const r of rows.slice(1)) {
     const id = get(r, 'id');
     const raw = get(r, 'decision').toLowerCase();
     const decision = (['keep', 'cut', 'edit'].includes(raw) ? raw : raw.startsWith('k') ? 'keep' : raw.startsWith('c') ? 'cut' : raw.startsWith('e') ? 'edit' : '') as Line['decision'];
     const batchId = id.replace(/-L\d+$/, '');
     let batch = batches.get(batchId);
-    if (!batch && fs.existsSync(batchPath(batchId))) { batch = loadBatch(batchId); batches.set(batchId, batch); }
+    if (!batch && (await batchExists(batchId))) { batch = await loadBatch(batchId); batches.set(batchId, batch); }
     const line = batch?.lines.find(l => l.id === id);
-    if (!line) { res.unknown.push(id || '(blank id)'); continue; }
+    if (!line || !batch) { res.unknown.push(id || '(blank id)'); continue; }
     res.matched++;
+    const before = { decision: line.decision || '', edited_text: line.edited_text || '', note: line.note || '' };
     line.decision = decision;
     line.edited_text = get(r, 'edited_text');
     line.note = get(r, 'note');
     if (decision === 'edit' && !line.edited_text) line.decision = 'keep';
+    const after = { decision: line.decision || '', edited_text: line.edited_text || '', note: line.note || '' };
+    if (JSON.stringify(before) !== JSON.stringify(after)) {
+      line.decided_by = user || line.decided_by || 'sheet';
+      line.decided_at = at;
+      await getStore().recordEdit({ line_id: line.id, batch_id: batch.id, before, after, by: line.decided_by, at });
+    }
     applyTaste(tasteById, line);
     if (line.decision === 'keep') res.kept++; else if (line.decision === 'edit') res.edited++; else if (line.decision === 'cut') res.cut++;
   }
-  for (const b of batches.values()) saveBatch(b);
-  saveTaste([...tasteById.values()]);
+  for (const b of batches.values()) await saveBatch(b);
+  await saveTaste([...tasteById.values()]);
   res.taste_total = tasteById.size;
-  const sl = writeShortlist();
+  const sl = await writeShortlist();
   res.shortlist = sl.count; res.shortlistPath = sl.path;
   return res;
 }
@@ -1367,13 +1493,14 @@ function applyTaste(store: Map<string, TasteExample>, l: Line) {
     });
   } else store.delete(l.id);
 }
-function saveTaste(ex: TasteExample[]) { writeJson(P('taste.json'), { _note: 'Kept, edited and cut-with-note lines from the creative director; used as few-shot taste examples by generate.', examples: ex }); }
+async function saveTaste(ex: TasteExample[]): Promise<void> { await getStore().saveTaste(ex); }
 
 /** Decision from the UI (keep / cut / edit, note). Updates the batch and the taste store. */
-export function setDecision(batchId: string, lineId: string, patch: { decision?: Line['decision']; edited_text?: string; note?: string }, user?: string): Line {
-  const batch = loadBatch(batchId);
+export async function setDecision(batchId: string, lineId: string, patch: { decision?: Line['decision']; edited_text?: string; note?: string }, user?: string): Promise<Line> {
+  const batch = await loadBatch(batchId);
   const l = batch.lines.find(x => x.id === lineId);
   if (!l) throw new Error(`No line ${lineId}`);
+  const before = { decision: l.decision || '', edited_text: l.edited_text || '', note: l.note || '' };
   if (patch.decision !== undefined) l.decision = patch.decision;
   if (patch.edited_text !== undefined) l.edited_text = patch.edited_text;
   if (patch.note !== undefined) l.note = patch.note;
@@ -1388,21 +1515,36 @@ export function setDecision(batchId: string, lineId: string, patch: { decision?:
     for (const f of modelFlags) addFlag(l.flags, { ...f, why: `${f.why || ''} (on the original wording)`.trim() });
     sortFlags(l);
   }
-  saveBatch(batch);
-  const store = new Map(loadTaste().map(t => [t.id, t]));
-  applyTaste(store, l);
-  saveTaste([...store.values()]);
+  const st = getStore();
+  // A signed-off line is never rewritten: a change of wording becomes a new version, and the sign-off keeps its own.
+  if (l.ready && lineHash(l) !== l.ready.sha256) {
+    const versions = await st.listLineVersions(l.id);
+    const h = lineHash(l);
+    if (!versions.some(v => v.sha256 === h)) {
+      await st.saveLineVersion({ line_id: l.id, batch_id: batchId, version: Math.max(0, ...versions.map(v => v.version)) + 1, field: l.field, text: finalText(l), sha256: h, created_by: user || 'unknown', created_at: l.decided_at!, stub: l.ready.stub });
+    }
+    l.ready.changed_since = true;
+  } else if (l.ready) l.ready.changed_since = false;
+  // Only this line is written, so decisions on other lines by other people stand.
+  await st.saveLine(batchId, l);
+  await st.recordEdit({ line_id: l.id, batch_id: batchId, before, after: { decision: l.decision || '', edited_text: l.edited_text || '', note: l.note || '' }, by: user || 'unknown', at: l.decided_at });
+  const taste = new Map((await loadTaste()).map(t => [t.id, t]));
+  applyTaste(taste, l);
+  await saveTaste([...taste.values()]);
   return l;
 }
+
+/** Every decision ever made on a line, oldest first (the audit trail). */
+export async function lineHistory(lineId: string) { return getStore().listEdits(lineId); }
 
 // ---------- shortlist ----------
 
 export interface ShortRow { stub: string; id: string; persona: string; territory: string; field: string; platform: string; format: string; text: string; angle: string; structure: string; tone: string; features: string; flags: string; note: string; compliance_flags: string[]; warn_flags: string[] }
 
-export function shortlist(): ShortRow[] {
+export async function shortlist(): Promise<ShortRow[]> {
   const r = loadRules();
   const lines: Line[] = [];
-  for (const b of listBatches()) lines.push(...loadBatch(b.id).lines.filter(l => l.decision === 'keep' || l.decision === 'edit'));
+  for (const b of await listBatches()) lines.push(...(await loadBatch(b.id)).lines.filter(l => l.decision === 'keep' || l.decision === 'edit'));
   lines.sort((a, b) => `${a.persona}|${a.territory}|${a.id}`.localeCompare(`${b.persona}|${b.territory}|${b.id}`));
   const counters = new Map<string, number>();
   return lines.map(l => {
@@ -1423,8 +1565,8 @@ export function shortlist(): ShortRow[] {
   });
 }
 
-export function writeShortlist(): { count: number; path: string; mdPath: string; csv: string; md: string } {
-  const rows = shortlist();
+export async function writeShortlist(): Promise<{ count: number; path: string; mdPath: string; csv: string; md: string }> {
+  const rows = await shortlist();
   const cols: Array<keyof ShortRow> = ['stub', 'id', 'persona', 'territory', 'field', 'platform', 'format', 'text', 'angle', 'structure', 'tone', 'features', 'flags', 'note'];
   const csv = toCsv([cols as string[], ...rows.map(x => cols.map(c => String(x[c])))]);
   const md = ['# Shortlist', '', 'Naming stubs follow PERSONA_TERRITORY_FORMAT_v#_PLATFORM (add _YYMMDD at trafficking).', ''];
@@ -1435,23 +1577,28 @@ export function writeShortlist(): { count: number; path: string; mdPath: string;
     const oneLine = (t: string) => t.replace(/\s*\n\s*/g, ' ');
     md.push(`- \`${x.stub}\` (${x.field}): ${oneLine(x.text)}${x.note ? ` *(${oneLine(x.note)})*` : ''}`);
   }
-  const p = P('shortlist.csv'), mp = P('shortlist.md');
-  ensureDir(STUDIO);
-  fs.writeFileSync(p, csv);
-  fs.writeFileSync(mp, md.join('\n') + '\n');
-  return { count: rows.length, path: p, mdPath: mp, csv, md: md.join('\n') + '\n' };
+  const mdText = md.join('\n') + '\n';
+  const st = getStore();
+  const p = st.writeOutput ? await st.writeOutput('shortlist.csv', csv) : '';
+  const mp = st.writeOutput ? await st.writeOutput('shortlist.md', mdText) : '';
+  return { count: rows.length, path: p, mdPath: mp, csv, md: mdText };
 }
 
 // ---------- compare ----------
 
-export interface CompareLine { id: string; label: string; field: string; text: string; chars: number; angle: string; structure: string; favourite?: boolean; note?: string }
-export interface CompareSet { name: string; brief: Brief; n_per_model: number; lines: CompareLine[]; created: string; revealed?: boolean; usd?: number; timings_ms?: number }
+export interface CompareLine { id: string; label: string; field: string; text: string; chars: number; angle: string; structure: string;
+  /** The viewer's own star (filled in per request by viewCompare); stored per person in `stars`. */
+  favourite?: boolean; note?: string;
+  /** Stars by person (hosted: email; local: the name the page asked for). */
+  stars?: Record<string, boolean>;
+}
+export interface CompareSet { name: string; brief: Brief; n_per_model: number; lines: CompareLine[]; created: string; revealed?: boolean; revealed_by?: string; revealed_at?: string; usd?: number; timings_ms?: number }
 
 export async function compare(b: Brief, models: string[], nPer: number, api: Api, emit: Emit = () => {}): Promise<CompareSet> {
   if (models.length < 2 || models.length > 4) throw new Error('Compare takes 2 to 4 models');
   const r = loadRules();
   const started = Date.now();
-  api.resetRun();
+  await api.resetRun();
   const name = `${b.territory}-${stamp()}`;
   const labels = shuffle(['A', 'B', 'C', 'D'].slice(0, models.length), mulberry32(hashStr(name)));
   const key: Record<string, string> = {};
@@ -1466,80 +1613,131 @@ export async function compare(b: Brief, models: string[], nPer: number, api: Api
   }));
   const lines = shuffle(all, mulberry32(hashStr(name + '|rows'))).map((l, i) => ({ ...l, id: `X${String(i + 1).padStart(2, '0')}` }));
   const set: CompareSet = { name, brief: b, n_per_model: nPer, lines, created: new Date().toISOString(), usd: round(api.runTotal(), 4), timings_ms: Date.now() - started };
-  const dir = P('compare', name);
-  writeJson(path.join(dir, 'set.json'), set);
-  writeJson(path.join(dir, 'key.json'), { _note: 'The key. Keep closed until the creative director has picked favourites.', labels: key });
-  fs.writeFileSync(path.join(dir, 'sheet.csv'), toCsv([['id', 'persona', 'territory', 'field', 'text', 'chars', 'writer', 'favourite', 'note'], ...lines.map(l => [l.id, b.persona, b.territory, l.field, l.text, String(l.chars), l.label, '', ''])]));
-  api.commit(`compare ${name}`);
+  const st = getStore();
+  await st.saveCompare(set);
+  await st.saveCompareKey(name, key);
+  if (st.writeOutput) await st.writeOutput(`compare/${name}/sheet.csv`, toCsv([['id', 'persona', 'territory', 'field', 'text', 'chars', 'writer', 'favourite', 'note'], ...lines.map(l => [l.id, b.persona, b.territory, l.field, l.text, String(l.chars), l.label, '', ''])]));
+  await api.commit(`compare ${name}`);
   emit({ type: 'done', batch: name });
   return set;
 }
-export function listCompares(): string[] { const d = P('compare'); return fs.existsSync(d) ? fs.readdirSync(d).filter(x => fs.existsSync(path.join(d, x, 'set.json'))).sort().reverse() : []; }
-export function loadCompare(name: string): CompareSet { return readJson(P('compare', name, 'set.json')); }
-export function saveCompare(s: CompareSet) { writeJson(P('compare', s.name, 'set.json'), s); }
-export function revealCompare(name: string): { labels: Record<string, string>; tally: Record<string, number> } {
-  const s = loadCompare(name);
-  s.revealed = true; saveCompare(s);
-  const labels = readJson(P('compare', name, 'key.json')).labels as Record<string, string>;
+export async function listCompares(): Promise<string[]> { return getStore().listCompares(); }
+export async function loadCompare(name: string): Promise<CompareSet> { return getStore().getCompare(name); }
+export async function saveCompare(set: CompareSet): Promise<void> { await getStore().saveCompare(set); }
+/** Who starred a line: per-person stars, plus the single unnamed star from before stars were per person. */
+function starrers(l: CompareLine): string[] {
+  const out = Object.entries(l.stars || {}).filter(([, v]) => v).map(([k]) => k);
+  if (l.favourite && !l.stars) out.push('');
+  return out;
+}
+/** The set as one person sees it: `favourite` is their own star, and other people's stars stay hidden until the reveal. */
+export function viewCompare(set: CompareSet, user?: string): CompareSet & { stars_total?: Record<string, number> } {
+  const who = (user || '').toLowerCase();
+  return {
+    ...set,
+    lines: set.lines.map(l => {
+      const { stars, ...rest } = l;
+      return { ...rest, favourite: who ? !!stars?.[who] : starrers(l).length > 0, ...(set.revealed ? { stars } : {}) };
+    }),
+  };
+}
+/** Star or unstar a line for one person, or set the note. */
+export async function markCompareLine(name: string, id: string, patch: { favourite?: boolean; note?: string }, user?: string): Promise<CompareLine> {
+  const set = await loadCompare(name);
+  const l = set.lines.find(x => x.id === id);
+  if (!l) throw new Error('No such line');
+  const who = (user || '').toLowerCase();
+  if (patch.favourite !== undefined) {
+    if (who) { l.stars = { ...(l.stars || {}), [who]: !!patch.favourite }; if (l.favourite && !Object.keys(l.stars).includes('')) delete l.favourite; }
+    else l.favourite = !!patch.favourite;
+  }
+  if (patch.note !== undefined) l.note = String(patch.note);
+  await saveCompare(set);
+  return viewCompare({ ...set, lines: [l] }, user).lines[0];
+}
+export async function revealCompare(name: string, user?: string): Promise<{ labels: Record<string, string>; tally: Record<string, number>; by_person: Record<string, Record<string, number>> }> {
+  const set = await loadCompare(name);
+  if (!set.revealed) { set.revealed = true; set.revealed_by = user; set.revealed_at = new Date().toISOString(); await saveCompare(set); }
+  const labels = await getStore().getCompareKey(name);
   const tally: Record<string, number> = Object.fromEntries(Object.keys(labels).map(k => [k, 0]));
-  for (const l of s.lines) if (l.favourite) tally[l.label] = (tally[l.label] || 0) + 1;
-  return { labels, tally };
+  const by_person: Record<string, Record<string, number>> = {};
+  for (const l of set.lines) {
+    for (const p of starrers(l)) {
+      tally[l.label] = (tally[l.label] || 0) + 1;
+      const k = p || 'unnamed';
+      by_person[k] = by_person[k] || Object.fromEntries(Object.keys(labels).map(x => [x, 0]));
+      by_person[k][l.label] = (by_person[k][l.label] || 0) + 1;
+    }
+  }
+  return { labels, tally, by_person };
 }
 
 // ---------- meta for the UI ----------
 
-export function meta() {
-  const r = loadRules();
+export async function meta() {
+  const r = await refreshRules();
   return {
-    personas: Object.fromEntries(Object.entries(r.personas).map(([k, v]) => [k, { name: v.name, default_fields: v.default_fields, triggers: v.triggers.map(t => ({ id: t.id, label: t.label })) }])),
+    // Who each persona is, from the active rules file (never the readout): shown on Territories and beside Write & brief.
+    personas: Object.fromEntries(Object.entries(r.personas).map(([k, v]) => [k, {
+      name: v.name, default_fields: v.default_fields,
+      triggers: v.triggers.map(t => ({ id: t.id, label: t.label, detail: t.detail, source: t.source })),
+      context: {
+        who: (v as any).who, tension: (v as any).tension, who_source: (v as any).who_source, platforms: (v as any).platforms || [],
+        turn_offs: (v.turn_offs || []).map(t => ({ id: t.id, rule: t.rule, source: t.source, severity: t.severity })),
+        language: ((v as any).language || []).map((l: any) => ({ text: l.text, caution: !!l.caution, source: l.source })),
+      },
+    }])),
+    // Source codes → titles, for plain-words sources on flags.
+    sources: Object.fromEntries(Object.entries((r as any).sources || {}).map(([k, v]: [string, any]) => [k, v?.title || k])),
     territories: r.territories,
     formats: FORMATS,
     fields: r.fields,
     structures: r.structures,
     tone_controls: r.tone_controls,
     needs_review: r.needs_review.length,
-    spend: readSpend().total_usd,
+    spend: await getStore().spendTotal(),
+    store: getStore().kind,
     studio_dir: STUDIO,
   };
 }
 
-// ---------- reference documents (the intelligence readout) ----------
+// ---------- the client logo (local only) ----------
 
-// Client material, read from the Claude outputs folder and never committed.
-// studio/docs.json can override the list: [{ id, title, kind: 'md' | 'file', path }]
-// with paths relative to Claude outputs. Buyer verbatims (the quote bank) stay
-// analyst-only and aren't listed.
-export interface RefDoc { id: string; title: string; kind: 'md' | 'file'; path: string; note?: string }
-const OUTPUTS = path.dirname(INPUTS);
-const DEFAULT_DOCS: RefDoc[] = [
-  { id: 'readout', title: 'Persona intelligence readout (v1.2, team version)', kind: 'md', path: 'intelligence-readout-v1-team.md' },
-  { id: 'readout-deck', title: 'Persona intelligence readout (v1.2 deck, .pptx)', kind: 'file', path: 'Trupanion_Persona_Intelligence_Readout_v1.2.pptx' },
-];
-export function referenceDocs(): Array<Omit<RefDoc, 'path'> & { available: boolean }> {
-  return docsList().map(({ path: pth, ...d }) => ({ ...d, available: fs.existsSync(path.join(OUTPUTS, pth)) }));
+// Locally the header shows the client logo from the studio folder (client
+// material, never committed). Hosted, there's no logo asset (Brook, 28 Sep),
+// so the page shows the text wordmark. Reference documents and the readout
+// are not in the tool (decision 10).
+const BRAND_ASSETS: Record<string, { path: string; contentType: string }> = { 'client-logo': { path: 'brand/trupanion-logo-white.png', contentType: 'image/png' } };
+/** Asset names and where FileStore finds them on this machine. */
+export function localAssets(): Record<string, { path: string; contentType: string }> {
+  const out: Record<string, { path: string; contentType: string }> = {};
+  for (const [k, v] of Object.entries(BRAND_ASSETS)) out[`brand:${k}`] = { path: path.join(STUDIO, v.path), contentType: v.contentType };
+  return out;
 }
-function docsList(): RefDoc[] {
-  const p = P('docs.json');
-  return fs.existsSync(p) ? readJson<RefDoc[]>(p) : DEFAULT_DOCS;
-}
-/** The document's absolute path, only for ids on the list (no arbitrary paths). */
-export function referenceDocPath(id: string): { doc: RefDoc; file: string } {
-  const doc = docsList().find(d => d.id === id);
-  if (!doc) throw new Error(`No reference document ${id}`);
-  const file = path.resolve(OUTPUTS, doc.path);
-  if (!file.startsWith(OUTPUTS + path.sep) || !fs.existsSync(file)) throw new Error(`${doc.title} isn't available on this machine`);
-  return { doc, file };
+export async function brandAsset(name: string) {
+  if (!BRAND_ASSETS[name]) throw new Error(`No brand asset ${name}`);
+  const asset = await getStore().getAsset(`brand:${name}`);
+  if (!asset) throw new Error(`${name} isn't available`);
+  return asset;
 }
 
-// ---------- brand assets (client logo) ----------
+// ---------- resuming a run ----------
 
-// Client trademarks stay out of the repo: the page asks the API for them by
-// name and they're read from the studio folder. Only listed names are served.
-const BRAND_ASSETS: Record<string, string> = { 'client-logo': 'brand/trupanion-logo-white.png' };
-export function brandAssetPath(name: string): string {
-  const rel = BRAND_ASSETS[name];
-  if (!rel) throw new Error(`No brand asset ${name}`);
-  const file = P(rel);
-  if (!fs.existsSync(file)) throw new Error(`${name} isn't available on this machine`);
-  return file;
+/** Check any lines a run left unchecked (e.g. the server restarted mid-run). */
+export async function resumeChecks(batchId: string, api: Api, emit: Emit = () => {}): Promise<Batch> {
+  const batch = await loadBatch(batchId);
+  const todo = batch.lines.filter(l => l.status !== 'checked').map(l => l.id);
+  if (!todo.length) { emit({ type: 'done', batch: batchId }); return batch; }
+  const started = Date.now();
+  await api.resetRun();
+  emit({ type: 'status', message: `Resuming: checking ${todo.length} line${todo.length === 1 ? '' : 's'}` });
+  await checkBatch(batch, api, emit, todo);
+  batch.stats.timings_ms.resume = (batch.stats.timings_ms.resume || 0) + (Date.now() - started);
+  for (const [k, v] of Object.entries(api.runUsd)) batch.stats.usd[k] = round((batch.stats.usd[k] || 0) + v, 4);
+  batch.stats.usd_total = round(Object.values(batch.stats.usd).reduce((a, b) => a + b, 0), 4);
+  await saveBatch(batch);
+  await api.commit(`resume ${batchId}`);
+  emit({ type: 'stats', stats: batch.stats });
+  emit({ type: 'done', batch: batchId });
+  return batch;
 }
