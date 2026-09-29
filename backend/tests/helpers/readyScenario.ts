@@ -80,27 +80,30 @@ export async function scenario() {
   const rows = S.parseCsv(pack.csv);
   assert.equal(rows.length, 3, 'header plus two lines');
   assert.ok(rows.every(r => r.length === rows[0].length), 'every row has the same columns');
-  assert.deepEqual(rows[0].slice(0, 3), ['Naming code', 'Persona', 'Territory']);
-  const byText = new Map(rows.slice(1).map(r => [r[6], r]));
+  assert.deepEqual(rows[0].slice(0, 5), ['Naming code', 'Region', 'Visual', 'Persona', 'Territory']);
+  const col = (name: string) => { const i = rows[0].indexOf(name); assert.ok(i >= 0, `handoff has a ${name} column`); return i; };
+  const [TEXT, STATUS, NOTE, OVERRIDE, CHANGED] = ['Final text', 'Compliance status', 'Compliance note', 'Red flag overridden', 'Changed since sign-off'].map(col);
+  const byText = new Map(rows.slice(1).map(r => [r[TEXT], r]));
   assert.ok(byText.has(v1Text), 'the handoff carries the signed-off wording (v1), not the later edit');
-  assert.equal(byText.get(v1Text)![14], 'yes: a newer version exists');
+  assert.equal(byText.get(v1Text)![CHANGED], 'yes: a newer version exists');
+  // Region and visual come from the code: a brief with no region is US; lines are packed onto visual A.
+  assert.ok(rows.slice(1).every(r => r[1] === 'US' && r[2] === 'A'));
   // Compliance was given on the later wording, so the signed-off v1 row says so rather than claiming it's cleared.
-  assert.equal(byText.get(v1Text)![9], 'Pending');
-  assert.equal(byText.get(v1Text)![10], 'Reviewed on a different wording');
-  assert.equal(byText.get('Honestly, the policy pays for itself.')![9], 'Cleared');
+  assert.equal(byText.get(v1Text)![STATUS], 'Pending');
+  assert.equal(byText.get(v1Text)![NOTE], 'Reviewed on a different wording');
+  assert.equal(byText.get('Honestly, the policy pays for itself.')![STATUS], 'Cleared');
   // The internal handoff shows the override next to the status.
-  assert.equal(rows[0][11], 'Red flag overridden');
-  assert.match(byText.get('Honestly, the policy pays for itself.')![11], /pays for itself.*overridden by nick.*Legal cleared this claim/);
-  assert.equal(byText.get(v1Text)![11], '');
+  assert.match(byText.get('Honestly, the policy pays for itself.')![OVERRIDE], /pays for itself.*overridden by nick.*Legal cleared this claim/);
+  assert.equal(byText.get(v1Text)![OVERRIDE], '');
   assert.match(pack.md, /Red flag overridden: .*overridden by nick/);
   assert.match(pack.md, /Expected to lead/);
   assert.match(pack.md, /not compliance clearance/);
   const sheet = S.parseCsv(pack.complianceCsv);
-  assert.deepEqual(sheet[0], ['Naming code', 'Field', 'Platform', 'Final text', 'Characters', 'Please check']);
+  assert.deepEqual(sheet[0], ['Naming code', 'Region', 'Field', 'Platform', 'Final text', 'Characters', 'Please check']);
   // The overridden line tells the reviewer which rule to look at, in the rule's plain words; clean lines say nothing.
-  const riskyRow = sheet.find(r => r[3] === 'Honestly, the policy pays for itself.')!;
-  assert.equal(riskyRow[5], 'Please check specifically: Never say it pays for itself');
-  assert.equal(sheet.find(r => r[3] === v1Text)![5], '');
+  const riskyRow = sheet.find(r => r[4] === 'Honestly, the policy pays for itself.')!;
+  assert.equal(riskyRow[6], 'Please check specifically: Never say it pays for itself');
+  assert.equal(sheet.find(r => r[4] === v1Text)![6], '');
   const all = pack.complianceCsv.toLowerCase();
   for (const internal of ['comp_pays_for_itself', 'legal cleared', 'skeptic', 'override', 'nick', 'vivan', 'j. doe', 'legal §4', 'owners told us']) assert.equal(all.includes(internal), false, `compliance sheet leaks "${internal}"`);
   // Never "approved" (the compliance status "cleared" is the one exception).
@@ -113,19 +116,19 @@ export async function scenario() {
   assert.equal((await R.readyView('OWN', 'OWN_CALM')).signoffs.length, 2);
   // Compliance was reviewed on the same wording for the risky line; the clean line is pending.
   const pack2 = S.parseCsv((await R.handoffPack()).csv);
-  assert.equal(pack2.find(r => r[6] === 'Honestly, the policy pays for itself.')![9], 'Cleared');
-  assert.equal(pack2.find(r => r[6].endsWith('Every time.'))![9], 'Cleared', 'cleared on the wording that is now signed off');
+  assert.equal(pack2.find(r => r[TEXT] === 'Honestly, the policy pays for itself.')![STATUS], 'Cleared');
+  assert.equal(pack2.find(r => r[TEXT].endsWith('Every time.'))![STATUS], 'Cleared', 'cleared on the wording that is now signed off');
 
-  // A line kept later that sorts first in the shortlist would take v1 of the same code; sign-off gives it a free number instead.
+  // A line kept later that sorts first is never handed a code already signed off: Shortlist and sign-off agree on a free one.
   const late = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'late', own_lines: [{ text: 'Calm, even on a Sunday.', field: 'meta_primary' }] }), api, () => {}, { ownOnly: true, user: 'nick', batchId: 'OWN_CALM-000000-000000' });  // sorts first
   const lateLine = late.lines[0];
   await S.setDecision(late.id, lateLine.id, { decision: 'keep' }, 'nick');
   const wanted = (await S.shortlist()).find(r => r.id === lateLine.id)!.stub;
-  assert.ok((await S.getStore().listSignoffs()).some((so: any) => so.lines.some((x: any) => x.stub === wanted && x.line_id !== lateLine.id)), 'the shortlist hands the late line a code that is already signed off');
+  assert.equal((await S.getStore().listSignoffs()).some((so: any) => so.lines.some((x: any) => x.stub === wanted)), false, 'the shortlist code is free');
   const third = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: [...ids, lateLine.id], expectation }, 'nick');
   const codes = third.signoff.lines.map(x => x.stub);
   assert.equal(new Set(codes).size, codes.length, 'no two lines share a naming code');
-  assert.notEqual(third.signoff.lines.find(x => x.line_id === lateLine.id)!.stub, wanted, 'the late line got a free number');
+  assert.equal(third.signoff.lines.find(x => x.line_id === lateLine.id)!.stub, wanted, 'sign-off gives the code the shortlist showed');
   const everSigned = new Map<string, string>();
   for (const so of await S.getStore().listSignoffs()) for (const x of so.lines) {
     assert.ok(!everSigned.has(x.stub) || everSigned.get(x.stub) === x.line_id, `${x.stub} was signed off for two different lines`);

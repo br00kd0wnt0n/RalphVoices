@@ -113,7 +113,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   r.post('/generate', wrap(async (req, res) => {
     // Checked before the brief is built, so the answer is always "start a new run", whatever else is wrong with it.
     const raw = req.body.brief || {};
-    const mismatch = await S.runMismatch(req.body.batch ? String(req.body.batch) : undefined, { persona: raw.persona || S.loadRules().territories[raw.territory]?.persona, territory: raw.territory });
+    const mismatch = await S.runMismatch(req.body.batch ? String(req.body.batch) : undefined, { persona: raw.persona || S.loadRules().territories[raw.territory]?.persona, territory: raw.territory, region: raw.region });
     if (mismatch) return res.status(409).json({ error: mismatch, run_mismatch: true });
     const b = S.makeBrief(raw);
     const ownOnly = !!req.body.own_only;
@@ -165,11 +165,13 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   }));
 
   // ----- Ready for production (after Shortlist) -----
-  const pt = (q: any) => ({ persona: q.persona ? String(q.persona) : undefined, territory: q.territory ? String(q.territory) : undefined });
+  const pt = (q: any) => ({ persona: q.persona ? String(q.persona) : undefined, territory: q.territory ? String(q.territory) : undefined, region: q.region ? String(q.region).toUpperCase() : undefined });
+  const json = (v: unknown) => { try { return v ? JSON.parse(String(v)) : undefined; } catch { throw new Error('visuals and include are JSON'); } };
   r.get('/ready', wrap(async (req, res) => {
-    const { persona, territory } = pt(req.query);
+    const { persona, territory, region } = pt(req.query);
     if (!persona || !territory) throw new Error('Pass persona and territory');
-    res.json(await R.readyView(persona, territory));
+    // visuals: {line id: letter} to preview codes; include: the line ids in the set (they get codes first).
+    res.json(await R.readyView(persona, territory, (region || 'US') as any, json(req.query.visuals) || {}, json(req.query.include)));
   }));
   r.post('/ready', wrap(async (req, res) => {
     try { res.json(await R.signOff(req.body || {}, o.who(req))); }

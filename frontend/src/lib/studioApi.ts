@@ -18,9 +18,14 @@ export interface Tone { dry_warm: number; playful_plain: number; short_long: num
 export interface Flag { rule: string; severity: Severity; label: string; source: string; quote: string; why?: string; by: string[]; p?: number }
 export type ComplianceStatus = 'pending' | 'cleared' | 'changes_requested';
 export interface Override { rule: string; label?: string; reason: string; by: string; at: string }
+/** Where the ads run: US and Canada are separate ads. The naming code carries it. */
+export type Region = 'US' | 'CA';
+export const REGION_NAMES: Record<Region, string> = { US: 'US', CA: 'Canada' };
+/** Shown on Write & brief and in "Who this is" when Canada is chosen. */
+export const CANADA_NOTE = 'These personas are built on US research; check that they hold for Canadian audiences.';
 export interface ReadyMark { signoff_id: string; version: number; sha256: string; ready_by: string; ready_at: string; stub: string; changed_since?: boolean }
 export interface Line {
-  id: string; batch: string; persona: string; territory: string; field: string; text: string; chars: number;
+  id: string; batch: string; persona: string; territory: string; region?: Region; field: string; text: string; chars: number;
   angle: string; angle_label: string; structure: string; tone: Tone; tone_label: string; features: string[]; flags: Flag[];
   objection?: string; status: 'generated' | 'checking' | 'checked'; model: string; parent?: string;
   decision?: '' | 'keep' | 'cut' | 'edit'; edited_text?: string; note?: string; decided_by?: string; decided_at?: string;
@@ -31,7 +36,7 @@ export interface Line {
 }
 export interface OwnLine { text: string; field: string }
 export interface Brief {
-  name?: string; persona: string; territory: string; fields: string[]; tone: Tone;
+  name?: string; persona: string; territory: string; region?: Region; fields: string[]; tone: Tone;
   banned_words: string[]; banned_ideas: string[]; reference_lines: string[]; own_lines?: OwnLine[]; n: number; model: string;
 }
 export interface RunStats {
@@ -40,7 +45,7 @@ export interface RunStats {
 }
 export interface Batch { id: string; brief: Brief; created: string; created_by?: string; updated?: string; rules_version?: string; lines: Line[]; stats: RunStats }
 export interface RunSummary {
-  id: string; name: string; persona: string; territory: string; created: string; updated: string; created_by: string;
+  id: string; name: string; persona: string; territory: string; region?: Region; created: string; updated: string; created_by: string;
   lines: number; yours: number; kept: number; undecided: number; usd: number;
   /** Lines left unchecked when a run was interrupted (e.g. a server restart). */
   unchecked: number;
@@ -67,6 +72,9 @@ export interface Meta {
   can_override?: boolean;
   territories: Record<string, Territory>;
   formats: string[];
+  /** Where ads can run, and the naming code's pattern (from the backend's one definition). */
+  regions?: Region[];
+  code_pattern?: string;
   fields: Record<string, FieldSpec>;
   structures: Record<string, string>;
   tone_controls: Record<string, Record<string, string>>;
@@ -77,19 +85,20 @@ export interface Meta {
   /** Hosted: the signed-in person. */
   user?: { email: string; name: string | null; admin: boolean } | null;
 }
-export interface ShortRow { stub: string; id: string; persona: string; territory: string; field: string; platform: string; format: string; text: string; angle: string; structure: string; note: string; flags: string; compliance_flags: string[]; warn_flags: string[] }
+export interface ShortRow { stub: string; id: string; persona: string; territory: string; region?: Region; field: string; platform: string; format: string; text: string; angle: string; structure: string; note: string; flags: string; compliance_flags: string[]; warn_flags: string[] }
 export interface CompareLine { id: string; label: string; field: string; text: string; chars: number; angle: string; structure: string; favourite?: boolean; note?: string; stars?: Record<string, boolean> }
 export interface CompareSet { name: string; brief: Brief; n_per_model: number; lines: CompareLine[]; created: string; revealed?: boolean; revealed_by?: string; revealed_at?: string }
 export interface Reveal { labels: Record<string, string>; tally: Record<string, number>; by_person?: Record<string, Record<string, number>> }
 export interface EditRecord { line_id: string; batch_id: string; before: any; after: any; by: string; at: string }
 export interface LineVersion { line_id: string; batch_id: string; version: number; field: string; text: string; sha256: string; created_by: string; created_at: string; signoff_id?: string }
 export interface Signoff {
-  id: string; persona: string; territory: string; version: number; ready_by: string; ready_at: string; sha256: string; expectation_id: string;
+  id: string; persona: string; territory: string; region?: Region; version: number; ready_by: string; ready_at: string; sha256: string; expectation_id: string;
   lines: Array<{ line_id: string; batch_id: string; version: number; sha256: string; stub: string; field: string; text: string; chars: number; overrides?: Override[] }>;
 }
 export interface Expectation { id: string; persona: string; territory: string; signoff_id: string; line_ids: string[]; reason: string; created_by: string; created_at: string; sha256: string }
-export interface ReadyLine { line: Line; final_text: string; sha256: string; stub: string; red: Flag[]; compliance: NonNullable<Line['compliance']>; versions: LineVersion[] }
-export interface ReadyView { persona: string; territory: string; lines: ReadyLine[]; signoffs: Signoff[]; expectations: Expectation[]; latest: Signoff | null }
+/** stub: the code it was signed off under (fixed) or would get now; visual: its letter ('' for an earlier v# code). */
+export interface ReadyLine { line: Line; final_text: string; sha256: string; stub: string; visual: string; fixed: boolean; red: Flag[]; compliance: NonNullable<Line['compliance']>; versions: LineVersion[] }
+export interface ReadyView { persona: string; territory: string; region: Region; lines: ReadyLine[]; signoffs: Signoff[]; expectations: Expectation[]; latest: Signoff | null }
 export interface RuleEntry { id: string; rule: string; severity: 'compliance' | 'warn' | 'note'; source: string; applies_to: 'text' | 'visual' | 'both'; status?: string; what_to_do?: string }
 export interface ActiveRules {
   version: string; updated?: string; compliance: RuleEntry[]; brand: RuleEntry[]; clarity: RuleEntry[];
@@ -103,6 +112,9 @@ export interface PfUpload { id: string; kind: 'static' | 'carousel' | 'video'; f
 export interface PfStatus { status: 'open' | 'ready'; ready_by?: string; ready_at?: string; upload_id?: string }
 export interface PfStub {
   stub: string; persona: string; territory: string; signoff_id: string; ready_by: string; ready_at: string; copy: SignedCopy[];
+  region: Region;
+  /** Codes on the same visual share it (null for an earlier v# code): suggested as one upload. */
+  visual_key: string | null;
   upload: PfUpload | null;
   audit: { id: string; status: string; usd: number; red: number; amber: number; grey: number; open_red: number; finished_at: string | null; error: string | null; stale?: string | null } | null;
   status: PfStatus;
@@ -116,7 +128,7 @@ export interface PfFlag {
   mine: boolean | null;
 }
 export interface PfReport {
-  stub: string; persona: string; territory: string; signoff_id: string; copy: SignedCopy[]; upload: PfUpload | null;
+  stub: string; persona: string; territory: string; region: Region; visual_key: string | null; signoff_id: string; copy: SignedCopy[]; upload: PfUpload | null;
   same_visual_as: string[]; on_asset_copy: SignedCopy[]; post_copy: SignedCopy[];
   /** Set when the upload's type doesn't fit the code's format (a note, never a block). */
   format_note?: string | null;
@@ -241,8 +253,10 @@ export const studio = {
   reveal: (name: string) => req<Reveal>(`/compare/${enc(name)}/reveal`, { method: 'POST' }),
 
   // Ready for production
-  ready: (persona: string, territory: string) => req<ReadyView>(`/ready${qs({ persona, territory })}`),
-  signOff: (body: { persona: string; territory: string; line_ids: string[]; expectation: { line_ids: string[]; reason: string } }) =>
+  /** visuals: line id → letter, to preview codes; include: the lines in the set (they get codes first, as at sign-off). */
+  ready: (persona: string, territory: string, region: Region = 'US', visuals: Record<string, string> = {}, include?: string[]) =>
+    req<ReadyView>(`/ready${qs({ persona, territory, region, visuals: Object.keys(visuals).length ? JSON.stringify(visuals) : undefined, include: include ? JSON.stringify(include) : undefined })}`),
+  signOff: (body: { persona: string; territory: string; region: Region; line_ids: string[]; visuals: Record<string, string>; expectation: { line_ids: string[]; reason: string } }) =>
     req<{ signoff: Signoff; expectation: Expectation }>('/ready', { method: 'POST', body: JSON.stringify(body) }),
   override: (batch: string, line: string, rule: string, reason: string) =>
     req<Line>(`${lineUrl(batch, line)}/override`, { method: 'POST', body: JSON.stringify({ rule, reason }) }),

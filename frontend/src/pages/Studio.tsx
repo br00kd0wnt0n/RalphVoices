@@ -5,7 +5,7 @@
 // Ready for production, is creative sign-off, never "approval".
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { HOSTED, getUser, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type CompareSet, type Flag, type Line, type Meta, type OwnLine, type RunSummary, type ShortRow, type StudioEvent, type Territory, type Tone, type EditRecord, type LineVersion, type Reveal, type ComplianceStatus, type ReadyView, type RulesVersion, type ActiveRules, type RuleEntry, type PfStub, type PfReport, type PfFlag } from '@/lib/studioApi';
+import { HOSTED, getUser, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type CompareSet, type Flag, type Line, type Meta, type OwnLine, type RunSummary, type ShortRow, type StudioEvent, type Territory, type Tone, type EditRecord, type LineVersion, type Reveal, type ComplianceStatus, type ReadyView, type RulesVersion, type ActiveRules, type RuleEntry, type PfStub, type PfReport, type PfFlag, type Region, REGION_NAMES, CANADA_NOTE } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { ArrowLeft, HelpCircle, ScrollText, Shuffle } from 'lucide-react';
 
@@ -16,7 +16,7 @@ const FLOW: Array<[Tab, string]> = [['territories', 'Territories'], ['brief', 'W
 // Below 1600 px (and inside the tools.ralph.world frame) the bar uses short labels; the full name is in the tooltip.
 const SHORT: Partial<Record<Tab, string>> = { brief: 'Write', ready: 'Ready' };
 // Deep links for the demo: /studio?tab=review&batch=<id>&open=L07 (opens that line's first flag), &compare=<name>,
-// ?tab=ready&persona=<P>&territory=<T>, ?tab=preflight&stub=<naming code>.
+// ?tab=ready&persona=<P>&territory=<T>[&region=CA], ?tab=preflight&stub=<naming code>.
 const params = new URLSearchParams(window.location.search);
 
 // ---------- small building blocks ----------
@@ -118,6 +118,13 @@ function personaKeys(personas: Record<string, unknown>): string[] {
 }
 const angleLabel = (meta: Meta, persona: string, id: string) => meta.personas[persona]?.triggers.find(x => x.id === id)?.label || id;
 const NAMING_TIP = 'Naming code: Add3 reports results by this';
+const regionOf = (x?: { region?: Region } | null): Region => x?.region || 'US';
+/** " · Canada" after a heading for Canadian work; nothing for the US (the default). */
+const inRegion = (r?: Region) => (r === 'CA' ? ` · ${REGION_NAMES.CA}` : '');
+/** The note on Write & brief and in "Who this is" when Canada is chosen. */
+function CanadaNote({ className }: { className?: string }) {
+  return <p className={cn('rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm text-amber-100', className)}>{CANADA_NOTE}</p>;
+}
 /** One line on what to do about a flag, where there's a clear fix. */
 /** Rule id → the fix in plain words, from the live rules file (v2.7+). Filled when the rules load; it wins over the list below. */
 let WHAT_TO_DO: Record<string, string> = {};
@@ -144,7 +151,7 @@ function whatToDo(rule: string, f?: { visible?: number; max?: number }): string 
 }
 
 /** Who a persona is, from the active rules file (never the readout). Collapsed by default. */
-function PersonaPanel({ meta, persona, open: startOpen = false, className }: { meta: Meta; persona: string; open?: boolean; className?: string }) {
+function PersonaPanel({ meta, persona, region, open: startOpen = false, className }: { meta: Meta; persona: string; region?: Region; open?: boolean; className?: string }) {
   const [open, setOpen] = useState(startOpen);
   useEffect(() => { setOpen(startOpen); }, [persona, startOpen]);
   const p = meta.personas[persona];
@@ -156,6 +163,7 @@ function PersonaPanel({ meta, persona, open: startOpen = false, className }: { m
         <span><span className="text-sm font-semibold uppercase tracking-wider text-[#858B96]">Who this is</span> <span className="ml-1 text-base font-semibold">{p.name}</span></span>
         <span className="text-[#646A75]">{open ? '−' : '+'}</span>
       </button>
+      {region === 'CA' && <CanadaNote className="mx-4 mb-3" />}
       {open && (
         <div className="space-y-3 border-t border-[#272B34] px-4 py-3 text-sm">
           {(c?.who || c?.platforms?.length) && <p className="text-base text-[#C9CCD2]">{c?.who || p.name}{c?.platforms?.length ? <span className="text-[#858B96]"> · on {c.platforms.join(', ')}</span> : null}</p>}
@@ -228,7 +236,7 @@ export function Studio() {
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
-  const [brief, setBrief] = useState<Brief>({ persona: 'DINK', territory: 'DINK_NEVER', fields: [], tone: { dry_warm: 3, playful_plain: 3, short_long: 2 }, banned_words: [], banned_ideas: [], reference_lines: [], n: 20, model: 'gpt-4o' });
+  const [brief, setBrief] = useState<Brief>({ persona: 'DINK', territory: 'DINK_NEVER', region: 'US', fields: [], tone: { dry_warm: 3, playful_plain: 3, short_long: 2 }, banned_words: [], banned_ideas: [], reference_lines: [], n: 20, model: 'gpt-4o' });
   const [batch, setBatch] = useState<Batch | null>(null);
   const [status, setStatus] = useState('');
   const [running, setRunning] = useState(false);
@@ -241,8 +249,8 @@ export function Studio() {
   // One rule for every way the brief changes ("Write for this", the dropdowns, the address, "Continue").
   useEffect(() => {
     if (!attached) return;
-    if (!batch || batch.id !== attached || batch.brief.persona !== brief.persona || batch.brief.territory !== brief.territory) setAttached(null);
-  }, [attached, batch, brief.persona, brief.territory]);
+    if (!batch || batch.id !== attached || batch.brief.persona !== brief.persona || batch.brief.territory !== brief.territory || regionOf(batch.brief) !== regionOf(brief)) setAttached(null);
+  }, [attached, batch, brief.persona, brief.territory, brief.region]);
 
   const refreshMeta = useCallback(() => studio.meta().then(m => {
     TERRITORY_NAMES = Object.fromEntries(Object.entries(m.territories).map(([k, t]) => [k, t.name]));
@@ -304,8 +312,8 @@ export function Studio() {
     setErr('');
     if (!getUser()) { setErr(HOSTED ? 'Still signing you in; try again in a moment.' : 'Add your name (top right) first, so your runs are saved under it.'); return; }
     const candidate = opts.into || (attached && batch?.id === attached ? batch : null);
-    // A run for another persona or territory is never added to: this starts a new run instead.
-    const into = candidate && candidate.brief.persona === brief.persona && candidate.brief.territory === brief.territory ? candidate : null;
+    // A run for another persona, territory or region is never added to: this starts a new run instead.
+    const into = candidate && candidate.brief.persona === brief.persona && candidate.brief.territory === brief.territory && regionOf(candidate.brief) === regionOf(brief) ? candidate : null;
     const b: Brief = into ? { ...into.brief, ...brief } : brief;
     try {
       let r;
@@ -530,7 +538,7 @@ function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onCon
     <div className="max-w-7xl space-y-5">
       {attachedRun ? (
         <div className="flex flex-wrap items-center gap-3 rounded-xl border-2 px-4 py-3 text-base" style={{ borderColor: PINK, background: 'rgba(217,77,143,0.10)' }}>
-          <span>Adding to: <b>{territoryName(meta.territories[attachedRun.brief.territory]) || attachedRun.brief.territory}</b> · {when(attachedRun.created)}{attachedRun.created_by ? ` · ${attachedRun.created_by.split('@')[0].split('.')[0].replace(/^./, c => c.toUpperCase())}` : ''} <span className="text-[#A3A8B1]">({attachedRun.lines.length} line{attachedRun.lines.length === 1 ? '' : 's'}; new lines go into this run)</span></span>
+          <span>Adding to: <b>{territoryName(meta.territories[attachedRun.brief.territory]) || attachedRun.brief.territory}{inRegion(attachedRun.brief.region)}</b> · {when(attachedRun.created)}{attachedRun.created_by ? ` · ${attachedRun.created_by.split('@')[0].split('.')[0].replace(/^./, c => c.toUpperCase())}` : ''} <span className="text-[#A3A8B1]">({attachedRun.lines.length} line{attachedRun.lines.length === 1 ? '' : 's'}; new lines go into this run)</span></span>
           <GhostButton className="ml-auto px-3 py-1 text-sm" onClick={onNewRun}>Start a new run</GhostButton>
         </div>
       ) : (
@@ -552,6 +560,13 @@ function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onCon
           </select>
         </div>
         <div>
+          <Label>Region</Label>
+          {/* US and Canada run as separate ads; the region goes into the naming code. */}
+          <select aria-label="Region" className="rounded-lg border-2 border-[#343946] bg-[#101216] px-3 py-2 text-base" value={regionOf(brief)} onChange={e => set({ region: e.target.value as Region })}>
+            {(meta.regions || ['US', 'CA']).map(r => <option key={r} value={r}>{REGION_NAMES[r]}</option>)}
+          </select>
+        </div>
+        <div>
           <Label>Fields</Label>
           <div className="flex flex-wrap gap-1.5">
             {Object.entries(meta.fields).map(([k, f]) => {
@@ -569,7 +584,8 @@ function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onCon
           ))}
         </div>
       </section>
-      {t && <p className="px-1 text-base text-[#A3A8B1]"><span className="font-semibold">{territoryName(t)}</span> · {t.format} · Angle: {angleLabel(meta, t.persona, t.angle)}. {t.premise}</p>}
+      {regionOf(brief) === 'CA' && <CanadaNote className="text-base" />}
+      {t && <p className="px-1 text-base text-[#A3A8B1]"><span className="font-semibold">{territoryName(t)}</span> · {t.format}{inRegion(brief.region)} · Angle: {angleLabel(meta, t.persona, t.angle)}. {t.premise}</p>}
 
       <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[1.6fr_1fr]">
         {/* Your lines: the first action */}
@@ -609,7 +625,7 @@ function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onCon
         </section>
 
         <div className="space-y-5">
-          <PersonaPanel meta={meta} persona={brief.persona} open />
+          <PersonaPanel meta={meta} persona={brief.persona} region={regionOf(brief)} open />
           <RunsList user={user} tick={runsTick} meta={meta} onContinue={onContinue} />
           <section className="rounded-xl border border-[#272B34] bg-[#16181D] p-4">
             <button className="flex w-full items-center justify-between text-lg font-semibold" onClick={() => setMore(!more)}>
@@ -669,7 +685,7 @@ function RunsList({ user, tick, meta, onContinue }: { user: string; tick: number
         {runs.slice(0, 30).map(r => (
           <li key={r.id} className="flex items-center gap-3 rounded-lg border border-[#272B34] px-3 py-2">
             <div className="min-w-0 flex-1">
-              <div className="truncate text-base font-medium">{meta.territories[r.territory]?.name || r.territory}</div>
+              <div className="truncate text-base font-medium">{meta.territories[r.territory]?.name || r.territory}{r.region === 'CA' && <Chip tone="outline" className="ml-2 text-xs">{REGION_NAMES.CA}</Chip>}</div>
               <div className="text-sm text-[#858B96]">
                 {new Date(r.updated).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · {r.lines} lines{r.yours ? ` (${r.yours} yours)` : ''} · {r.kept} kept{!mine && r.created_by ? ` · ${r.created_by}` : ''}
                 {r.unchecked > 0 && <span className="text-amber-300"> · {r.unchecked} unchecked</span>}
@@ -982,7 +998,7 @@ function Shortlist({ meta, batch, onReady }: { meta: Meta; batch: Batch | null; 
   useEffect(() => { load(); }, []);
   const groups = useMemo(() => {
     const m = new Map<string, ShortRow[]>();
-    for (const r of rows) { const k = `${personaName(meta, r.persona)} · ${territoryName(meta.territories[r.territory]) || r.territory}`; m.set(k, [...(m.get(k) || []), r]); }
+    for (const r of rows) { const k = `${personaName(meta, r.persona)} · ${territoryName(meta.territories[r.territory]) || r.territory}${inRegion(r.region)}`; m.set(k, [...(m.get(k) || []), r]); }
     return m;
   }, [rows]);
 
@@ -998,7 +1014,7 @@ function Shortlist({ meta, batch, onReady }: { meta: Meta; batch: Batch | null; 
         <div className="flex flex-wrap items-start gap-3">
           <div className="mr-auto max-w-3xl">
             <div className="text-lg font-semibold">Shortlist</div>
-            <div className="text-base text-[#858B96]">Kept and edited lines, each with its naming code (PERSONA_TERRITORY_FORMAT_v#_PLATFORM; Add3 reports results by it, with the date added at trafficking).</div>
+            <div className="text-base text-[#858B96]">Kept and edited lines, each with the naming code it would get ({meta.code_pattern || 'PERSONA_TERRITORY_FORMAT_[visual][line]_REGION_PLATFORM'}; Add3 reports results by it, with the date added at trafficking). Visuals default to three lines each; you can change that at Ready for production, where the code is fixed.</div>
           </div>
           <PinkButton onClick={onReady}>Ready for production →</PinkButton>
         </div>
@@ -1199,13 +1215,19 @@ const COMPLIANCE_TONE: Record<ComplianceStatus, string> = {
 };
 
 function Ready({ meta, batch, user, onNext }: { meta: Meta; batch: Batch | null; user: string; onNext: () => void }) {
-  const [groups, setGroups] = useState<Array<{ persona: string; territory: string; n: number }>>([]);
-  // Deep link: /studio?tab=ready&persona=DINK&territory=DINK_NEVER
-  const [pt, setPt] = useState<{ persona: string; territory: string } | null>(
-    params.get('persona') && params.get('territory') ? { persona: params.get('persona')!, territory: params.get('territory')! }
-      : batch ? { persona: batch.brief.persona, territory: batch.brief.territory } : null);
+  type PT = { persona: string; territory: string; region: Region };
+  const ptKey = (x: PT) => `${x.persona}|${x.territory}|${x.region}`;
+  const [groups, setGroups] = useState<Array<PT & { n: number }>>([]);
+  // Deep link: /studio?tab=ready&persona=DINK&territory=DINK_NEVER[&region=CA]
+  const [pt, setPt] = useState<PT | null>(
+    params.get('persona') && params.get('territory') ? { persona: params.get('persona')!, territory: params.get('territory')!, region: (params.get('region') as Region) || 'US' }
+      : batch ? { persona: batch.brief.persona, territory: batch.brief.territory, region: regionOf(batch.brief) } : null);
   const [view, setView] = useState<ReadyView | null>(null);
   const [include, setInclude] = useState<Set<string>>(new Set());
+  // The visual letter chosen per line (line id → letter), before sign-off; the default packs three lines to a visual.
+  const [visuals, setVisuals] = useState<Record<string, string>>({});
+  const pick = useRef({ visuals, include });
+  pick.current = { visuals, include };
   const [lead, setLead] = useState<Set<string>>(new Set());
   const [reason, setReason] = useState('');
   const [error, setError] = useState('');
@@ -1214,18 +1236,20 @@ function Ready({ meta, batch, user, onNext }: { meta: Meta; batch: Batch | null;
 
   useEffect(() => {
     studio.shortlist().then(rows => {
-      const m = new Map<string, { persona: string; territory: string; n: number }>();
-      for (const r of rows) { const k = `${r.persona}|${r.territory}`; m.set(k, { persona: r.persona, territory: r.territory, n: (m.get(k)?.n || 0) + 1 }); }
+      const m = new Map<string, PT & { n: number }>();
+      for (const r of rows) { const g = { persona: r.persona, territory: r.territory, region: regionOf(r) }; const k = ptKey(g); m.set(k, { ...g, n: (m.get(k)?.n || 0) + 1 }); }
       const gs = [...m.values()];
       setGroups(gs);
-      setPt(cur => (cur && gs.some(g => g.persona === cur.persona && g.territory === cur.territory) ? cur : gs[0] ? { persona: gs[0].persona, territory: gs[0].territory } : cur));
+      setPt(cur => (cur && gs.some(g => ptKey(g) === ptKey(cur)) ? cur : gs[0] ? { persona: gs[0].persona, territory: gs[0].territory, region: gs[0].region } : cur));
     }).catch(e => setError(e.message));
   }, []);
   const load = useCallback(async (keepSelection = false) => {
     if (!pt) return;
-    const v = await studio.ready(pt.persona, pt.territory);
+    // Codes shown are the ones a sign-off of this set, with these visuals, would give.
+    const v = keepSelection ? await studio.ready(pt.persona, pt.territory, pt.region, pick.current.visuals, [...pick.current.include]) : await studio.ready(pt.persona, pt.territory, pt.region);
     setView(v);
     if (!keepSelection) {
+      setVisuals({});
       setInclude(new Set(v.lines.map(x => x.line.id)));
       const lastExp = v.expectations[v.expectations.length - 1];
       setLead(new Set(lastExp?.line_ids.filter(id => v.lines.some(x => x.line.id === id)) || []));
@@ -1233,6 +1257,12 @@ function Ready({ meta, batch, user, onNext }: { meta: Meta; batch: Batch | null;
     }
   }, [pt]);
   useEffect(() => { setDone(''); setError(''); load().catch(e => setError(e.message)); }, [load]);
+  // A different visual, or a line in or out of the set, can change the codes: preview them again.
+  const firstPick = useRef(true);
+  useEffect(() => {
+    if (firstPick.current) { firstPick.current = false; return; }
+    load(true).catch(e => setError(e.message));
+  }, [visuals, include]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selected = view?.lines.filter(x => include.has(x.line.id)) || [];
   const reds = selected.reduce((n, x) => n + x.red.length, 0);
@@ -1246,7 +1276,7 @@ function Ready({ meta, batch, user, onNext }: { meta: Meta; batch: Batch | null;
     if (!pt) return;
     setBusy(true); setError(''); setDone('');
     try {
-      const r = await studio.signOff({ persona: pt.persona, territory: pt.territory, line_ids: selected.map(x => x.line.id), expectation: { line_ids: leads, reason } });
+      const r = await studio.signOff({ persona: pt.persona, territory: pt.territory, region: pt.region, line_ids: selected.map(x => x.line.id), visuals, expectation: { line_ids: leads, reason } });
       setDone(`${r.signoff.lines.length} line${r.signoff.lines.length === 1 ? '' : 's'} marked Ready for production (set v${r.signoff.version}), with your expectations locked alongside.`);
       await load(true);
     } catch (e: any) {
@@ -1254,7 +1284,7 @@ function Ready({ meta, batch, user, onNext }: { meta: Meta; batch: Batch | null;
     } finally { setBusy(false); }
   }
   const t = pt ? meta.territories[pt.territory] : null;
-  const q = pt ? `?persona=${encodeURIComponent(pt.persona)}&territory=${encodeURIComponent(pt.territory)}` : '';
+  const q = pt ? `?persona=${encodeURIComponent(pt.persona)}&territory=${encodeURIComponent(pt.territory)}&region=${pt.region}` : '';
 
   return (
     <div className="max-w-7xl space-y-5">
@@ -1265,10 +1295,10 @@ function Ready({ meta, batch, user, onNext }: { meta: Meta; batch: Batch | null;
         </div>
         <div>
           <Label>Persona × territory</Label>
-          <select className="rounded-lg border-2 border-[#343946] bg-[#101216] px-3 py-2 text-base" value={pt ? `${pt.persona}|${pt.territory}` : ''}
-            onChange={e => { const [persona, territory] = e.target.value.split('|'); setPt({ persona, territory }); }}>
+          <select className="rounded-lg border-2 border-[#343946] bg-[#101216] px-3 py-2 text-base" value={pt ? ptKey(pt) : ''}
+            onChange={e => { const [persona, territory, region] = e.target.value.split('|'); setPt({ persona, territory, region: region as Region }); }}>
             {!groups.length && <option value="">Nothing kept yet</option>}
-            {groups.map(g => <option key={`${g.persona}|${g.territory}`} value={`${g.persona}|${g.territory}`}>{meta.personas[g.persona]?.name || g.persona} · {meta.territories[g.territory]?.name || g.territory} ({g.n})</option>)}
+            {groups.map(g => <option key={ptKey(g)} value={ptKey(g)}>{meta.personas[g.persona]?.name || g.persona} · {meta.territories[g.territory]?.name || g.territory}{inRegion(g.region)} ({g.n})</option>)}
           </select>
         </div>
       </div>
@@ -1284,10 +1314,12 @@ function Ready({ meta, batch, user, onNext }: { meta: Meta; batch: Batch | null;
               <span className="font-semibold">{selected.length} of {view.lines.length} lines in this set</span>
               <span>·</span>
               <span>{reds ? `${reds} red flag${reds === 1 ? '' : 's'} to resolve` : 'No red flags left'}</span>
-              <span className="ml-auto text-sm opacity-80">{t?.format}</span>
+              <span className="ml-auto text-sm opacity-80">{t?.format} · {REGION_NAMES[view.region || 'US']}</span>
             </div>
+            <p className="px-1 text-sm text-[#858B96]">Each line runs as its own ad. Lines sharing a visual letter go on the same visual (A1, A2, A3…); by default three to a visual. Change a letter before signing off: the code is fixed at sign-off and never changes after.</p>
             {view.lines.map(x => (
               <ReadyCard key={x.line.id} meta={meta} item={x} included={include.has(x.line.id)} lead={lead.has(x.line.id)}
+                onVisual={v => setVisuals(cur => ({ ...cur, [x.line.id]: v }))}
                 onInclude={on => setInclude(cur => { const n = new Set(cur); if (on) n.add(x.line.id); else n.delete(x.line.id); return n; })}
                 onLead={on => setLead(cur => { const n = new Set(cur); if (on) n.add(x.line.id); else n.delete(x.line.id); return n; })}
                 onChanged={() => load(true).catch(e => setError(e.message))} onError={setError} canCompliance={meta.can_set_compliance !== false} canOverride={meta.can_override !== false} />
@@ -1345,8 +1377,9 @@ function Ready({ meta, batch, user, onNext }: { meta: Meta; batch: Batch | null;
   );
 }
 
-function ReadyCard({ meta, item, included, lead, onInclude, onLead, onChanged, onError, canCompliance, canOverride }: {
-  meta: Meta; item: ReadyView['lines'][number]; included: boolean; lead: boolean;
+const LETTERS = 'ABCDEFGH'.split('');
+function ReadyCard({ meta, item, included, lead, onVisual, onInclude, onLead, onChanged, onError, canCompliance, canOverride }: {
+  meta: Meta; item: ReadyView['lines'][number]; included: boolean; lead: boolean; onVisual: (letter: string) => void;
   onInclude: (on: boolean) => void; onLead: (on: boolean) => void; onChanged: () => void; onError: (m: string) => void; canCompliance: boolean; canOverride: boolean;
 }) {
   const { line, final_text, red, compliance, versions } = item;
@@ -1369,7 +1402,15 @@ function ReadyCard({ meta, item, included, lead, onInclude, onLead, onChanged, o
         <label className="flex cursor-pointer items-center gap-2 font-medium text-[#ECEDEF]">
           <input type="checkbox" className="h-4 w-4 accent-[#D94D8F]" checked={included} onChange={e => onInclude(e.target.checked)} aria-label={`Include ${item.stub} in this set`} /> {included ? 'In this set' : 'Not in this set'}
         </label>
-        <span className="font-mono" title={line.id}>{item.stub}</span>
+        <span className="font-mono" title={item.fixed ? `${line.id}: fixed at sign-off` : `${line.id}: the code it gets if signed off now`}>{item.stub}</span>
+        {!item.fixed && item.visual && included && (
+          <label className="flex items-center gap-1 text-xs">
+            Visual
+            <select aria-label={`Visual for ${item.stub}`} className="rounded border border-[#343946] bg-[#101216] px-1 py-0.5 font-mono text-xs" value={item.visual} onChange={e => onVisual(e.target.value)}>
+              {[...new Set([...LETTERS, item.visual])].map(l => <option key={l} value={l}>{l}</option>)}
+            </select>
+          </label>
+        )}
         <span>{f?.label || line.field}</span>
         <span className={cn('font-mono', f && chars > f.visible ? 'font-bold text-amber-300' : '')}>{chars}/{f?.visible}</span>
         {line.model === 'human' && <Chip tone="outline" className="border-[#D94D8F] text-[#D94D8F]">yours</Chip>}
@@ -1566,14 +1607,14 @@ function AuthMedia({ path, video, className, alt }: { path: string; video?: bool
   return video ? <video src={url} controls preload="metadata" className={cn('rounded-lg bg-black', className)} /> : <img src={url} alt={alt || ''} className={cn('rounded-lg object-contain bg-[#101216]', className)} />;
 }
 
-/** Codes grouped by the visual they run on (codes sharing an upload together), in list order. */
+/** Codes grouped by the visual they run on (codes sharing an upload together; before any upload, codes signed off on the same visual letter), in list order. */
 function byVisual(ss: PfStub[]): Array<[string, PfStub[]]> {
   const groups = new Map<string, PfStub[]>();
   for (const s of ss) {
-    const k = s.upload ? `u:${s.upload.id}` : `s:${s.stub}`;
+    const k = s.upload ? `u:${s.upload.id}` : s.visual_key ? `v:${s.visual_key}` : `s:${s.stub}`;
     groups.set(k, [...(groups.get(k) || []), s]);
   }
-  return [...groups.entries()].map(([k, g]) => [k.startsWith('u:') ? g[0].upload!.files.map(f => f.filename).join(', ') : '', g]);
+  return [...groups.entries()].map(([k, g]) => [k.startsWith('u:') ? g[0].upload!.files.map(f => f.filename).join(', ') : k.startsWith('v:') ? 'not uploaded yet' : '', g]);
 }
 
 function stubState(s: PfStub): { words: string; tone: 'grey' | 'amber' | 'red' | 'outline'; className?: string } {
@@ -1649,7 +1690,7 @@ function Preflight({ meta }: { meta: Meta }) {
   }
 
   const groups = new Map<string, PfStub[]>();
-  for (const s of stubs) groups.set(`${s.persona}|${s.territory}`, [...(groups.get(`${s.persona}|${s.territory}`) || []), s]);
+  for (const s of stubs) { const k = `${s.persona}|${s.territory}|${regionOf(s)}`; groups.set(k, [...(groups.get(k) || []), s]); }
   const rate = agreement?.rate;
 
   return (
@@ -1679,7 +1720,7 @@ function Preflight({ meta }: { meta: Meta }) {
           <aside className="space-y-4 lg:sticky lg:top-24 lg:max-h-[calc(100vh-8rem)] lg:self-start lg:overflow-y-auto">
             {[...groups.entries()].map(([k, ss]) => (
               <section key={k} className="rounded-xl border border-[#272B34] bg-[#16181D] p-3">
-                <div className="mb-2 px-1 text-sm font-semibold">{meta.personas[ss[0].persona]?.name || ss[0].persona} · {meta.territories[ss[0].territory]?.name || ss[0].territory}</div>
+                <div className="mb-2 px-1 text-sm font-semibold">{meta.personas[ss[0].persona]?.name || ss[0].persona} · {meta.territories[ss[0].territory]?.name || ss[0].territory}{inRegion(ss[0].region)}</div>
                 <ul className="space-y-1.5">
                   {byVisual(ss).map(([visual, group]) => group.map((s, gi) => {
                     const st = stubState(s);
@@ -1735,10 +1776,13 @@ function PreflightReport({ meta, report, stubs, canReady, progress, pending, fil
   const readyBlock = !up ? 'Upload the asset first.' : !auditForLatest ? 'Run the audit on this upload first.' : !a ? 'Run the audit first.' : a.status === 'running' || a.status === 'queued' ? 'The audit is still running.' : a.status === 'failed' ? 'The audit failed; run it again.' : openRed ? `${openRed} red flag${openRed === 1 ? '' : 's'} to fix (a new upload) or override.` : '';
   const act = async (fn: () => Promise<unknown>) => { try { await fn(); await onChanged(); } catch (e: any) { onError(e.body?.blocking ? `${e.message}: ${e.body.blocking.map((b: any) => b.label || b.rule).join('; ')}` : e.message); } };
   const copyRows = res?.copy_match ?? res?.report?.copy_match;
+  // Other signed-off codes in the same set and region: 2-3 copy lines often run on one visual. Codes signed off
+  // on the same visual letter come first and are ticked; a US visual never serves a Canadian code.
+  const sameVisual = (s: PfStub) => !!report.visual_key && s.visual_key === report.visual_key;
+  const siblings = stubs.filter(s => s.stub !== report.stub && s.persona === report.persona && s.territory === report.territory && regionOf(s) === regionOf(report))
+    .sort((x, y) => Number(sameVisual(y)) - Number(sameVisual(x)));
   const [also, setAlso] = useState<string[]>([]);
-  useEffect(() => { setAlso([]); }, [report.stub]);
-  // Other signed-off codes in the same set: 2-3 copy lines often run on one visual.
-  const siblings = stubs.filter(s => s.stub !== report.stub && s.persona === report.persona && s.territory === report.territory);
+  useEffect(() => { setAlso(siblings.filter(sameVisual).map(s => s.stub)); }, [report.stub]); // eslint-disable-line react-hooks/exhaustive-deps
   const secs = (n: number) => (n >= 90 ? `${Math.round(n / 60)} min` : `${Math.round(n)} s`);
   const tagged = res ? Object.entries(res.features || {}).filter(([, p]) => p >= 0.5).sort((x, y) => y[1] - x[1]) : [];
 
@@ -1747,7 +1791,7 @@ function PreflightReport({ meta, report, stubs, canReady, progress, pending, fil
       <div className={cn('flex flex-wrap items-center gap-3 rounded-xl border-2 px-5 py-4', ready ? 'border-emerald-500/60 bg-emerald-500/10' : 'border-[#272B34] bg-[#16181D]')}>
         <div className="mr-auto">
           <div className="font-mono text-lg font-semibold" title={NAMING_TIP}>{report.stub}</div>
-          <div className="text-sm text-[#858B96]">{personaName(meta, report.persona)} · {territoryName(meta.territories[report.territory]) || report.territory} · signed off in {report.signoff_id}</div>
+          <div className="text-sm text-[#858B96]">{personaName(meta, report.persona)} · {territoryName(meta.territories[report.territory]) || report.territory}{inRegion(report.region)} · signed off in {report.signoff_id}</div>
         </div>
         {ready
           ? <span className="text-base text-emerald-100"><span className="font-semibold">Ready to traffic</span> · {report.status.ready_by}, {when(report.status.ready_at)}</span>
@@ -1803,7 +1847,7 @@ function PreflightReport({ meta, report, stubs, canReady, progress, pending, fil
               <p className="text-xs text-[#646A75]">One image (static), several images (carousel cards, in order), or one video (MP4, MOV). A new upload replaces the asset and reopens it for review.</p>
               {siblings.length > 0 && files.length > 0 && (
                 <fieldset className="rounded-lg border border-[#272B34] px-3 py-2">
-                  <legend className="px-1 text-xs text-[#858B96]">Also use this visual for (the same asset, another copy line)</legend>
+                  <legend className="px-1 text-xs text-[#858B96]">Also use this visual for (the same asset, another copy line; codes signed off on this visual are ticked)</legend>
                   {siblings.map(s => (
                     <label key={s.stub} className="flex cursor-pointer items-center gap-2 py-0.5 text-sm">
                       <input type="checkbox" className="h-4 w-4 accent-[#D94D8F]" checked={also.includes(s.stub)} onChange={e => setAlso(cur => e.target.checked ? [...cur, s.stub] : cur.filter(x => x !== s.stub))} />
