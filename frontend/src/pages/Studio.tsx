@@ -119,7 +119,10 @@ function personaKeys(personas: Record<string, unknown>): string[] {
 const angleLabel = (meta: Meta, persona: string, id: string) => meta.personas[persona]?.triggers.find(x => x.id === id)?.label || id;
 const NAMING_TIP = 'Naming code: Add3 reports results by this';
 /** One line on what to do about a flag, where there's a clear fix. */
+/** Rule id → the fix in plain words, from the live rules file (v2.7+). Filled when the rules load; it wins over the list below. */
+let WHAT_TO_DO: Record<string, string> = {};
 function whatToDo(rule: string, f?: { visible?: number; max?: number }): string {
+  if (WHAT_TO_DO[rule]) return WHAT_TO_DO[rule];
   if (rule === 'LIMIT_VISIBLE') return f?.visible ? `Keep the point in the first ${f.visible} characters; the rest is cut off on screen.` : 'Keep the point early; the end is cut off on screen.';
   if (rule === 'LIMIT_MAX') return f?.max ? `Cut it to ${f.max} characters or fewer.` : 'Cut it to fit the field.';
   const map: Record<string, string> = {
@@ -243,6 +246,7 @@ export function Studio() {
 
   const refreshMeta = useCallback(() => studio.meta().then(m => {
     TERRITORY_NAMES = Object.fromEntries(Object.entries(m.territories).map(([k, t]) => [k, t.name]));
+    WHAT_TO_DO = m.what_to_do || {};
     setMeta(m);
     setErr('');
     if (HOSTED && m.user) { setSignedInUser(m.user.email); setUserState(m.user.email); }
@@ -753,6 +757,7 @@ function TerritoryCard({ meta, code, t, onEdit, onBrief, onSaved }: { meta: Meta
       </div>
       <div className="mb-2 text-sm text-[#858B96]">{t.format} · Angle: {angle}</div>
       {t.headline && <p className="mb-2 text-base font-semibold text-[#F2F3F5]" title={t.headline_source ? `Pitched headline · ${plainSource(t.headline_source)}` : 'Pitched headline'}><span className="mr-1 text-xs font-normal uppercase tracking-wider text-[#858B96]">Pitched as</span>“{t.headline}”</p>}
+      {(t.name_note || t.headline_note) && <p className="mb-2 text-sm text-amber-200">{[t.pitched_name && t.pitched_name !== t.name ? `Pitched as “${t.pitched_name.replace(/\.$/, '')}”.` : '', t.name_note, t.headline_note].filter(Boolean).join(' ')}</p>}
       <p className="mb-3 text-base leading-snug text-[#C9CCD2]">{t.premise}</p>
       {t.updated_by && <p className="mb-3 text-sm text-[#858B96]">Changed by {t.updated_by}, {t.updated_at?.slice(0, 10)}{t.note ? `: ${t.note}` : ''}</p>}
       {history && t.history?.length ? (
@@ -1961,6 +1966,7 @@ function LiveRules({ active, meta }: { active: ActiveRules; meta: Meta | null })
           {sev(r)}
           <div className="min-w-0">
             <div className="text-base text-[#ECEDEF]">{r.rule}{r.status === 'pending' && <span className="ml-2 text-xs text-amber-300">awaiting the client’s confirmation</span>}</div>
+            {r.what_to_do && <div className="text-sm text-[#A3A8B1]"><span className="font-semibold">What to do:</span> {r.what_to_do}</div>}
             <div className="text-xs text-[#646A75]"><Src s={r.source} />{r.applies_to === 'both' ? ' · also checked on images' : ''}</div>
           </div>
         </li>
@@ -1983,6 +1989,13 @@ function LiveRules({ active, meta }: { active: ActiveRules; meta: Meta | null })
           <>
             <h3 className="mb-2 mt-4 text-base font-semibold">On images and video only <span className="text-sm font-normal text-[#858B96]">(checked in Pre-flight, not on copy)</span></h3>
             {list(visual)}
+          </>
+        )}
+        {active.disclaimer && (
+          <>
+            <h3 className="mb-2 mt-4 text-base font-semibold">On the last screen <span className="text-sm font-normal text-[#858B96]">(checked in Pre-flight)</span></h3>
+            {list([active.disclaimer])}
+            <p className="mt-2 text-sm text-[#A3A8B1]">{active.disclaimer.active ? <>Approved text: “{active.disclaimer.text}”</> : 'Off for now: no approved disclaimer text in the rules yet. Pre-flight shows a grey note until it’s added.'}</p>
           </>
         )}
       </section>

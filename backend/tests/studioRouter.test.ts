@@ -185,3 +185,38 @@ test('lines only go into a run of the same persona and territory: a brief for an
   const same = await call('POST', '/generate', { brief: { territory: 'OWN_CALM', own_lines: [{ text: 'Another calm line', field: 'meta_headline' }] }, batch: g.body.batch, own_only: true });
   assert.equal(same.status, 200);
 });
+
+test('the disclaimer on the last screen: off (grey) until the rules carry the text, then red when the last card or frame lacks it', async () => {
+  const { disclaimerCheck } = await import('../src/services/studio/preflight.js');
+  const made = 'Made-up disclaimer: coverage subject to terms, exclusions and waiting periods. Policies underwritten by Example Co.';
+  const rules = (text: string | null) => ({ disclaimer: { id: 'DISCLAIMER_LAST_SCREEN', rule: 'The approved disclaimer appears on the final frame or card of every asset.', severity: 'compliance', applies_to: 'visual', text, source: 'Trupanion brand notes, email 29 Sep 2026' } });
+  assert.deepEqual(disclaimerCheck({}, [], 'static'), [], 'older rules: no check at all');
+  const off = disclaimerCheck(rules(null), [{ where: 'image', text: 'anything' }], 'static');
+  assert.equal(off.length, 1);
+  assert.equal(off[0].severity, 'grey');
+  assert.match(off[0].label, /Disclaimer check off: no approved text in the rules yet/);
+  // Small print over three lines, different case and punctuation, on the last card: a match.
+  const split = 'MADE-UP DISCLAIMER\ncoverage subject to terms, exclusions\nand waiting periods — policies underwritten by Example Co';
+  assert.deepEqual(disclaimerCheck(rules(made), [{ where: 'card 1', text: 'Hook' }, { where: 'card 2', text: split }], 'carousel', 2), []);
+  // On card 1 but not the last card: red, pointing at the last card.
+  const red = disclaimerCheck(rules(made), [{ where: 'card 1', text: split }, { where: 'card 2', text: 'Get a quote' }], 'carousel', 2);
+  assert.equal(red[0].severity, 'red');
+  assert.equal(red[0].frame?.asset_position, 1);
+  assert.match(red[0].why!, /isn't on card 2/);
+  // A last card with no readable text at all (the mock drops empty cards).
+  assert.equal(disclaimerCheck(rules(made), [{ where: 'card 1', text: 'Hook' }], 'carousel', 2)[0].severity, 'red');
+  // One OCR slip out of the small print still matches; the voice-over never counts.
+  assert.deepEqual(disclaimerCheck(rules(made), [{ where: 'image', text: split.replace('exclusions', 'exc1usions') }], 'static'), []);
+  assert.equal(disclaimerCheck(rules(made), [{ where: '8.9 s (last frame)', text: 'Trupanion' }, { where: 'voice-over', text: made }], 'video')[0].severity, 'red');
+  assert.deepEqual(disclaimerCheck(rules(made), [{ where: '8.9 s (last frame)', text: made }], 'video'), []);
+  assert.equal(disclaimerCheck(rules(made), [{ where: 'voice-over', text: made }], 'video')[0].severity, 'grey', 'no frames: a note, not a pass');
+});
+
+test('red brand items with two wordings are asked as yes/no too, so red still needs agreement', () => {
+  const r: any = { compliance: [{ id: 'C1', wordings: ['a', 'b'] }, { id: 'C2' }], brand: [{ id: 'B_RED', severity: 'compliance', wordings: ['a', 'b'] }, { id: 'B_WARN', severity: 'warn', wordings: ['a', 'b'] }] };
+  assert.deepEqual(S.yesNoItems(r).map(i => i.id), ['C1', 'B_RED']);
+  // A lone model call on a red brand rule is amber, not red.
+  const line: any = { text: 'x', edited_text: '', flags: [{ rule: 'B_RED', severity: 'compliance', label: '', source: '', quote: '', by: ['model'], p: 0.1 }], probes: {} };
+  S.reconcile(line, r);
+  assert.equal(line.flags[0].severity, 'warn');
+});

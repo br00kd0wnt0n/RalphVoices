@@ -182,6 +182,7 @@ export interface RuleItem {
   patterns?: Pat[]; trigger_patterns?: string[]; requires_patterns?: string[];
   lead_fields?: string[];
   wordings?: [string, string]; structures?: string[]; min_words?: number; status?: string; needs_confirmation?: boolean;
+  what_to_do?: string;     // the fix in plain words, shown with the flag (rules v2.7+)
   /** What the rule is checked on: copy ('text', the default), images and frames only ('visual', B2's audit), or 'both'. */
   applies_to?: 'text' | 'visual' | 'both';
 }
@@ -787,7 +788,7 @@ export function estimate(b: Brief, opts: { ownOnly?: boolean } = {}): { usd: num
   const angles = g ? r.personas[b.persona].triggers.length + 1 : 0;
   const gen = { calls: angles, inTok: angles * (wsys + 200), outTok: n * 60 };
   const tag = { calls: own ? 1 : 0, inTok: own ? 700 + own * 30 : 0, outTok: own * 25 };
-  const probeItems = r.compliance.filter(c => c.wordings).length;
+  const probeItems = yesNoItems(r).length;
   const chk = { calls: m, inTok: m * 1300, outTok: m * 150 };
   const prb = { calls: m * probeItems * 2, inTok: m * probeItems * 2 * 120, outTok: m * probeItems * 2 };
   const obj = { calls: m, inTok: m * 500, outTok: m * 45 };
@@ -1217,10 +1218,18 @@ async function modelCheck(line: Line, r: Rules, api: Api, model: string, idx: Re
 // short lines loosely, and live runs showed lone flags at 0.5-0.75 on clean lines.
 const LONE_LOGPROB = 0.8;
 
-/** Two wordings per compliance item, P(Yes) from logprobs, averaged. */
+/**
+ * Items asked as two yes/no wordings: every compliance item with wordings, and
+ * any red brand item with them (v2.7 BR_PET_RESPECT), so red still needs agreement.
+ */
+export function yesNoItems(r: Rules): RuleItem[] {
+  return [...r.compliance.filter(c => c.wordings), ...r.brand.filter(b => b.wordings && b.severity === 'compliance')];
+}
+
+/** Two wordings per yes/no item, P(Yes) from logprobs, averaged. */
 async function probeCheck(line: Line, r: Rules, api: Api, model: string) {
   const f = r.fields[line.field];
-  const items = r.compliance.filter(c => c.wordings);
+  const items = yesNoItems(r);
   line.probes = {};
   await Promise.all(items.map(async it => {
     const ps = await Promise.all(it.wordings!.map(async w => {
@@ -1309,11 +1318,11 @@ export async function checkBatch(batch: Batch, api: Api, emit: Emit = () => {}, 
 /**
  * Red (compliance) needs agreement: a hard rule match, or the model check and
  * the two yes/no wordings together. Any single layer alone is amber (warn), so
- * a lone model or logprob call can't turn a line red. Only for compliance items
- * that have wordings; everything else keeps its severity.
+ * a lone model or logprob call can't turn a line red. For red items that have
+ * wordings (compliance, and red brand items); everything else keeps its severity.
  */
 export function reconcile(l: Line, r: Rules) {
-  for (const it of r.compliance) {
+  for (const it of [...r.compliance, ...r.brand.filter(b => b.severity === 'compliance')]) {
     if ((it.severity || 'compliance') !== 'compliance') continue;
     const f = l.flags.find(x => x.rule === it.id);
     if (!f) continue;
@@ -1689,6 +1698,9 @@ export async function meta() {
     }])),
     // Source codes → titles, for plain-words sources on flags.
     sources: Object.fromEntries(Object.entries((r as any).sources || {}).map(([k, v]: [string, any]) => [k, v?.title || k])),
+    // The fix in plain words, from the rules file where an item carries one (v2.7+); the page has its own for the rest.
+    what_to_do: Object.fromEntries([...r.compliance, ...r.brand, ...r.clarity, ...((r as any).disclaimer ? [(r as any).disclaimer] : [])]
+      .filter((i: any) => i.what_to_do).map((i: any) => [i.id, i.what_to_do])),
     territories: r.territories,
     formats: FORMATS,
     fields: r.fields,

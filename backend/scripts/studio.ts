@@ -147,6 +147,11 @@ const PLANTED: Array<{ text: string; field: string; expect: string; severity?: S
   // Rules v2.2: trust claims and superlatives need substantiation (two lines kept on 28 Sep only got 'truncated').
   { text: 'Trupanion: trusted by pet parents across the country', field: 'meta_primary', expect: 'COMP_SUPERLATIVE', severity: 'warn' },
   { text: 'Is pet insurance the ultimate adulting?', field: 'meta_headline', expect: 'COMP_SUPERLATIVE', severity: 'warn' },
+  // Rules v2.7 (Trupanion brand notes, 29 Sep): cheek at the pet's chaos is fine, insults aren't; protection, never an investment.
+  { text: 'Two incomes. No kids. One sock-eating idiot.', field: 'meta_primary', expect: 'BR_PET_RESPECT' },
+  { text: 'Two incomes. No kids. One sock-eating little monster.', field: 'meta_primary', expect: 'BR_PET_RESPECT', absent: true },
+  { text: 'Is pet insurance worth it?', field: 'meta_headline', expect: 'COMP_NOT_INVESTMENT' },
+  { text: "Protection you'll use for life, like your own health insurance.", field: 'meta_primary', expect: 'COMP_NOT_INVESTMENT', absent: true },
 ];
 
 async function main() {
