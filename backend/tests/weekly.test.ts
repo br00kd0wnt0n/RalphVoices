@@ -574,7 +574,7 @@ test('the newer form: visual letter, copy line and region, alongside the older v
   const r = parseAdName('FAM_SUMMER_ST_A2_US_META_261013', N);
   assert.ok(r.ok);
   assert.deepEqual({ v: r.visual, l: r.line, ver: r.version, reg: r.region, stub: r.stub, asset: r.asset, d: r.date, form: r.form },
-    { v: 'A', l: 2, ver: 2, reg: 'US', stub: 'FAM_SUMMER_ST_A2_US_META', asset: 'FAM_SUMMER_ST_A', d: '2026-10-13', form: 0 });
+    { v: 'A', l: 2, ver: 2, reg: 'US', stub: 'FAM_SUMMER_ST_A2_US_META', asset: 'FAM_SUMMER_ST_A_US_META', d: '2026-10-13', form: 0 });
   assert.deepEqual(r.warnings, []);
   for (const v of ['fam_summer_st_a2_us_meta_261013', 'FAM _ SUMMER_STATIC_A2_US_META_261013', 'FAM_SUMMER_ST_A2_US_META_261013_X9', 'FAM_SUMMER_ST_A2_USA_META_261013 - Copy', 'FAM_ASK_YOUR_VET_ST_A2_US_META_261013'.replace('ASK_YOUR_VET', 'SUMMER')]) {
     const x = parseAdName(v, N);
@@ -624,4 +624,15 @@ test('region splits the ad sets: US and CA ads are compared within their own reg
   const acts = actions(r.ads, cfg).join('\n');
   assert.match(acts, /the US Meta ad set/);
   assert.equal(readableLabel(r.ads.find(a => a.stub === 'FAM_SUMMER_ST_A1_US_META')!, { FAM_SUMMER: 'One Bill.' }), 'FAM · One Bill · static A1 (US, Meta)');
+});
+
+test("the visual key keeps region and platform (Studio's visualKey): US A and CA A are different visuals", () => {
+  const us1 = parseAdName('FAM_SUMMER_ST_A1_US_META_261013', N), us2 = parseAdName('FAM_SUMMER_ST_A2_US_META_261013', N), ca1 = parseAdName('FAM_SUMMER_ST_A1_CA_META_261013', N);
+  assert.ok(us1.ok && us2.ok && ca1.ok);
+  assert.equal(us1.asset, 'FAM_SUMMER_ST_A_US_META');
+  assert.equal(us2.asset, us1.asset, 'copy lines on one visual share it');
+  assert.equal(ca1.asset, 'FAM_SUMMER_ST_A_CA_META');
+  assert.notEqual(ca1.asset, us1.asset);
+  const old = parseAdName('FAM_SUMMER_ST_v2_META_261013', N);
+  assert.ok(old.ok && old.asset === 'FAM_SUMMER_ST', 'v# names keep PERSONA_TERRITORY_FORMAT');
 });

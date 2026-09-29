@@ -20,7 +20,7 @@ export interface ParsedName {
   date: string | null;      // ISO yyyy-mm-dd, the delivery date
   suffix: string[];         // tokens after the date
   stub: string;             // the name without the date: the join key to Studio and the audit
-  asset: string;            // the visual: PERSONA_TERRITORY_FORMAT(_A in the newer form)
+  asset: string;            // the visual: PERSONA_TERRITORY_FORMAT_A_REGION_PLATFORM (newer form, as Studio's visualKey); PERSONA_TERRITORY_FORMAT (v#)
   form: number;             // which config form matched (0 = the first)
   warnings: string[];
 }
@@ -139,7 +139,9 @@ export function parseAdName(raw: string, naming: Naming): NameResult {
       const stub = [persona, territory, fmt, idPart, ...(region ? [region] : []), plat].join('_');
       return {
         ok: true, persona, territory, format: fmt, version, visual, line, region, platform: plat, date, suffix: rest,
-        stub, asset: [persona, territory, fmt, ...(visual ? [visual] : [])].join('_'), form: fi, warnings: w,
+        // The visual: the key without the line. In the newer form it keeps region and platform,
+        // as Studio's visualKey() does: US "A" and CA "A" can be different images.
+        stub, asset: visual ? [persona, territory, fmt, visual, ...(region ? [region] : []), plat].join('_') : [persona, territory, fmt].join('_'), form: fi, warnings: w,
       };
     }
   }

@@ -177,13 +177,15 @@ The convention lives in one place: `naming.forms` in `backend/config/weekly-read
 
 | Form | Example | Stub (join key) | Asset (the visual) |
 |---|---|---|---|
-| Newer: `PERSONA_TERRITORY_FORMAT_[visual][line]_REGION_PLATFORM_YYMMDD` | `FAM_SUMMER_ST_A2_US_META_261013` | `FAM_SUMMER_ST_A2_US_META` | `FAM_SUMMER_ST_A` |
+| Newer: `PERSONA_TERRITORY_FORMAT_[visual][line]_REGION_PLATFORM_YYMMDD` | `FAM_SUMMER_ST_A2_US_META_261013` | `FAM_SUMMER_ST_A2_US_META` | `FAM_SUMMER_ST_A_US_META` |
 | Older, still accepted: `PERSONA_TERRITORY_FORMAT_v#_PLATFORM_YYMMDD` | `FAM_SUMMER_ST_v2_META_261013` | `FAM_SUMMER_ST_v2_META` | `FAM_SUMMER_ST` |
 
 - **Stored fields:** `live_ads` gains `visual`, `copy_line` and `region` (inside 016, with `ADD COLUMN IF NOT EXISTS` for local databases made earlier); `live_reads` gains `region`. Historic mode keeps its region from Add3's names.
 - **Model:** the cell is persona × platform × region, so US and Canada ads are compared within their own ad sets. Pooling runs persona → platform → region → format. Features pool across regions, with region as a stratum (a control).
 - **Labels:** notes name ad sets as "the US Meta ad set". The client label is "FAM · territory name · static A2 (US, Meta) (FAM_TERR_ST_A2_US_META)".
-- **Matching the Studio:** the Studio session is implementing the same format (`docs/build-log/studio-region-naming.md`, not written yet on 29 Sep). Check the two agree when it lands; any difference should be a config edit here.
+- **Matching the Studio (PR #20, `docs/build-log/studio-region-naming.md`, "Spec for B3"):**
+  - The join key (stub) and dates match Studio's `parseCode()` on both forms, dates, suffixes, CA, aliases and multi-word territories.
+  - The visual key matches Studio's `visualKey()`: in the newer form it keeps region and platform, because Studio letters each region separately (US "A" and CA "A" can be different images).
 
 
 
