@@ -234,6 +234,12 @@ export function Studio() {
   const [attached, setAttached] = useState<string | null>(null); // the run new lines go into, if any
   const [admin, setAdmin] = useState(false); // hosted, before rules exist (meta can't load yet)
   const esRef = useRef<{ close: () => void } | null>(null);
+  // New lines go into the attached run only while the brief is for the same persona and territory.
+  // One rule for every way the brief changes ("Write for this", the dropdowns, the address, "Continue").
+  useEffect(() => {
+    if (!attached) return;
+    if (!batch || batch.id !== attached || batch.brief.persona !== brief.persona || batch.brief.territory !== brief.territory) setAttached(null);
+  }, [attached, batch, brief.persona, brief.territory]);
 
   const refreshMeta = useCallback(() => studio.meta().then(m => {
     TERRITORY_NAMES = Object.fromEntries(Object.entries(m.territories).map(([k, t]) => [k, t.name]));
@@ -293,13 +299,15 @@ export function Studio() {
   async function run(opts: { ownOnly?: boolean; into?: Batch | null } = {}) {
     setErr('');
     if (!getUser()) { setErr(HOSTED ? 'Still signing you in; try again in a moment.' : 'Add your name (top right) first, so your runs are saved under it.'); return; }
-    const into = opts.into || (attached && batch?.id === attached ? batch : null);
-    const b: Brief = into ? { ...into.brief, ...brief, persona: into.brief.persona, territory: into.brief.territory } : brief;
+    const candidate = opts.into || (attached && batch?.id === attached ? batch : null);
+    // A run for another persona or territory is never added to: this starts a new run instead.
+    const into = candidate && candidate.brief.persona === brief.persona && candidate.brief.territory === brief.territory ? candidate : null;
+    const b: Brief = into ? { ...into.brief, ...brief } : brief;
     try {
       let r;
       try { r = await studio.generate(b, { batch: into?.id, ownOnly: opts.ownOnly }); }
       catch (e: any) {
-        if (e.status !== 409) throw e;
+        if (e.status !== 409 || !e.body?.needs_confirm) throw e;
         if (!window.confirm(`This run is estimated at $${e.body.estimate.toFixed(2)}, over the $2 ask-first line. Run it?`)) return;
         r = await studio.generate(b, { batch: into?.id, ownOnly: opts.ownOnly, confirm: true });
       }
@@ -403,7 +411,7 @@ export function Studio() {
         {tab === 'home' && <Home onStart={() => setTab('territories')} />}
         {meta && tab === 'territories' && <Territories meta={meta} onSaved={() => refreshMeta()} onBrief={code => { const t = meta.territories[code]; setBrief(b => ({ ...b, persona: t.persona, territory: code, fields: b.persona === t.persona && b.fields.length ? b.fields : meta.personas[t.persona].default_fields })); setTab('brief'); }} />}
         {meta && tab === 'brief' && <BriefPanel meta={meta} brief={brief} run={run} running={running} user={user} runsTick={runsTick} onContinue={continueRun}
-          setBrief={b => { if (attached && b.territory !== brief.territory) setAttached(null); setBrief(b); }}
+          setBrief={setBrief}
           attachedRun={attached && batch?.id === attached ? batch : null} onNewRun={() => setAttached(null)} />}
         {meta && tab === 'review' && <Review meta={meta} batch={batch} setBatch={setBatch} status={status} running={running} onMore={more} onMoreRun={() => run({ into: batch })} onDecided={() => setRunsTick(t => t + 1)} />}
         {meta && tab === 'shortlist' && <Shortlist meta={meta} batch={batch} onReady={() => setTab('ready')} />}
@@ -516,11 +524,13 @@ function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onCon
 
   return (
     <div className="max-w-7xl space-y-5">
-      {attachedRun && (
+      {attachedRun ? (
         <div className="flex flex-wrap items-center gap-3 rounded-xl border-2 px-4 py-3 text-base" style={{ borderColor: PINK, background: 'rgba(217,77,143,0.10)' }}>
-          <span>Adding to your run <b>{meta.territories[attachedRun.brief.territory]?.name}</b> ({attachedRun.lines.length} lines). New lines go into it.</span>
+          <span>Adding to: <b>{territoryName(meta.territories[attachedRun.brief.territory]) || attachedRun.brief.territory}</b> · {when(attachedRun.created)}{attachedRun.created_by ? ` · ${attachedRun.created_by.split('@')[0].split('.')[0].replace(/^./, c => c.toUpperCase())}` : ''} <span className="text-[#A3A8B1]">({attachedRun.lines.length} line{attachedRun.lines.length === 1 ? '' : 's'}; new lines go into this run)</span></span>
           <GhostButton className="ml-auto px-3 py-1 text-sm" onClick={onNewRun}>Start a new run</GhostButton>
         </div>
+      ) : (
+        <p className="px-1 text-sm text-[#A3A8B1]">This starts a new run.</p>
       )}
       {/* Setup, in one row */}
       <section className="flex flex-wrap items-end gap-4 rounded-xl border border-[#272B34] bg-[#16181D] p-4">

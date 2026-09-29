@@ -76,9 +76,15 @@ Screenshots are in `Claude outputs/voices-r1/studio/screens/` (client material):
 
 **After the deploy:**
 1. The logs show "Database migrations applied." and "[studio] Pre-flight files: private R2 bucket reachable", with no warning.
-2. **Rules v2.5:** in the Rules view, "Upload and activate" `Claude outputs/voices-r1/studio/studio-rules.json`. v2.5 adds the pitched headline on each territory card (v2.4) and each persona's who and tension (v2.5). No check changed. Audits run under older rules will say "Checked under older rules: audit again".
-3. **The M3 rubric:** `db-import` carries `rubric.json`, which Pre-flight needs. Re-run the carry-over (`--since 2026-09-28`, dry run first) or send the rubric on its own. It's safe to re-run.
-4. **Smoke test:** upload one test static to a signed-off code, run the audit (about $0.10), check the copy-match table, then take the test asset back.
+2. **Rules v2.6:** "Upload and activate" `Claude outputs/voices-r1/studio/studio-rules.json` in the Rules view. v2.6 carries everything the hosted Studio needs: the M3 rubric, and each persona's seed and voice for the skeptic. Nothing is imported from a laptop and there's no `db-import`. The hosted upload refuses a file without them ("v2.5 is missing rubric, personas.DINK.seed…"). If v2.6 was already activated before the deploy (Brook did, 29 Sep), there's nothing to do: the old code ignores the extra blocks and the new code reads them.
+3. **Smoke test:** upload one test static to a signed-off code, run the audit (about $0.10), check the copy-match table, then take the test asset back.
+
+**Acceptance of this, 29 Sep** (hosted mode, voices_rehearsal, real keys; the rubric, personas and voices store rows deleted first):
+- Brook's upload of v2.5 in the Rules view was refused, naming the seven missing blocks; v2.6 uploaded and went live.
+- Static with the dropped caveat on DINK_NEVER_UGC_v2_TIKTOK: 140 s, $0.085. COPY_CAVEAT red plus the direct-pay red; features came from the rubric in the rules (less_hassle); the skeptic used the persona from the rules.
+- Video with a voice-over (FAM_PLANTVO, 9 s): 438 s, $0.27. Five keyframes and the transcription came through async ffmpeg; the voice-over's "pay the whole vet bill" was flagged red. A health check every 100 ms (4,203 of them) never took more than 31 ms.
+- Vivan's override of a copy red flag: 403; `can_override` is false for Vivan and true for Nick.
+- Attached-run bug (Brook, production): with a Curators run attached, "Write for this" on Never the Choice now says "This starts a new run", and the checked line went into a new DINK run with DINK angles; the Curators run was untouched. The server refuses a brief for another persona or territory with a 409.
 
 **Rollback:** `ENABLE_STUDIO=false` hides the whole Studio. Migration 017 is additive, so its tables can stay.
 

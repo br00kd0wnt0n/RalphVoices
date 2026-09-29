@@ -172,3 +172,16 @@ test('a red flag on copy is overridden only by the Ready to traffic people or an
   const local = await call('POST', '/batches/nope/lines/L1/override', { rule: 'X', reason: 'A reason here' });
   assert.notEqual(local.status, 403);
 });
+
+test('lines only go into a run of the same persona and territory: a brief for another is a 409, never silently moved', async () => {
+  const g = await call('POST', '/generate', { brief: { territory: 'OWN_CALM', n: 2, name: 'mismatch-run' } });
+  await events(g.body.job);
+  const other = await call('POST', '/generate', { brief: { persona: 'DINK', territory: 'DINK_NEVER', own_lines: [{ text: 'A DINK line', field: 'meta_headline' }] }, batch: g.body.batch, own_only: true });
+  assert.equal(other.status, 409);
+  assert.match(other.body.error, /^This run is for .*Start a new run for /);
+  const run = (await call('GET', `/batches/${g.body.batch}`)).body;
+  assert.equal(run.lines.some((l: any) => l.text === 'A DINK line'), false, 'nothing was added to the other run');
+  // The same persona and territory still go in.
+  const same = await call('POST', '/generate', { brief: { territory: 'OWN_CALM', own_lines: [{ text: 'Another calm line', field: 'meta_headline' }] }, batch: g.body.batch, own_only: true });
+  assert.equal(same.status, 200);
+});

@@ -111,7 +111,11 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   r.get('/batches', wrap(async (req, res) => res.json(await S.listBatches(req.query.user ? String(req.query.user) : undefined))));
   r.get('/batches/:id', wrap(async (req, res) => res.json(await S.loadBatch(req.params.id))));
   r.post('/generate', wrap(async (req, res) => {
-    const b = S.makeBrief(req.body.brief || {});
+    // Checked before the brief is built, so the answer is always "start a new run", whatever else is wrong with it.
+    const raw = req.body.brief || {};
+    const mismatch = await S.runMismatch(req.body.batch ? String(req.body.batch) : undefined, { persona: raw.persona || S.loadRules().territories[raw.territory]?.persona, territory: raw.territory });
+    if (mismatch) return res.status(409).json({ error: mismatch, run_mismatch: true });
+    const b = S.makeBrief(raw);
     const ownOnly = !!req.body.own_only;
     const e = S.estimate(b, { ownOnly });
     const so = await spent();

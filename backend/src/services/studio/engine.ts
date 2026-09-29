@@ -901,7 +901,23 @@ export async function newBatchId(territory: string): Promise<string> {
   }
 }
 
+/**
+ * Lines only go into a run of the same persona and territory: a brief for
+ * another one is refused, never quietly given the run's persona (lines written
+ * for DINKs once landed in a Curators run). Null when it fits or there's no run.
+ */
+export async function runMismatch(batchId: string | undefined, b: Pick<Brief, 'persona' | 'territory'>): Promise<string | null> {
+  if (!batchId || !(await batchExists(batchId))) return null;
+  const run = (await loadBatch(batchId)).brief;
+  if (run.persona === b.persona && run.territory === b.territory) return null;
+  const r = loadRules();
+  const name = (p: string, t: string) => `${r.personas[p]?.name || p} · ${(r.territories[t]?.name || t).replace(/\.$/, '')}`;
+  return `This run is for ${name(run.persona, run.territory)}. Start a new run for ${name(b.persona, b.territory)}.`;
+}
+
 export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: { check?: boolean; batchId?: string; ownOnly?: boolean; user?: string } = {}): Promise<Batch> {
+  const mismatch = await runMismatch(opts.batchId, b);
+  if (mismatch) throw Object.assign(new Error(mismatch), { status: 409 });
   const r = loadRules();
   const existing = opts.batchId && (await batchExists(opts.batchId)) ? await loadBatch(opts.batchId) : null;
   const id = existing?.id || opts.batchId || (await newBatchId(b.territory));
