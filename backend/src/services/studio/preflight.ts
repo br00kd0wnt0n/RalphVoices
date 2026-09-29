@@ -25,6 +25,21 @@ import { signedOffCopy } from './preflightB2.js';
 type Queryable = Pick<pg.Pool, 'query'>;
 
 export const DB_FILE_CAP = 25 * 1024 * 1024;     // local/dev only (R2 off)
+/** Bump when the audit or copy-match logic changes what a stored audit would say (2: on-asset copy match per stub). */
+export const PREFLIGHT_LOGIC_VERSION = 2;
+
+/**
+ * Where Pre-flight files go. Production with R2 on: the private bucket
+ * (STUDIO_R2_BUCKET) or nothing: uploads are refused rather than fall back to
+ * the public R2_BUCKET_NAME. Local and dev: Postgres (25 MB per file) unless a
+ * private bucket is configured.
+ */
+export function preflightStorage(env: NodeJS.ProcessEnv = process.env, r2Enabled = isR2Enabled()): { mode: 'r2' | 'db' | 'refuse'; reason?: string } {
+  const production = env.NODE_ENV === 'production';
+  if (r2Enabled && env.STUDIO_R2_BUCKET) return { mode: 'r2' };
+  if (production && (r2Enabled || env.ENABLE_R2_STORAGE === 'true')) return { mode: 'refuse', reason: "Pre-flight storage isn't configured: set STUDIO_R2_BUCKET to a private bucket" };
+  return { mode: 'db' };
+}
 export const R2_FILE_CAP = 200 * 1024 * 1024;    // production, per file
 const IMAGE = /^image\/(png|jpe?g|webp|gif)$/;
 const VIDEO = /^video\/(mp4|quicktime)$/;
@@ -34,7 +49,7 @@ export interface StubRow {
   stub: string; persona: string; territory: string; signoff_id: string; ready_by: string; ready_at: string;
   copy: SignedCopy[];
   upload: { id: string; kind: AssetKind; files: Array<{ position: number; filename: string; content_type: string; size: number }>; uploaded_by: string; uploaded_at: string; stubs: string[] } | null;
-  audit: { id: string; status: string; usd: number; red: number; amber: number; grey: number; open_red: number; finished_at: string | null; error: string | null } | null;
+  audit: { id: string; status: string; usd: number; red: number; amber: number; grey: number; open_red: number; finished_at: string | null; error: string | null; stale: string | null } | null;
   status: { status: 'open' | 'ready'; ready_by?: string; ready_at?: string; upload_id?: string };
 }
 
@@ -88,9 +103,27 @@ export function copyMatchForStub(copy: SignedCopy[], assetText: Array<{ where: s
   };
 }
 
+/**
+ * Why a finished audit may be out of date: checked under older rules, or by an
+ * older version of the checks. Never re-run automatically (it costs money).
+ */
+export function staleness(a: { status: string; rules_version?: string | null; result?: any }, currentRules = (() => { try { return S.loadRules().version; } catch { return undefined; } })()): string | null {
+  if (a.status !== 'done') return null;
+  if (currentRules && a.rules_version && a.rules_version !== currentRules) return `Checked under older rules (${a.rules_version}; live: ${currentRules}): audit again`;
+  if ((a.result?.logic_version ?? 1) < PREFLIGHT_LOGIC_VERSION) return 'Checked by an older version of the checks: audit again';
+  return null;
+}
+
 export class Preflight {
   constructor(private db: Queryable, private engine: AuditEngine, private opts: { storage?: 'r2' | 'db' } = {}) {}
-  get storage(): 'r2' | 'db' { return this.opts.storage || (isR2Enabled() ? 'r2' : 'db'); }
+  get storage(): 'r2' | 'db' {
+    if (this.opts.storage) return this.opts.storage;
+    const s = preflightStorage();
+    if (s.mode === 'refuse') throw Object.assign(new Error(s.reason), { status: 503 });
+    return s.mode;
+  }
+  /** For /meta: the storage mode, or why uploads are refused (without throwing). */
+  get storageStatus(): string { try { return this.storage; } catch (e: any) { return `refused: ${e.message}`; } }
   get engineName() { return this.engine.name; }
 
   // ---------- what can be uploaded: the latest sign-off per persona × territory ----------
@@ -259,7 +292,7 @@ export class Preflight {
           [`${auditId}-F${String(i + 1).padStart(2, '0')}`, auditId, for_stub || a.stub, i + 1, rule, severity, body, for_stub]);
       }
       const { flags: _f, ...rest } = result;
-      const stored = { ...rest, copy_match_by_stub: copyByStub };
+      const stored = { ...rest, copy_match_by_stub: copyByStub, logic_version: PREFLIGHT_LOGIC_VERSION };
       await this.db.query(`UPDATE studio_audits SET status = 'done', result = $2, usd = $3, rules_version = $4, finished_at = NOW() WHERE id = $1`,
         [auditId, stored, result.usd || 0, rules?.version ?? null]);
       if (result.usd) await S.getStore().addSpend({ label: `preflight ${a.stub}`, usd: Math.round(result.usd * 10000) / 10000, at: new Date().toISOString(), user: user || a.started_by || undefined });
@@ -294,7 +327,7 @@ export class Preflight {
     if (!a) return null;
     const f = await this.flagsFor(a.id, stub);
     const n = (s: string) => f.filter(x => x.severity === s).length;
-    return { id: a.id, status: a.status, usd: Number(a.usd), red: n('red'), amber: n('amber'), grey: n('grey'), open_red: f.filter(x => x.severity === 'red' && !x.override).length, finished_at: a.finished_at ? new Date(a.finished_at).toISOString() : null, error: a.error };
+    return { id: a.id, status: a.status, usd: Number(a.usd), red: n('red'), amber: n('amber'), grey: n('grey'), open_red: f.filter(x => x.severity === 'red' && !x.override).length, finished_at: a.finished_at ? new Date(a.finished_at).toISOString() : null, error: a.error, stale: staleness(a) };
   }
 
   /** Everything the report screen shows for one stub. */
@@ -323,7 +356,7 @@ export class Preflight {
       same_visual_as: upload ? upload.stubs.filter(x => x !== stub) : [],
       format_note: upload ? formatNote(stub, upload.kind) : null,
       on_asset_copy: copy.filter(c => !POST_COPY_FIELDS.has(c.field)), post_copy: copy.filter(c => POST_COPY_FIELDS.has(c.field)),
-      audit: a ? { id: a.id, upload_id: a.upload_id, status: a.status, engine: a.engine, rules_version: a.rules_version, usd: Number(a.usd), error: a.error, started_by: a.started_by, started_at: new Date(a.started_at).toISOString(), finished_at: a.finished_at ? new Date(a.finished_at).toISOString() : null, result } : null,
+      audit: a ? { id: a.id, upload_id: a.upload_id, status: a.status, engine: a.engine, rules_version: a.rules_version, usd: Number(a.usd), error: a.error, started_by: a.started_by, started_at: new Date(a.started_at).toISOString(), finished_at: a.finished_at ? new Date(a.finished_at).toISOString() : null, result, stale: staleness(a) } : null,
       flags, status: await this.status(stub),
     };
   }

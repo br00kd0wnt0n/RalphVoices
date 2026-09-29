@@ -5,7 +5,7 @@
 // Ready for production, is creative sign-off, never "approval".
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { HOSTED, getUser, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type CompareSet, type Flag, type Line, type Meta, type OwnLine, type RunSummary, type ShortRow, type StudioEvent, type Territory, type Tone, type EditRecord, type LineVersion, type Reveal, type ComplianceStatus, type ReadyView, type RulesVersion, type PfStub, type PfReport, type PfFlag } from '@/lib/studioApi';
+import { HOSTED, getUser, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type CompareSet, type Flag, type Line, type Meta, type OwnLine, type RunSummary, type ShortRow, type StudioEvent, type Territory, type Tone, type EditRecord, type LineVersion, type Reveal, type ComplianceStatus, type ReadyView, type RulesVersion, type ActiveRules, type RuleEntry, type PfStub, type PfReport, type PfFlag } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { ArrowLeft, HelpCircle, ScrollText, Shuffle } from 'lucide-react';
 
@@ -13,7 +13,7 @@ const PINK = '#D94D8F';
 type Tab = 'home' | 'territories' | 'brief' | 'review' | 'shortlist' | 'ready' | 'preflight' | 'compare' | 'rules';
 // The writing flow, in order. Blind compare sits apart from it; Live comes later (B3b).
 const FLOW: Array<[Tab, string]> = [['territories', 'Territories'], ['brief', 'Write & brief'], ['review', 'Review'], ['shortlist', 'Shortlist'], ['ready', 'Ready for production'], ['preflight', 'Pre-flight']];
-// Below 1440 px (and inside the tools.ralph.world frame) the bar uses short labels; the full name is in the tooltip.
+// Below 1600 px (and inside the tools.ralph.world frame) the bar uses short labels; the full name is in the tooltip.
 const SHORT: Partial<Record<Tab, string>> = { brief: 'Write', ready: 'Ready' };
 // Deep links for the demo: /studio?tab=review&batch=<id>&open=L07 (opens that line's first flag), &compare=<name>,
 // ?tab=ready&persona=<P>&territory=<T>, ?tab=preflight&stub=<naming code>.
@@ -36,7 +36,7 @@ function Chip({ children, tone = 'grey', className, ...p }: React.HTMLAttributes
 }
 // Plain names for the chips; the full rule, quote and source open on click.
 const CHIP: Record<string, string> = {
-  LIMIT_VISIBLE: 'truncated', LIMIT_MAX: 'over limit', NEAR_DUP: 'similar line', CL_GLANCE: 'not a glance read', CL_PRODUCT: 'product unclear',
+  LIMIT_VISIBLE: 'cut off on screen', LIMIT_MAX: 'too long for the field', NEAR_DUP: 'similar line', CL_GLANCE: 'not a glance read', CL_PRODUCT: 'product unclear',
   COMP_UGC_MEMBER: 'cast a member', COMP_VERBATIM: 'verbatim quote', FIG_UNSOURCED: 'unsourced figure', FIG_CITATION: 'needs citation', FIG_ATTRIBUTION: 'misattributed figure',
   COMP_DIRECT_PAY: 'direct pay caveat', COMP_PAYS_FOR_ITSELF: 'pays for itself', COMP_PAID_SHARE: 'whole bill', COMP_PREEXISTING: 'pre-existing', COMP_ROUTINE: 'routine care',
   COMP_CLAIM_SPEED: 'claim speed', COMP_CHEAP_LOCKED: 'cheap / locked price', COMP_PRICE_LEAD: 'price lead', COMP_COVERAGE_CAVEAT: 'coverage caveat', COMP_SUPERLATIVE: 'superlative',
@@ -44,6 +44,111 @@ const CHIP: Record<string, string> = {
 };
 const chipName = (rule: string) => CHIP[rule] || (rule.startsWith('BRIEF_BANNED:') ? `banned: ${rule.slice(13)}` : /^[A-Z]+_T_/.test(rule) ? `turn-off: ${rule.replace(/^[A-Z]+_T_/, '').replace(/_/g, ' ').toLowerCase()}` : rule.replace(/_/g, ' ').toLowerCase());
 const sevTone = (s: Flag['severity']) => (s === 'compliance' ? 'red' : s === 'warn' ? 'amber' : 'grey') as 'red' | 'amber' | 'grey';
+
+// ---------- plain words for codes ----------
+
+/** Source codes in the rules file, as people say them. */
+const SOURCE_NAMES: Record<string, string> = {
+  TM: 'Trigger maps', EP: 'Evidence pack', QB: 'Quote bank', CLB: 'Creative brief', CC: 'Concept cards', RB: 'Rubric',
+  BG: 'Brand guidelines', META: 'Meta ads guide', META3P: 'Meta length guides', HOUSE: 'House rule', LEGAL: 'Legal', GUIDE: 'Guide',
+};
+/** "CLB 'Rules that bind every line'; TM DINK watch-outs; EP §3.1" → "Creative brief: 'Rules that bind every line' · Trigger maps: DINK watch-outs · Evidence pack §3.1" */
+function plainSource(src?: string): string {
+  if (!src) return '';
+  return src.split(/;\s*/).map(part => {
+    const m = /^([A-Z][A-Z0-9]+)\b\s*:?\s*(.*)$/.exec(part.trim());
+    if (!m || !SOURCE_NAMES[m[1]]) return part.trim();
+    const rest = m[2].replace(/^Trigger map\s*/i, 'map ');
+    return rest ? (/^[§p]/.test(rest) ? `${SOURCE_NAMES[m[1]]} ${rest}` : `${SOURCE_NAMES[m[1]]}: ${rest}`) : SOURCE_NAMES[m[1]];
+  }).join(' · ');
+}
+/** Tone levels (1-5) in words, from the rules file's tone controls: "even · light touch · short". */
+function toneWords(tone: Tone | undefined, meta: Meta): string {
+  if (!tone) return '';
+  const pick = (k: keyof Tone) => {
+    const c = meta.tone_controls?.[k] || {};
+    const keys = Object.keys(c).map(Number).sort((a, b) => Math.abs(a - tone[k]) - Math.abs(b - tone[k]));
+    const w = keys.length ? String(c[String(keys[0])]).split(',')[0].trim() : '';
+    return k === 'short_long' ? (tone[k] <= 2 ? 'short' : tone[k] >= 4 ? 'long' : 'medium') : w;
+  };
+  return (['dry_warm', 'playful_plain', 'short_long'] as const).map(pick).filter(Boolean).join(' · ');
+}
+/** Territory names as shown: the research springboard isn't "on the board". */
+function territoryName(t?: Territory): string {
+  if (!t) return '';
+  const name = t.name.replace(/\s*\(springboard[^)]*\)\s*/i, '').trim();
+  return t.status === 'springboard' ? `${name} (idea from the research; not in the pitch)` : name;
+}
+const personaName = (meta: Meta, code: string) => meta.personas[code]?.name || code;
+/** One persona order everywhere (the database doesn't keep the rules file's key order). */
+const PERSONA_ORDER = ['DINK', 'CUR', 'FAM'];
+function personaKeys(personas: Record<string, unknown>): string[] {
+  const rank = (k: string) => (PERSONA_ORDER.indexOf(k) + 1) || PERSONA_ORDER.length + 1;
+  return Object.keys(personas).sort((a, b) => rank(a) - rank(b));
+}
+const angleLabel = (meta: Meta, persona: string, id: string) => meta.personas[persona]?.triggers.find(x => x.id === id)?.label || id;
+const NAMING_TIP = 'Naming code: Add3 reports results by this';
+/** One line on what to do about a flag, where there's a clear fix. */
+function whatToDo(rule: string, f?: { visible?: number; max?: number }): string {
+  if (rule === 'LIMIT_VISIBLE') return f?.visible ? `Keep the point in the first ${f.visible} characters; the rest is cut off on screen.` : 'Keep the point early; the end is cut off on screen.';
+  if (rule === 'LIMIT_MAX') return f?.max ? `Cut it to ${f.max} characters or fewer.` : 'Cut it to fit the field.';
+  const map: Record<string, string> = {
+    COMP_PAYS_FOR_ITSELF: 'Say what it does instead of what it saves.',
+    COMP_DIRECT_PAY: 'Add “at participating hospitals”.',
+    COMP_PAID_SHARE: 'Say what’s covered, not “the whole bill”.',
+    COMP_PREEXISTING: 'Don’t imply pre-existing conditions are covered.',
+    COMP_ROUTINE: 'Don’t imply check-ups or vaccines are covered.',
+    COMP_CLAIM_SPEED: 'Drop the speed promise, or say “can be”, not “every”.',
+    COMP_SUPERLATIVE: 'Remove the superlative, or point to the proof.',
+    COMP_PRICE_LEAD: 'Lead with the benefit; move the price later.',
+    COMP_CHEAP_LOCKED: 'Don’t call Trupanion cheap or promise the price won’t change.',
+    BR_NAMING: 'Say “medical insurance for pets”.',
+    BR_CASE: 'Use sentence case; capitals are a design choice on the image.',
+    COPY_CAVEAT: 'Put the caveat on the asset, as signed off.',
+    COPY_MATCH: 'Use the signed-off wording on the asset.',
+  };
+  return map[rule] || '';
+}
+
+/** Who a persona is, from the active rules file (never the readout). Collapsed by default. */
+function PersonaPanel({ meta, persona, open: startOpen = false, className }: { meta: Meta; persona: string; open?: boolean; className?: string }) {
+  const [open, setOpen] = useState(startOpen);
+  useEffect(() => { setOpen(startOpen); }, [persona, startOpen]);
+  const p = meta.personas[persona];
+  if (!p) return null;
+  const c = p.context;
+  return (
+    <section className={cn('rounded-xl border border-[#272B34] bg-[#16181D]', className)}>
+      <button onClick={() => setOpen(!open)} aria-expanded={open} className="flex w-full items-center justify-between px-4 py-3 text-left">
+        <span><span className="text-sm font-semibold uppercase tracking-wider text-[#858B96]">Who this is</span> <span className="ml-1 text-base font-semibold">{p.name}</span></span>
+        <span className="text-[#646A75]">{open ? '−' : '+'}</span>
+      </button>
+      {open && (
+        <div className="space-y-3 border-t border-[#272B34] px-4 py-3 text-sm">
+          {(c?.who || c?.platforms?.length) && <p className="text-base text-[#C9CCD2]">{c?.who || p.name}{c?.platforms?.length ? <span className="text-[#858B96]"> · on {c.platforms.join(', ')}</span> : null}</p>}
+          {c?.tension && <p className="text-[#C9CCD2]"><span className="font-semibold">The tension:</span> {c.tension}</p>}
+          <div>
+            <Label>What moves them</Label>
+            <ul className="space-y-1.5">{p.triggers.map(t => <li key={t.id}><span className="font-semibold text-[#ECEDEF]">{t.label}</span>{t.detail ? <span className="text-[#C9CCD2]">: {t.detail}</span> : null}{t.source && <div className="text-xs text-[#646A75]">{plainSource(t.source)}</div>}</li>)}</ul>
+          </div>
+          {!!c?.turn_offs?.length && (
+            <div>
+              <Label>Turn-offs</Label>
+              <ul className="space-y-1.5">{c.turn_offs.map(t => <li key={t.id}><span className="text-[#C9CCD2]">{t.rule}</span><div className="text-xs text-[#646A75]">{plainSource(t.source)}</div></li>)}</ul>
+            </div>
+          )}
+          {!!c?.language?.length && (
+            <div>
+              <Label>Language to use</Label>
+              <ul className="space-y-1">{c.language.map((l, i) => <li key={i}><span className={cn(l.caution ? 'text-amber-200' : 'text-[#C9CCD2]')}>“{l.text}”</span>{l.caution && <span className="ml-1 text-xs text-amber-300">use carefully</span>}<span className="ml-1 text-xs text-[#646A75]">{plainSource(l.source)}</span></li>)}</ul>
+            </div>
+          )}
+          <p className="text-xs text-[#646A75]">From the live rules file.</p>
+        </div>
+      )}
+    </section>
+  );
+}
 
 // ---------- brand lockup: Ralph × client ----------
 
@@ -218,7 +323,7 @@ export function Studio() {
             <span key={t} className="flex items-center">
               <GhostButton active={tab === t} onClick={() => setTab(t)} title={label} aria-label={label} className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-1.5 py-1.5 text-sm">
                 <span className={cn('hidden h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold min-[1280px]:flex', tab === t ? 'bg-[#0E0F12] text-white' : 'bg-[#272B34] text-[#A3A8B1]')}>{i + 1}</span>
-                {t === 'review' && batch ? `Review (${batch.lines.length})` : SHORT[t] ? <><span className="min-[1440px]:hidden">{SHORT[t]}</span><span className="hidden min-[1440px]:inline">{label}</span></> : label}
+                {t === 'review' && batch ? `Review (${batch.lines.length})` : SHORT[t] ? <><span className="min-[1600px]:hidden">{SHORT[t]}</span><span className="hidden min-[1600px]:inline">{label}</span></> : label}
               </GhostButton>
             </span>
           ))}
@@ -233,13 +338,11 @@ export function Studio() {
         <div className="ml-auto flex shrink-0 flex-nowrap items-center gap-2.5 text-sm text-[#858B96]">
           <span className="mr-1 h-5 w-px bg-[#343946]" aria-hidden />
           <button onClick={() => setTab('compare')} title="Blind compare: a separate exercise, outside the writing flow" aria-label="Blind compare" className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-dashed border-[#4B55A8] bg-[#1B2150] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#232A5C]">
-            <Shuffle className="h-4 w-4" aria-hidden /> <span className="hidden min-[1800px]:inline">Blind compare</span>
+            <Shuffle className="h-4 w-4" aria-hidden /> <span className="min-[1600px]:hidden">Compare</span><span className="hidden min-[1600px]:inline">Blind compare</span>
           </button>
-          {HOSTED && (
-            <button onClick={() => setTab('rules')} title="Rules: what every line is checked against" aria-label="Rules" className={cn('flex items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 py-1.5 text-sm transition', tab === 'rules' ? 'border-[#ECEDEF] text-[#ECEDEF]' : 'border-transparent text-[#858B96] hover:text-[#ECEDEF]')}>
-              <ScrollText className="h-4 w-4" aria-hidden />
-            </button>
-          )}
+          <button onClick={() => setTab('rules')} title="Rules: what every line is checked against" className={cn('flex items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 py-1.5 text-sm transition', tab === 'rules' ? 'border-[#ECEDEF] text-[#ECEDEF]' : 'border-transparent text-[#858B96] hover:text-[#ECEDEF]')}>
+            <ScrollText className="h-4 w-4" aria-hidden /> Rules
+          </button>
           {HOSTED
             ? <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[#343946] text-xs font-semibold uppercase text-[#C9CCD2]" title={user ? `Signed in as ${user}; your runs and decisions are saved under this address` : 'Signing in…'}>{initials(user)}</span>
             : <UserBadge user={user} onChange={n => { setUser(n); setUserState(n); setRunsTick(t => t + 1); }} />}
@@ -253,16 +356,16 @@ export function Studio() {
       )}
       {err && <div className="mx-8 mt-4 rounded-lg border-2 border-red-500/45 bg-red-500/10 p-4 text-base text-red-200">{err}</div>}
       <main className="px-6 py-6">
-        {tab === 'home' && <Home />}
+        {tab === 'home' && <Home onStart={() => setTab('territories')} />}
         {meta && tab === 'territories' && <Territories meta={meta} onSaved={() => refreshMeta()} onBrief={code => { const t = meta.territories[code]; setBrief(b => ({ ...b, persona: t.persona, territory: code, fields: b.persona === t.persona && b.fields.length ? b.fields : meta.personas[t.persona].default_fields })); setTab('brief'); }} />}
         {meta && tab === 'brief' && <BriefPanel meta={meta} brief={brief} run={run} running={running} user={user} runsTick={runsTick} onContinue={continueRun}
           setBrief={b => { if (attached && b.territory !== brief.territory) setAttached(null); setBrief(b); }}
           attachedRun={attached && batch?.id === attached ? batch : null} onNewRun={() => setAttached(null)} />}
         {meta && tab === 'review' && <Review meta={meta} batch={batch} setBatch={setBatch} status={status} running={running} onMore={more} onMoreRun={() => run({ into: batch })} onDecided={() => setRunsTick(t => t + 1)} />}
-        {meta && tab === 'shortlist' && <Shortlist batch={batch} onReady={() => setTab('ready')} />}
-        {meta && tab === 'ready' && <Ready meta={meta} batch={batch} user={user} />}
+        {meta && tab === 'shortlist' && <Shortlist meta={meta} batch={batch} onReady={() => setTab('ready')} />}
+        {meta && tab === 'ready' && <Ready meta={meta} batch={batch} user={user} onNext={() => setTab('preflight')} />}
         {meta && tab === 'preflight' && <Preflight meta={meta} />}
-        {tab === 'rules' && (meta || admin) && <Rules admin={!!meta?.user?.admin || admin} onActivated={() => refreshMeta().then(() => setErr('')).catch(() => {})} />}
+        {tab === 'rules' && (meta || admin) && <Rules meta={meta} admin={HOSTED && (!!meta?.user?.admin || admin)} onActivated={() => refreshMeta().then(() => setErr('')).catch(() => {})} />}
       </main>
     </div>
   );
@@ -279,7 +382,7 @@ const STEPS: Array<{ title: string; what: string; you: string }> = [
   { title: 'Pre-flight', what: 'The finished asset checked against the signed-off copy and the rules.', you: 'Upload, agree or disagree, mark Ready to traffic.' },
 ];
 
-function Home() {
+function Home({ onStart }: { onStart: () => void }) {
   return (
     <div className="mx-auto max-w-6xl space-y-7">
       <section className="space-y-3">
@@ -287,6 +390,7 @@ function Home() {
           Twenty options per persona, stress-tested as you write.
         </h1>
         <p className="text-lg text-[#A3A8B1]">You bring the taste. Studio brings range, the rules, and the audience’s pushback. The market decides what wins.</p>
+        <PinkButton className="mt-1" onClick={onStart}>Start: pick a territory →</PinkButton>
       </section>
 
       <section>
@@ -311,9 +415,9 @@ function Home() {
         <div className="rounded-xl border border-[#272B34] bg-[#16181D] p-4">
           <h3 className="mb-2.5 text-base font-semibold">Reading the flags</h3>
           <ul className="space-y-2 text-sm leading-snug text-[#C9CCD2]">
-            <li className="flex items-center gap-2"><Chip tone="red">red</Chip> Compliance: a hard rule, or two checks agree.</li>
-            <li className="flex items-center gap-2"><Chip tone="amber">amber</Chip> Worth a look: one check raised it.</li>
-            <li className="flex items-center gap-2"><Chip tone="grey">grey</Chip> A note, e.g. cast a real member.</li>
+            <li className="flex items-center gap-2"><Chip tone="red">red</Chip> Breaks a client rule: fix it, or override with a reason.</li>
+            <li className="flex items-center gap-2"><Chip tone="amber">amber</Chip> Worth a look.</li>
+            <li className="flex items-center gap-2"><Chip tone="grey">grey</Chip> A note.</li>
           </ul>
         </div>
         <div className="rounded-xl border border-[#272B34] bg-[#16181D] p-4">
@@ -328,7 +432,7 @@ function Home() {
           <span className="text-xs uppercase tracking-wider text-[#8F97D6]">Separate exercise</span>
           <span className="mt-1 text-base font-semibold text-white">Blind compare: choose the writing model</span>
           <span className="mt-1 text-sm leading-snug text-[#B9BFEA]">Models write to the same brief, unlabelled. Star, then reveal. Nothing goes into your runs.</span>
-          <span className="mt-auto pt-2 text-sm text-[#8F97D6]">In the header, on the right.</span>
+          <span className="mt-auto pt-2 text-sm text-[#8F97D6]">“Blind compare”, in the header on the right.</span>
         </div>
       </section>
     </div>
@@ -380,13 +484,13 @@ function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onCon
           <Label>Persona</Label>
           <select className="rounded-lg border-2 border-[#343946] bg-[#101216] px-3 py-2 text-base" value={brief.persona}
             onChange={e => { const p = e.target.value; const first = Object.entries(meta.territories).find(([, x]) => x.persona === p && x.status !== 'retired')?.[0] || ''; set({ persona: p, territory: first, fields: meta.personas[p].default_fields, own_lines: own.map(o => ({ ...o, field: meta.personas[p].default_fields[0] })) }); }}>
-            {Object.entries(meta.personas).map(([k, p]) => <option key={k} value={k}>{p.name}</option>)}
+            {personaKeys(meta.personas).map(k => <option key={k} value={k}>{meta.personas[k].name}</option>)}
           </select>
         </div>
         <div>
           <Label>Territory</Label>
           <select className="rounded-lg border-2 border-[#343946] bg-[#101216] px-3 py-2 text-base" value={brief.territory} onChange={e => set({ territory: e.target.value })}>
-            {territories.map(([k, x]) => <option key={k} value={k}>{x.name}{x.origin === 'new' ? ' (new)' : x.origin === 'edited' ? ' (edited)' : ''}</option>)}
+            {territories.map(([k, x]) => <option key={k} value={k}>{territoryName(x)}{x.origin === 'new' ? ' (new)' : x.origin === 'edited' ? ' (edited)' : ''}</option>)}
           </select>
         </div>
         <div>
@@ -394,7 +498,7 @@ function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onCon
           <div className="flex flex-wrap gap-1.5">
             {Object.entries(meta.fields).map(([k, f]) => {
               const on = brief.fields.includes(k);
-              return <GhostButton key={k} active={on} className="px-2.5 py-1.5 text-sm" onClick={() => set({ fields: on ? brief.fields.filter(x => x !== k) : [...brief.fields, k] })}>{f.label} · {f.visible}</GhostButton>;
+              return <GhostButton key={k} active={on} className="px-2.5 py-1.5 text-sm" onClick={() => set({ fields: on ? brief.fields.filter(x => x !== k) : [...brief.fields, k] })}>{f.label} · {f.visible} chars visible</GhostButton>;
             })}
           </div>
         </div>
@@ -407,7 +511,7 @@ function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onCon
           ))}
         </div>
       </section>
-      {t && <p className="px-1 text-base text-[#A3A8B1]"><span className="font-semibold">{t.name}</span> · {t.format} · leads on “{meta.personas[t.persona]?.triggers.find(x => x.id === t.angle)?.label}”. {t.premise}</p>}
+      {t && <p className="px-1 text-base text-[#A3A8B1]"><span className="font-semibold">{territoryName(t)}</span> · {t.format} · Angle: {angleLabel(meta, t.persona, t.angle)}. {t.premise}</p>}
 
       <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[1.6fr_1fr]">
         {/* Your lines: the first action */}
@@ -447,6 +551,7 @@ function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onCon
         </section>
 
         <div className="space-y-5">
+          <PersonaPanel meta={meta} persona={brief.persona} open />
           <RunsList user={user} tick={runsTick} meta={meta} onContinue={onContinue} />
           <section className="rounded-xl border border-[#272B34] bg-[#16181D] p-4">
             <button className="flex w-full items-center justify-between text-lg font-semibold" onClick={() => setMore(!more)}>
@@ -552,7 +657,7 @@ function Territories({ meta, onSaved, onBrief }: { meta: Meta; onSaved: () => vo
         </div>
         <GhostButton active={showRetired} onClick={() => setShowRetired(!showRetired)}>Show retired</GhostButton>
       </div>
-      {Object.entries(meta.personas).map(([pk, p]) => {
+      {personaKeys(meta.personas).map(pk => { const p = meta.personas[pk];
         const list = Object.entries(meta.territories).filter(([, x]) => x.persona === pk && (showRetired || x.status !== 'retired'));
         return (
           <section key={pk}>
@@ -560,6 +665,7 @@ function Territories({ meta, onSaved, onBrief }: { meta: Meta; onSaved: () => vo
               <h2 className="text-lg font-semibold">{p.name}</h2>
               <GhostButton className="px-3 py-1 text-sm" onClick={() => setEditing(`new:${pk}`)}>+ New territory</GhostButton>
             </div>
+            <PersonaPanel meta={meta} persona={pk} className="mb-3" />
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
               {editing === `new:${pk}` && <TerritoryEditor meta={meta} persona={pk} onDone={saved => { setEditing(null); if (saved) onSaved(); }} />}
               {list.map(([code, t]) => editing === code
@@ -586,12 +692,13 @@ function TerritoryCard({ meta, code, t, onEdit, onBrief, onSaved }: { meta: Meta
   return (
     <div className={cn('flex flex-col rounded-xl border-2 bg-[#16181D] p-5', retired ? 'border-[#272B34] opacity-60' : 'border-[#272B34]')}>
       <div className="mb-1 flex flex-wrap items-center gap-2">
-        <h3 className="text-lg font-bold">{t.name}</h3>
+        <h3 className="text-lg font-bold">{territoryName(t)}</h3>
         <Chip tone={t.origin === 'pitch' ? 'grey' : 'outline'} className={t.origin !== 'pitch' ? 'border-[#D94D8F] text-[#D94D8F]' : ''}>{t.origin === 'new' ? 'new' : t.origin === 'edited' ? 'edited' : 'from the pitch'}</Chip>
         {retired && <Chip tone="grey">retired</Chip>}
-        {t.status === 'springboard' && <Chip tone="grey">springboard</Chip>}
+
       </div>
-      <div className="mb-2 text-sm text-[#858B96]">{t.format} · leads on “{angle}”</div>
+      <div className="mb-2 text-sm text-[#858B96]">{t.format} · Angle: {angle}</div>
+      {t.headline && <p className="mb-2 text-base font-semibold text-[#F2F3F5]" title={t.headline_source ? `Pitched headline · ${plainSource(t.headline_source)}` : 'Pitched headline'}><span className="mr-1 text-xs font-normal uppercase tracking-wider text-[#858B96]">Pitched as</span>“{t.headline}”</p>}
       <p className="mb-3 text-base leading-snug text-[#C9CCD2]">{t.premise}</p>
       {t.updated_by && <p className="mb-3 text-sm text-[#858B96]">Changed by {t.updated_by}, {t.updated_at?.slice(0, 10)}{t.note ? `: ${t.note}` : ''}</p>}
       {history && t.history?.length ? (
@@ -663,7 +770,7 @@ function Review({ meta, batch, setBatch, status, running, onMore, onMoreRun, onD
     (filter === 'all' ? true : filter === 'compliance' ? l.flags.some(f => f.severity === 'compliance') : filter === 'open' ? !l.decision : l.decision === 'keep' || l.decision === 'edit'));
   const groups = new Map<string, Line[]>();
   for (const l of shown) {
-    const k = group === 'angle' ? `${l.angle} · ${l.angle_label}` : l.structure.replace('_', ' ');
+    const k = group === 'angle' ? `Angle: ${l.angle_label}` : `Structure: ${l.structure.replace('_', ' ')}`;
     groups.set(k, [...(groups.get(k) || []), l]);
   }
   const t = meta.territories[batch.brief.territory];
@@ -681,7 +788,9 @@ function Review({ meta, batch, setBatch, status, running, onMore, onMoreRun, onD
           </div>
         </div>
         <select className="rounded-lg border-2 border-[#343946] bg-[#101216] px-3 py-1.5 text-base" value={batch.id} onChange={e => studio.batch(e.target.value).then(setBatch)}>
-          {[...batches.map(b => b.id), ...(batches.some(b => b.id === batch.id) ? [] : [batch.id])].map(id => <option key={id} value={id}>{id}</option>)}
+          {[...batches, ...(batches.some(b => b.id === batch.id) ? [] : [{ id: batch.id, territory: batch.brief.territory, updated: batch.updated || batch.created, created_by: batch.created_by || '' } as RunSummary])].map(b => (
+            <option key={b.id} value={b.id} title={b.id}>{territoryName(meta.territories[b.territory]) || b.territory} · {new Date(b.updated).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}{b.created_by ? ` · ${b.created_by.split('@')[0]}` : ''}</option>
+          ))}
         </select>
         <PinkButton className="px-4 py-2 text-base" disabled={running} onClick={onMoreRun}>{yours ? 'Generate around your lines' : 'Generate more in this run'}</PinkButton>
         <div className="ml-auto flex flex-wrap gap-2">
@@ -716,8 +825,11 @@ function LineCard({ meta, line, onChange, onMore }: { meta: Meta; line: Line; on
   const [draft, setDraft] = useState(line.edited_text || line.text);
   const [note, setNote] = useState(line.note || '');
   const [history, setHistory] = useState(false);
+  const [details, setDetails] = useState(false);
   useEffect(() => { setNote(line.note || ''); }, [line.note]);
   const f = meta.fields[line.field];
+  // Decisions wait for the checks: keeping a line before its flags arrive is how a red line got kept by accident.
+  const checking = line.status !== 'checked';
   const text = line.decision === 'edit' && line.edited_text ? line.edited_text : line.text;
   const chars = [...text].length;
   const over = f && chars > f.visible;
@@ -728,14 +840,13 @@ function LineCard({ meta, line, onChange, onMore }: { meta: Meta; line: Line; on
   return (
     <div className={cn('rounded-xl border-2 bg-[#16181D] p-5', border)}>
       <div className="mb-2 flex flex-wrap items-center gap-2 text-sm text-[#858B96]">
-        <span className="font-mono font-semibold text-[#ECEDEF]">{line.id.split('-').pop()}</span>
         {line.model === 'human' && <Chip tone="outline" className="border-[#D94D8F] font-semibold text-[#D94D8F]">yours</Chip>}
-        <span>{f?.label || line.field}</span>
-        <span className={cn('font-mono', over ? 'font-bold text-amber-300' : '')}>{chars}/{f?.visible}</span>
-        <span>· {line.structure.replace('_', ' ')}</span>
-        <span>· {line.tone_label}</span>
+        <span title={line.id}>{f?.label || line.field}</span>
+        <span className={cn('font-mono', over ? 'font-bold text-amber-300' : '')} title={f ? `${f.visible} characters show on screen; ${f.max} is the most the field takes` : undefined}>{chars} chars · {f?.visible} visible</span>
+        <span>· Structure: {line.structure.replace('_', ' ')}</span>
+        <span>· Tone: {toneWords(line.tone, meta) || line.tone_label}</span>
         {line.parent && <Chip tone="outline">more like {line.parent.split('-').pop()}</Chip>}
-        {line.status !== 'checked' && <span className="animate-pulse" style={{ color: PINK }}>checking…</span>}
+        {checking && <span className="animate-pulse" style={{ color: PINK }}>flags still arriving…</span>}
         {line.ready && <Chip tone="outline" className="border-emerald-500/60 text-emerald-300" title={`Signed off by ${line.ready.ready_by}, ${when(line.ready.ready_at)}`}>ready v{line.ready.version}{line.ready.changed_since ? ' · edited since' : ''}</Chip>}
       </div>
       {/* Who decided, on a line of its own with a fixed height: a decision never changes the card's size, so nothing below it moves. */}
@@ -760,10 +871,11 @@ function LineCard({ meta, line, onChange, onMore }: { meta: Meta; line: Line; on
       {line.decision === 'edit' && line.edited_text && !editing && <p className="mt-1 text-base text-[#858B96] line-through">{line.text}</p>}
 
       {line.flags.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-1.5">
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 text-xs font-semibold uppercase tracking-wider text-[#858B96]">Flags</span>
           {line.flags.map(fl => (
-            <Chip key={fl.rule} tone={sevTone(fl.severity)} className="cursor-pointer" title={`${fl.label}${fl.quote ? `\n"${fl.quote}"` : ''}\nSource: ${fl.source}`} onClick={() => setOpen(open === fl.rule ? null : fl.rule)}>
-              {chipName(fl.rule)}
+            <Chip key={fl.rule} tone={sevTone(fl.severity)} className="cursor-pointer" title={`${fl.label}${fl.quote ? `\n"${fl.quote}"` : ''}\nSource: ${plainSource(fl.source)}`} onClick={() => setOpen(open === fl.rule ? null : fl.rule)}>
+              {fl.rule === 'LIMIT_VISIBLE' && f ? `cut off on screen after ${f.visible} characters` : fl.rule === 'LIMIT_MAX' && f ? `too long for this field (max ${f.max})` : chipName(fl.rule)}
             </Chip>
           ))}
         </div>
@@ -773,20 +885,27 @@ function LineCard({ meta, line, onChange, onMore }: { meta: Meta; line: Line; on
           <div className="font-semibold">{openFlag.label}</div>
           {openFlag.quote && <div className="mt-1">In the line: <mark className="bg-amber-400/30 text-amber-50 px-1">{openFlag.quote}</mark></div>}
           {openFlag.why && <div className="mt-1 text-[#A3A8B1]">{openFlag.why}</div>}
-          <div className="mt-1 text-sm text-[#858B96]">Source: {openFlag.source} · found by {openFlag.by.join(' + ')}{openFlag.p !== undefined ? ` · P(yes) ${openFlag.p}` : ''}</div>
+          {whatToDo(openFlag.rule, f) && <div className="mt-1"><span className="font-semibold">What to do:</span> {whatToDo(openFlag.rule, f)}</div>}
+          <div className="mt-1 text-sm text-[#858B96]">Source: {plainSource(openFlag.source)}
+            <button className="ml-2 text-xs underline-offset-2 hover:underline" onClick={() => setDetails(!details)}>{details ? 'hide details' : 'details'}</button>
+            {details && <span className="ml-2 text-xs">found by {openFlag.by.join(' + ')}{openFlag.p !== undefined ? ` · P(yes) ${openFlag.p}` : ''} · {openFlag.source}</span>}
+          </div>
         </div>
       )}
       {line.features.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5">{line.features.map(x => <Chip key={x} tone="outline" className="text-xs">{x.replace(/_/g, ' ')}</Chip>)}</div>
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 text-xs font-semibold uppercase tracking-wider text-[#646A75]">Tags (what the line contains)</span>
+          {line.features.map(x => <span key={x} className="rounded border border-dashed border-[#343946] px-1.5 py-px text-xs text-[#A3A8B1]">{x.replace(/_/g, ' ')}</span>)}
+        </div>
       )}
       {line.objection && <p className="mt-3 border-l-4 border-[#343946] pl-3 text-base italic text-[#A3A8B1]">Skeptic: {line.objection}</p>}
       <Overrides line={line} />
       {history && <LineHistory line={line} />}
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <GhostButton active={line.decision === 'keep'} onClick={() => decide({ decision: line.decision === 'keep' ? '' : 'keep' })}>Keep</GhostButton>
-        <GhostButton active={line.decision === 'cut'} onClick={() => decide({ decision: line.decision === 'cut' ? '' : 'cut' })}>Cut</GhostButton>
-        <GhostButton active={line.decision === 'edit'} onClick={() => { setDraft(line.edited_text || line.text); setEditing(true); }}>Edit</GhostButton>
+        <GhostButton active={line.decision === 'keep'} disabled={checking} title={checking ? 'Flags still arriving' : undefined} onClick={() => decide({ decision: line.decision === 'keep' ? '' : 'keep' })}>Keep</GhostButton>
+        <GhostButton active={line.decision === 'cut'} disabled={checking} title={checking ? 'Flags still arriving' : undefined} onClick={() => decide({ decision: line.decision === 'cut' ? '' : 'cut' })}>Cut</GhostButton>
+        <GhostButton active={line.decision === 'edit'} disabled={checking} title={checking ? 'Flags still arriving' : undefined} onClick={() => { setDraft(line.edited_text || line.text); setEditing(true); }}>Edit</GhostButton>
         <GhostButton onClick={() => onMore(line, note)} title="Writes three siblings, using the note as guidance">More like this</GhostButton>
         <input className="min-w-[12rem] flex-1 rounded-lg border-2 border-[#272B34] px-3 py-1.5 text-base bg-[#101216] text-[#ECEDEF] placeholder:text-[#646A75]" placeholder="Note (why; guides 'more like this')" value={note}
           onChange={e => setNote(e.target.value)} onBlur={() => note !== (line.note || '') && decide({ note })} />
@@ -797,14 +916,14 @@ function LineCard({ meta, line, onChange, onMore }: { meta: Meta; line: Line; on
 
 // ---------- 3. shortlist and export ----------
 
-function Shortlist({ batch, onReady }: { batch: Batch | null; onReady: () => void }) {
+function Shortlist({ meta, batch, onReady }: { meta: Meta; batch: Batch | null; onReady: () => void }) {
   const [rows, setRows] = useState<ShortRow[]>([]);
   const [msg, setMsg] = useState('');
   const load = () => studio.shortlist().then(setRows).catch(e => setMsg(e.message));
   useEffect(() => { load(); }, []);
   const groups = useMemo(() => {
     const m = new Map<string, ShortRow[]>();
-    for (const r of rows) m.set(`${r.persona} · ${r.territory}`, [...(m.get(`${r.persona} · ${r.territory}`) || []), r]);
+    for (const r of rows) { const k = `${personaName(meta, r.persona)} · ${territoryName(meta.territories[r.territory]) || r.territory}`; m.set(k, [...(m.get(k) || []), r]); }
     return m;
   }, [rows]);
 
@@ -816,20 +935,33 @@ function Shortlist({ batch, onReady }: { batch: Batch | null; onReady: () => voi
 
   return (
     <div className="max-w-6xl space-y-6">
-      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#272B34] bg-[#16181D] p-5">
-        <div className="mr-auto">
-          <div className="text-lg font-semibold">Shortlist</div>
-          <div className="text-base text-[#858B96]">Kept and edited lines with naming stubs (PERSONA_TERRITORY_FORMAT_v#_PLATFORM; add the date at trafficking).</div>
+      <div className="space-y-4 rounded-xl border border-[#272B34] bg-[#16181D] p-5">
+        <div className="flex flex-wrap items-start gap-3">
+          <div className="mr-auto max-w-3xl">
+            <div className="text-lg font-semibold">Shortlist</div>
+            <div className="text-base text-[#858B96]">Kept and edited lines, each with its naming code (PERSONA_TERRITORY_FORMAT_v#_PLATFORM; Add3 reports results by it, with the date added at trafficking).</div>
+          </div>
+          <PinkButton onClick={onReady}>Ready for production →</PinkButton>
         </div>
-        <button className="rounded-lg px-4 py-2 text-base font-semibold text-white" style={{ background: PINK }} onClick={onReady}>Ready for production →</button>
-        <button className="rounded-lg border-2 border-[#343946] px-4 py-2 text-base font-medium" onClick={() => studio.download('/shortlist.csv', 'shortlist.csv')}>Shortlist CSV</button>
-        <button className="rounded-lg border-2 border-[#343946] px-4 py-2 text-base font-medium" onClick={() => studio.download('/shortlist.md', 'shortlist.md')}>Shortlist Markdown</button>
-        {batch && <button className="rounded-lg border-2 border-[#343946] px-4 py-2 text-base font-medium" onClick={() => studio.download(`/batches/${encodeURIComponent(batch.id)}/export.csv`, `${batch.id}.csv`)}>Batch CSV for Sheets</button>}
-        {batch && <button className="rounded-lg border-2 border-[#343946] px-4 py-2 text-base font-medium" onClick={() => studio.download(`/batches/${encodeURIComponent(batch.id)}/export.md`, `${batch.id}.md`)}>Batch Markdown</button>}
-        <label className="cursor-pointer rounded-lg border-2 border-dashed border-[#4A505D] px-4 py-2 text-base font-medium">
-          Import curated CSV
-          <input type="file" accept=".csv,text/csv" className="hidden" onChange={e => e.target.files?.[0] && upload(e.target.files[0])} />
-        </label>
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-[#272B34] bg-[#101216] p-3">
+          <div className="mr-auto min-w-[16rem] max-w-xl">
+            <div className="font-semibold">Review in Google Sheets</div>
+            <div className="text-sm text-[#858B96]">Download the sheet, mark keep / cut / edit in Sheets with the team, then import it back: decisions and notes land on the lines, and taste examples feed the next run.</div>
+          </div>
+          <GhostButton className="text-base" disabled={!batch} onClick={() => batch && studio.download(`/batches/${encodeURIComponent(batch.id)}/export.csv`, `${batch.id}.csv`)} title={batch ? undefined : 'Open a run first'}>1. Download the sheet</GhostButton>
+          <label className="cursor-pointer rounded-lg border border-dashed border-[#4A505D] px-3 py-1.5 text-base font-medium">
+            2. Import it back
+            <input type="file" accept=".csv,text/csv" className="hidden" onChange={e => e.target.files?.[0] && upload(e.target.files[0])} />
+          </label>
+        </div>
+        <details className="text-sm text-[#858B96]">
+          <summary className="cursor-pointer">More downloads</summary>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <GhostButton onClick={() => studio.download('/shortlist.csv', 'shortlist.csv')}>Shortlist CSV</GhostButton>
+            <GhostButton onClick={() => studio.download('/shortlist.md', 'shortlist.md')}>Shortlist Markdown</GhostButton>
+            {batch && <GhostButton onClick={() => studio.download(`/batches/${encodeURIComponent(batch.id)}/export.md`, `${batch.id}.md`)}>This run as Markdown</GhostButton>}
+          </div>
+        </details>
       </div>
       {msg && <div className="rounded-lg bg-emerald-500/10 p-3 text-base text-emerald-200">{msg}</div>}
       {!rows.length && <div className="text-base text-[#858B96]">Nothing kept yet. Keep or edit lines in Review, or import a curated sheet.</div>}
@@ -837,12 +969,12 @@ function Shortlist({ batch, onReady }: { batch: Batch | null; onReady: () => voi
         <section key={g} className="rounded-xl border border-[#272B34] bg-[#16181D] p-5">
           <h2 className="mb-3 text-lg font-bold">{g} <span className="font-normal text-[#858B96]">({rs.length})</span></h2>
           <table className="w-full text-left text-base">
-            <thead><tr className="text-sm uppercase text-[#858B96]"><th className="pb-2 pr-4">Naming stub</th><th className="pb-2 pr-4">Field</th><th className="pb-2 pr-4">Line</th><th className="pb-2">Note</th></tr></thead>
+            <thead><tr className="text-sm uppercase text-[#858B96]"><th className="pb-2 pr-4" title={NAMING_TIP}>Naming code</th><th className="pb-2 pr-4">Field</th><th className="pb-2 pr-4">Line</th><th className="pb-2">Note</th></tr></thead>
             <tbody>
               {rs.map(r => (
                 <tr key={r.id} className="border-t border-[#272B34] align-top">
-                  <td className="py-2 pr-4 font-mono text-sm">{r.stub}</td>
-                  <td className="py-2 pr-4 text-base text-[#858B96]">{r.field.replace('_', ' ')}</td>
+                  <td className="py-2 pr-4 font-mono text-sm" title={NAMING_TIP}>{r.stub}</td>
+                  <td className="py-2 pr-4 text-base text-[#858B96]">{meta.fields[r.field]?.label || r.field.replace(/_/g, ' ')}</td>
                   <td className="py-2 pr-4">
                     {r.text}
                     {((r.compliance_flags?.length ?? 0) > 0 || (r.warn_flags?.length ?? 0) > 0) && (
@@ -1007,7 +1139,7 @@ const COMPLIANCE_TONE: Record<ComplianceStatus, string> = {
   pending: 'border-[#343946] text-[#A3A8B1]', cleared: 'border-emerald-500 bg-emerald-500/15 text-emerald-200', changes_requested: 'border-amber-400 bg-amber-400/15 text-amber-100',
 };
 
-function Ready({ meta, batch, user }: { meta: Meta; batch: Batch | null; user: string }) {
+function Ready({ meta, batch, user, onNext }: { meta: Meta; batch: Batch | null; user: string; onNext: () => void }) {
   const [groups, setGroups] = useState<Array<{ persona: string; territory: string; n: number }>>([]);
   // Deep link: /studio?tab=ready&persona=DINK&territory=DINK_NEVER
   const [pt, setPt] = useState<{ persona: string; territory: string } | null>(
@@ -1083,7 +1215,7 @@ function Ready({ meta, batch, user }: { meta: Meta; batch: Batch | null; user: s
       </div>
 
       {error && <div className="rounded-lg border-2 border-red-500/45 bg-red-500/10 p-3 text-base text-red-200">{error}</div>}
-      {done && <div className="rounded-lg border-2 border-emerald-500/50 bg-emerald-500/10 p-3 text-base text-emerald-100">{done}</div>}
+      {done && <div className="flex flex-wrap items-center gap-3 rounded-lg border-2 border-emerald-500/50 bg-emerald-500/10 p-3 text-base text-emerald-100"><span className="mr-auto">{done}</span><PinkButton className="px-4 py-1.5 text-base" onClick={onNext}>Next: Pre-flight →</PinkButton></div>}
       {!view && !error && <div className="text-base text-[#858B96]">{groups.length ? 'Loading…' : 'Nothing kept yet. Keep or edit lines in Review first.'}</div>}
 
       {view && (
@@ -1099,7 +1231,7 @@ function Ready({ meta, batch, user }: { meta: Meta; batch: Batch | null; user: s
               <ReadyCard key={x.line.id} meta={meta} item={x} included={include.has(x.line.id)} lead={lead.has(x.line.id)}
                 onInclude={on => setInclude(cur => { const n = new Set(cur); if (on) n.add(x.line.id); else n.delete(x.line.id); return n; })}
                 onLead={on => setLead(cur => { const n = new Set(cur); if (on) n.add(x.line.id); else n.delete(x.line.id); return n; })}
-                onChanged={() => load(true).catch(e => setError(e.message))} onError={setError} />
+                onChanged={() => load(true).catch(e => setError(e.message))} onError={setError} canCompliance={meta.can_set_compliance !== false} />
             ))}
           </div>
 
@@ -1113,9 +1245,9 @@ function Ready({ meta, batch, user }: { meta: Meta; batch: Batch | null; user: s
                   : <span className="text-sm text-[#858B96]">Pick with “Expect to lead” on a line.</span>}
               </div>
               <Label>Why</Label>
-              <textarea rows={4} className="w-full rounded-lg border-2 border-[#343946] px-3 py-2 text-base" placeholder="e.g. The plain promise answers the Owners’ first objection in under 40 characters." value={reason} onChange={e => setReason(e.target.value)} />
+              <textarea rows={4} className="w-full rounded-lg border-2 border-[#343946] px-3 py-2 text-base" placeholder="e.g. The direct-pay line answers the DINKs’ ‘what happens at the counter?’ question in under 40 characters." value={reason} onChange={e => setReason(e.target.value)} />
               <PinkButton className="mt-3 w-full" disabled={!!blockedBy || busy} onClick={signOff}>{busy ? 'Signing off…' : `Mark ${selected.length} line${selected.length === 1 ? '' : 's'} Ready for production`}</PinkButton>
-              <p className="mt-2 text-sm text-[#858B96]">{blockedBy || `Signed off as ${user || 'you'}. The set and your expectations are locked together.`}</p>
+              <p className="mt-2 text-sm text-[#858B96]">{blockedBy || `Will be signed off as ${user || 'you'}. The set and your expectations are locked together.`}</p>
             </section>
 
             <section className="rounded-xl border border-[#272B34] bg-[#16181D] p-5">
@@ -1154,9 +1286,9 @@ function Ready({ meta, batch, user }: { meta: Meta; batch: Batch | null; user: s
   );
 }
 
-function ReadyCard({ meta, item, included, lead, onInclude, onLead, onChanged, onError }: {
+function ReadyCard({ meta, item, included, lead, onInclude, onLead, onChanged, onError, canCompliance }: {
   meta: Meta; item: ReadyView['lines'][number]; included: boolean; lead: boolean;
-  onInclude: (on: boolean) => void; onLead: (on: boolean) => void; onChanged: () => void; onError: (m: string) => void;
+  onInclude: (on: boolean) => void; onLead: (on: boolean) => void; onChanged: () => void; onError: (m: string) => void; canCompliance: boolean;
 }) {
   const { line, final_text, red, compliance, versions } = item;
   const f = meta.fields[line.field];
@@ -1176,7 +1308,7 @@ function ReadyCard({ meta, item, included, lead, onInclude, onLead, onChanged, o
     <div className={cn('rounded-xl border-2 bg-[#16181D] p-5 transition', !included ? 'border-[#272B34] opacity-50' : red.length ? 'border-red-500/60' : 'border-emerald-500/60')}>
       <div className="mb-2 flex flex-wrap items-center gap-2 text-sm text-[#858B96]">
         <label className="flex cursor-pointer items-center gap-2 font-medium text-[#ECEDEF]">
-          <input type="checkbox" className="h-4 w-4 accent-[#D94D8F]" checked={included} onChange={e => onInclude(e.target.checked)} /> In this set
+          <input type="checkbox" className="h-4 w-4 accent-[#D94D8F]" checked={included} onChange={e => onInclude(e.target.checked)} aria-label={`Include ${item.stub} in this set`} /> {included ? 'In this set' : 'Not in this set'}
         </label>
         <span className="font-mono" title={line.id}>{item.stub}</span>
         <span>{f?.label || line.field}</span>
@@ -1200,7 +1332,7 @@ function ReadyCard({ meta, item, included, lead, onInclude, onLead, onChanged, o
         </div>
       ) : <p className="text-[21px] leading-snug text-[#F2F3F5]">{final_text}</p>}
 
-      {red.length > 0 && (
+      {red.length > 0 && included && (
         <div className="mt-3 space-y-2 rounded-lg border border-red-500/45 bg-red-500/10 p-3">
           <div className="text-sm font-semibold uppercase tracking-wider text-red-200">Fix or override before sign-off</div>
           {red.map(fl => (
@@ -1245,8 +1377,9 @@ function ReadyCard({ meta, item, included, lead, onInclude, onLead, onChanged, o
 
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[#272B34] pt-3">
         <span className="text-sm font-semibold uppercase tracking-wider text-[#858B96]">Compliance</span>
+        {!canCompliance && <span className="text-xs text-[#646A75]">Vivan updates this</span>}
         {(Object.keys(COMPLIANCE_WORDS) as ComplianceStatus[]).map(st => (
-          <button key={st} onClick={() => {
+          <button key={st} disabled={!canCompliance} aria-pressed={compliance.status === st} onClick={() => {
             // A line that went through with an overridden red flag can only be cleared with a note.
             let n = note;
             if (st === 'cleared' && line.overrides?.length && !n.trim()) {
@@ -1256,10 +1389,10 @@ function ReadyCard({ meta, item, included, lead, onInclude, onLead, onChanged, o
             }
             act(() => studio.compliance(line.batch, line.id, st, n));
           }}
-            className={cn('rounded-full border px-3 py-0.5 text-sm font-medium', compliance.status === st ? COMPLIANCE_TONE[st] : 'border-[#272B34] text-[#646A75] hover:text-[#C9CCD2]')}>{COMPLIANCE_WORDS[st]}</button>
+            className={cn('rounded-full border px-3 py-0.5 text-sm font-medium disabled:cursor-default', compliance.status === st ? COMPLIANCE_TONE[st] : cn('border-[#272B34] text-[#646A75]', canCompliance && 'hover:text-[#C9CCD2]'), !canCompliance && compliance.status !== st && 'hidden')}>{COMPLIANCE_WORDS[st]}</button>
         ))}
-        <input className="min-w-[10rem] flex-1 rounded-lg border-2 border-[#272B34] px-3 py-1 text-sm" placeholder="Compliance note" value={note} onChange={e => setNote(e.target.value)}
-          onBlur={() => note !== (compliance.note || '') && act(() => studio.compliance(line.batch, line.id, compliance.status, note))} />
+        {!canCompliance ? (note ? <span className="flex-1 text-sm text-[#C9CCD2]">{note}</span> : <span className="flex-1" />) : <input aria-label="Compliance note" className="min-w-[10rem] flex-1 rounded-lg border-2 border-[#272B34] px-3 py-1 text-sm" placeholder="Compliance note" value={note} onChange={e => setNote(e.target.value)}
+          onBlur={() => note !== (compliance.note || '') && act(() => studio.compliance(line.batch, line.id, compliance.status, note))} />}
         <button className="text-xs text-[#858B96] hover:text-[#ECEDEF]" onClick={() => { setDraft(final_text); setEditing(true); }} title={line.ready ? 'Editing makes a new version; the signed-off wording is kept' : undefined}>edit wording</button>
         {compliance.by && <span className="text-xs text-[#858B96]">{compliance.by}, {when(compliance.at)}{compliance.sha256 && compliance.sha256 !== item.sha256 ? ' · on an earlier wording' : ''}</span>}
         <button className="text-xs text-[#646A75] hover:text-[#ECEDEF]" onClick={() => setShowHistory(!showHistory)}>{showHistory ? 'hide history' : `history${versions.length ? ` · ${versions.length} version${versions.length === 1 ? '' : 's'}` : ''}`}</button>
@@ -1271,16 +1404,18 @@ function ReadyCard({ meta, item, included, lead, onInclude, onLead, onChanged, o
 
 // ---------- rules versions (hosted) ----------
 
-function Rules({ admin, onActivated }: { admin: boolean; onActivated: () => void }) {
+function Rules({ meta, admin, onActivated }: { meta: Meta | null; admin: boolean; onActivated: () => void }) {
   const [list, setList] = useState<RulesVersion[]>([]);
   const [error, setError] = useState('');
   const [version, setVersion] = useState('');
   const [notes, setNotes] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [drafted, setDrafted] = useState<string | null>(null); // just uploaded as a draft: not live yet
-  const load = () => studio.rules().then(setList).catch(e => setError(e.message));
+  const [active, setActive] = useState<ActiveRules | null>(null);
+  // Versions exist only hosted; the plain-words view of the live rules works everywhere.
+  const load = () => { if (HOSTED) studio.rules().then(setList).catch(e => setError(e.message)); studio.activeRules().then(setActive).catch(() => {}); };
   useEffect(() => { load(); }, []);
-  const live = list.find(r => r.status === 'active');
+  const live = list.find(r => r.status === 'active') || (active && !HOSTED ? { version: active.version, status: 'active', created_at: active.updated || '' } as RulesVersion : undefined);
   async function activate(v: string, ask = true) {
     if (ask && !window.confirm(`Make ${v} the live rules? New checks use it straight away.`)) return;
     try { setList(await studio.activateRules(v)); setDrafted(null); onActivated(); } catch (e: any) { setError(e.message); }
@@ -1301,7 +1436,7 @@ function Rules({ admin, onActivated }: { admin: boolean; onActivated: () => void
     <div className="max-w-4xl space-y-5">
       <div>
         <h1 className="text-2xl font-bold tracking-tight" style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>Rules</h1>
-        <p className="text-base text-[#A3A8B1]">Every line is checked against the live rules version, built from the client’s legal, brand and persona material. Each run records the version it was checked under. {admin ? 'You can upload and activate versions.' : 'Only an admin can change them.'}</p>
+        <p className="text-base text-[#A3A8B1]">Every line is checked against the live rules, built from the client’s legal, brand and persona material. Each run records the version it was checked under. {admin ? 'You can upload and activate versions.' : 'Brook changes them; here they are in plain words.'}</p>
       </div>
       <div className={cn('flex flex-wrap items-center gap-3 rounded-xl border-2 px-5 py-4', live ? 'border-emerald-500/60 bg-emerald-500/10' : 'border-amber-400/60 bg-amber-400/10')}>
         <span className={cn('text-sm font-semibold uppercase tracking-wider', live ? 'text-emerald-300' : 'text-amber-200')}>Live</span>
@@ -1316,7 +1451,9 @@ function Rules({ admin, onActivated }: { admin: boolean; onActivated: () => void
         </div>
       )}
       {error && <div className="rounded-lg border-2 border-red-500/45 bg-red-500/10 p-3 text-base text-red-200">{error}</div>}
-      <ul className="divide-y divide-[#272B34] rounded-xl border border-[#272B34] bg-[#16181D]">
+      {active && <LiveRules active={active} meta={meta} />}
+      {HOSTED && <h2 className="pt-2 text-lg font-semibold">Versions</h2>}
+      {HOSTED && <ul className="divide-y divide-[#272B34] rounded-xl border border-[#272B34] bg-[#16181D]">
         {list.map(r => (
           <li key={r.version} className="flex flex-wrap items-center gap-3 px-5 py-3">
             <span className="font-mono text-base font-semibold">{r.version}</span>
@@ -1326,7 +1463,7 @@ function Rules({ admin, onActivated }: { admin: boolean; onActivated: () => void
           </li>
         ))}
         {!list.length && !error && <li className="px-5 py-3 text-[#858B96]">No versions yet.</li>}
-      </ul>
+      </ul>}
       {admin && (
         <section className="space-y-3 rounded-xl border border-dashed border-[#4A505D] p-5">
           <h2 className="text-lg font-semibold">Upload a new version</h2>
@@ -1423,6 +1560,7 @@ function Preflight({ meta }: { meta: Meta }) {
     setError(''); setProgress('Uploading…');
     try {
       const r = await studio.pfUpload(sel, files, also);
+      if (r.format_notes?.length) setError(r.format_notes.join(' '));
       setPending({ upload_id: r.upload_id, estimate: r.estimate });
       setFiles([]); setProgress('');
       await refresh();
@@ -1462,15 +1600,17 @@ function Preflight({ meta }: { meta: Meta }) {
           <p className="mt-1 text-base text-[#A3A8B1]">The finished asset for each signed-off naming code, checked against the signed-off copy and the rules before it goes to Add3. Agree or disagree with each flag; red flags are fixed with a new upload or overridden with a reason, then the asset is marked Ready to traffic.</p>
         </div>
         <div className="min-w-[15rem] rounded-lg border border-[#272B34] bg-[#101216] px-4 py-3">
-          <Label>Agreement with the flags, this round</Label>
-          <div className="text-2xl font-bold">{rate === null || rate === undefined ? '–' : `${Math.round(rate * 100)}%`}<span className={cn('ml-2 text-sm font-medium', rate !== null && rate !== undefined && rate >= 0.9 ? 'text-emerald-300' : 'text-[#858B96]')}>target 90%</span></div>
-          <div className="text-sm text-[#858B96]">{agreement ? `${agreement.agree} of ${agreement.marked} flags marked agree` : ''}</div>
+          <Label>Your verdicts on the flags</Label>
+          <p className="mb-1 max-w-[16rem] text-xs text-[#858B96]">They help us tune the checks (the aim: agree with 9 in 10).</p>
+          <div className="text-2xl font-bold">{rate === null || rate === undefined ? '–' : `${Math.round(rate * 100)}%`}<span className={cn('ml-2 text-sm font-medium', rate !== null && rate !== undefined && rate >= 0.9 ? 'text-emerald-300' : 'text-[#858B96]')}>aim 90%</span></div>
+          <div className="text-sm text-[#858B96]">{agreement ? `${agreement.agree} of ${agreement.marked} agreed so far` : ''}</div>
         </div>
         <div className="flex flex-col gap-2">
-          <GhostButton className="text-base" onClick={() => studio.download('/preflight/features.csv', 'preflight-features.csv')} title="For B3: weekly.ts features --file">Features CSV (for B3)</GhostButton>
+          <GhostButton className="text-base" onClick={() => studio.download('/preflight/features.csv', 'preflight-features.csv')} title="The tags on each ad, for the weekly read of live results (B3)">Export tags for the weekly read</GhostButton>
           <GhostButton className="text-base" onClick={() => studio.download('/preflight/handoff.csv', 'asset-handoff.csv')}>Asset handoff list</GhostButton>
         </div>
       </div>
+      {meta.preflight?.storage?.startsWith('refused') && <div className="rounded-lg border-2 border-amber-400/50 bg-amber-400/10 p-3 text-base text-amber-100">Uploads are switched off: {meta.preflight.storage.replace(/^refused:\s*/, '')}. An admin sets this on Railway.</div>}
       {error && <div className="rounded-lg border-2 border-red-500/45 bg-red-500/10 p-3 text-base text-red-200">{error}</div>}
       {!stubs.length && !error && <div className="text-base text-[#858B96]">Nothing signed off yet. Mark lines Ready for production first; each naming code then gets its asset here.</div>}
 
@@ -1488,8 +1628,9 @@ function Preflight({ meta }: { meta: Meta }) {
                         {visual && gi === 0 && group.length > 1 && <div className="mb-1 px-1 text-xs text-[#858B96]">One visual, {group.length} codes: {visual}</div>}
                         <button onClick={() => setSel(s.stub)} className={cn('w-full rounded-lg border px-3 py-2 text-left transition', sel === s.stub ? 'border-[#D94D8F] bg-[#D94D8F]/10' : 'border-[#272B34] hover:border-[#4A505D]')}>
                           <div className="flex items-center gap-2">
-                            <span className="truncate font-mono text-sm">{s.stub}</span>
+                            <span className="truncate font-mono text-sm" title={NAMING_TIP}>{s.stub}</span>
                             <Chip tone={st.tone} className={cn('ml-auto shrink-0 text-xs', st.className)}>{st.words}</Chip>
+                            {s.audit?.stale && <Chip tone="amber" className="shrink-0 text-xs" title={s.audit.stale}>older rules</Chip>}
                           </div>
                           <div className="mt-1 truncate text-sm text-[#858B96]">{s.copy.map(c => c.text).join(' · ')}</div>
                         </button>
@@ -1545,8 +1686,8 @@ function PreflightReport({ meta, report, stubs, canReady, progress, pending, fil
     <>
       <div className={cn('flex flex-wrap items-center gap-3 rounded-xl border-2 px-5 py-4', ready ? 'border-emerald-500/60 bg-emerald-500/10' : 'border-[#272B34] bg-[#16181D]')}>
         <div className="mr-auto">
-          <div className="font-mono text-lg font-semibold">{report.stub}</div>
-          <div className="text-sm text-[#858B96]">{meta.personas[report.persona]?.name || report.persona} · {meta.territories[report.territory]?.name || report.territory} · signed off in {report.signoff_id}</div>
+          <div className="font-mono text-lg font-semibold" title={NAMING_TIP}>{report.stub}</div>
+          <div className="text-sm text-[#858B96]">{personaName(meta, report.persona)} · {territoryName(meta.territories[report.territory]) || report.territory} · signed off in {report.signoff_id}</div>
         </div>
         {ready
           ? <span className="text-base text-emerald-100"><span className="font-semibold">Ready to traffic</span> · {report.status.ready_by}, {when(report.status.ready_at)}</span>
@@ -1560,6 +1701,13 @@ function PreflightReport({ meta, report, stubs, canReady, progress, pending, fil
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
         <div className="space-y-4">
           <section className="space-y-3 rounded-xl border border-[#272B34] bg-[#16181D] p-4">
+            {a?.stale && auditForLatest && (
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
+                <span className="min-w-0 flex-1">{a.stale}</span>
+                {up && <PinkButton className="px-3 py-1 text-sm" disabled={!!progress} onClick={() => onAudit(up.id)}>Audit again</PinkButton>}
+              </div>
+            )}
+            {report.format_note && <p className="rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">{report.format_note}</p>}
             {report.same_visual_as.length > 0 && <p className="text-sm text-[#A3A8B1]">Same visual as <span className="font-mono">{report.same_visual_as.join(', ')}</span>. Checked once; copy match is for this code’s own lines.</p>}
             <div>
               <Label>On the asset (checked against it)</Label>
@@ -1693,6 +1841,9 @@ function PreflightReport({ meta, report, stubs, canReady, progress, pending, fil
 
 function PfFlagRow({ flag, canOverride, onChanged, onError }: { flag: PfFlag; canOverride: boolean; onChanged: () => Promise<void>; onError: (m: string) => void }) {
   const [overriding, setOverriding] = useState(false);
+  const [details, setDetails] = useState(false);
+  // The engine's numbers (P(Yes) …) are for tuning, behind "details"; the reason in words stays in view.
+  const numeric = !!flag.why && /^\s*P\(yes\)/i.test(flag.why);
   const [why, setWhy] = useState('');
   const act = async (fn: () => Promise<unknown>) => { try { await fn(); await onChanged(); } catch (e: any) { onError(e.message); } };
   const agree = flag.agreements.filter(x => x.agree).length, disagree = flag.agreements.length - agree;
@@ -1712,8 +1863,12 @@ function PfFlagRow({ flag, canOverride, onChanged, onError }: { flag: PfFlag; ca
           {flag.quote && (flag.check === 'copy_match'
             ? <div className="mt-1 text-sm">{/^signed off/i.test(flag.quote) ? '' : 'Missing from the asset: '}<mark className="bg-amber-400/30 px-1 text-amber-50">{flag.quote}</mark></div>
             : <div className="mt-1 text-sm">On the asset: <mark className="bg-amber-400/30 px-1 text-amber-50">{flag.quote}</mark></div>)}
-          {flag.why && <div className="mt-0.5 text-sm text-[#A3A8B1]">{flag.why}</div>}
-          <div className="mt-0.5 text-xs text-[#858B96]">{[flag.where, flag.frame?.label && !flag.frame.upload_id ? `frame ${flag.frame.label}${flag.frame.description ? `: ${flag.frame.description}` : ''}` : '', `Source: ${flag.source}`].filter(Boolean).join(' · ')}</div>
+          {flag.why && !numeric && <div className="mt-0.5 text-sm text-[#A3A8B1]">{flag.why}</div>}
+          {whatToDo(flag.rule) && <div className="mt-0.5 text-sm"><span className="font-semibold">What to do:</span> {whatToDo(flag.rule)}</div>}
+          <div className="mt-0.5 text-xs text-[#858B96]">{[flag.where, flag.frame?.label && !flag.frame.upload_id ? `frame ${flag.frame.label}${flag.frame.description ? `: ${flag.frame.description}` : ''}` : '', `Source: ${plainSource(flag.source)}`].filter(Boolean).join(' · ')}
+            <button className="ml-2 underline-offset-2 hover:underline" onClick={() => setDetails(!details)}>{details ? 'hide details' : 'details'}</button>
+            {details && <span className="ml-2">{[numeric ? flag.why : '', flag.rule, flag.source].filter(Boolean).join(' · ')}</span>}
+          </div>
           {flag.override && <div className="mt-2 rounded border border-red-500/30 bg-red-500/5 px-2 py-1 text-sm text-red-100"><span className="font-semibold">Overridden</span> by {flag.override.by}, {when(flag.override.at)}: “{flag.override.reason}”</div>}
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <GhostButton active={flag.mine === true} className="px-2 py-0.5 text-xs" onClick={() => act(() => studio.pfAgree(flag.id, true))}>Agree</GhostButton>
@@ -1736,5 +1891,56 @@ function PfFlagRow({ flag, canOverride, onChanged, onError }: { flag: PfFlag; ca
         </div>
       </div>
     </li>
+  );
+}
+
+/** The live rules in plain words, read-only, with sources. Image-only brand rules are marked (Pre-flight uses them). */
+function LiveRules({ active, meta }: { active: ActiveRules; meta: Meta | null }) {
+  const sev = (r: RuleEntry) => r.severity === 'compliance'
+    ? <Chip tone="red" className="shrink-0 text-xs">breaks a client rule</Chip>
+    : r.severity === 'warn' ? <Chip tone="amber" className="shrink-0 text-xs">worth a look</Chip> : <Chip tone="grey" className="shrink-0 text-xs">a note</Chip>;
+  const list = (items: RuleEntry[]) => (
+    <ul className="space-y-2">
+      {items.map(r => (
+        <li key={r.id} className="flex items-start gap-2">
+          {sev(r)}
+          <div className="min-w-0">
+            <div className="text-base text-[#ECEDEF]">{r.rule}{r.status === 'pending' && <span className="ml-2 text-xs text-amber-300">awaiting the client’s confirmation</span>}</div>
+            <div className="text-xs text-[#646A75]">{plainSource(r.source)}{r.applies_to === 'both' ? ' · also checked on images' : ''}</div>
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+  const copyBrand = active.brand.filter(b => b.applies_to !== 'visual');
+  const visual = active.brand.filter(b => b.applies_to === 'visual');
+  return (
+    <div className="space-y-4">
+      <section className="rounded-xl border border-[#272B34] bg-[#16181D] p-5">
+        <h2 className="mb-1 text-lg font-semibold">Copy rules <span className="text-sm font-normal text-[#858B96]">(every line)</span></h2>
+        <p className="mb-3 text-sm text-[#858B96]">Red means it breaks a client rule: fix it, or override with a reason.</p>
+        {list(active.compliance)}
+      </section>
+      <section className="rounded-xl border border-[#272B34] bg-[#16181D] p-5">
+        <h2 className="mb-3 text-lg font-semibold">Brand rules</h2>
+        {list(copyBrand)}
+        {visual.length > 0 && (
+          <>
+            <h3 className="mb-2 mt-4 text-base font-semibold">On images and video only <span className="text-sm font-normal text-[#858B96]">(checked in Pre-flight, not on copy)</span></h3>
+            {list(visual)}
+          </>
+        )}
+      </section>
+      {active.clarity.length > 0 && (
+        <section className="rounded-xl border border-[#272B34] bg-[#16181D] p-5">
+          <h2 className="mb-3 text-lg font-semibold">Clarity</h2>
+          {list(active.clarity)}
+        </section>
+      )}
+      <section className="space-y-3 rounded-xl border border-[#272B34] bg-[#16181D] p-5">
+        <h2 className="text-lg font-semibold">Personas</h2>
+        {meta ? personaKeys(active.personas).map(k => <PersonaPanel key={k} meta={meta} persona={k} />) : Object.entries(active.personas).map(([k, p]) => <div key={k} className="font-semibold">{p.name}</div>)}
+      </section>
+    </div>
   );
 }

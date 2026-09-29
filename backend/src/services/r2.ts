@@ -6,7 +6,7 @@
 // R2_BUCKET_NAME, and R2_PUBLIC_URL (the public bucket domain used to construct
 // fetchable URLs).
 
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { randomUUID } from 'crypto';
 
 const R2_ENABLED = process.env.ENABLE_R2_STORAGE === 'true';
@@ -95,15 +95,26 @@ export async function fetchAsBuffer(url: string): Promise<Buffer> {
 }
 
 // ---------- private objects (Copy Studio Pre-flight) ----------
-// Stored under a key the caller chooses and read back through the signed-in
-// API, never through R2_PUBLIC_URL. STUDIO_R2_BUCKET can point them at a
-// private bucket; otherwise they share R2_BUCKET_NAME, where the key's random
-// upload id keeps them unguessable (the URL is never sent to a browser).
+// Stored in a private bucket (STUDIO_R2_BUCKET: no public URL) under a key the
+// caller chooses, and read back only through the signed-in API. Never
+// R2_BUCKET_NAME, which has a public URL (Brook, 29 Sep).
 
 function privateBucket(): string {
-  const bucket = process.env.STUDIO_R2_BUCKET || process.env.R2_BUCKET_NAME;
-  if (!bucket) throw new Error('R2_BUCKET_NAME (or STUDIO_R2_BUCKET) not configured.');
+  const bucket = process.env.STUDIO_R2_BUCKET;
+  if (!bucket) throw new Error("Pre-flight storage isn't configured: set STUDIO_R2_BUCKET to a private bucket");
   return bucket;
+}
+
+/** Can the R2 keys reach the private bucket? For a startup warning; never throws. */
+export async function checkPrivateBucket(): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const s3 = getClient();
+    if (!s3) return { ok: false, error: 'R2 is not configured' };
+    await s3.send(new HeadBucketCommand({ Bucket: privateBucket() }));
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: String(err?.name || err?.message || err) };
+  }
 }
 
 export async function putPrivateObject(key: string, buffer: Buffer, contentType: string): Promise<void> {

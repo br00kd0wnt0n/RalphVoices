@@ -135,3 +135,23 @@ test('Pre-flight notes an asset whose type doesn’t fit the code’s format (ne
   assert.equal(formatNote('DINK_NEVER_VIDEO_v1_TIKTOK', 'video'), null);
   assert.equal(formatNote('ODD_NAME', 'static'), null);
 });
+
+test('Pre-flight storage: production with R2 needs the private bucket, never the public one', async () => {
+  const { preflightStorage } = await import('../src/services/studio/preflight.js');
+  const prod = { NODE_ENV: 'production', ENABLE_R2_STORAGE: 'true', R2_BUCKET_NAME: 'public-bucket' } as NodeJS.ProcessEnv;
+  const refused = preflightStorage(prod, true);
+  assert.equal(refused.mode, 'refuse');
+  assert.match(refused.reason!, /set STUDIO_R2_BUCKET to a private bucket/);
+  assert.equal(preflightStorage({ ...prod, STUDIO_R2_BUCKET: 'private' }, true).mode, 'r2');
+  assert.equal(preflightStorage({ ...prod, ENABLE_R2_STORAGE: 'true' }, false).mode, 'refuse', 'R2 on but unusable still refuses in production');
+  assert.equal(preflightStorage({ NODE_ENV: 'development' } as NodeJS.ProcessEnv, false).mode, 'db');
+  assert.equal(preflightStorage({ NODE_ENV: 'development', R2_BUCKET_NAME: 'public-bucket' } as NodeJS.ProcessEnv, true).mode, 'db', 'never the public bucket, even in dev');
+});
+
+test('an audit from older rules or older checks says so (never re-run automatically)', async () => {
+  const { staleness, PREFLIGHT_LOGIC_VERSION } = await import('../src/services/studio/preflight.js');
+  assert.equal(staleness({ status: 'done', rules_version: 'v2.4', result: { logic_version: PREFLIGHT_LOGIC_VERSION } }, 'v2.4'), null);
+  assert.match(staleness({ status: 'done', rules_version: 'v2.3', result: { logic_version: PREFLIGHT_LOGIC_VERSION } }, 'v2.4')!, /older rules \(v2\.3; live: v2\.4\): audit again/);
+  assert.match(staleness({ status: 'done', rules_version: 'v2.4', result: {} }, 'v2.4')!, /older version of the checks/);
+  assert.equal(staleness({ status: 'failed', rules_version: 'v1' }, 'v2.4'), null);
+});

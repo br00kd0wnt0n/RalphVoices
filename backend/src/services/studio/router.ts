@@ -92,7 +92,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
 
   r.get('/meta', wrap(async (req, res) => {
     const { studio_dir, ...m } = await S.meta();
-    const pf = o.preflight ? { enabled: true, storage: o.preflight.service.storage, engine: o.preflight.service.engineName, can_set_ready: o.preflight.canSetReady(req) } : { enabled: false };
+    const pf = o.preflight ? { enabled: true, storage: o.preflight.service.storageStatus, engine: o.preflight.service.engineName, can_set_ready: o.preflight.canSetReady(req) } : { enabled: false };
     res.json({ ...m, ...(o.rules ? {} : { studio_dir }), preflight: pf, can_set_compliance: o.canSetCompliance ? o.canSetCompliance(req) : true, spend: await spent(), mock: o.mock, cap: o.cap, cap_window: o.capWindow, ask_over: o.askOver, ...(o.metaExtra?.(req) || {}) });
   }));
   r.post('/estimate', wrap(async (req, res) => {

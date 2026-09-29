@@ -63,13 +63,16 @@ Screenshots are in `Claude outputs/voices-r1/studio/screens/` (client material):
 | Variable | Value |
 |---|---|
 | `STUDIO_READY_EMAILS` | `nick.larson@ralph.world` (admins in `ADMIN_EMAILS` can already mark assets ready) |
-| `STUDIO_R2_BUCKET` | optional: a private R2 bucket for Pre-flight files. Without it they share `R2_BUCKET_NAME`, under unguessable keys that are never sent to a browser. The existing bucket has a public URL (`R2_PUBLIC_URL`), so a private bucket is safer. |
+| `STUDIO_R2_BUCKET` | **required**: the new private R2 bucket (no public URL; the existing R2 keys, with the token's scope extended to it). Without it, production refuses Pre-flight uploads with "Pre-flight storage isn't configured: set STUDIO_R2_BUCKET to a private bucket". It never falls back to `R2_BUCKET_NAME`, which has a public URL. At startup the logs say "Pre-flight files: private R2 bucket reachable", or warn if the keys can't reach it. |
+| `STUDIO_COMPLIANCE_EMAILS` | `vivan@ralph.world`. Who sets the compliance status on copy (admins can too); everyone else sees it read-only ("Vivan updates this"). |
 | `FFMPEG_PATH` | not needed once ffmpeg is in the image (below) |
 
 `ENABLE_R2_STORAGE=true` and the `R2_*` variables are already set (Brook, 28 Sep); nothing new is needed for R2. Don't set `STUDIO_MOCK`.
 
 - **ffmpeg:** `backend/nixpacks.toml` now has `nixPkgs = ["nodejs_18", "ffmpeg"]`. Check that the backend service builds from `backend/` (its Root Directory). If it builds from the repo root, the same line goes in the root `nixpacks.toml`. Without ffmpeg, videos are still audited on copy and voice-over, with a note that frames were unavailable.
 - **Migration 017** needs nothing new from the database: it's additive and idempotent (`IF NOT EXISTS` throughout). Migration 016 (B3) is separate.
+
+**Rules v2.4** (29 Sep, UX review item 12): the pitched headline on each territory card. Upload `studio-rules.json` (v2.4) in the Rules view with "Upload and activate". No check changes. Audits run under v2.3 will say "Checked under older rules: audit again".
 
 **After the deploy:**
 1. The logs show "Database migrations applied." with no warning.
