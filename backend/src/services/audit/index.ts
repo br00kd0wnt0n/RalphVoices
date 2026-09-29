@@ -22,7 +22,12 @@ import type { Asset, AssetAudit, Flag, Frame, Rubric, Rules } from './types.js';
 
 export const REPORT_VERSION = 1;
 
-export interface AuditFile { name: string; mime: string; data: Buffer }
+/**
+ * One uploaded file: its bytes (`data`) or a path to it on local disk (`path`).
+ * With a path nothing is copied into memory; the file is read where it is and
+ * never modified or deleted (large videos stay on disk).
+ */
+export interface AuditFile { name: string; mime: string; data?: Buffer; path?: string }
 
 export interface AuditInput {
   stub: string;                        // PERSONA_TERRITORY_FORMAT_v#_PLATFORM
@@ -106,6 +111,25 @@ const byNumber = (a: AuditFile, b: AuditFile) => {
 };
 const safe = (name: string, i: number) => `${String(i + 1).padStart(2, '0')}-${path.basename(name).replace(/[^A-Za-z0-9._-]+/g, '_').slice(-80)}`;
 
+/** A file on disk for the engine: the caller's own file (linked, not copied) when a path is given, else its bytes written under the temp dir. */
+function place(f: AuditFile, i: number, dir: string): string {
+  // The engine reads the type from the extension: take it from the MIME type when the name has none.
+  const EXT: Record<string, string> = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp', 'image/gif': '.gif', 'video/mp4': '.mp4', 'video/quicktime': '.mov' };
+  const name = /\.[a-z0-9]{2,4}$/i.test(f.name) ? f.name : `${f.name}${EXT[f.mime] || ''}`;
+  if (f.path) {
+    if (!fs.existsSync(f.path)) throw new Error(`File not found: ${f.path}`);
+    // A symlink under the temp dir, named from the file's own name: the extension
+    // (multer's disk files have none) and a unique name for each card, with no copy.
+    // Removing the temp dir removes the link, never the caller's file.
+    const link = path.join(dir, safe(name, i));
+    try { fs.symlinkSync(path.resolve(f.path), link); return link; } catch { return f.path; }
+  }
+  if (!f.data) throw new Error(`${f.name}: give either data or path`);
+  const p = path.join(dir, safe(name, i));
+  fs.writeFileSync(p, f.data);
+  return p;
+}
+
 /** Signed-off copy → the copy fields the rule checks see (limits, price lead). On-image text isn't a field. */
 function copyFields(copy: SignedOffCopy = {}): { copy: Record<string, string>; labels: Record<string, string> } {
   const out: Record<string, string> = {}, labels: Record<string, string> = {};
@@ -135,7 +159,7 @@ function kindOf(files: AuditFile[]): { kind: Asset['kind']; media: AuditFile[] }
 function materialise(input: AuditInput, rules: Rules, dir: string, tools: Tools): Asset {
   const { kind, media } = kindOf(input.files);
   const { stub, error } = stubOf(input, rules);
-  const paths = media.map((f, i) => { const p = path.join(dir, safe(f.name, i)); fs.writeFileSync(p, f.data); return p; });
+  const paths = media.map((f, i) => place(f, i, dir));
   const { copy, labels } = copyFields(input.copy);
   const a: Asset = {
     name: input.stub, stub, stub_error: error, persona: input.persona || stub?.persona, kind, source: paths[0],
@@ -167,7 +191,7 @@ export function estimateAudit(input: AuditInput, opts: Pick<AuditOptions, 'rules
   try {
     const { kind, media } = kindOf(input.files);
     const { stub, error } = stubOf(input, opts.rules);
-    const paths = media.map((f, i) => { const p = path.join(dir, safe(f.name, i)); fs.writeFileSync(p, f.data); return p; });
+    const paths = media.map((f, i) => place(f, i, dir));
     let frames: Frame[] = paths.map(p => ({ label: 'image', path: p }));
     let duration = 0, audio = false;
     if (kind === 'video') {
