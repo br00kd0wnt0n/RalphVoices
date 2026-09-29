@@ -239,6 +239,7 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   await assert.rejects(() => pf.setReady(stub, true, 'nick'), /Run the audit on the latest upload/);
   await pf.runAudit(await pf.createAudit(up2.upload_id, 'nick'));
   assert.equal((await pf.report(stub)).flags.some((f: any) => f.check === 'copy_match'), false);
+  assert.equal((await pf.agreement()).marked, 3, 'verdicts on the replaced upload still count towards the round');
   assert.equal((await pf.setReady(stub, true, 'brook')).status, 'ready');
   assert.equal((await pf.report(stub)).history.length, 2);
 

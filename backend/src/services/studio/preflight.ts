@@ -317,12 +317,16 @@ export class Preflight {
 
   // ---------- the round: agreement rate and exports ----------
 
-  /** People's agree/disagree on flags from the latest audit of each stub. Brook's target: 90%. */
+  /**
+   * People's agree/disagree on the flags, across every audit of the round's
+   * signed-off stubs (a verdict on an asset that was later replaced still says
+   * how good the checks are). Brook's target: 90%.
+   */
   async agreement(filter: { persona?: string; territory?: string } = {}) {
-    const stubs = (await this.stubs(filter)).filter(s => s.audit?.status === 'done').map(s => s.audit!.id);
+    const stubs = (await this.stubs(filter)).map(s => s.stub);
     if (!stubs.length) return { marked: 0, agree: 0, rate: null as number | null, by_severity: {} as Record<string, { marked: number; agree: number }> };
     const rows = (await this.db.query(
-      `SELECT f.severity, g.agree FROM studio_audit_agreements g JOIN studio_audit_flags f ON f.id = g.flag_id WHERE f.audit_id = ANY($1)`, [stubs])).rows;
+      `SELECT f.severity, g.agree FROM studio_audit_agreements g JOIN studio_audit_flags f ON f.id = g.flag_id WHERE f.stub = ANY($1)`, [stubs])).rows;
     const by: Record<string, { marked: number; agree: number }> = {};
     for (const r of rows) { by[r.severity] = by[r.severity] || { marked: 0, agree: 0 }; by[r.severity].marked++; if (r.agree) by[r.severity].agree++; }
     const agree = rows.filter(r => r.agree).length;

@@ -1355,7 +1355,7 @@ function AuthMedia({ path, video, className, alt }: { path: string; video?: bool
   }, [path]);
   if (failed) return <div className={cn('flex items-center justify-center rounded-lg bg-[#101216] text-xs text-[#646A75]', className)}>not available</div>;
   if (!url) return <div className={cn('animate-pulse rounded-lg bg-[#1C1F26]', className)} />;
-  return video ? <video src={url} controls className={cn('rounded-lg bg-black', className)} /> : <img src={url} alt={alt || ''} className={cn('rounded-lg object-contain bg-[#101216]', className)} />;
+  return video ? <video src={url} controls preload="metadata" className={cn('rounded-lg bg-black', className)} /> : <img src={url} alt={alt || ''} className={cn('rounded-lg object-contain bg-[#101216]', className)} />;
 }
 
 function stubState(s: PfStub): { words: string; tone: 'grey' | 'amber' | 'red' | 'outline'; className?: string } {
@@ -1660,7 +1660,7 @@ function PfFlagRow({ flag, canOverride, onChanged, onError }: { flag: PfFlag; ca
             {flag.persona && flag.cross_persona && <span className="text-xs text-[#858B96]">({flag.persona})</span>}
           </div>
           {flag.quote && (flag.check === 'copy_match'
-            ? <div className="mt-1 text-sm">{/signed off:/i.test(flag.quote) ? '' : 'Missing from the asset: '}<mark className="bg-amber-400/30 px-1 text-amber-50">{flag.quote}</mark></div>
+            ? <div className="mt-1 text-sm">{/^signed off/i.test(flag.quote) ? '' : 'Missing from the asset: '}<mark className="bg-amber-400/30 px-1 text-amber-50">{flag.quote}</mark></div>
             : <div className="mt-1 text-sm">On the asset: <mark className="bg-amber-400/30 px-1 text-amber-50">{flag.quote}</mark></div>)}
           {flag.why && <div className="mt-0.5 text-sm text-[#A3A8B1]">{flag.why}</div>}
           <div className="mt-0.5 text-xs text-[#858B96]">{[flag.where, flag.frame?.label && !flag.frame.upload_id ? `frame ${flag.frame.label}${flag.frame.description ? `: ${flag.frame.description}` : ''}` : '', `Source: ${flag.source}`].filter(Boolean).join(' · ')}</div>
