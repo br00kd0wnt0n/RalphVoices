@@ -1,0 +1,6 @@
+{
+  "_note": "Made-up example. The real territory names are client material: weekly.ts reads them at runtime from Claude outputs/voices-r1/studio/studio-rules.json (its `territories` block), or from --territories FILE in this shape. Keys are PERSONA_TERRITORY (or TERRITORY); unknown codes fall back to the code.",
+  "DINK_SIMA": "Example Territory A",
+  "FAM_SIME": "Example Territory E",
+  "SIMC": "Example Territory C"
+}

@@ -1,0 +1,158 @@
+{
+  "_note": "B3 weekly read (VOICES v2, Trupanion). Written 28 Sep 2026, before any live data. Change a threshold only with a dated entry in `changes` and a reason; the weekly note prints the config version it ran with.",
+  "version": 6,
+  "changes": [
+    { "date": "2026-09-28", "version": 1, "by": "B3 build", "what": "First version, set before Month 1 goes live." },
+    { "date": "2026-09-28", "version": 2, "by": "B3 build, asked by Brook", "what": "Hold bars on calls (calls.hold): a call made last week stays until the evidence falls well back, so ads near a threshold don't flip between scale and keep testing week to week. Still before any live data." },
+    { "date": "2026-09-28", "version": 3, "by": "B3 build, fixes approved by Brook after review", "what": "(1) Ties and calls use the same draws: tied = fewer than 9 in 10 draws put one ad ahead (calls.tie_bar); a scale must be clear of every ad outside its group, a cut must be clear of the ad set's leader. Ties were judged by 90% range overlap before, so an ad could be tied with an ad and cut. (2) min_ads_in_cell 2 -> 3: with two ads the rules produced a scale and a cut every week, a coin toss. (3) Note: one-screen plain-English front, appendix, client variant; cost per enrollment hidden below 5 enrollments. Still before any live data." },
+    { "date": "2026-09-29", "version": 4, "by": "B3 historic run", "what": "Audience rule: RET (Add3's retargeting prefix, e.g. Add3_RET_Trupanion_US_...) now reads as retargeting. Seen in Add3's historic Meta and TikTok exports; before this, RET campaigns fell to 'unknown' and were left out anyway, so no call changes." },
+    { "date": "2026-09-29", "version": 5, "by": "B3, naming update from Brook (proposed to Add3, confirmation pending)", "what": "New ad-name form PERSONA_TERRITORY_FORMAT_[visual][line]_REGION_PLATFORM_YYMMDD (e.g. FAM_SUMMER_ST_A2_US_META_261013): US and Canada run as separate ads, 3 copy lines per visual. The older _v#_ form is still accepted. Region joins the cell (persona x platform x region) and the feature strata (features pool across regions with region as a control)." },
+    { "date": "2026-09-29", "version": 6, "by": "B3, Add3 confirmation via Brook", "what": "Meta conversion columns confirmed by Add3 (29 Sep): 'Checkouts initiated' = a quote started, 'Purchases' = an enrollment. Mapped first in columns.meta.quotes / enrollments. The attribution window is still unknown. TikTok's 'Purchases (website)' is mapped to enrollments as an unconfirmed assumption." }
+  ],
+
+  "naming": {
+    "_why": "The convention agreed with Add3 (tagging email, Sep 2026; region and visual letter added 29 Sep, see forms). Aliases absorb Studio's long format names (STATIC, CAROUSEL) and common slips; anything else is quarantined with a reason.",
+    "personas": ["DINK", "CUR", "FAM"],
+    "formats": { "ST": ["ST", "STATIC"], "VID": ["VID", "VIDEO"], "CAR": ["CAR", "CAROUSEL"], "TT": ["TT", "TIKTOK"], "UGC": ["UGC"] },
+    "platforms": { "META": ["META", "FB", "IG"], "TT": ["TT", "TIKTOK"] },
+    "regions": { "US": ["US", "USA"], "CA": ["CA", "CAN", "CANADA"] },
+    "forms": [
+      ["PERSONA", "TERRITORY", "FORMAT", "VISUALLINE", "REGION", "PLATFORM"],
+      ["PERSONA", "TERRITORY", "FORMAT", "VERSION", "PLATFORM"]
+    ],
+    "_forms": "The naming convention, in one place. Each form is a list of slots tried in order; the delivery date (YYMMDD) and any suffix follow the last slot. VISUALLINE is a visual letter and copy line (A2 = visual A, line 2); VERSION is the older v#. If Add3 changes the format, edit this list (and the two patterns below if the tokens change).",
+    "visual_line_pattern": "^([A-Z])([1-9][0-9]?)$",
+    "version_pattern": "^V([0-9]{1,3})$",
+    "video_formats": ["VID", "TT", "UGC"],
+    "territories": [],
+    "_territories": "Optional list of known territory codes (without the persona prefix). Empty = accept any; an unknown code is a warning, not a quarantine, because new territories arrive every month."
+  },
+
+  "audience": {
+    "_why": "Creative reads use prospecting only; retargeting audiences have already met the brand and convert at several times the prospecting rate (Add3's May report). Rows that match neither pattern are 'unknown' and left out of the read, and listed, so a new campaign name can't slip retargeting into a creative call.",
+    "retargeting_pattern": "retarget|remarket|\\bRET\\b|\\bRT\\b|\\bRTG\\b|\\bRMKT?\\b|\\bwarm\\b|\\bBOF\\b",
+    "prospecting_pattern": "prospect|\\bPRO\\b|\\bPROS\\b|\\bTOF\\b|\\bcold\\b|\\bacq",
+    "match_on": ["campaign", "ad_set"],
+    "_match": "Underscores and hyphens are read as spaces before matching, so RT in Trupanion_RT_Meta counts as a word. Retargeting wins if both patterns match.",
+    "default": "unknown"
+  },
+
+  "columns": {
+    "_why": "Header aliases per field, matched case-insensitively ignoring punctuation and spacing. A trailing * is a prefix match (e.g. 'Amount spent (USD)'). Meta's quote and enrollment columns are confirmed (see _conversions); if none match, the read runs without quotes and says so.",
+    "meta": {
+      "ad_name": ["Ad name"],
+      "ad_id": ["Ad ID"],
+      "campaign": ["Campaign name"],
+      "ad_set": ["Ad set name"],
+      "day": ["Day", "Date"],
+      "period_start": ["Reporting starts"],
+      "period_end": ["Reporting ends"],
+      "spend": ["Amount spent*", "Spend", "Cost"],
+      "impressions": ["Impressions"],
+      "reach": ["Reach"],
+      "frequency": ["Frequency"],
+      "video_3s": ["3-second video plays", "3 second video plays", "Video plays at 3 seconds", "3-second video views"],
+      "thruplays": ["ThruPlays", "ThruPlay"],
+      "link_clicks": ["Link clicks"],
+      "landing_page_views": ["Landing page views", "Website landing page views"],
+      "quotes": ["Checkouts initiated", "Quotes", "Quote starts", "Website quotes", "Get quote", "Custom conversions: quote*", "Quote*"],
+      "enrollments": ["Purchases", "Enrollments", "Enrolments", "Website enrollments", "Custom conversions: enroll*", "Enroll*"],
+      "_conversions": "Confirmed by Add3 (29 Sep 2026, via Brook): in the Meta export, 'Checkouts initiated' = a quote started and 'Purchases' = an enrollment. The attribution window is still unknown (open item)."
+    },
+    "tiktok": {
+      "_note": "Unconfirmed: Add3 hasn't said what TikTok export they can give. These are TikTok Ads Manager's standard names. TikTok's closest hook metric is 2-second views, which is not the same as Meta's 3-second plays; it's read as hook rate but never pooled with Meta's.",
+      "ad_name": ["Ad name"],
+      "ad_id": ["Ad ID"],
+      "campaign": ["Campaign name"],
+      "ad_set": ["Ad group name"],
+      "day": ["Date", "By Day", "Day"],
+      "period_start": ["Reporting starts", "Start date"],
+      "period_end": ["Reporting ends", "End date"],
+      "spend": ["Cost", "Spend", "Total cost"],
+      "impressions": ["Impressions", "Impression"],
+      "reach": ["Reach"],
+      "frequency": ["Frequency"],
+      "video_3s": ["2-second video views", "Video views at 2s", "3-second video views"],
+      "thruplays": ["6-second video views", "Video views at 100%"],
+      "link_clicks": ["Clicks (destination)", "Clicks"],
+      "landing_page_views": ["Landing page views", "Landing page view"],
+      "quotes": ["Quotes", "Quote*", "Complete registration"],
+      "enrollments": ["Purchases (website)", "Enrollments", "Enroll*", "Complete payment"],
+      "_conversions": "'Purchases (website)' is mapped to enrollments as an ASSUMPTION: likely the same event as Meta's Purchases, but Add3 hasn't confirmed it for TikTok."
+    }
+  },
+
+  "model": {
+    "interval": 0.9,
+    "_interval": "90% ranges throughout (the plan and the readout spec).",
+    "mc_draws": 4000,
+    "seed": 20261009,
+    "_seed": "Fixed so the same data gives the same P(best) every time the note is drafted.",
+    "between_ad_cv": { "default": 0.25, "min": 0.05, "max": 0.8, "min_ads_to_estimate": 6 },
+    "_between_ad_cv": "How much ads' true rates differ within a persona x format group, as a coefficient of variation. Estimated from the data once there are 6+ ads with enough impressions; before that 0.25 (a typical spread between creatives in the same ad set). It sets how hard each ad is pulled towards its group mean.",
+    "group_prior_ads": 2,
+    "_group_prior_ads": "Each persona x format mean is pulled towards its persona mean as if the persona mean were worth 2 more ads; each persona mean towards the overall mean the same way. With 1-2 ads in a group (the Month-1 norm) the group mean leans on the persona.",
+    "pool_by": ["persona", "platform", "region", "format"],
+    "cell_by": ["persona", "platform", "region"],
+    "_cell_by": "A cell is what Add3 can act on: one ad set per persona per platform, and (from v5) per region, since US and Canada run as separate ads. P(best) and the cell median are computed within it. Older names without a region form one cell per persona and platform."
+  },
+
+  "metrics": {
+    "hook_rate": { "label": "hook rate", "events": "video_3s", "per": "impressions", "video_only": true, "min_impressions": 2000, "scale": "pct" },
+    "link_ctr": { "label": "link CTR", "events": "link_clicks", "per": "impressions", "min_impressions": 8000, "scale": "pct" },
+    "quotes_per_1k": { "label": "quotes per 1,000 impressions", "events": "quotes", "per": "impressions", "min_impressions": 20000, "scale": "per1k" },
+    "_min_impressions": "Below these an ad is 'too early to call' on that metric. At a 1.4% CTR, 8,000 impressions is about 110 clicks (roughly +/-15% on the rate). At about 0.6 quotes per 1,000, 20,000 impressions is about 12 quotes (roughly +/-30%). A thin week of a few thousand impressions per ad is below both."
+  },
+
+  "calls": {
+    "primary_metric": "quotes_per_1k",
+    "fallback_metric": "link_ctr",
+    "fallback_can_scale": false,
+    "fallback_can_cut": true,
+    "_metrics": "Calls are made on quotes per 1,000 impressions, the closest read to cost per quote. While quotes are too thin, link CTR can support a cut (an ad that clearly can't earn clicks can't earn quotes) but never a scale. Hook rate is diagnostic only. Cost per enrollment is reported and never used for a call.",
+    "min_days_live": 4,
+    "_min_days_live": "Meta's learning phase: the first days' delivery skews to cheap impressions.",
+    "min_ads_in_cell": 3,
+    "_min_ads_in_cell": "No scale or cut unless the ad set has 3+ ads with enough data. With 2, one is always above the median and one below, so the rules called a scale and a cut every week (a coin toss). Below 3 the call is keep testing and the note says why.",
+    "tie_bar": 0.9,
+    "_tie_bar": "Two ads are tied when fewer than 9 in 10 Monte Carlo draws put one ahead of the other. The same draws decide the calls: a scale must be ahead of every ad outside its scaled group in at least 9 of 10 draws, a cut must be behind the ad set's leader in at least 9 of 10. So an ad is never scaled or cut relative to an ad it's tied with.",
+    "p_best_scale": 0.8,
+    "max_tied_scale": 2,
+    "p_beat_median_tied_scale": 0.9,
+    "_scale": "Scale when P(best in cell) >= 0.8. If no single ad reaches it but the top two together do and each beats the cell median with P >= 0.9, both are 'scale (tied)': never 'the winner'.",
+    "p_worse_than_median_cut": 0.9,
+    "_cut": "Cut when P(worse than the cell median) >= 0.9.",
+    "hold": { "p_best_scale": 0.6, "p_beat_median_tied_scale": 0.75, "p_worse_than_median_cut": 0.75, "tie_bar": 0.8 },
+    "_hold": "Hysteresis. A call needs the full bar to start and a lower bar to stay: last week's scale stays while P(best) >= 0.6 (and nothing else has reached 0.8); a tied scale stays while the ad is still in the top two by P(best) and beats the median with P >= 0.75; a cut stays while P(worse than median) >= 0.75. Without it, ads near 0.8 or 0.9 flip between calls from one week's noise. Holds apply only to ads still readable and delivering, and each week's read is chained from the start of the flight.",
+    "otherwise": "keep testing"
+  },
+
+  "features": {
+    "min_ads_with": 3,
+    "min_ads_without": 3,
+    "strata": ["persona", "platform", "region"],
+    "_strata": "Ads with a feature are compared with ads without it in the same persona and platform, in one weighted regression on the log rate that also adjusts for format and for the other features, so a feature that only ever appears in video doesn't take credit for video, and two features that travel together don't take each other's credit. Ads whose features are unknown (no Studio or audit record) are left out, not counted as 'without'. 'Clear' needs the range to exclude no effect after a Bonferroni allowance for the number of features checked together (about 1 false 'clear' a week otherwise, at 90% ranges and a dozen features); the range printed is the plain 90% one.",
+    "include_tags": ["angle", "structure"],
+    "_include_tags": "Besides the content features, angle and structure from the Studio shortlist are tagged as 'angle:<id>' and 'structure:<name>'.",
+    "persona_min_ads_with": 3,
+    "min_residual_df": 4,
+    "_min_residual_df": "The regression needs at least 4 more ads than terms it fits, so it can check its own fit. If ads scatter more than the between-ad spread allows (a standout ad, say), every range is widened by that factor. A persona with 10 ads and 5 features doesn't qualify: it would pin a standout ad's success on whatever features that ad happened to carry."
+  },
+
+  "cost_benchmarks": {
+    "cost_per_quote": null,
+    "_note": "Trupanion's allowable acquisition cost (PAC) by state hasn't arrived. Ad names don't carry state, so a by-state comparison needs a state breakdown from Add3 too. Until then cost per quote is reported without a target, and the note says so."
+  },
+
+  "report": {
+    "min_enrollments_for_cpe": 5,
+    "_min_enrollments_for_cpe": "Below 5 enrollments, cost per enrollment is shown as 'too few enrollments to read (n)', not a dollar figure: one enrollment more or less moves it by 20% or more."
+  },
+
+  "wording": {
+    "banned": ["predict", "prediction", "predicted", "winner", "winning", "score", "scores", "guarantee", "certain", "proves", "proven"],
+    "internal_terms": ["P(", "cell", "posterior", "median", "prior", "draws", "Monte Carlo", "shrunk"],
+    "_internal_terms": "Not allowed in the one-screen front of the note or the client variant; the appendix may use them.",
+    "_banned": "The read reports what live results show, with ranges. Never forecasts, never a winner inside a tie, never scores."
+  }
+}
