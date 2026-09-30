@@ -80,6 +80,7 @@ router.use(createStudioRouter({
   preflight: { service: preflight, canSetReady: req => canSetReady((req as AuthRequest).user?.email) },
   canSetCompliance: req => canSetCompliance((req as AuthRequest).user?.email),
   canOverride: req => canSetReady((req as AuthRequest).user?.email),
+  canSignOff: req => canSetReady((req as AuthRequest).user?.email),
   metaExtra: req => {
     const u = (req as AuthRequest).user;
     return { user: u ? { email: u.email, name: u.name, admin: studioAccess(u.email).admin } : null };

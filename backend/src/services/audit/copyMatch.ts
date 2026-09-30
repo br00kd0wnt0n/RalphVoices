@@ -20,7 +20,8 @@ export interface SignedOffCopy {
 
 /** Signed-off fields → the rules file's field ids (limits, price-lead fields). */
 export const COPY_FIELDS: Record<keyof SignedOffCopy, { field?: string; label: string; onAsset: 'must' | 'maybe' | 'no' }> = {
-  on_image: { label: 'On-image text (signed off)', onAsset: 'must' },
+  // meta_on_image arrives in rules v2.10: with it, on-image copy gets its limits and the price-lead check; without it they're skipped.
+  on_image: { field: 'meta_on_image', label: 'On-image text (signed off)', onAsset: 'must' },
   hook: { field: 'tiktok_hook', label: 'TikTok hook / on-screen text', onAsset: 'must' },
   headline: { field: 'meta_headline', label: 'Meta headline', onAsset: 'maybe' },
   primary_text: { field: 'meta_primary', label: 'Meta primary text', onAsset: 'no' },

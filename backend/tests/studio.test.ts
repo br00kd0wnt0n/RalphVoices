@@ -142,8 +142,11 @@ test('the creative director writes first: own lines are tagged, checked, and Stu
   const l = await S.setDecision(first.id, more.lines[0].id, { decision: 'keep' }, 'Brook');
   assert.equal(l.decided_by, 'Brook');
   const history = await S.lineHistory(l.id);
-  assert.equal(history.length, 1);
-  assert.deepEqual(history[0].after, { decision: 'keep', edited_text: '', note: '' });
+  // A person's line starts its history with who added it; then each decision.
+  assert.equal(history.length, 2);
+  assert.deepEqual([history[0].by, (history[0].after as any).added], ['Brook', true]);
+  assert.equal(l.added_by, 'Brook');
+  assert.deepEqual(history[1].after, { decision: 'keep', edited_text: '', note: '' });
 });
 
 test('only the local client logo is served; no reference documents', async () => {
