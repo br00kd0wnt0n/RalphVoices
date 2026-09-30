@@ -60,13 +60,13 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
 
   const plan = view?.plan;
   const byId = new Map((view?.lines || []).map(x => [x.line.id, x]));
-  const used = new Set(draft ? [...draft.versions.flatMap(v => Object.values(v.fields)), ...Object.values(draft.on_image)] : []);
+  const used = new Set(draft ? [...draft.versions.flatMap(v => Object.values(v.fields)), ...Object.values(draft.on_image).flat()].filter(Boolean) : []);
   const reds = [...used].reduce((n, id) => n + (byId.get(id)?.red.length || 0), 0);
   const leads = [...lead].filter(c => plan?.versions.some(v => v.code === c));
   const latest = view?.latest;
   const sameAsLatest = !!latest && !!plan && JSON.stringify((latest.versions || []).map(v => [v.code, Object.entries(v.fields).map(([f, x]) => [f, x.line_id, x.sha256]).sort()]))
     === JSON.stringify(plan.versions.map(v => [v.code, Object.entries(v.fields).map(([f, id]) => [f, id, byId.get(id)?.sha256]).sort()]))
-    && JSON.stringify((latest.on_image || []).map(o => [o.visual, o.line_id, o.sha256])) === JSON.stringify(plan.on_image.map(o => [o.visual, o.line_id, byId.get(o.line_id)?.sha256]));
+    && JSON.stringify((latest.on_image || []).map(o => [o.visual, o.card || 0, o.line_id, o.sha256])) === JSON.stringify(plan.on_image.map(o => [o.visual, o.card || 0, o.line_id, byId.get(o.line_id)?.sha256]));
   const canSignOff = meta.can_sign_off !== false;
   const blockedBy = !canSignOff ? 'Versions are signed off by the creative lead or an admin.' : !plan ? '' : sameAsLatest ? `These versions are signed off (set v${latest!.version}). Edit a line or change a version to sign off again.`
     : plan.issues.length ? `${plan.issues.length} thing${plan.issues.length === 1 ? '' : 's'} to finish: ${plan.issues[0]}${plan.issues.length > 1 ? '…' : ''}`
@@ -95,6 +95,8 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
   const visualsOf = (p: string) => [...new Set(indexed.filter(x => (x.p?.platform || x.d.platform) === p).map(x => x.d.visual))].sort();
   const nextLetter = (p: string) => VISUAL_LETTERS.find(l => !visualsOf(p).includes(l)) || 'Z';
   const linesFor = (f: string) => (view?.lines || []).filter(x => x.line.field === f);
+  // A carousel's on-image text is card by card (card 1 the hook … the end card), shared by every version on the visual.
+  const carousel = /^CAR/i.test(t?.format || '');
   const addVersion = (platform: string, visual: string) => change(d => {
     const vf = view!.fields[platform];
     const fields: Record<string, string> = {};
@@ -139,17 +141,19 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
                 {visualsOf(p).map(letter => {
                   const vs = indexed.filter(x => x.d.visual === letter && (x.p?.platform || x.d.platform) === p);
                   const oiFields = view.fields[p].per_visual;
-                  const oi = plan.on_image.find(o => o.visual === letter && oiFields.includes(byId.get(o.line_id)?.line.field || ''));
+                  const ois = plan.on_image.filter(o => o.visual === letter && oiFields.includes(byId.get(o.line_id)?.line.field || ''));
+                  const oi = ois[0];
+                  const setOnImage = (val: string | string[] | null) => change(d => { const on_image = { ...d.on_image }; if (val && (!Array.isArray(val) || val.length)) on_image[letter] = val; else delete on_image[letter]; return { ...d, on_image }; });
                   return (
                     <div key={letter} className="rounded-xl border border-l-4 border-[#272B34] bg-[#121419] p-4" style={personaEdge(pt.persona)}>
                       <div className="mb-3 flex flex-wrap items-center gap-3">
                         <span className="rounded-md bg-[#D94D8F]/15 px-2.5 py-1 font-mono text-base font-semibold text-[#F2C4DA]">Visual {letter}</span>
-                        {oiFields.map(f => (
+                        {!carousel && oiFields.map(f => (
                           <label key={f} className="flex min-w-0 flex-1 items-center gap-2 text-sm text-[#A3A8B1]">
                             {short(f)}
                             <select aria-label={`${label(f)} for visual ${letter}`} className="min-w-0 flex-1 rounded border border-[#343946] bg-[#101216] px-2 py-1 text-sm text-[#ECEDEF]"
-                              value={draft.on_image[letter] && byId.get(draft.on_image[letter])?.line.field === f ? draft.on_image[letter] : ''}
-                              onChange={e => change(d => { const on_image = { ...d.on_image }; if (e.target.value) on_image[letter] = e.target.value; else delete on_image[letter]; return { ...d, on_image }; })}>
+                              value={typeof draft.on_image[letter] === 'string' && byId.get(draft.on_image[letter] as string)?.line.field === f ? draft.on_image[letter] as string : ''}
+                              onChange={e => setOnImage(e.target.value || null)}>
                               <option value="">None on the image</option>
                               {linesFor(f).map(x => <option key={x.line.id} value={x.line.id}>{x.final_text}</option>)}
                             </select>
@@ -158,7 +162,10 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
                         {oi && <span className="font-mono text-xs text-[#646A75]" title="Same visual: one upload serves all its codes">{oi.visual_key}</span>}
                         {vs.length < LINES_PER_VISUAL && <GhostButton className="text-sm" onClick={() => addVersion(p, letter)}>+ Version on {letter}</GhostButton>}
                       </div>
-                      {oi?.issues.map(x => <div key={x} className="mb-2 text-sm text-red-200">{x}</div>)}
+                      {carousel && oiFields.map(f => (
+                        <CarouselCards key={f} label={label(f)} letter={letter} visible={meta.fields[f]?.visible || 40} options={linesFor(f)} cards={Array.isArray(draft.on_image[letter]) ? draft.on_image[letter] as string[] : draft.on_image[letter] ? [draft.on_image[letter] as string] : []} onChange={setOnImage} />
+                      ))}
+                      {ois.flatMap(o => o.issues).map(x => <div key={x} className="mb-2 text-sm text-red-200">{x}</div>)}
                       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 2xl:grid-cols-3">
                         {vs.map(({ d, i, p: pv }) => (
                           <VersionCard key={i} meta={meta} view={view} version={d} planned={pv} stub={pv?.code ? stubs[pv.code] : undefined} lead={!!pv?.code && lead.has(pv.code)}
@@ -234,6 +241,60 @@ const VISUAL_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 const LINES_PER_VISUAL = 3;
 const VERSION_CHIP: Record<string, string> = { VERSION_REPEAT: 'fields repeat', VERSION_TOO_ALIKE: 'too alike', VERSION_CONFLICT: 'fields clash' };
 
+const DEFAULT_CARDS = 4, MAX_CARDS = 10;
+/** A carousel visual's on-image text, card by card: choose each card's line, swap or reorder, or take a whole sequence. */
+function CarouselCards({ label, letter, options, cards, visible, onChange }: {
+  label: string; letter: string; visible: number; options: ReadyView['lines']; cards: string[]; onChange: (cards: string[] | null) => void;
+}) {
+  const seqs = [...new Map(options.filter(x => x.line.sequence_id).map(x => [x.line.sequence_id!, options.filter(y => y.line.sequence_id === x.line.sequence_id).sort((a, b) => (a.line.card || 0) - (b.line.card || 0))])).entries()];
+  const seqName = (id?: string) => (id ? `S${id.split('-S').pop()}` : '');
+  const optLabel = (x: ReadyView['lines'][number]) => `${x.line.sequence_id ? `${seqName(x.line.sequence_id)}·${x.line.card} ` : ''}${x.final_text}`;
+  const slots = cards.length ? cards : Array(DEFAULT_CARDS).fill('');
+  const set = (next: string[]) => onChange(next.some(Boolean) ? next : null);
+  const move = (i: number, d: number) => { const n = [...slots]; [n[i], n[i + d]] = [n[i + d], n[i]]; set(n); };
+  return (
+    <div className="mb-3 rounded-lg border border-[#272B34] bg-[#16181D] p-3">
+      <div className="mb-2 flex flex-wrap items-center gap-3 text-sm text-[#A3A8B1]">
+        <span className="font-semibold text-[#ECEDEF]">{label}: carousel cards</span>
+        <label className="flex items-center gap-1">Cards
+          <select aria-label={`Number of cards on visual ${letter}`} className="rounded border border-[#343946] bg-[#101216] px-1 py-0.5 text-sm" value={slots.length}
+            onChange={e => { const n = Number(e.target.value); set(n > slots.length ? [...slots, ...Array(n - slots.length).fill('')] : slots.slice(0, n)); }}>
+            {Array.from({ length: MAX_CARDS }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+        {seqs.length > 0 && (
+          <label className="flex items-center gap-1">Use a whole sequence
+            <select aria-label={`Sequence for visual ${letter}`} className="rounded border border-[#343946] bg-[#101216] px-1 py-0.5 text-sm" value=""
+              onChange={e => { const s = seqs.find(([id]) => id === e.target.value); if (s) set(s[1].map(x => x.line.id)); }}>
+              <option value="">Choose…</option>
+              {seqs.map(([id, xs]) => <option key={id} value={id}>{seqName(id)}: {xs[0]?.final_text}</option>)}
+            </select>
+          </label>
+        )}
+        <span className="text-xs text-[#646A75]">Card 1 is the hook; the last card is the end card. The same cards go with every version on visual {letter}.</span>
+      </div>
+      <ol className="space-y-1.5">
+        {slots.map((id, i) => {
+          const x = options.find(o => o.line.id === id);
+          return (
+            <li key={i} className="flex items-center gap-2">
+              <span className="w-14 shrink-0 font-mono text-xs text-[#858B96]">Card {i + 1}</span>
+              <select aria-label={`Card ${i + 1} on visual ${letter}`} className={cn('min-w-0 flex-1 rounded border bg-[#101216] px-2 py-1 text-sm', x?.red.length ? 'border-red-500/60 text-red-200' : 'border-[#343946] text-[#ECEDEF]')}
+                value={id} onChange={e => { const n = [...slots]; n[i] = e.target.value; set(n); }}>
+                <option value="">No text on this card</option>
+                {options.map(o => <option key={o.line.id} value={o.line.id}>{o.red.length ? '⚠ ' : ''}{optLabel(o)}</option>)}
+              </select>
+              {x && <span className={cn('font-mono text-xs', [...x.final_text].length > visible ? 'text-amber-300' : 'text-[#646A75]')}>{[...x.final_text].length}</span>}
+              <button className="rounded px-1 text-[#858B96] hover:text-[#ECEDEF] disabled:opacity-30" disabled={i === 0} onClick={() => move(i, -1)} aria-label={`Move card ${i + 1} up`}>↑</button>
+              <button className="rounded px-1 text-[#858B96] hover:text-[#ECEDEF] disabled:opacity-30" disabled={i === slots.length - 1} onClick={() => move(i, 1)} aria-label={`Move card ${i + 1} down`}>↓</button>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
 /** One version (one ad): its code, a line per field, what's missing, and the version checks. */
 function VersionCard({ meta, view, version, planned, stub, lead, onLead, onField, onVisual, onRemove }: {
   meta: Meta; view: ReadyView; version: DraftVersion; planned?: ReadyView['plan']['versions'][number]; stub?: PfStub; lead: boolean;
@@ -246,7 +307,7 @@ function VersionCard({ meta, view, version, planned, stub, lead, onLead, onField
   const c = planned?.compliance;
   // One chip for the whole version: its fields plus the visual's on-image line.
   const signed = !!planned?.code && !!view.latest?.versions?.some(v => v.code === planned.code);
-  const ids = [...Object.values(version.fields), view.draft.on_image[version.visual] || ''].filter(Boolean);
+  const ids = [...Object.values(version.fields), ...[view.draft.on_image[version.visual] || ''].flat()].filter(Boolean);
   const edited = signed && ids.some(id => view.lines.find(x => x.line.id === id)?.line.ready?.changed_since);
   const state = codeState({ signed, edited, passed: stub?.status.status === 'ready', compliance: c?.status, ready: stub?.traffic?.ready });
   return (

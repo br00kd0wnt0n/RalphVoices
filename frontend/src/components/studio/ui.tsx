@@ -284,6 +284,7 @@ export const SEV_ORDER = { red: 0, amber: 1, grey: 2 } as const;
 export const COPY_STATUS: Record<string, { tone: 'grey' | 'amber' | 'red' | 'outline'; words: string }> = {
   match: { tone: 'outline', words: 'matches' }, reworded: { tone: 'amber', words: 'reworded' },
   'not on asset': { tone: 'red', words: 'not on the asset' }, 'not expected on asset': { tone: 'grey', words: 'not expected on the asset' },
+  'wrong card': { tone: 'amber', words: 'on another card' },
 };
 
 /** An image or video the signed-in API serves (fetched with the token, shown from a blob URL). */
@@ -371,5 +372,10 @@ export function PersonaChip({ meta, persona, short, className }: { meta: Meta; p
 // ---------- the context: persona × territory × region, chosen once ----------
 
 export interface Ctx { persona: string; territory: string; region: Region }
+/** What Assets, Export and Live show: every set in the round by default ('all'); narrowing it never changes the writing context. */
+export interface ViewFilter { persona: string | 'all'; territory: string | 'all'; region: Region | 'all' }
+export const ALL_VIEW: ViewFilter = { persona: 'all', territory: 'all', region: 'all' };
+export const inViewFilter = (x: { persona: string; territory: string; region?: Region }, v: ViewFilter) =>
+  (v.persona === 'all' || x.persona === v.persona) && (v.territory === 'all' || x.territory === v.territory) && (v.region === 'all' || regionOf(x) === v.region);
 export const ctxKey = (x: Ctx) => `${x.persona}|${x.territory}|${x.region}`;
 export const sameCtx = (a: { persona: string; territory: string; region?: Region }, b: Ctx) => a.persona === b.persona && a.territory === b.territory && regionOf(a) === b.region;

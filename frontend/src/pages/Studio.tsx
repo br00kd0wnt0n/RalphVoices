@@ -1,7 +1,9 @@
-// Copy Studio in four steps: Write → Review → Build & sign off → Assets (Live later). Locally it talks to
+// Copy Studio in four steps: Write → Review → Build & sign off → Assets (then Live, an explainer for now). Locally it talks to
 // `npx tsx scripts/studio.ts serve` (no sign-in); hosted, to /api/studio as the signed-in user (see studioApi.ts).
-// One context bar (persona × territory × region) applies to every step; one Export menu holds every download;
-// Territories, Rules and Compare sit top right. The steps live in components/studio/*.
+// The start screen is the round board (How it works while the round has no runs, and behind "?"). The context bar
+// (persona × territory × region) scopes Write, Review and Build & sign off; Assets, Export and Live show everything in
+// the round, and narrowing them there never changes the writing context. Territories, Rules (with Rounds), Export and
+// Compare sit top right. The steps live in components/studio/*; rounds and Live in pages/StudioRounds.tsx.
 //
 // Old tab keys redirect: brief → write, shortlist → review (Kept), ready → build, preflight and compliance → assets.
 // Deep links: ?tab=review&batch=<id>&open=L07, ?tab=build&persona=<P>&territory=<T>[&region=CA], ?tab=assets&stub=<code>
@@ -11,9 +13,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { HOSTED, getUser, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type Line, type Meta, type Region, type StudioEvent, REGION_NAMES } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { ArrowLeft, HelpCircle, Map as MapIcon, ScrollText, Shuffle } from 'lucide-react';
-import { Chip, GhostButton, Lockup, PINK, PersonaDot, initials, params, personaKeys, regionOf, sameCtx, setTerritoryNames, setWhatToDo, territoryName, type Ctx } from '@/components/studio/ui';
+import { LivePage, RoundBadge, RoundsPanel } from './StudioRounds';
+import { Board, type Step } from '@/components/studio/Board';
+import { ALL_VIEW, Chip, GhostButton, Lockup, PINK, PersonaDot, initials, params, personaKeys, regionOf, sameCtx, setTerritoryNames, setWhatToDo, territoryName, type Ctx, type ViewFilter } from '@/components/studio/ui';
 import { Home } from '@/components/studio/Home';
-import { Write, countsFor } from '@/components/studio/Write';
+import { Write, countsFor, formatFields } from '@/components/studio/Write';
 import { Review } from '@/components/studio/Review';
 import { Build } from '@/components/studio/Build';
 import { Assets } from '@/components/studio/Assets';
@@ -23,8 +27,10 @@ import { Rules } from '@/components/studio/Rules';
 import { Compare } from '@/components/studio/Compare';
 import { ExportMenu } from '@/components/studio/ExportMenu';
 
-type Tab = 'home' | 'write' | 'review' | 'build' | 'assets' | 'territories' | 'rules' | 'compare';
-const TABS: Tab[] = ['home', 'write', 'review', 'build', 'assets', 'territories', 'rules', 'compare'];
+type Tab = 'home' | 'howto' | 'write' | 'review' | 'build' | 'assets' | 'live' | 'territories' | 'rules' | 'compare';
+const TABS: Tab[] = ['home', 'howto', 'write', 'review', 'build', 'assets', 'live', 'territories', 'rules', 'compare'];
+/** Screens that show everything in the round (the bar filters the view there, never the writing context). */
+const VIEW_TABS: Tab[] = ['assets', 'live'];
 // The four steps, in order, with their full names (never shortened).
 const FLOW: Array<[Tab, string]> = [['write', 'Write'], ['review', 'Review'], ['build', 'Build & sign off'], ['assets', 'Assets']];
 /** Old tab keys and where they live now. */
@@ -70,6 +76,10 @@ export function Studio() {
     setCtxState(c);
     try { localStorage.setItem(CTX_KEY, JSON.stringify(c)); } catch { /* private mode */ }
   }, []);
+  // Assets, Export and Live: everything in the round unless narrowed there (a deep link to a set narrows it).
+  const [view, setView] = useState<ViewFilter>(() => (params.get('persona') && ['assets', 'preflight', 'compliance'].includes(params.get('tab') || '') ? { ...ALL_VIEW, persona: params.get('persona')!, territory: params.get('territory') || 'all' } : ALL_VIEW));
+  // "This round / All rounds" (header): the views reload with the new filter.
+  const [roundKey, setRoundKey] = useState(0);
   // A context from a link is remembered like one chosen in the bar.
   useEffect(() => { try { localStorage.setItem(CTX_KEY, JSON.stringify(ctx)); } catch { /* private mode */ } }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -93,12 +103,13 @@ export function Studio() {
   }
   const esRef = useRef<{ close: () => void } | null>(null);
 
-  // The brief follows the context: a new persona brings its default fields and their counts.
+  // The brief follows the context. The fields start from the territory's format (then the ticked fields stay as they
+  // are when the persona or territory changes); counts from the rules' default_count.
   useEffect(() => {
     if (!meta) return;
     setBrief(b => {
-      const fields = b.persona === ctx.persona && b.fields.length ? b.fields : meta.personas[ctx.persona]?.default_fields || [];
-      const field_counts = countsFor(meta, fields, 20, b.persona === ctx.persona ? b.field_counts : undefined);
+      const fields = b.fields.length ? b.fields : formatFields(meta, ctx.territory, ctx.persona);
+      const field_counts = countsFor(meta, fields, 20, b.field_counts);
       return { ...b, persona: ctx.persona, territory: ctx.territory, region: ctx.region, fields, field_counts, n: Math.max(1, Object.values(field_counts).reduce((a, x) => a + x, 0)) };
     });
   }, [meta, ctx.persona, ctx.territory, ctx.region]);
@@ -242,7 +253,14 @@ export function Studio() {
   }
 
   const stepIndex = FLOW.findIndex(([t]) => t === tab);
-  const showCtx = stepIndex >= 0 && !!meta;
+  const viewMode = VIEW_TABS.includes(tab);
+  const showCtx = (stepIndex >= 0 || viewMode) && !!meta;
+  /** A board cell: set the context (and, for Assets, narrow the view to it) and open the step. */
+  const openCell = (persona: string, territory: string, step: Step) => {
+    setCtx({ persona, territory, region: ctx.region });
+    if (step === 'assets') setView({ persona, territory, region: 'all' });
+    setTab(step);
+  };
   const utility = (t: Tab, label: string, icon: React.ReactNode, title: string) => (
     <button onClick={() => setTab(t)} title={title} aria-label={label} className={cn('flex items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 py-1.5 text-sm transition', tab === t ? 'border-[#ECEDEF] text-[#ECEDEF]' : 'border-transparent text-[#858B96] hover:text-[#ECEDEF]')}>
       {icon}<span className="hidden min-[1600px]:inline">{label}</span>
@@ -255,7 +273,7 @@ export function Studio() {
         {HOSTED && <a href="/" title="Back to Voices" className="-mr-2 hidden rounded-lg p-1.5 text-[#858B96] hover:bg-[#1C1F26] hover:text-[#ECEDEF] sm:block"><ArrowLeft className="h-4 w-4" aria-label="Back to Voices" /></a>}
         <span className="hidden md:block"><Lockup onHome={() => setTab('home')} /></span>
         <nav aria-label="Studio steps" className="flex min-w-0 flex-nowrap items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <GhostButton active={tab === 'home'} onClick={() => setTab('home')} title="How it works" aria-label="How it works" className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-2 py-1.5 text-sm">
+          <GhostButton active={tab === 'howto'} onClick={() => setTab('howto')} title="How it works" aria-label="How it works" className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-2 py-1.5 text-sm">
             <HelpCircle className="h-4 w-4" aria-hidden />
           </GhostButton>
           <span className="mx-1 h-5 w-px bg-[#343946]" aria-hidden />
@@ -265,17 +283,18 @@ export function Studio() {
               {t === 'review' && batch && sameCtx(batch.brief, ctx) ? `${label} (${batch.lines.length})` : label}
             </GhostButton>
           ))}
-          {/* Live: the explainer page goes here (another session); until then a disabled "soon". */}
-          <span aria-disabled="true" title="Coming soon: live results next to each code, from the first weeks in market"
-            className="flex cursor-not-allowed items-center gap-1 whitespace-nowrap rounded-lg px-1.5 py-1.5 text-sm text-[#4A505D]">
+          {/* Live (B3b): live results next to each signed-off ad; for now a page explaining what's coming. */}
+          <button onClick={() => setTab('live')} title="Coming soon: live results next to each signed-off ad, from the first weeks in market"
+            className={cn('flex items-center gap-1 whitespace-nowrap rounded-lg px-1.5 py-1.5 text-sm', tab === 'live' ? 'text-[#ECEDEF]' : 'text-[#4A505D] hover:text-[#858B96]')}>
             Live <span className="rounded-full border border-[#343946] px-1.5 py-px text-[10px] uppercase tracking-wide">soon</span>
-          </span>
+          </button>
         </nav>
         <div className="ml-auto flex shrink-0 flex-nowrap items-center gap-1.5 text-sm text-[#858B96]">
           <span className="mr-1 hidden h-5 w-px bg-[#343946] sm:block" aria-hidden />
           {utility('territories', 'Territories', <MapIcon className="h-4 w-4" aria-hidden />, 'Territories: edit, add or retire')}
           {utility('rules', 'Rules', <ScrollText className="h-4 w-4" aria-hidden />, 'Rules: what every line is checked against')}
-          <ExportMenu meta={meta} ctx={ctx} batch={batch} onImported={m => { setNote(m); setRunsTick(t => t + 1); }} />
+          <RoundBadge meta={meta} onViewChange={() => setRoundKey(k => k + 1)} />
+          <ExportMenu meta={meta} ctx={ctx} view={view} batch={batch} onImported={m => { setNote(m); setRunsTick(t => t + 1); }} />
           <button onClick={() => setTab('compare')} title="Blind compare: a separate exercise, outside the writing flow" aria-label="Blind compare" className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-dashed border-[#4B55A8] bg-[#1B2150] px-2.5 py-1.5 text-sm font-medium text-white hover:bg-[#232A5C]">
             <Shuffle className="h-4 w-4" aria-hidden /><span className="hidden min-[1600px]:inline">Compare</span>
           </button>
@@ -285,7 +304,9 @@ export function Studio() {
           {meta?.mock && <Chip tone="amber" className="hidden sm:inline-flex">mock</Chip>}
         </div>
       </header>
-      {showCtx && <ContextBar meta={meta!} ctx={ctx} setCtx={setCtx} step={stepIndex} onNewTerritory={() => setDrawer({ code: null })} />}
+      {showCtx && (viewMode
+        ? <ViewBar meta={meta!} view={view} setView={setView} what={tab === 'live' ? 'Live' : 'Assets'} />
+        : <ContextBar meta={meta!} ctx={ctx} setCtx={setCtx} step={stepIndex} onNewTerritory={() => setDrawer({ code: null })} />)}
       {drawer && meta && <TerritoryDrawer meta={meta} persona={ctx.persona} code={drawer.code} onClose={() => setDrawer(null)} onSaved={c => { territorySaved(c).catch(e => setErr(e.message)); }} />}
       {running && (
         <div className={cn('sticky z-10 flex items-center gap-2 border-b border-[#272B34] bg-[#16181D]/95 px-6 py-1.5 text-sm font-medium', showCtx ? 'top-[7.25rem]' : 'top-16')} style={{ color: PINK }}>
@@ -294,17 +315,61 @@ export function Studio() {
       )}
       {err && <div className="mx-4 mt-4 rounded-lg border-2 border-red-500/45 bg-red-500/10 p-4 text-base text-red-200 sm:mx-8">{err}</div>}
       {note && <div className="mx-4 mt-4 flex items-center gap-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-base text-emerald-100 sm:mx-8"><span className="mr-auto">{note}</span><button className="text-sm underline" onClick={() => setNote('')}>dismiss</button></div>}
-      <main className="px-4 py-6 sm:px-6">
-        {tab === 'home' && <Home onStart={() => setTab('write')} />}
+      <main key={roundKey} className="px-4 py-6 sm:px-6">
+        {tab === 'home' && meta && <Start meta={meta} onOpen={openCell} onHowItWorks={() => setTab('howto')} onStart={() => setTab('write')} onRoundSaved={() => refreshMeta().catch(() => {})} />}
+        {tab === 'home' && !meta && !err && <div className="text-base text-[#858B96]">Loading…</div>}
+        {tab === 'howto' && <Home onStart={() => setTab('write')} />}
+        {tab === 'live' && <LivePage />}
         {meta && tab === 'write' && <Write meta={meta} brief={brief} setBrief={setBrief} ctx={ctx} setCtx={setCtx} run={run} running={running} user={user} runsTick={runsTick} onContinue={continueRun}
           attachedRun={attached && batch?.id === attached ? batch : null} onNewRun={() => setAttached(null)} onTerritories={() => setTab('territories')} onEditTerritory={code => setDrawer({ code })} />}
         {meta && tab === 'review' && <Review meta={meta} ctx={ctx} batch={batch} setBatch={setBatch} status={status} running={running} onMore={more} onMoreRun={() => run({ into: batch })} onAddLine={addLine}
           onDecided={() => setRunsTick(t => t + 1)} onBuild={() => setTab('build')} initialFilter={openKept ? 'kept' : undefined} />}
         {meta && tab === 'build' && <Build meta={meta} ctx={ctx} user={user} onNext={() => setTab('assets')} onReview={() => setTab('review')} />}
-        {meta && tab === 'assets' && <Assets meta={meta} ctx={ctx} onBuild={() => setTab('build')} />}
+        {meta && tab === 'assets' && <Assets meta={meta} view={view} setView={setView} onBuild={() => setTab('build')} />}
         {meta && tab === 'territories' && <Territories meta={meta} onSaved={() => refreshMeta()} onBrief={code => { const t = meta.territories[code]; setCtx({ persona: t.persona, territory: code, region: ctx.region }); setTab('write'); }} />}
+        {tab === 'rules' && meta?.rounds && <RoundsPanel meta={meta} onSaved={() => refreshMeta().catch(() => {})} />}
         {tab === 'rules' && (meta || admin) && <Rules meta={meta} admin={HOSTED && (!!meta?.user?.admin || admin)} onActivated={() => refreshMeta().then(() => setErr('')).catch(() => {})} />}
       </main>
+    </div>
+  );
+}
+
+/** The start screen: the round board once the round has runs; How it works until then. */
+function Start({ meta, onOpen, onHowItWorks, onStart, onRoundSaved }: { meta: Meta; onOpen: (p: string, t: string, s: Step) => void; onHowItWorks: () => void; onStart: () => void; onRoundSaved: () => void }) {
+  const [runs, setRuns] = useState<number | null>(null);
+  useEffect(() => { studio.batches().then(r => setRuns(r.length)).catch(() => setRuns(0)); }, []);
+  if (runs === null) return <div className="text-base text-[#858B96]">Loading…</div>;
+  return runs ? <Board meta={meta} onOpen={onOpen} onHowItWorks={onHowItWorks} onRoundSaved={onRoundSaved} /> : <Home onStart={onStart} />;
+}
+
+/** On Assets and Live: the bar shows "All" and narrows this view only (the writing context is untouched). */
+function ViewBar({ meta, view, setView, what }: { meta: Meta; view: ViewFilter; setView: (v: ViewFilter) => void; what: string }) {
+  const territories = Object.entries(meta.territories).filter(([, x]) => (view.persona === 'all' || x.persona === view.persona) && x.status !== 'retired');
+  const sel = 'min-w-0 rounded-lg border border-[#343946] bg-[#101216] px-2.5 py-1.5 text-sm font-medium text-[#ECEDEF]';
+  const pc = view.persona === 'all' ? null : personaColor(view.persona);
+  return (
+    <div className="sticky top-16 z-10 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-[#272B34] bg-[#121419]/95 px-4 py-2 backdrop-blur sm:px-6">
+      <span className="text-xs font-semibold uppercase tracking-wider text-[#646A75]">Showing</span>
+      <span className="flex min-w-0 items-center gap-1.5 rounded-lg border pl-2.5" style={pc ? { borderColor: tint(pc.base, 0.6), background: tint(pc.base, 0.12) } : { borderColor: '#343946' }}>
+        {pc ? <PersonaDot persona={view.persona} /> : <span className="h-2.5 w-2.5 rounded-full border border-[#646A75]" aria-hidden />}
+        <select aria-label="Persona (this view)" className="min-w-0 rounded-lg py-1.5 pl-0.5 pr-2 text-sm font-semibold" style={{ background: 'transparent', color: pc ? pc.light : '#ECEDEF' }} value={view.persona}
+          onChange={e => setView({ persona: e.target.value, territory: 'all', region: view.region })}>
+          <option value="all" style={{ background: '#101216', color: '#ECEDEF' }}>All personas</option>
+          {personaKeys(meta.personas).map(k => <option key={k} value={k} style={{ background: '#101216', color: '#ECEDEF' }}>{meta.personas[k].name}</option>)}
+        </select>
+      </span>
+      <span className="text-[#4A505D]" aria-hidden>×</span>
+      <select aria-label="Territory (this view)" className={cn(sel, 'max-w-[22rem]')} value={view.territory} onChange={e => setView({ ...view, territory: e.target.value })}>
+        <option value="all">All territories</option>
+        {territories.map(([k, x]) => <option key={k} value={k}>{view.persona === 'all' ? `${meta.personas[x.persona]?.name.replace(/\s*\(.*\)$/, '')}: ` : ''}{territoryName(x)}</option>)}
+      </select>
+      <span className="text-[#4A505D]" aria-hidden>×</span>
+      <select aria-label="Region (this view)" className={sel} value={view.region} onChange={e => setView({ ...view, region: e.target.value as ViewFilter['region'] })}>
+        <option value="all">All regions</option>
+        {(meta.regions || ['US', 'CA']).map(r => <option key={r} value={r}>{REGION_NAMES[r]}</option>)}
+      </select>
+      {(view.persona !== 'all' || view.territory !== 'all' || view.region !== 'all') && <button className="text-xs text-[#858B96] underline-offset-2 hover:text-[#ECEDEF] hover:underline" onClick={() => setView(ALL_VIEW)}>show all</button>}
+      <span className="ml-auto hidden text-xs text-[#646A75] md:inline">{what}: everything in the round · filters this view only</span>
     </div>
   );
 }

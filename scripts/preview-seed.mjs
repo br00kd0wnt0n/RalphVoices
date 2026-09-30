@@ -220,4 +220,54 @@ if (pending(A3)) {
   await V.post(`/compliance/assets/${asset.upload_id}`, { status: 'changes_requested', codes: [A3], note: 'Headline reads as a promise about summer costs; soften it.', send_back: 'copy', client_by: 'Dana Ruiz, Trupanion legal' });
   log(`${A3}: changes requested (copy)`);
 }
+// 7. An R0 TEST round with a carousel (DINK "Expect the Unexpected"): card sequences written, a carousel visual A with
+//    three cards signed off, three card images uploaded, checked and passed; then R1 is made active again.
+//    Skip with --no-test-round.
+if (!process.argv.includes('--no-test-round')) {
+  const rounds = (await B.get('/rounds'));
+  if (!rounds.rounds.some(r => r.id === 'R0')) await B.post('/rounds', { id: 'R0', name: 'Test run-through', test: true, activate: false });
+  await B.post('/rounds', { id: 'R1', name: 'Round one', assets_due: '2026-10-12' });   // the round board's deadline
+  const inR0 = async p => call(nick, 'GET', `/studio${p}${p.includes('?') ? '&' : '?'}round=R0`);
+  let carouselRun = (await inR0('/batches')).find(b => b.territory === 'DINK_UNEXPECTED');
+  if (carouselRun) log('R0 carousel run already there');
+  else {
+    await B.post('/rounds/R0/activate');
+    try {
+      const fields = ['meta_primary', 'meta_headline', 'meta_on_image'];
+      const brief = { persona: 'DINK', territory: 'DINK_UNEXPECTED', region: 'US', fields, field_counts: { meta_primary: 3, meta_headline: 2, meta_on_image: 0 }, carousel: { sequences: 1, cards: 3 }, tone: { dry_warm: 3, playful_plain: 3, short_long: 1 }, banned_words: [], banned_ideas: [], reference_lines: [], own_lines: [{ text: 'You budgeted for everything. Except him. Medical insurance for pets, from Trupanion.', field: 'meta_primary' }], n: 5, model: 'gpt-4o' };
+      const r = await N.post('/generate', { brief, confirm: true });
+      await waitJob(nick, r.job);
+      const b = await N.get(`/batches/${encodeURIComponent(r.batch)}?round=R0`);
+      for (const l of b.lines.filter(l => !l.flags.some(f => f.severity === 'compliance'))) await N.patch(`/batches/${encodeURIComponent(b.id)}/lines/${encodeURIComponent(l.id)}`, { decision: 'keep' });
+      log(`R0 carousel run: ${b.lines.length} lines, ${b.lines.filter(l => l.sequence_id).length} cards`);
+      const pq = '?persona=DINK&territory=DINK_UNEXPECTED&region=US&round=R0';
+      const v = await call(nick, 'GET', `/studio/ready${pq}`);
+      const of = f => v.lines.filter(x => x.line.field === f && !x.red.length);
+      const cards = v.lines.filter(x => x.line.sequence_id).sort((a, c) => (a.line.card || 0) - (c.line.card || 0));
+      const [p1] = of('meta_primary'), [h1] = of('meta_headline');
+      if (p1 && h1 && cards.length) {
+        const draft = { versions: [{ visual: 'A', platform: 'META', fields: { meta_primary: p1.line.id, meta_headline: h1.line.id } }], on_image: { A: cards.map(x => x.line.id) } };
+        const pv = await N.post('/ready/preview', { persona: 'DINK', territory: 'DINK_UNEXPECTED', region: 'US', round: 'R0', ...draft });
+        const reds = [...new Set([p1, h1, ...cards].flatMap(x => x.red.map(f => [x.line, f.rule])))];
+        for (const [line, rule] of reds) await N.post(`/batches/${encodeURIComponent(line.batch)}/lines/${encodeURIComponent(line.id)}/override`, { rule, reason: 'Preview seed: test round' });
+        if (!pv.plan.issues.length) {
+          await N.post('/ready', { persona: 'DINK', territory: 'DINK_UNEXPECTED', region: 'US', round: 'R0', ...draft, expectation: { codes: [pv.plan.versions[0].code], reason: 'The card sequence builds to the end card.' }, expect_latest: null });
+          const stub = (await inR0('/preflight/stubs')).find(s => s.territory === 'DINK_UNEXPECTED');
+          const form = new FormData();
+          cards.forEach((x, i) => form.append('files', new Blob([png(360, 360, x.final_text)], { type: 'image/png' }), `dink-unexpected-A-card-${i + 1}.png`));
+          const up = await call(nick, 'POST', `/studio/preflight/stubs/${encodeURIComponent(stub.stub)}/uploads`, form);
+          const au = await N.post(`/preflight/uploads/${encodeURIComponent(up.upload_id)}/audit`, { confirm: true });
+          await waitJob(nick, au.job);
+          const rep = await call(nick, 'GET', `/studio/preflight/stubs/${encodeURIComponent(stub.stub)}/report`);
+          for (const f of rep.flags.filter(f => f.severity === 'red' && !f.override)) await N.post(`/preflight/flags/${f.id}/override`, { reason: 'Preview seed: test round' });
+          await N.post(`/preflight/stubs/${encodeURIComponent(stub.stub)}/ready`, { ready: true });
+          log(`R0: signed off ${stub.stub} (carousel, ${cards.length} cards), uploaded, checked and Pre-flight passed`);
+        } else log(`R0 carousel versions not complete: ${pv.plan.issues.join('; ')}`);
+      } else log('R0 carousel: not enough clean kept lines to sign off');
+    } finally {
+      await B.post('/rounds/R1/activate');
+      log('R1 active again (R0 shows under "All rounds")');
+    }
+  }
+}
 log('done. Open http://localhost:5183/studio and sign in as nick@ / brook@ / vivan@ralph.test with password preview-pass');

@@ -77,7 +77,7 @@ export function Review({ meta, ctx, batch, setBatch, status, running, onMore, on
                 <select aria-label="Run" className="max-w-full rounded-lg border-2 border-[#343946] bg-[#101216] px-3 py-1.5 text-base" value={b?.id || ''} onChange={e => studio.batch(e.target.value).then(setBatch)}>
                   {!b && <option value="">Choose a run…</option>}
                   {[...here, ...(b && !here.some(r => r.id === b.id) ? [{ id: b.id, updated: b.updated || b.created, created_by: b.created_by || '', lines: b.lines.length } as RunSummary] : [])].map(r => (
-                    <option key={r.id} value={r.id} title={r.id}>{when(r.updated)}{r.created_by ? ` · ${r.created_by.split('@')[0]}` : ''} · {r.lines} lines</option>
+                    <option key={r.id} value={r.id} title={r.id}>{when(r.updated)}{r.created_by ? ` · ${r.created_by.split('@')[0]}` : ''} · {r.lines} lines{r.round && r.round !== meta.rounds?.active ? ` · ${r.round}${meta.rounds?.rounds.find(x => x.id === r.round)?.test ? ' TEST' : ''}` : ''}</option>
                   ))}
                 </select>
               ) : <p className="text-base text-[#858B96]">No runs for {territoryName(meta.territories[ctx.territory])} yet: write lines on Write.</p>}
@@ -96,7 +96,7 @@ export function Review({ meta, ctx, batch, setBatch, status, running, onMore, on
             <section key={g}>
               <h2 className="mb-3 mt-2 text-lg font-bold first-letter:uppercase">{g} <span className="font-normal text-[#858B96]">({ls.length})</span></h2>
               <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                {ls.map(l => <LineCard key={l.id} meta={meta} line={l} onChange={x => { if (filter !== 'all') setStay(cur => new Set(cur).add(x.id)); replace(x); onDecided(); }} onMore={onMore} />)}
+                {ls.map(l => <LineCard key={l.id} meta={meta} line={l} sequence={l.sequence_id ? lines.filter(x => x.sequence_id === l.sequence_id) : undefined} onChange={x => { if (filter !== 'all') setStay(cur => new Set(cur).add(x.id)); replace(x); onDecided(); }} onMore={onMore} />)}
               </div>
             </section>
           ))}
@@ -140,7 +140,7 @@ function AddLine({ meta, batch, running, onAdd }: { meta: Meta; batch: Batch; ru
 }
 
 /** A lighter card: the line, its flags, the skeptic and the actions. Length, structure, tone and tags behind "details"; the note opens on demand. */
-function LineCard({ meta, line, onChange, onMore }: { meta: Meta; line: Line; onChange: (l: Line) => void; onMore: (l: Line, note: string) => void }) {
+function LineCard({ meta, line, sequence, onChange, onMore }: { meta: Meta; line: Line; sequence?: Line[]; onChange: (l: Line) => void; onMore: (l: Line, note: string) => void }) {
   const [open, setOpen] = useState<string | null>(params.get('open') === line.id.split('-').pop() ? line.flags[0]?.rule ?? null : null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(line.edited_text || line.text);
@@ -167,6 +167,7 @@ function LineCard({ meta, line, onChange, onMore }: { meta: Meta; line: Line; on
         <span>{shortField(meta, line.field)}</span>
         {over && <span className="font-mono font-bold text-amber-300" title={`${f!.visible} characters show on screen`}>{chars}/{f!.visible}</span>}
         {line.parent && <Chip tone="outline">more like {line.parent.split('-').pop()}</Chip>}
+        {line.sequence_id && <Chip tone="outline" title="A carousel card sequence: keep it whole or card by card; the cards are placed at Build & sign off">card {line.card} of {sequence?.length || '?'} · sequence S{line.sequence_id.split('-S').pop()}</Chip>}
         {checking && <span className="animate-pulse" style={{ color: PINK }}>flags still arriving…</span>}
         {line.ready && !line.ready.superseded_by && <Chip tone="outline" className="border-[#D94D8F]/60 text-[#F2C4DA]" title={`Signed off by ${line.ready.ready_by}, ${when(line.ready.ready_at)}`}>signed off{line.ready.changed_since ? ' · edited since' : ''}</Chip>}
         <button onClick={() => setDetails(!details)} aria-expanded={details} className="ml-auto text-xs text-[#646A75] underline-offset-2 hover:text-[#ECEDEF] hover:underline">{details ? 'hide details' : 'details'}</button>
@@ -236,6 +237,12 @@ function LineCard({ meta, line, onChange, onMore }: { meta: Meta; line: Line; on
         <GhostButton active={line.decision === 'cut'} disabled={checking} title={checking ? 'Flags still arriving' : undefined} onClick={() => decide({ decision: line.decision === 'cut' ? '' : 'cut' })}>Cut</GhostButton>
         <GhostButton active={edited} disabled={checking} title={checking ? 'Flags still arriving' : undefined} onClick={() => { setDraft(line.edited_text || line.text); setEditing(true); }}>Edit</GhostButton>
         <GhostButton onClick={() => onMore(line, note)} title="Writes three siblings, using the note as guidance">More like this</GhostButton>
+        {sequence && sequence.length > 1 && sequence.some(x => x.decision !== 'keep' && x.decision !== 'edit') && (
+          <GhostButton disabled={sequence.some(x => x.status !== 'checked')} title="Keep every card of this sequence (cards you edited keep the edit)"
+            onClick={async () => { for (const x of [...sequence].sort((a, b) => (a.card || 0) - (b.card || 0))) if (x.decision !== 'keep' && x.decision !== 'edit') onChange(await studio.decide(x.batch, x.id, { decision: 'keep' })); }}>
+            Keep the whole sequence
+          </GhostButton>
+        )}
         <GhostButton active={noteOpen} onClick={() => setNoteOpen(!noteOpen)} title="Why; guides 'more like this'">{line.note ? 'Edit note' : 'Note'}</GhostButton>
       </div>
       {noteOpen && (
@@ -304,9 +311,10 @@ function KeptTray({ meta, ctx, onCount }: { meta: Meta; ctx: Ctx; onCount: (n: n
                 <li key={r.id} className="flex items-start gap-3 py-2">
                   <div className="min-w-0 flex-1">
                     <div className="text-base leading-snug text-[#F2F3F5]">{r.text}</div>
-                    {(r.compliance_flags?.length || r.warn_flags?.length || r.note || r.signed_off) ? (
+                    {(r.compliance_flags?.length || r.warn_flags?.length || r.note || r.signed_off || (r.round && r.round !== meta.rounds?.active)) ? (
                       <div className="mt-1 flex flex-wrap items-center gap-1">
                         {r.signed_off && <Chip tone="outline" className="border-[#D94D8F]/60 text-xs text-[#F2C4DA]">signed off</Chip>}
+                        {r.round && r.round !== meta.rounds?.active && <Chip tone={meta.rounds?.rounds.find(x => x.id === r.round)?.test ? 'amber' : 'outline'} className="text-xs">{r.round}{meta.rounds?.rounds.find(x => x.id === r.round)?.test ? ' TEST' : ''}</Chip>}
                         {(r.compliance_flags || []).map(x => <Chip key={x} tone="red" className="text-xs">{chipName(x)}</Chip>)}
                         {(r.warn_flags || []).map(x => <Chip key={x} tone="amber" className="text-xs">{chipName(x)}</Chip>)}
                         {r.note && <span className="text-sm text-[#858B96]">{r.note}</span>}

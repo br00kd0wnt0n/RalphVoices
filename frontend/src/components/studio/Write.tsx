@@ -11,6 +11,17 @@ export function defaultCount(meta: Meta, f: string, fields: string[], n: number)
   const d = meta.fields[f]?.default_count;
   return typeof d === 'number' ? d : Math.max(1, Math.round(n / Math.max(1, fields.length)));
 }
+/**
+ * The fields a territory's format starts with: static and carousel → primary, headline, on-image; video and UGC →
+ * primary, headline; a TikTok format → hook, caption. Anything else: the persona's default fields.
+ */
+export function formatFields(meta: Meta, territory: string, persona: string): string[] {
+  const f = String(meta.territories[territory]?.format || '').toUpperCase();
+  const want = /^(STATIC|CAROUSEL)/.test(f) ? ['meta_primary', 'meta_headline', 'meta_on_image']
+    : /^(VIDEO|UGC)/.test(f) ? ['meta_primary', 'meta_headline']
+    : /^(TT|TIKTOK)/.test(f) ? ['tiktok_hook', 'tiktok_caption'] : meta.personas[persona]?.default_fields || [];
+  return want.filter(k => meta.fields[k]);
+}
 /** Counts for a set of fields: the ones already set are kept. */
 export function countsFor(meta: Meta, fields: string[], n: number, prev: Record<string, number> = {}): Record<string, number> {
   return Object.fromEntries(fields.map(f => [f, prev[f] ?? defaultCount(meta, f, fields, n)]));
@@ -43,14 +54,20 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
   const [focusRow, setFocusRow] = useState<number | null>(null);
   useEffect(() => { if (focusRow !== null) { rowRefs.current[focusRow]?.focus(); setFocusRow(null); } }, [focusRow, own.length]);
 
-  // Per-field counts: every ticked field has one; the total is what Studio writes.
+  // Per-field counts: every ticked field has one; the total is what Studio writes. On a carousel territory the on-image
+  // field is written as card sequences (sequences × cards) instead of a count.
+  const carousel = /^CAR/i.test(t?.format || '');
+  const seq = brief.carousel || { sequences: 3, cards: 4 };
+  const seqOn = carousel && brief.fields.some(f => /on_image/.test(f));
   const counts = countsFor(meta, brief.fields, brief.n, brief.field_counts);
-  const total = Object.values(counts).reduce((a, x) => a + x, 0);
+  const total = Object.entries(counts).reduce((a, [f, x]) => a + (seqOn && /on_image/.test(f) ? seq.sequences * seq.cards : x), 0);
   const toggleField = (f: string) => {
     const fields = brief.fields.includes(f) ? brief.fields.filter(x => x !== f) : [...brief.fields, f].sort((a, b) => fieldOrder(meta, a) - fieldOrder(meta, b));
     const next = countsFor(meta, fields, brief.n, brief.field_counts);
     set({ fields, field_counts: next, n: Math.max(1, Object.values(next).reduce((a, x) => a + x, 0)) });
   };
+  /** "only": this field and nothing else. */
+  const onlyField = (f: string) => { const next = countsFor(meta, [f], brief.n, brief.field_counts); set({ fields: [f], field_counts: next, n: Math.max(1, next[f] || 1) }); };
   const setCount = (f: string, v: number) => {
     const next = { ...counts, [f]: Math.max(0, Math.min(60, Math.floor(v) || 0)) };
     set({ field_counts: next, n: Math.max(1, Object.values(next).reduce((a, x) => a + x, 0)) });
@@ -61,11 +78,11 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
   useEffect(() => {
     if (!brief.fields.length) { setEst(null); return; }
     const h = setTimeout(() => {
-      studio.estimate({ ...brief, field_counts: counts, n: Math.max(1, total), own_lines: written }, total === 0)
+      studio.estimate({ ...brief, field_counts: counts, n: Math.max(1, Object.values(counts).reduce((a, x) => a + x, 0)), ...(seqOn ? { carousel: seq } : {}), own_lines: written }, total === 0)
         .then(e => setEst({ usd: e.usd, minutes: Math.max(0, ...Object.values(e.minutes_at_budget || {})) })).catch(() => setEst(null));
     }, 400);
     return () => clearTimeout(h);
-  }, [JSON.stringify(counts), brief.persona, brief.territory, brief.model, written.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(counts), JSON.stringify(seq), brief.persona, brief.territory, brief.model, written.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function onPaste(i: number, e: React.ClipboardEvent<HTMLTextAreaElement>) {
     const parts = e.clipboardData.getData('text').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
@@ -162,6 +179,8 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
                   {Object.keys(meta.fields).filter(k => (String(meta.fields[k].platform).toUpperCase().startsWith('META') ? 'Meta' : 'TikTok') === pl).sort((a, b) => fieldOrder(meta, a) - fieldOrder(meta, b)).map(k => {
                     const f = meta.fields[k];
                     const on = brief.fields.includes(k);
+                    // On a carousel territory, on-image text is written as card sequences: sequences × cards, not a count.
+                    const cards = on && carousel && /on_image/.test(k);
                     return (
                       <div key={k} className={cn('flex items-center gap-2 rounded-lg px-2 py-1.5', on ? 'bg-[#101216]' : '')}>
                         <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
@@ -169,8 +188,13 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
                           <span className={cn('truncate', on ? 'text-[#ECEDEF]' : 'text-[#858B96]')} title={f.label}>{shortField(meta, k)}</span>
                           <span className="shrink-0 text-xs text-[#646A75]">{f.visible} visible</span>
                         </label>
-                        {on && <input type="number" min={0} max={60} aria-label={`How many ${f.label}`} value={counts[k]} onChange={e => setCount(k, Number(e.target.value))}
+                        {!(on && brief.fields.length === 1) && <button onClick={() => onlyField(k)} title={`Write ${f.label} only`} className="shrink-0 rounded px-1.5 text-xs text-[#646A75] hover:bg-[#272B34] hover:text-[#ECEDEF]">only</button>}
+                        {on && !cards && <input type="number" min={0} max={60} aria-label={`How many ${f.label}`} value={counts[k]} onChange={e => setCount(k, Number(e.target.value))}
                           className="w-16 rounded-lg border-2 border-[#343946] px-2 py-1 text-right font-mono text-base" />}
+                        {cards && <span className="flex items-center gap-1 text-sm text-[#A3A8B1]" title="Carousel: card sequences, each one idea (card 1 the hook … the end card)">
+                          <input type="number" min={1} max={6} aria-label="Card sequences" value={seq.sequences} onChange={e => set({ carousel: { ...seq, sequences: Math.max(1, Math.min(6, Number(e.target.value) || 1)) } })} className="w-12 rounded-lg border-2 border-[#343946] px-1.5 py-1 text-right font-mono" />
+                          × <input type="number" min={2} max={10} aria-label="Cards in each" value={seq.cards} onChange={e => set({ carousel: { ...seq, cards: Math.max(2, Math.min(10, Number(e.target.value) || 4)) } })} className="w-12 rounded-lg border-2 border-[#343946] px-1.5 py-1 text-right font-mono" /> cards
+                        </span>}
                       </div>
                     );
                   })}
@@ -192,7 +216,7 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
             <div className="mr-auto min-w-0">
               <div className="text-base font-semibold">{written.length ? `${written.length} of yours` : 'None of yours yet'} + Studio writes {total}</div>
               <div className="text-sm text-[#858B96]">
-                {brief.fields.filter(f => counts[f]).map(f => `${counts[f]} ${shortField(meta, f).toLowerCase()}`).join(' · ') || 'Set a count to generate'}
+                {brief.fields.filter(f => counts[f] || (seqOn && /on_image/.test(f))).map(f => seqOn && /on_image/.test(f) ? `${seq.sequences} × ${seq.cards} carousel cards` : `${counts[f]} ${shortField(meta, f).toLowerCase()}`).join(' · ') || 'Set a count to generate'}
                 {est ? ` · about $${est.usd.toFixed(2)}${meta.mock ? ' (mock: free)' : ''}` : ''}
               </div>
             </div>
@@ -258,7 +282,7 @@ function RunsList({ user, tick, meta, ctx, onContinue }: { user: string; tick: n
         {here.slice(0, 30).map(r => (
           <li key={r.id} className="flex items-center gap-3 rounded-lg border border-l-4 border-[#272B34] px-3 py-2" style={personaEdge(r.persona)}>
             <div className="min-w-0 flex-1">
-              <div className="truncate text-base font-medium">{when(r.updated)}{r.created_by ? ` · ${r.created_by.split('@')[0]}` : ''}</div>
+              <div className="truncate text-base font-medium">{when(r.updated)}{r.created_by ? ` · ${r.created_by.split('@')[0]}` : ''}{r.round && r.round !== meta.rounds?.active && <Chip tone={meta.rounds?.rounds.find(x => x.id === r.round)?.test ? 'amber' : 'outline'} className="ml-2 text-xs">{r.round}{meta.rounds?.rounds.find(x => x.id === r.round)?.test ? ' TEST' : ''}</Chip>}</div>
               <div className="text-sm text-[#858B96]">
                 {r.lines} lines{r.yours ? ` (${r.yours} yours)` : ''} · {r.kept} kept
                 {r.unchecked > 0 && <span className="text-amber-300"> · {r.unchecked} unchecked</span>}

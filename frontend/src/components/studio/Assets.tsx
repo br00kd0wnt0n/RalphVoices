@@ -7,7 +7,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { studio, type CodeCompliance, type ComplianceAsset, type ComplianceStatus, type ComplianceView, type Meta, type PfFlag, type PfReport, type PfStub, type StudioEvent } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { personaEdge } from '@/lib/personaColors';
-import { AuthMedia, PersonaChip, Chip, CodeChip, COMPLIANCE_TONE, COMPLIANCE_WORDS, COPY_STATUS, GhostButton, Intro, Label, NAMING_TIP, PINK, PinkButton, SEV_ORDER, chipName, codeState, inRegion, params, plainSource, regionOf, sameCtx, territoryName, when, whatToDo, type Ctx } from './ui';
+import { personaColor, tint } from '@/lib/personaColors';
+import { AuthMedia, PersonaChip, PersonaDot, inViewFilter, personaKeys, type ViewFilter, Chip, CodeChip, COMPLIANCE_TONE, COMPLIANCE_WORDS, COPY_STATUS, GhostButton, Intro, Label, NAMING_TIP, PINK, PinkButton, SEV_ORDER, chipName, codeState, inRegion, params, plainSource, regionOf, territoryName, when, whatToDo } from './ui';
 
 type Filter = 'needs' | 'awaiting' | 'changes' | 'ready' | 'all';
 const FILTERS: Array<[Filter, string]> = [['needs', 'Needs upload or review'], ['awaiting', 'Awaiting Trupanion'], ['changes', 'Changes requested'], ['ready', 'Ready to traffic'], ['all', 'All']];
@@ -67,14 +68,14 @@ function byVisual(rs: CodeRow[]): Array<[string, CodeRow[]]> {
   return [...groups.entries()].map(([k, g]) => [k.startsWith('u:') ? g[0].s.upload!.files.map(f => f.filename).join(', ') : k.startsWith('v:') ? 'not uploaded yet' : '', g]);
 }
 
-export function Assets({ meta, ctx, onBuild }: { meta: Meta; ctx: Ctx; onBuild: () => void }) {
+export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: ViewFilter; setView: (v: ViewFilter) => void; onBuild: () => void }) {
   const enabled = !!meta.preflight?.enabled;
   const canReady = !!meta.preflight?.can_set_ready;
   const canCompliance = meta.can_set_compliance !== false;
   // The producer (compliance emails, not an admin or the creative lead) starts on what's waiting for Trupanion, across every set.
   const producer = canCompliance && !meta.user?.admin && !canReady;
   const [filter, setFilter] = useState<Filter>(producer ? 'awaiting' : 'needs');
-  const [scope, setScope] = useState<'set' | 'all'>(producer ? 'all' : 'set');
+  const [format, setFormat] = useState<string>('all');
   const [stubs, setStubs] = useState<PfStub[] | null>(null);
   const [comp, setComp] = useState<ComplianceView | null>(null);
   const [sel, setSel] = useState<string | null>(params.get('stub'));
@@ -105,13 +106,14 @@ export function Assets({ meta, ctx, onBuild }: { meta: Meta; ctx: Ctx; onBuild: 
     const asset = comp?.assets.find(a => a.codes.some(c => c.stub === s.stub));
     return { s, asset, c: asset?.codes.find(c => c.stub === s.stub)?.compliance };
   });
-  const scoped = rows.filter(r => scope === 'all' || sameCtx(r.s, ctx));
+  const formatOf = (s: PfStub) => String(meta.territories[s.territory]?.format || '').toUpperCase() || 'OTHER';
+  const scoped = rows.filter(r => inViewFilter(r.s, view) && (format === 'all' || formatOf(r.s) === format));
   const shown = scoped.filter(r => inFilter(r, filter));
   // Keep a selection in view: the first shown code when the current one isn't in the list.
   useEffect(() => {
     if (!stubs) return;
     if (!sel || !shown.some(r => r.s.stub === sel)) setSel(shown[0]?.s.stub ?? (sel && scoped.some(r => r.s.stub === sel) ? sel : null));
-  }, [stubs, comp, filter, scope, ctx.persona, ctx.territory, ctx.region]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [stubs, comp, filter, format, view.persona, view.territory, view.region]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!enabled) return <div className="max-w-3xl rounded-xl border border-[#272B34] bg-[#16181D] p-6 text-base text-[#A3A8B1]">Assets need the database: in <code>backend/</code>, run <code>npx tsx scripts/studio.ts serve --store pg --database-url …</code> (hosted Studio has it on).</div>;
 
@@ -148,8 +150,14 @@ export function Assets({ meta, ctx, onBuild }: { meta: Meta; ctx: Ctx; onBuild: 
     } catch (e: any) { setError(e.message); }
   }
 
-  const groups = new Map<string, CodeRow[]>();
-  for (const r of shown) { const k = `${r.s.persona}|${r.s.territory}|${regionOf(r.s)}`; groups.set(k, [...(groups.get(k) || []), r]); }
+  // Grouped by persona (its colour), then territory × region, then visual.
+  const byPersona = personaKeys(Object.fromEntries(shown.map(r => [r.s.persona, 1]))).map(p => {
+    const sets = new Map<string, CodeRow[]>();
+    for (const r of shown.filter(x => x.s.persona === p)) { const k = `${r.s.territory}|${regionOf(r.s)}`; sets.set(k, [...(sets.get(k) || []), r]); }
+    return [p, [...sets.values()]] as const;
+  });
+  const formats = [...new Set(rows.filter(r => inViewFilter(r.s, view)).map(r => formatOf(r.s)))].sort();
+  const chip = (on: boolean) => cn('rounded-full border px-3 py-1 text-sm transition', on ? 'border-[#ECEDEF] bg-[#ECEDEF] text-[#0E0F12]' : 'border-[#343946] text-[#C9CCD2] hover:border-[#6B7280]');
   const count = (f: Filter) => scoped.filter(r => inFilter(r, f)).length;
   const row = rows.find(r => r.s.stub === sel) || null;
 
@@ -162,18 +170,31 @@ export function Assets({ meta, ctx, onBuild }: { meta: Meta; ctx: Ctx; onBuild: 
       {meta.preflight?.storage?.startsWith('refused') && <div className="rounded-lg border-2 border-amber-400/50 bg-amber-400/10 p-3 text-base text-amber-100">Uploads are switched off: {meta.preflight.storage.replace(/^refused:\s*/, '')}. An admin sets this on Railway.</div>}
       {error && <div className="rounded-lg border-2 border-red-500/45 bg-red-500/10 p-3 text-base text-red-200">{error}</div>}
 
-      <div className="flex flex-wrap items-center gap-2">
-        {FILTERS.map(([k, l]) => <GhostButton key={k} active={filter === k} onClick={() => setFilter(k)} className="text-base">{l} ({count(k)})</GhostButton>)}
-        <span className="ml-auto flex items-center gap-2">
-          <GhostButton active={scope === 'set'} onClick={() => setScope('set')} title="The persona × territory × region in the bar above">This set</GhostButton>
-          <GhostButton active={scope === 'all'} onClick={() => setScope('all')}>Every set</GhostButton>
-        </span>
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="w-16 text-xs font-semibold uppercase tracking-wider text-[#646A75]">Status</span>
+          {FILTERS.map(([k, l]) => <GhostButton key={k} active={filter === k} onClick={() => setFilter(k)} className="text-base">{l} ({count(k)})</GhostButton>)}
+          {filter === (producer ? 'awaiting' : 'needs') && <span className="text-xs text-[#646A75]">your default</span>}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="w-16 text-xs font-semibold uppercase tracking-wider text-[#646A75]">Persona</span>
+          <button className={chip(view.persona === 'all')} onClick={() => setView({ ...view, persona: 'all', territory: 'all' })}>All</button>
+          {personaKeys(meta.personas).map(p => {
+            const pc = personaColor(p), on = view.persona === p;
+            return <button key={p} className="flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm transition" style={on ? { borderColor: pc.edge, background: tint(pc.base, 0.22), color: pc.light } : { borderColor: tint(pc.base, 0.45), color: pc.light }}
+              onClick={() => setView({ ...view, persona: on ? 'all' : p, territory: 'all' })}><PersonaDot persona={p} />{meta.personas[p].name.replace(/\s*\(.*\)$/, '')}</button>;
+          })}
+          <span className="ml-3 text-xs font-semibold uppercase tracking-wider text-[#646A75]">Region</span>
+          {(['all', ...(meta.regions || ['US', 'CA'])] as const).map(r => <button key={r} className={chip(view.region === r)} onClick={() => setView({ ...view, region: r as ViewFilter['region'] })}>{r === 'all' ? 'All' : r === 'CA' ? 'Canada' : r}</button>)}
+          <span className="ml-3 text-xs font-semibold uppercase tracking-wider text-[#646A75]">Format</span>
+          {['all', ...formats].map(f => <button key={f} className={chip(format === f)} onClick={() => setFormat(f)}>{f === 'all' ? 'All' : f.charAt(0) + f.slice(1).toLowerCase()}</button>)}
+        </div>
       </div>
 
       {stubs && !scoped.length && (
         <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#272B34] bg-[#16181D] p-5 text-base text-[#A3A8B1]">
-          <span className="mr-auto">{scope === 'set' ? `Nothing signed off yet for ${territoryName(meta.territories[ctx.territory])}${inRegion(ctx.region)}.` : 'Nothing signed off yet.'} Each code gets its asset here once it’s signed off.</span>
-          {scope === 'set' && <GhostButton onClick={() => setScope('all')}>Every set</GhostButton>}
+          <span className="mr-auto">{view.persona !== 'all' || view.territory !== 'all' || view.region !== 'all' || format !== 'all' ? 'Nothing signed off for this filter.' : 'Nothing signed off yet in this round.'} Each code gets its asset here once it’s signed off.</span>
+          {(view.persona !== 'all' || view.territory !== 'all' || view.region !== 'all' || format !== 'all') && <GhostButton onClick={() => { setView({ persona: 'all', territory: 'all', region: 'all' }); setFormat('all'); }}>Show all</GhostButton>}
           <GhostButton onClick={onBuild}>Build & sign off</GhostButton>
         </div>
       )}
@@ -182,9 +203,12 @@ export function Assets({ meta, ctx, onBuild }: { meta: Meta; ctx: Ctx; onBuild: 
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-[360px_1fr]">
           <aside className="space-y-4 lg:sticky lg:top-32 lg:max-h-[calc(100vh-9rem)] lg:self-start lg:overflow-y-auto">
             {!shown.length && <p className="rounded-xl border border-[#272B34] bg-[#16181D] p-4 text-sm text-[#858B96]">Nothing here. <button className="underline" onClick={() => setFilter('all')}>Show all</button></p>}
-            {[...groups.entries()].map(([k, rs]) => (
-              <section key={k} className="rounded-xl border border-l-4 border-[#272B34] bg-[#16181D] p-3" style={personaEdge(rs[0].s.persona)}>
-                <div className="mb-2 space-y-1 px-1"><PersonaChip meta={meta} persona={rs[0].s.persona} short /><div className="text-sm font-semibold">{territoryName(meta.territories[rs[0].s.territory]) || rs[0].s.territory}{inRegion(rs[0].s.region)}</div></div>
+            {byPersona.map(([p, sets]) => (
+              <section key={p} className="space-y-2 rounded-xl border border-l-4 border-[#272B34] bg-[#16181D] p-3" style={personaEdge(p)}>
+                <PersonaChip meta={meta} persona={p} short />
+                {sets.map(rs => (
+                <div key={`${rs[0].s.territory}|${regionOf(rs[0].s)}`}>
+                <div className="mb-1.5 px-1 text-sm font-semibold">{territoryName(meta.territories[rs[0].s.territory]) || rs[0].s.territory}{inRegion(rs[0].s.region)}</div>
                 <ul className="space-y-1.5">
                   {byVisual(rs).map(([visual, group]) => group.map((r, gi) => (
                     <li key={r.s.stub} className={cn(visual && group.length > 1 && gi > 0 && '-mt-1 ml-3 border-l-2 border-[#343946] pl-2')}>
@@ -200,6 +224,8 @@ export function Assets({ meta, ctx, onBuild }: { meta: Meta; ctx: Ctx; onBuild: 
                     </li>
                   )))}
                 </ul>
+                </div>
+                ))}
               </section>
             ))}
           </aside>
@@ -343,7 +369,7 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, progress,
             <div>
               <Label>On the asset (checked against it)</Label>
               {report.on_asset_copy.length
-                ? <ul className="space-y-2">{report.on_asset_copy.map(x => <li key={x.line_id}><div className="text-xs text-[#858B96]">{x.label} · v{x.version}</div><div className="text-base leading-snug text-[#F2F3F5]">{x.text}</div></li>)}</ul>
+                ? <ul className="space-y-2">{[...report.on_asset_copy].sort((a, b) => (a.card || 0) - (b.card || 0)).map(x => <li key={`${x.card || 0}|${x.line_id}`}><div className="text-xs text-[#858B96]">{x.label}{x.card ? ` · card ${x.card}` : ''} · v{x.version}</div><div className="text-base leading-snug text-[#F2F3F5]">{x.text}</div></li>)}</ul>
                 : <p className="text-sm text-[#858B96]">None: this code’s copy all runs in the post.</p>}
             </div>
             {report.post_copy.length > 0 && (
@@ -379,10 +405,10 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, progress,
                   <thead><tr className="text-xs uppercase text-[#858B96]"><th className="pb-1 pr-3">Field</th><th className="pb-1 pr-3">Signed off</th><th className="pb-1 pr-3">On the asset</th><th className="pb-1">Result</th></tr></thead>
                   <tbody>{copyRows.map((r, i) => (
                     <tr key={i} className="border-t border-[#272B34] align-top">
-                      <td className="py-1.5 pr-3 text-[#858B96]">{r.field}</td>
+                      <td className="py-1.5 pr-3 text-[#858B96]">{r.field}{r.card ? `, card ${r.card}` : ''}</td>
                       <td className="py-1.5 pr-3">{r.signed_off}</td>
                       <td className="py-1.5 pr-3 text-[#C9CCD2]">{r.found || '–'}</td>
-                      <td className="py-1.5"><Chip tone={COPY_STATUS[r.status]?.tone || 'grey'} className="text-xs">{COPY_STATUS[r.status]?.words || r.status}</Chip></td>
+                      <td className="py-1.5"><Chip tone={COPY_STATUS[r.status]?.tone || 'grey'} className="text-xs">{r.found_on ? `on card ${r.found_on}` : COPY_STATUS[r.status]?.words || r.status}</Chip></td>
                     </tr>
                   ))}</tbody>
                 </table>

@@ -74,6 +74,17 @@ test('admin rounds: ids R + number, a name, R1 is never a test round; the active
   await assert.rejects(() => Rounds.setActiveRound('R9'), /No round R9/);
 });
 
+test('a round carries its asset deadline (the round board): a date, kept when a save leaves it out, cleared with ""', async () => {
+  await fresh();
+  await assert.rejects(() => Rounds.saveRound({ id: 'R1', name: 'Round one', assets_due: '12 Oct' }), /YYYY-MM-DD/);
+  let s = await Rounds.saveRound({ id: 'R1', name: 'Round one', assets_due: '2026-10-12' });
+  assert.equal(s.rounds.find(r => r.id === 'R1')!.assets_due, '2026-10-12');
+  s = await Rounds.saveRound({ id: 'R1', name: 'Round one, renamed' });
+  assert.equal(s.rounds.find(r => r.id === 'R1')!.assets_due, '2026-10-12', 'kept');
+  s = await Rounds.saveRound({ id: 'R1', name: 'Round one', assets_due: '' });
+  assert.equal(s.rounds.find(r => r.id === 'R1')!.assets_due, undefined, 'cleared');
+});
+
 test('R0 (test) then R1: views default to the active round, R0 is hidden from R1 and never handed off; R1 codes start at A; R0 codes carry _TEST', async () => {
   await fresh();
   await Rounds.saveRound({ id: 'R0', name: 'Test run-through', test: true, activate: true });

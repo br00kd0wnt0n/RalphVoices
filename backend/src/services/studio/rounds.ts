@@ -14,7 +14,7 @@
 
 import { getStore } from './engine.js';
 
-export interface Round { id: string; name: string; from?: string; test?: boolean; created_by?: string; created_at?: string }
+export interface Round { id: string; name: string; from?: string; test?: boolean; created_by?: string; created_at?: string; /** When the round's assets are due (YYYY-MM-DD), shown on the round board. */ assets_due?: string }
 export interface RoundsState { active: string; rounds: Round[] }
 
 /** Content with no round stamp is round one. */
@@ -58,7 +58,11 @@ export async function saveRound(input: Partial<Round> & { activate?: boolean }, 
   const state = await getRounds();
   const existing = state.rounds.find(r => r.id === id);
   if (id === DEFAULT_ROUND && input.test) throw new Error('R1 is the first real round; use R0 for a test run-through');
+  // The asset deadline: a date, or '' to clear it; left out, it stays as it was.
+  const due = input.assets_due === undefined ? existing?.assets_due : String(input.assets_due || '').trim();
+  if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due)) throw new Error('The asset deadline is a date (YYYY-MM-DD)');
   const round: Round = { ...(existing || {}), id, name, from: input.from ? String(input.from).slice(0, 10) : existing?.from || new Date().toISOString().slice(0, 10), test: !!input.test, created_by: existing?.created_by || user, created_at: existing?.created_at || new Date().toISOString() };
+  if (due) round.assets_due = due; else delete round.assets_due;
   const next: RoundsState = { active: input.activate ? id : state.active, rounds: [...state.rounds.filter(r => r.id !== id), round].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true })) };
   await getStore().putInput('rounds', next);
   return next;
