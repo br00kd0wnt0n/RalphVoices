@@ -50,6 +50,8 @@ export interface Brief {
   carousel?: { sequences: number; cards: number };
   /** Client only: the person has changed the fields in this brief, so a new territory keeps them (studioFields.ts). */
   fields_touched?: boolean;
+  /** Lines Studio writes per field (Write's counts); n is their sum. */
+  field_counts?: Record<string, number>;
 }
 export interface RunStats {
   generated: number; near_duplicates_removed: number; similar_flagged: number;
@@ -64,7 +66,7 @@ export interface RunSummary {
   /** The run's round (none before rounds: R1). */
   round?: string;
 }
-export interface FieldSpec { platform: string; label: string; visible: number; max: number; source: string }
+export interface FieldSpec { platform: string; label: string; visible: number; max: number; source: string; /** Options Write asks for by default (rules v2.11+). */ default_count?: number }
 export interface Territory {
   persona: string; name: string; angle: string; format: string; premise: string; source: string;
   /** The pitched headline ("headline as sold"), from the concept cards (rules v2.4+). */
