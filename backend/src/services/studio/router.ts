@@ -247,6 +247,13 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     r.get('/preflight/agreement', wrap(async (req, res) => res.json(await pf.agreement(pt(req.query)))));
     r.get('/preflight/features.csv', wrap(async (_req, res) => download(res, 'text/csv; charset=utf-8', 'preflight-features.csv', await pf.featuresCsv())));
     r.get('/preflight/handoff.csv', wrap(async (_req, res) => download(res, 'text/csv; charset=utf-8', 'asset-handoff.csv', await pf.handoffCsv())));
+
+    // ----- Compliance (step 7): each asset with its codes' copy and flags; Trupanion's reviewer sets the status -----
+    r.get('/compliance', wrap(async (req, res) => res.json(await pf.complianceAssets(pt(req.query)))));
+    r.post('/compliance/assets/:upload', wrap(async (req, res) => {
+      if (o.canSetCompliance && !o.canSetCompliance(req)) return res.status(403).json({ error: 'Compliance status is set by the producer (Vivan) or an admin' });
+      res.json(await pf.setAssetCompliance(req.params.upload, req.body || {}, o.who(req)));
+    }));
   }
 
   // ----- territories -----

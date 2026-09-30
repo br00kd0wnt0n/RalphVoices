@@ -116,7 +116,9 @@ export interface Line {
   /** Red flags a person has overridden, with the written reason (Ready for production gate). */
   overrides?: Override[];
   /** Trupanion compliance review: pending (default), cleared or changes_requested. Doesn't block sign-off. */
-  compliance?: { status: ComplianceStatus; note?: string; by?: string; at?: string; sha256?: string };  // sha256: the wording it was reviewed on
+  compliance?: { status: ComplianceStatus; note?: string; by?: string; at?: string; sha256?: string;  // sha256: the wording it was reviewed on
+    /** Set when reviewed at the Compliance step (after Pre-flight): the asset it was reviewed with, and where changes go back to. */
+    upload_id?: string; code?: string; send_back?: 'copy' | 'asset' };
   /** The line's place in the latest Ready for production sign-off. */
   ready?: { signoff_id: string; version: number; sha256: string; ready_by: string; ready_at: string; stub: string; changed_since?: boolean };
   /** When the final wording was last fully re-checked (after an edit). */
@@ -626,7 +628,8 @@ export function makeBrief(input: Partial<Brief>): Brief {
   if (!pr) throw new Error(`Unknown persona ${persona}`);
   const fields = (input.fields && input.fields.length ? input.fields : pr.default_fields);
   for (const f of fields) if (!r.fields[f]) throw new Error(`Unknown field ${f}. Known: ${Object.keys(r.fields).join(', ')}`);
-  const tone = { dry_warm: 3, playful_plain: 3, short_long: 2, ...(input.tone || {}) };
+  // Short by default (Nick, 29 Sep: lines were too wordy).
+  const tone = { dry_warm: 3, playful_plain: 3, short_long: 1, ...(input.tone || {}) };
   const region = String(input.region || DEFAULT_REGION).toUpperCase() as Region;
   if (!REGIONS.includes(region)) throw new Error(`Region must be ${REGIONS.join(' or ')}`);
   return {
@@ -740,11 +743,18 @@ ${facts.map(f => `  - ${f.own ? '[Trupanion] ' : f.category ? '[category survey,
 STRUCTURES:
 ${Object.entries(r.structures).map(([k, v]) => `- ${k}: ${v}`).join('\n')}
 
-FIELDS (stay within the visible length):
-${b.fields.map(f => `- ${f}: ${r.fields[f].label}, ${r.fields[f].visible} characters visible`).join('\n')}
+FIELDS: aim for the target, well inside what shows on screen. A line that runs past the visible length is cut off in the feed.
+${b.fields.map(f => `- ${f}: ${r.fields[f].label}, aim for ${targetChars(r.fields[f].visible)} characters or fewer (${r.fields[f].visible} visible)`).join('\n')}
+
+LENGTH AND RHYTHM: short and punchy. One idea per line. Fragments are welcome ("Vet bill? Covered." beats a full sentence). Cut throat-clearing openers ("Honestly,", "Picture this:", "Here's the thing:", "Real talk:") and any word that isn't doing work. When in doubt, cut.
 ${b.banned_words.length ? `\nBANNED WORDS (the creative director's): ${b.banned_words.join(', ')}` : ''}${b.banned_ideas.length ? `\nIDEAS THAT ARE OFF LIMITS: ${b.banned_ideas.join('; ')}` : ''}${own.length ? `\nTHE CREATIVE DIRECTOR'S OWN LINES for this brief. This is the voice to match most closely. Build around them: never repeat or paraphrase them, and take the angles and structures they haven't used:\n${own.map(x => `- ${x}`).join('\n')}` : ''}${b.reference_lines.length ? `\nREFERENCE LINES in the voice the creative director wants (match the voice, don't copy):\n${b.reference_lines.map(x => `- ${x}`).join('\n')}` : ''}${keeps.length ? `\nTHE CREATIVE DIRECTOR'S TASTE: lines they kept or rewrote, with their notes. Learn from the edits and notes:\n${keeps.map(x => `- [${x.field}, ${x.structure}] ${x.original && x.original !== x.text ? `"${x.original}" → rewritten as "${x.text}"` : `"${x.text}"`}${x.note ? ` (note: ${x.note})` : ''}`).join('\n')}` : ''}${cuts.length ? `\nLINES THEY CUT, and why (avoid these moves):\n${cuts.map(x => `- "${x.text}" (note: ${x.note})`).join('\n')}` : ''}
 
 Write exactly one line per cell you are given, fitting its angle, structure, tone and field. Make lines in the same request differ from each other in wording, rhythm and idea. Plain text only: no hashtags, no emoji, no quotation marks around the line, no labels. Return JSON: {"lines":[{"cell":"<cell id>","text":"<the line>"}]}`;
+}
+
+/** The length the writer aims for: well inside the visible limit (three quarters of a short field, 60% of a long one). */
+export function targetChars(visible: number): number {
+  return Math.round(visible * (visible <= 40 ? 0.75 : 0.6));
 }
 
 /**
@@ -767,7 +777,7 @@ function writerUser(r: Rules, b: Brief, cells: Cell[], guidance?: string, siblin
   const pr = r.personas[b.persona];
   const label = (id: string) => pr.triggers.find(t => t.id === id)?.label || id;
   return `${sibling ? `Write siblings of this line: "${sibling}". Keep what works about it but make each one a genuinely different line.\n` : ''}${guidance ? `Creative director's guidance for these: ${guidance}\n` : ''}Cells:
-${cells.map(c => `- ${c.cell}: angle ${c.angle} "${label(c.angle)}"; structure ${c.structure}; tone ${toneWords(r, c.tone)}; field ${c.field} (${r.fields[c.field].visible} chars visible)`).join('\n')}`;
+${cells.map(c => `- ${c.cell}: angle ${c.angle} "${label(c.angle)}"; structure ${c.structure}; tone ${toneWords(r, c.tone)}; field ${c.field} (aim ≤${targetChars(r.fields[c.field].visible)} chars; ${r.fields[c.field].visible} visible)`).join('\n')}`;
 }
 
 function parseLines(text: string): Array<{ cell: string; text: string }> {
@@ -1541,10 +1551,14 @@ function applyTaste(store: Map<string, TasteExample>, l: Line) {
 async function saveTaste(ex: TasteExample[]): Promise<void> { await getStore().saveTaste(ex); }
 
 /** Decision from the UI (keep / cut / edit, note). Updates the batch and the taste store. */
-export async function setDecision(batchId: string, lineId: string, patch: { decision?: Line['decision']; edited_text?: string; note?: string }, user?: string): Promise<Line> {
+export async function setDecision(batchId: string, lineId: string, patch: { decision?: Line['decision']; edited_text?: string; note?: string; source?: string }, user?: string): Promise<Line> {
   const batch = await loadBatch(batchId);
   const l = batch.lines.find(x => x.id === lineId);
   if (!l) throw new Error(`No line ${lineId}`);
+  // A cut from the Shortlist is the same decision as in Review, except for a signed-off line: that set changes at Ready.
+  if (patch.source === 'shortlist' && patch.decision === 'cut' && l.ready) {
+    throw Object.assign(new Error(`Signed off at Ready for production (set ${l.ready.signoff_id}): take it out of the set there, then cut it`), { status: 409 });
+  }
   const before = { decision: l.decision || '', edited_text: l.edited_text || '', note: l.note || '' };
   if (patch.decision !== undefined) l.decision = patch.decision;
   if (patch.edited_text !== undefined) l.edited_text = patch.edited_text;
@@ -1590,7 +1604,7 @@ export async function lineHistory(lineId: string) { return getStore().listEdits(
 
 // ---------- shortlist ----------
 
-export interface ShortRow { stub: string; id: string; persona: string; territory: string; region: Region; field: string; platform: string; format: string; text: string; angle: string; structure: string; tone: string; features: string; flags: string; note: string; compliance_flags: string[]; warn_flags: string[] }
+export interface ShortRow { stub: string; id: string; batch: string; decision: string; signed_off: string; persona: string; territory: string; region: Region; field: string; platform: string; format: string; text: string; angle: string; structure: string; tone: string; features: string; flags: string; note: string; compliance_flags: string[]; warn_flags: string[] }
 
 /** Kept and edited lines in every run, each with its region (the run's), oldest first within a persona and territory. */
 export async function keptLines(): Promise<Line[]> {
@@ -1624,7 +1638,9 @@ export async function shortlist(): Promise<ShortRow[]> {
     const t = r.territories[l.territory];
     const platform = r.fields[l.field]?.platform || 'META';
     return {
-      stub: l.ready?.stub || book.assign(codeInput(l)), id: l.id, persona: l.persona, territory: l.territory, region: regionOf(l), field: l.field,
+      stub: l.ready?.stub || book.assign(codeInput(l)), id: l.id, batch: l.batch, decision: l.decision || '',
+      // Signed off at Ready: the set it's in (it can't be cut from the Shortlist; change the set at Ready instead).
+      signed_off: l.ready?.signoff_id || '', persona: l.persona, territory: l.territory, region: regionOf(l), field: l.field,
       platform, format: t?.format || '', text: finalText(l),
       angle: `${l.angle} ${l.angle_label}`, structure: l.structure, tone: l.tone_label, features: l.features.join('; '),
       flags: l.flags.map(flagText).join(' | '), note: l.note || '',
