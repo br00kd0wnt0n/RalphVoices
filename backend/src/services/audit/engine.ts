@@ -23,6 +23,7 @@ import { CONFIG } from './config.js';
 import { copyMatch, type SignedOffCopy } from './copyMatch.js';
 import { defaultTools, type Tools } from './tools.js';
 import type { Asset, AssetAudit, Flag, FrameText, Rubric, RuleItem, Rules, YesNo } from './types.js';
+import { CURRENT_PATTERN } from '../../utils/namingCode.js';
 
 export const MODELS = CONFIG.models;
 
@@ -354,7 +355,7 @@ export async function auditAsset(a: Asset, ctx: AuditContext): Promise<AssetAudi
     textLoad = { words: w, where: first.label };
     if (w > CONFIG.text_load.max_words) addFlag(flags, { severity: 'amber', rule: 'TEXT_LOAD', label: `Heavy on-image text: ${w} words on the ${first.label}`, source: CONFIG.text_load.source, where: first.label, by: ['rule'] });
   }
-  if (!a.stub) addFlag(flags, { severity: 'amber', rule: 'NAMING', label: `Name doesn't parse as a naming stub (${a.stub_error}); B3 can't join its features`, source: 'Naming convention agreed with Add3 (PERSONA_TERRITORY_FORMAT_v#_PLATFORM)', by: ['rule'] });
+  if (!a.stub) addFlag(flags, { severity: 'amber', rule: 'NAMING', label: `Name doesn't parse as a naming stub (${a.stub_error}); B3 can't join its features`, source: `Naming convention with Add3 (${CURRENT_PATTERN}, or the earlier PERSONA_TERRITORY_FORMAT_v#_PLATFORM)`, by: ['rule'] });
 
   const features: Record<string, number> = {};
   for (const it of items) if (yn[it.id] && (it.kind === 'feature')) features[it.id] = yn[it.id].p;

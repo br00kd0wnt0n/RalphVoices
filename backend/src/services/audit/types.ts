@@ -68,11 +68,14 @@ export interface Rubric { version: string; system: string; items: RubricItem[] }
 export type AssetKind = 'static' | 'carousel' | 'video' | 'text';
 
 export interface Stub {
-  stub: string;        // PERSONA_TERRITORY_FORMAT_v#_PLATFORM, as B3 normalises it
+  stub: string;        // PERSONA_TERRITORY_FORMAT_[visual][line]_REGION_PLATFORM (or the earlier …_v#_PLATFORM), as B3 normalises it
   persona: string;
   territory: string;
   format: string;      // ST | VID | CAR | TT | UGC
-  version: number;
+  version?: number;    // earlier v# form only
+  visual?: string;     // current form: A, B…
+  line?: number;       // current form: copy line on that visual
+  region?: 'US' | 'CA';
   platform: string;    // META | TT
 }
 

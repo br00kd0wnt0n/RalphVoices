@@ -113,7 +113,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   r.post('/generate', wrap(async (req, res) => {
     // Checked before the brief is built, so the answer is always "start a new run", whatever else is wrong with it.
     const raw = req.body.brief || {};
-    const mismatch = await S.runMismatch(req.body.batch ? String(req.body.batch) : undefined, { persona: raw.persona || S.loadRules().territories[raw.territory]?.persona, territory: raw.territory });
+    const mismatch = await S.runMismatch(req.body.batch ? String(req.body.batch) : undefined, { persona: raw.persona || S.loadRules().territories[raw.territory]?.persona, territory: raw.territory, region: raw.region });
     if (mismatch) return res.status(409).json({ error: mismatch, run_mismatch: true });
     const b = S.makeBrief(raw);
     const ownOnly = !!req.body.own_only;
@@ -165,11 +165,13 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   }));
 
   // ----- Ready for production (after Shortlist) -----
-  const pt = (q: any) => ({ persona: q.persona ? String(q.persona) : undefined, territory: q.territory ? String(q.territory) : undefined });
+  const pt = (q: any) => ({ persona: q.persona ? String(q.persona) : undefined, territory: q.territory ? String(q.territory) : undefined, region: q.region ? String(q.region).toUpperCase() : undefined });
+  const json = (v: unknown) => { try { return v ? JSON.parse(String(v)) : undefined; } catch { throw new Error('visuals and include are JSON'); } };
   r.get('/ready', wrap(async (req, res) => {
-    const { persona, territory } = pt(req.query);
+    const { persona, territory, region } = pt(req.query);
     if (!persona || !territory) throw new Error('Pass persona and territory');
-    res.json(await R.readyView(persona, territory));
+    // visuals: {line id: letter} to preview codes; include: the line ids in the set (they get codes first).
+    res.json(await R.readyView(persona, territory, (region || 'US') as any, json(req.query.visuals) || {}, json(req.query.include)));
   }));
   r.post('/ready', wrap(async (req, res) => {
     try { res.json(await R.signOff(req.body || {}, o.who(req))); }
@@ -245,6 +247,13 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     r.get('/preflight/agreement', wrap(async (req, res) => res.json(await pf.agreement(pt(req.query)))));
     r.get('/preflight/features.csv', wrap(async (_req, res) => download(res, 'text/csv; charset=utf-8', 'preflight-features.csv', await pf.featuresCsv())));
     r.get('/preflight/handoff.csv', wrap(async (_req, res) => download(res, 'text/csv; charset=utf-8', 'asset-handoff.csv', await pf.handoffCsv())));
+
+    // ----- Compliance (step 7): each asset with its codes' copy and flags; Trupanion's reviewer sets the status -----
+    r.get('/compliance', wrap(async (req, res) => res.json(await pf.complianceAssets(pt(req.query)))));
+    r.post('/compliance/assets/:upload', wrap(async (req, res) => {
+      if (o.canSetCompliance && !o.canSetCompliance(req)) return res.status(403).json({ error: 'Compliance status is set by the producer (Vivan) or an admin' });
+      res.json(await pf.setAssetCompliance(req.params.upload, req.body || {}, o.who(req)));
+    }));
   }
 
   // ----- territories -----
@@ -277,7 +286,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   // ----- the live rules, read-only, for everyone (the Rules view) -----
   r.get('/rules/active', wrap(async (_req, res) => {
     const full: any = await S.getStore().getRules();   // unfiltered: the visual-only brand items are shown, marked as such
-    const item = (x: any) => ({ id: x.id, rule: x.rule, severity: x.severity || 'warn', source: x.source, applies_to: x.applies_to || 'text', status: x.status });
+    const item = (x: any) => ({ id: x.id, rule: x.rule, severity: x.severity || 'warn', source: x.source, applies_to: x.applies_to || 'text', status: x.status, what_to_do: x.what_to_do });
     res.json({
       version: full.version, updated: full.updated,
       compliance: (full.compliance || []).map(item), brand: (full.brand || []).map(item), clarity: (full.clarity || []).map(item),
@@ -286,6 +295,8 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
         turn_offs: (p.turn_offs || []).map(item), language: (p.language || []).map((l: any) => ({ text: l.text, caution: !!l.caution, source: l.source })),
       }])),
       sources: Object.fromEntries(Object.entries(full.sources || {}).map(([k, v]: [string, any]) => [k, v?.title || k])),
+      // Checked on the last screen in Pre-flight; off until the approved text is in the rules.
+      disclaimer: full.disclaimer ? { ...item(full.disclaimer), text: full.disclaimer.text || null, active: !!String(full.disclaimer.text || '').trim() } : null,
     });
   }));
 

@@ -270,9 +270,10 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   assert.equal(feats[1][0], stub);
   assert.equal(feats[1][1], 'direct_vet_pay');
   const hand = S.parseCsv(await pf.handoffCsv());
-  assert.equal(hand[0][6], 'Status');
-  assert.equal(hand.find(r => r[0] === stub)![6], 'Ready to traffic');
-  assert.equal(hand.find(r => r[0] === postStub)![6], 'Not uploaded');
+  assert.deepEqual(hand[0].slice(0, 2), ['Naming code', 'Region']);
+  assert.equal(hand[0][7], 'Status');
+  assert.equal(hand.find(r => r[0] === stub)![7], 'Ready to traffic');
+  assert.equal(hand.find(r => r[0] === postStub)![7], 'Not uploaded');
   assert.equal(/approved/i.test(await pf.handoffCsv()), false);
 
   // 6. Carousel and video kinds.
@@ -302,7 +303,7 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   (other as any).findStub = async (x: string) => x === postStub ? { ...(await realFind(x)), signoff: { ...(await realFind(x)).signoff, persona: 'DINK', territory: 'DINK_NEVER' } } : realFind(x);
   await assert.rejects(() => other.upload(headlineStub, [{ buffer: png('x'), filename: 'x.png', contentType: 'image/png' }], 'nick', [postStub]), /same persona and territory only/);
   const hand2 = S.parseCsv(await pf.handoffCsv());
-  assert.equal(hand2.find(r => r[0] === postStub)![5], headlineStub, 'the handoff says which codes share the visual');
+  assert.equal(hand2.find(r => r[0] === postStub)![6], headlineStub, 'the handoff says which codes share the visual');
 
   // An OpenAI outage fails the audit as retryable; running it again on the same upload works.
   const { FatalError } = await import('../src/services/audit/api.js');
@@ -362,4 +363,124 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
     assert.equal(ready.status, 403, 'only the creative lead or an admin sets Ready to traffic');
     assert.equal(((await (await fetch(`${base}/meta`)).json()) as any).preflight.enabled, true);
   } finally { server.close(); }
+});
+
+test('Pre-flight by region: US and Canadian codes listed apart, same-visual codes share a key, a US visual never serves a Canadian code', { skip }, async () => {
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const R = await import('../src/services/studio/ready.js');
+  const tables = ['studio_asset_status', 'studio_audit_agreements', 'studio_audit_flags', 'studio_audits', 'studio_upload_files', 'studio_asset_uploads', 'studio_expectations', 'studio_line_versions', 'studio_signoffs', 'studio_edits', 'studio_line_embeddings', 'studio_lines', 'studio_batches', 'studio_taste', 'studio_spend'];
+  await (store as any).db.query(`TRUNCATE ${tables.join(', ')} RESTART IDENTITY CASCADE`);
+  const api = new S.Api({ mock: true });
+  const signOffRegion = async (region: 'US' | 'CA', texts: string[]) => {
+    const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: `pf-${region}`, region, own_lines: texts.map(text => ({ text, field: 'meta_headline' })) }), api, () => {}, { ownOnly: true, user: 'nick' });
+    for (const l of run.lines) {
+      await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+      for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find(x => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'Test line for regions', 'nick');
+    }
+    // Four lines: the fourth goes on visual B.
+    return (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region, line_ids: run.lines.map(l => l.id), visuals: { [run.lines[3]?.id ?? '-']: 'B' }, expectation: { line_ids: [run.lines[0].id], reason: 'The plain one.' } }, 'nick')).signoff;
+  };
+  await signOffRegion('US', ['Calm at the counter.', 'One less worry.', 'Home by nine.', 'Calm on a Sunday.']);
+  await signOffRegion('CA', ['Calm at the counter, in colour.', 'Your favourite kind of calm.']);
+
+  const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
+  const rows = await pf.stubs();
+  assert.deepEqual(rows.map(r => `${r.stub} ${r.region}`).sort(), [
+    'OWN_CALM_UGC_A1_CA_META CA', 'OWN_CALM_UGC_A1_US_META US', 'OWN_CALM_UGC_A2_CA_META CA', 'OWN_CALM_UGC_A2_US_META US', 'OWN_CALM_UGC_A3_US_META US', 'OWN_CALM_UGC_B1_US_META US',
+  ]);
+  const key = (s: string) => rows.find(r => r.stub === s)!.visual_key;
+  assert.equal(key('OWN_CALM_UGC_A1_US_META'), key('OWN_CALM_UGC_A3_US_META'));
+  assert.notEqual(key('OWN_CALM_UGC_A1_US_META'), key('OWN_CALM_UGC_B1_US_META'));
+  assert.equal((await pf.stubs({ region: 'CA' })).length, 2);
+
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from('fake image VOICES_TEXT: Calm at the counter.')]);
+  const file = () => [{ buffer: png, filename: 'a.png', contentType: 'image/png' }];
+  // One visual for A1-A3: fine. Canada is a separate visual: refused.
+  const up = await pf.upload('OWN_CALM_UGC_A1_US_META', file(), 'nick', ['OWN_CALM_UGC_A2_US_META', 'OWN_CALM_UGC_A3_US_META']);
+  assert.equal(up.stubs.length, 3);
+  assert.equal(up.format_notes.some(n => /another visual/.test(n)), false);
+  await assert.rejects(() => pf.upload('OWN_CALM_UGC_A1_US_META', file(), 'nick', ['OWN_CALM_UGC_A1_CA_META']), /US and Canadian ads are separate visuals/);
+  // Sharing across letters is allowed, with a note; the codes stay as signed off.
+  const across = await pf.upload('OWN_CALM_UGC_A1_US_META', file(), 'nick', ['OWN_CALM_UGC_B1_US_META']);
+  assert.ok(across.format_notes.some(n => /OWN_CALM_UGC_B1_US_META was signed off on another visual/.test(n)));
+  const rep = await pf.report('OWN_CALM_UGC_A1_CA_META');
+  assert.equal(rep.region, 'CA');
+  const hand = S.parseCsv(await pf.handoffCsv());
+  assert.equal(hand.find(r => r[0] === 'OWN_CALM_UGC_A1_CA_META')![1], 'CA');
+});
+
+test('Compliance after Pre-flight: per asset, copy and visual together; changes go back to the copy or the visual; a new upload reopens it', { skip }, async () => {
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const R = await import('../src/services/studio/ready.js');
+  const tables = ['studio_asset_status', 'studio_audit_agreements', 'studio_audit_flags', 'studio_audits', 'studio_upload_files', 'studio_asset_uploads', 'studio_expectations', 'studio_line_versions', 'studio_signoffs', 'studio_edits', 'studio_line_embeddings', 'studio_lines', 'studio_batches', 'studio_taste', 'studio_spend'];
+  await (store as any).db.query(`TRUNCATE ${tables.join(', ')} RESTART IDENTITY CASCADE`);
+  const api = new S.Api({ mock: true });
+  const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'comp', own_lines: [
+    { text: 'Calm at the counter.', field: 'meta_headline' }, { text: 'One less worry.', field: 'meta_headline' }, { text: 'Home by nine.', field: 'meta_headline' },
+  ] }), api, () => {}, { ownOnly: true, user: 'nick' });
+  for (const l of run.lines) {
+    await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+    for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find(x => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'Test line for compliance', 'nick');
+  }
+  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: run.lines.map(l => l.id), expectation: { line_ids: [run.lines[0].id], reason: 'Plain.' } }, 'nick');
+  const [A1, A2, A3] = signoff.lines.map(x => x.stub).sort();
+  // A status set per line on Ready before this step existed is still read (and not lost).
+  await R.setCompliance(run.id, signoff.lines.find(x => x.stub === A3)!.line_id, 'cleared', 'Cleared by legal, 29 Sep (on Ready)', 'vivan');
+
+  const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
+  const png = (t: string) => [{ buffer: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from(`fake VOICES_TEXT: ${t}`)]), filename: 'v.png', contentType: 'image/png' }];
+  const up = await pf.upload(A1, png('Calm at the counter.'), 'nick', [A2]);
+  await pf.runAudit(await pf.createAudit(up.upload_id));
+
+  let view = await pf.complianceAssets();
+  assert.equal(view.assets.length, 1, 'one asset serving two codes');
+  assert.deepEqual(view.assets[0].codes.map(c => c.stub), [A1, A2]);
+  assert.equal(view.assets[0].status, 'pending');
+  assert.deepEqual(view.waiting.map(w => w.stub), [A3]);
+  assert.equal((await pf.codeCompliance(A3, null)).status, 'cleared', 'the per-line status from Ready is read');
+  assert.equal((await pf.codeCompliance(A3, null)).on_asset, false);
+
+  // Changes requested needs a note and says what goes back.
+  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', note: 'x' }, 'vivan'), /what goes back/);
+  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', send_back: 'asset' }, 'vivan'), /what needs changing/);
+  // Clearing an asset that went through with an overridden red flag needs a note (if the example lines had any).
+  const anyOverride = signoff.lines.some(x => x.overrides?.length);
+  if (anyOverride) await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'cleared' }, 'vivan'), /add a note/);
+
+  // Back to the visual: the codes stop being Ready to traffic, and Pre-flight shows the note.
+  await pf.setReady(A1, true, 'nick').catch(() => {});
+  await pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', note: 'Disclaimer too small on the last card', send_back: 'asset' }, 'vivan');
+  view = await pf.complianceAssets();
+  assert.equal(view.assets[0].status, 'changes_requested');
+  assert.equal((await pf.report(A1)).status.status, 'open');
+  const rep = await pf.report(A2);
+  assert.equal(rep.compliance!.status, 'changes_requested');
+  assert.equal(rep.compliance!.send_back, 'asset');
+  assert.equal(rep.compliance!.note, 'Disclaimer too small on the last card');
+  // The line carries it too (Ready shows it read-only).
+  const line = (await S.loadBatch(run.id)).lines.find(l => l.id === signoff.lines.find(x => x.stub === A1)!.line_id)!;
+  assert.equal(line.compliance!.upload_id, up.upload_id);
+
+  // A new upload reopens the review: pending, with what happened before.
+  const up2 = await pf.upload(A1, png('Calm at the counter.'), 'nick', [A2]);
+  const c = await pf.codeCompliance(A1, up2.upload_id);
+  assert.equal(c.status, 'pending');
+  assert.match(c.note!, /New upload after "Changes requested": Disclaimer too small/);
+  // Cleared (with a note, since the lines went through with overrides in this example).
+  await pf.setAssetCompliance(up2.upload_id, { status: 'cleared', note: 'Cleared by J. Doe, Trupanion legal' }, 'vivan');
+  assert.equal((await pf.complianceAssets()).assets[0].status, 'cleared');
+  // The old upload can't be reviewed any more.
+  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'cleared', note: 'x' }, 'vivan'), /replaced/);
+
+  // Handoffs: per code (copy) and per asset.
+  const hand = S.parseCsv(await pf.handoffCsv());
+  const col = hand[0].indexOf('Compliance');
+  assert.ok(col > 0);
+  assert.equal(hand.find(r => r[0] === A1)![col], 'Cleared');
+  assert.equal(hand.find(r => r[0] === A3)![col], 'Cleared');
+  const copy = S.parseCsv((await R.handoffPack()).csv);
+  const cc = copy[0].indexOf('Compliance status');
+  assert.equal(copy.find(r => r[0] === A2)![cc], 'Cleared');
 });

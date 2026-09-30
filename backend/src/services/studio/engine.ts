@@ -18,6 +18,8 @@ import { probabilityYes } from '../../utils/probes.js';
 import { mockClient } from './mock.js';
 import { claudeWrite, isClaude } from './claude.js';
 import { FileStore, type StudioStore } from './store.js';
+import { CURRENT_PATTERN, DEFAULT_REGION, REGIONS, type Region } from '../../utils/namingCode.js';
+import { CodeBook, regionOf } from './codes.js';
 
 // ---------- paths ----------
 
@@ -55,6 +57,8 @@ export interface Brief {
   name: string;
   persona: string;
   territory: string;
+  /** Where the ads run: US (default) or CA. US and Canada are separate ads; it goes into the naming code. */
+  region?: Region;
   fields: string[];
   tone: Tone;
   banned_words: string[];
@@ -84,6 +88,8 @@ export interface Line {
   batch: string;
   persona: string;
   territory: string;
+  /** From the run's brief; lines written before regions have none and read as US. */
+  region?: Region;
   field: string;
   text: string;
   chars: number;
@@ -110,7 +116,9 @@ export interface Line {
   /** Red flags a person has overridden, with the written reason (Ready for production gate). */
   overrides?: Override[];
   /** Trupanion compliance review: pending (default), cleared or changes_requested. Doesn't block sign-off. */
-  compliance?: { status: ComplianceStatus; note?: string; by?: string; at?: string; sha256?: string };  // sha256: the wording it was reviewed on
+  compliance?: { status: ComplianceStatus; note?: string; by?: string; at?: string; sha256?: string;  // sha256: the wording it was reviewed on
+    /** Set when reviewed at the Compliance step (after Pre-flight): the asset it was reviewed with, and where changes go back to. */
+    upload_id?: string; code?: string; send_back?: 'copy' | 'asset' };
   /** The line's place in the latest Ready for production sign-off. */
   ready?: { signoff_id: string; version: number; sha256: string; ready_by: string; ready_at: string; stub: string; changed_since?: boolean };
   /** When the final wording was last fully re-checked (after an edit). */
@@ -124,8 +132,20 @@ export interface LineVersion { line_id: string; batch_id: string; version: numbe
   /** The naming code the line was signed off under (B3b joins live results on it). */
   stub?: string }
 export const sha256 = (s: string) => crypto.createHash('sha256').update(s, 'utf8').digest('hex');
+/**
+ * Has the line a saved edit that counts? Any saved wording that differs from
+ * the original, unless the line is cut. "Save edit" then "Keep" keeps the edit
+ * (Nick, 29 Sep: the shortlist showed the original); "Revert to original"
+ * clears edited_text. The one definition: everything else goes through finalText.
+ */
+export const isEdited = (l: Pick<Line, 'decision' | 'edited_text' | 'text'>) => !!l.edited_text && l.edited_text !== l.text && l.decision !== 'cut';
 /** The words that go to production: the edit when there is one. */
-export const finalText = (l: Pick<Line, 'decision' | 'edited_text' | 'text'>) => (l.decision === 'edit' && l.edited_text ? l.edited_text : l.text);
+export const finalText = (l: Pick<Line, 'decision' | 'edited_text' | 'text'>) => (isEdited(l) ? l.edited_text! : l.text);
+/** Keep on an edited line is recorded as edit, and edit with nothing changed as keep, so counts and history say what happened. */
+function settleDecision(l: Line) {
+  if (l.decision === 'keep' && isEdited(l)) l.decision = 'edit';
+  else if (l.decision === 'edit' && !isEdited(l)) l.decision = 'keep';
+}
 export const lineHash = (l: Pick<Line, 'field' | 'decision' | 'edited_text' | 'text'>) => sha256(`${l.field}\n${finalText(l)}`);
 export interface Batch {
   id: string;
@@ -182,6 +202,7 @@ export interface RuleItem {
   patterns?: Pat[]; trigger_patterns?: string[]; requires_patterns?: string[];
   lead_fields?: string[];
   wordings?: [string, string]; structures?: string[]; min_words?: number; status?: string; needs_confirmation?: boolean;
+  what_to_do?: string;     // the fix in plain words, shown with the flag (rules v2.7+)
   /** What the rule is checked on: copy ('text', the default), images and frames only ('visual', B2's audit), or 'both'. */
   applies_to?: 'text' | 'visual' | 'both';
 }
@@ -607,10 +628,13 @@ export function makeBrief(input: Partial<Brief>): Brief {
   if (!pr) throw new Error(`Unknown persona ${persona}`);
   const fields = (input.fields && input.fields.length ? input.fields : pr.default_fields);
   for (const f of fields) if (!r.fields[f]) throw new Error(`Unknown field ${f}. Known: ${Object.keys(r.fields).join(', ')}`);
-  const tone = { dry_warm: 3, playful_plain: 3, short_long: 2, ...(input.tone || {}) };
+  // Short by default (Nick, 29 Sep: lines were too wordy).
+  const tone = { dry_warm: 3, playful_plain: 3, short_long: 1, ...(input.tone || {}) };
+  const region = String(input.region || DEFAULT_REGION).toUpperCase() as Region;
+  if (!REGIONS.includes(region)) throw new Error(`Region must be ${REGIONS.join(' or ')}`);
   return {
-    name: input.name || `${territory}-${stamp()}`,
-    persona, territory, fields,
+    name: input.name || `${territory}-${region === DEFAULT_REGION ? '' : `${region}-`}${stamp()}`,
+    persona, territory, region, fields,
     tone: { dry_warm: clamp15(tone.dry_warm), playful_plain: clamp15(tone.playful_plain), short_long: clamp15(tone.short_long) },
     banned_words: (input.banned_words || []).map(s => s.trim()).filter(Boolean),
     banned_ideas: (input.banned_ideas || []).map(s => s.trim()).filter(Boolean),
@@ -709,7 +733,7 @@ Real owners' words, for inspiration only (never copy more than four words in a r
 ${pr.verbatims.map(v => `- "${v.text}"`).join('\n')}
 
 TERRITORY: ${t.name} ${t.premise}
-
+${regionBlock(regionOf({}, b))}
 RULES THAT BIND EVERY LINE:
 ${modelRules.map(c => `- ${c.rule}`).join('\n')}
 - Primary text and captions must make clear what is being sold: Trupanion, medical insurance for cats and dogs. Headlines and hooks can lean on the primary text.
@@ -719,18 +743,41 @@ ${facts.map(f => `  - ${f.own ? '[Trupanion] ' : f.category ? '[category survey,
 STRUCTURES:
 ${Object.entries(r.structures).map(([k, v]) => `- ${k}: ${v}`).join('\n')}
 
-FIELDS (stay within the visible length):
-${b.fields.map(f => `- ${f}: ${r.fields[f].label}, ${r.fields[f].visible} characters visible`).join('\n')}
+FIELDS: aim for the target, well inside what shows on screen. A line that runs past the visible length is cut off in the feed.
+${b.fields.map(f => `- ${f}: ${r.fields[f].label}, aim for ${targetChars(r.fields[f].visible)} characters or fewer (${r.fields[f].visible} visible)`).join('\n')}
+
+LENGTH AND RHYTHM: short and punchy. One idea per line. Fragments are welcome ("Vet bill? Covered." beats a full sentence). Cut throat-clearing openers ("Honestly,", "Picture this:", "Here's the thing:", "Real talk:") and any word that isn't doing work. When in doubt, cut.
 ${b.banned_words.length ? `\nBANNED WORDS (the creative director's): ${b.banned_words.join(', ')}` : ''}${b.banned_ideas.length ? `\nIDEAS THAT ARE OFF LIMITS: ${b.banned_ideas.join('; ')}` : ''}${own.length ? `\nTHE CREATIVE DIRECTOR'S OWN LINES for this brief. This is the voice to match most closely. Build around them: never repeat or paraphrase them, and take the angles and structures they haven't used:\n${own.map(x => `- ${x}`).join('\n')}` : ''}${b.reference_lines.length ? `\nREFERENCE LINES in the voice the creative director wants (match the voice, don't copy):\n${b.reference_lines.map(x => `- ${x}`).join('\n')}` : ''}${keeps.length ? `\nTHE CREATIVE DIRECTOR'S TASTE: lines they kept or rewrote, with their notes. Learn from the edits and notes:\n${keeps.map(x => `- [${x.field}, ${x.structure}] ${x.original && x.original !== x.text ? `"${x.original}" → rewritten as "${x.text}"` : `"${x.text}"`}${x.note ? ` (note: ${x.note})` : ''}`).join('\n')}` : ''}${cuts.length ? `\nLINES THEY CUT, and why (avoid these moves):\n${cuts.map(x => `- "${x.text}" (note: ${x.note})`).join('\n')}` : ''}
 
 Write exactly one line per cell you are given, fitting its angle, structure, tone and field. Make lines in the same request differ from each other in wording, rhythm and idea. Plain text only: no hashtags, no emoji, no quotation marks around the line, no labels. Return JSON: {"lines":[{"cell":"<cell id>","text":"<the line>"}]}`;
+}
+
+/** The length the writer aims for: well inside the visible limit (three quarters of a short field, 60% of a long one). */
+export function targetChars(visible: number): number {
+  return Math.round(visible * (visible <= 40 ? 0.75 : 0.6));
+}
+
+/**
+ * Where the ads run. Canada gets its own ads, written in Canadian English and
+ * meant to feel Canadian, not a US ad with a maple leaf. Kept modest: no facts
+ * about Canada beyond the facts list (Canadian rules come in a later rules version).
+ */
+export function regionBlock(region: Region): string {
+  if (region !== 'CA') return '';
+  return `
+REGION: CANADA. These ads run in Canada, as separate ads from the US ones.
+- Use Canadian English spelling: colour, favourite, centre, neighbour, cheque.
+- Make each line feel distinctly Canadian in its voice and everyday detail, not a US ad with a maple leaf added. Don't reach for flags, maple leaves, "eh", hockey or other clichés.
+- Avoid US-only references: US states or cities, the Fourth of July, US-only brands or chains, "ZIP code".
+- Don't state anything about Canada (prices, laws, coverage, statistics, where Trupanion is available) unless it's in the facts list above.
+`;
 }
 
 function writerUser(r: Rules, b: Brief, cells: Cell[], guidance?: string, sibling?: string): string {
   const pr = r.personas[b.persona];
   const label = (id: string) => pr.triggers.find(t => t.id === id)?.label || id;
   return `${sibling ? `Write siblings of this line: "${sibling}". Keep what works about it but make each one a genuinely different line.\n` : ''}${guidance ? `Creative director's guidance for these: ${guidance}\n` : ''}Cells:
-${cells.map(c => `- ${c.cell}: angle ${c.angle} "${label(c.angle)}"; structure ${c.structure}; tone ${toneWords(r, c.tone)}; field ${c.field} (${r.fields[c.field].visible} chars visible)`).join('\n')}`;
+${cells.map(c => `- ${c.cell}: angle ${c.angle} "${label(c.angle)}"; structure ${c.structure}; tone ${toneWords(r, c.tone)}; field ${c.field} (aim ≤${targetChars(r.fields[c.field].visible)} chars; ${r.fields[c.field].visible} visible)`).join('\n')}`;
 }
 
 function parseLines(text: string): Array<{ cell: string; text: string }> {
@@ -748,7 +795,7 @@ export async function batchExists(id: string): Promise<boolean> { return getStor
 export async function loadBatch(id: string): Promise<Batch> { return getStore().getBatch(id); }
 export async function saveBatch(b: Batch): Promise<void> { b.updated = new Date().toISOString(); await getStore().saveBatch(b); }
 export interface RunSummary {
-  id: string; name: string; persona: string; territory: string; created: string; updated: string; created_by: string;
+  id: string; name: string; persona: string; territory: string; region: Region; created: string; updated: string; created_by: string;
   lines: number; yours: number; kept: number; undecided: number; usd: number;
   /** Lines not yet checked (a run interrupted by a restart); resume checks them. */
   unchecked: number;
@@ -762,7 +809,7 @@ export async function listBatches(user?: string): Promise<RunSummary[]> {
   for (const x of ids) {
     const b: Batch = await st.getBatch(x);
     out.push({
-      id: b.id, name: b.brief.name, persona: b.brief.persona, territory: b.brief.territory,
+      id: b.id, name: b.brief.name, persona: b.brief.persona, territory: b.brief.territory, region: regionOf({}, b.brief),
       created: b.created, updated: b.updated || b.created, created_by: b.created_by || '',
       lines: b.lines.length, yours: b.lines.filter(l => l.model === 'human').length,
       kept: b.lines.filter(l => l.decision === 'keep' || l.decision === 'edit').length,
@@ -787,7 +834,7 @@ export function estimate(b: Brief, opts: { ownOnly?: boolean } = {}): { usd: num
   const angles = g ? r.personas[b.persona].triggers.length + 1 : 0;
   const gen = { calls: angles, inTok: angles * (wsys + 200), outTok: n * 60 };
   const tag = { calls: own ? 1 : 0, inTok: own ? 700 + own * 30 : 0, outTok: own * 25 };
-  const probeItems = r.compliance.filter(c => c.wordings).length;
+  const probeItems = yesNoItems(r).length;
   const chk = { calls: m, inTok: m * 1300, outTok: m * 150 };
   const prb = { calls: m * probeItems * 2, inTok: m * probeItems * 2 * 120, outTok: m * probeItems * 2 };
   const obj = { calls: m, inTok: m * 500, outTok: m * 45 };
@@ -839,11 +886,11 @@ function newLine(b: Brief, r: Rules, batchId: string, idx: number, cell: Cell, t
   const pr = r.personas[b.persona];
   return {
     id: `${batchId}-L${String(idx).padStart(2, '0')}`,
-    batch: batchId, persona: b.persona, territory: b.territory, field: cell.field,
+    batch: batchId, persona: b.persona, territory: b.territory, region: regionOf({}, b), field: cell.field,
     text, chars: [...text].length, cell: cell.cell,
     angle: cell.angle, angle_label: pr.triggers.find(t => t.id === cell.angle)?.label || cell.angle,
     structure: cell.structure, tone: cell.tone, tone_label: toneLabel(cell.tone),
-    features: [], flags: [], status: 'generated', model, prompt_version: PROMPT_VERSION,
+    features: [], flags: [], status: 'generated', model, prompt_version: regionOf({}, b) === 'CA' ? `${PROMPT_VERSION}+ca` : PROMPT_VERSION,
     decision: '', edited_text: '', note: '',
   };
 }
@@ -902,17 +949,18 @@ export async function newBatchId(territory: string): Promise<string> {
 }
 
 /**
- * Lines only go into a run of the same persona and territory: a brief for
- * another one is refused, never quietly given the run's persona (lines written
- * for DINKs once landed in a Curators run). Null when it fits or there's no run.
+ * Lines only go into a run of the same persona, territory and region: a brief
+ * for another one is refused, never quietly given the run's persona (lines
+ * written for DINKs once landed in a Curators run), and a Canadian line never
+ * lands in a US run. Null when it fits or there's no run.
  */
-export async function runMismatch(batchId: string | undefined, b: Pick<Brief, 'persona' | 'territory'>): Promise<string | null> {
+export async function runMismatch(batchId: string | undefined, b: Pick<Brief, 'persona' | 'territory' | 'region'>): Promise<string | null> {
   if (!batchId || !(await batchExists(batchId))) return null;
   const run = (await loadBatch(batchId)).brief;
-  if (run.persona === b.persona && run.territory === b.territory) return null;
+  if (run.persona === b.persona && run.territory === b.territory && regionOf({}, run) === regionOf({}, b)) return null;
   const r = loadRules();
-  const name = (p: string, t: string) => `${r.personas[p]?.name || p} · ${(r.territories[t]?.name || t).replace(/\.$/, '')}`;
-  return `This run is for ${name(run.persona, run.territory)}. Start a new run for ${name(b.persona, b.territory)}.`;
+  const name = (x: Pick<Brief, 'persona' | 'territory' | 'region'>) => `${r.personas[x.persona]?.name || x.persona} · ${(r.territories[x.territory]?.name || x.territory).replace(/\.$/, '')}${regionOf({}, x) === 'CA' ? ' · Canada' : ''}`;
+  return `This run is for ${name(run)}. Start a new run for ${name(b)}.`;
 }
 
 export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: { check?: boolean; batchId?: string; ownOnly?: boolean; user?: string } = {}): Promise<Batch> {
@@ -1217,10 +1265,18 @@ async function modelCheck(line: Line, r: Rules, api: Api, model: string, idx: Re
 // short lines loosely, and live runs showed lone flags at 0.5-0.75 on clean lines.
 const LONE_LOGPROB = 0.8;
 
-/** Two wordings per compliance item, P(Yes) from logprobs, averaged. */
+/**
+ * Items asked as two yes/no wordings: every compliance item with wordings, and
+ * any red brand item with them (v2.7 BR_PET_RESPECT), so red still needs agreement.
+ */
+export function yesNoItems(r: Rules): RuleItem[] {
+  return [...r.compliance.filter(c => c.wordings), ...r.brand.filter(b => b.wordings && b.severity === 'compliance')];
+}
+
+/** Two wordings per yes/no item, P(Yes) from logprobs, averaged. */
 async function probeCheck(line: Line, r: Rules, api: Api, model: string) {
   const f = r.fields[line.field];
-  const items = r.compliance.filter(c => c.wordings);
+  const items = yesNoItems(r);
   line.probes = {};
   await Promise.all(items.map(async it => {
     const ps = await Promise.all(it.wordings!.map(async w => {
@@ -1264,8 +1320,7 @@ export async function checkBatch(batch: Batch, api: Api, emit: Emit = () => {}, 
   // Deterministic first, for every line, so the grid fills with the hard flags at once.
   const embs: Record<string, number[]> = await getStore().getEmbeddings(batch.id);
   for (const l of lines) {
-    const text = l.decision === 'edit' && l.edited_text ? l.edited_text : l.text;
-    const det = deterministicFlags({ ...l, text }, r, b);
+    const det = deterministicFlags({ ...l, text: finalText(l) }, r, b);
     l.flags = det.flags;
     l.features = det.features;
     l.chars = [...l.text].length;
@@ -1309,11 +1364,11 @@ export async function checkBatch(batch: Batch, api: Api, emit: Emit = () => {}, 
 /**
  * Red (compliance) needs agreement: a hard rule match, or the model check and
  * the two yes/no wordings together. Any single layer alone is amber (warn), so
- * a lone model or logprob call can't turn a line red. Only for compliance items
- * that have wordings; everything else keeps its severity.
+ * a lone model or logprob call can't turn a line red. For red items that have
+ * wordings (compliance, and red brand items); everything else keeps its severity.
  */
 export function reconcile(l: Line, r: Rules) {
-  for (const it of r.compliance) {
+  for (const it of [...r.compliance, ...r.brand.filter(b => b.severity === 'compliance')]) {
     if ((it.severity || 'compliance') !== 'compliance') continue;
     const f = l.flags.find(x => x.rule === it.id);
     if (!f) continue;
@@ -1405,7 +1460,7 @@ function markdownView(batch: Batch, r: Rules): string {
       const f = r.fields[l.field];
       const dec = l.decision ? ` · **${l.decision.toUpperCase()}**` : '';
       out.push('', `**${l.id.split('-').pop()}** · ${f?.label || l.field} · ${l.structure} · ${l.tone_label} · ${l.chars}/${f?.visible ?? '?'} chars${dec}`, '', `> ${l.text.replace(/\n/g, '\n> ')}`);
-      if (l.decision === 'edit' && l.edited_text) out.push('', `> *Edited:* ${l.edited_text}`);
+      if (isEdited(l)) out.push('', `> *Edited:* ${l.edited_text}`);
       if (l.features.length) out.push('', `Features: ${l.features.join(', ')}`);
       for (const fl of l.flags) out.push(`- ${fl.severity === 'compliance' ? '🟥' : fl.severity === 'warn' ? '🟧' : '⬜'} ${fl.rule}${fl.quote ? `: "${fl.quote}"` : ''}${fl.why ? ` (${fl.why})` : ''} *[${fl.source}]*`);
       if (l.objection) out.push('', `*Skeptic:* ${l.objection}`);
@@ -1466,7 +1521,7 @@ export async function ingest(csvText: string, user?: string): Promise<IngestResu
     line.decision = decision;
     line.edited_text = get(r, 'edited_text');
     line.note = get(r, 'note');
-    if (decision === 'edit' && !line.edited_text) line.decision = 'keep';
+    settleDecision(line);
     const after = { decision: line.decision || '', edited_text: line.edited_text || '', note: line.note || '' };
     if (JSON.stringify(before) !== JSON.stringify(after)) {
       line.decided_by = user || line.decided_by || 'sheet';
@@ -1489,30 +1544,40 @@ function applyTaste(store: Map<string, TasteExample>, l: Line) {
   if (d === 'keep' || d === 'edit' || (d === 'cut' && l.note)) {
     store.set(l.id, {
       id: l.id, persona: l.persona, territory: l.territory, field: l.field, angle: l.angle, structure: l.structure, tone_label: l.tone_label,
-      text: d === 'edit' ? l.edited_text! : l.text, original: d === 'edit' ? l.text : undefined, decision: d, note: l.note || '', batch: l.batch, at: new Date().toISOString(),
+      text: finalText(l), original: isEdited(l) ? l.text : undefined, decision: d, note: l.note || '', batch: l.batch, at: new Date().toISOString(),
     });
   } else store.delete(l.id);
 }
 async function saveTaste(ex: TasteExample[]): Promise<void> { await getStore().saveTaste(ex); }
 
 /** Decision from the UI (keep / cut / edit, note). Updates the batch and the taste store. */
-export async function setDecision(batchId: string, lineId: string, patch: { decision?: Line['decision']; edited_text?: string; note?: string }, user?: string): Promise<Line> {
+export async function setDecision(batchId: string, lineId: string, patch: { decision?: Line['decision']; edited_text?: string; note?: string; source?: string }, user?: string): Promise<Line> {
   const batch = await loadBatch(batchId);
   const l = batch.lines.find(x => x.id === lineId);
   if (!l) throw new Error(`No line ${lineId}`);
+  // A cut from the Shortlist is the same decision as in Review, except for a signed-off line: that set changes at Ready.
+  if (patch.source === 'shortlist' && patch.decision === 'cut' && l.ready) {
+    throw Object.assign(new Error(`Signed off at Ready for production (set ${l.ready.signoff_id}): take it out of the set there, then cut it`), { status: 409 });
+  }
   const before = { decision: l.decision || '', edited_text: l.edited_text || '', note: l.note || '' };
   if (patch.decision !== undefined) l.decision = patch.decision;
   if (patch.edited_text !== undefined) l.edited_text = patch.edited_text;
   if (patch.note !== undefined) l.note = patch.note;
+  settleDecision(l);
   if (user) l.decided_by = user;
   l.decided_at = new Date().toISOString();
-  if (l.decision === 'edit' && l.edited_text) {
-    // Re-run the instant checks on the edited words.
+  const ORIGINAL = ' (on the original wording)';
+  if (patch.edited_text !== undefined) {
+    // Re-run the instant checks on the words that now count: the edit, or the original after "Revert to original".
     const r = loadRules();
-    const det = deterministicFlags({ ...l, text: l.edited_text }, r, batch.brief);
+    const det = deterministicFlags({ ...l, text: finalText(l) }, r, batch.brief);
     const modelFlags = l.flags.filter(f => !f.by.includes('rule') || f.rule === 'NEAR_DUP');
     l.flags = [...det.flags];
-    for (const f of modelFlags) addFlag(l.flags, { ...f, why: `${f.why || ''} (on the original wording)`.trim() });
+    const edited = isEdited(l);
+    for (const f of modelFlags) {
+      const why = (f.why || '').replace(ORIGINAL, '');
+      addFlag(l.flags, { ...f, why: edited ? `${why}${ORIGINAL}`.trim() : why || undefined });
+    }
     sortFlags(l);
   }
   const st = getStore();
@@ -1539,24 +1604,44 @@ export async function lineHistory(lineId: string) { return getStore().listEdits(
 
 // ---------- shortlist ----------
 
-export interface ShortRow { stub: string; id: string; persona: string; territory: string; field: string; platform: string; format: string; text: string; angle: string; structure: string; tone: string; features: string; flags: string; note: string; compliance_flags: string[]; warn_flags: string[] }
+export interface ShortRow { stub: string; id: string; batch: string; decision: string; signed_off: string; persona: string; territory: string; region: Region; field: string; platform: string; format: string; text: string; angle: string; structure: string; tone: string; features: string; flags: string; note: string; compliance_flags: string[]; warn_flags: string[] }
+
+/** Kept and edited lines in every run, each with its region (the run's), oldest first within a persona and territory. */
+export async function keptLines(): Promise<Line[]> {
+  const lines: Line[] = [];
+  for (const b of await listBatches()) {
+    const batch = await loadBatch(b.id);
+    lines.push(...batch.lines.filter(l => l.decision === 'keep' || l.decision === 'edit').map(l => ({ ...l, region: regionOf(l, batch.brief) })));
+  }
+  // US before Canada within a persona and territory.
+  const key = (l: Line) => `${l.persona}|${l.territory}|${l.region === DEFAULT_REGION ? 0 : 1}${l.region}|${l.id}`;
+  return lines.sort((a, b) => key(a).localeCompare(key(b), undefined, { numeric: true }));
+}
+
+/** What goes into a line's naming code, from the rules (format from the territory, platform from the field). */
+export function codeInput(l: Pick<Line, 'persona' | 'territory' | 'field' | 'region'>) {
+  const r = loadRules();
+  return { persona: l.persona, territory: l.territory, format: r.territories[l.territory]?.format || 'STATIC', platform: r.fields[l.field]?.platform || 'META', region: regionOf(l) };
+}
+
+/** Every naming code signed off so far (they're never handed out again). */
+export async function signedCodes(): Promise<string[]> {
+  return ((await getStore().listSignoffs()) as Array<{ lines: Array<{ stub: string }> }>).flatMap(s => s.lines.map(x => x.stub));
+}
 
 export async function shortlist(): Promise<ShortRow[]> {
   const r = loadRules();
-  const lines: Line[] = [];
-  for (const b of await listBatches()) lines.push(...(await loadBatch(b.id)).lines.filter(l => l.decision === 'keep' || l.decision === 'edit'));
-  lines.sort((a, b) => `${a.persona}|${a.territory}|${a.id}`.localeCompare(`${b.persona}|${b.territory}|${b.id}`));
-  const counters = new Map<string, number>();
+  const lines = await keptLines();
+  // A signed-off line shows its own code; the others, the code they'd get if signed off now.
+  const book = new CodeBook(await signedCodes());
   return lines.map(l => {
     const t = r.territories[l.territory];
     const platform = r.fields[l.field]?.platform || 'META';
-    const short = l.territory.startsWith(l.persona + '_') ? l.territory.slice(l.persona.length + 1) : l.territory;
-    const key = `${l.persona}_${short}_${t?.format || 'STATIC'}_${platform}`;
-    const v = (counters.get(key) || 0) + 1;
-    counters.set(key, v);
     return {
-      stub: `${l.persona}_${short}_${t?.format || 'STATIC'}_v${v}_${platform}`, id: l.id, persona: l.persona, territory: l.territory, field: l.field,
-      platform, format: t?.format || '', text: l.decision === 'edit' && l.edited_text ? l.edited_text : l.text,
+      stub: l.ready?.stub || book.assign(codeInput(l)), id: l.id, batch: l.batch, decision: l.decision || '',
+      // Signed off at Ready: the set it's in (it can't be cut from the Shortlist; change the set at Ready instead).
+      signed_off: l.ready?.signoff_id || '', persona: l.persona, territory: l.territory, region: regionOf(l), field: l.field,
+      platform, format: t?.format || '', text: finalText(l),
       angle: `${l.angle} ${l.angle_label}`, structure: l.structure, tone: l.tone_label, features: l.features.join('; '),
       flags: l.flags.map(flagText).join(' | '), note: l.note || '',
       compliance_flags: l.flags.filter(f => f.severity === 'compliance').map(f => f.rule),
@@ -1567,12 +1652,12 @@ export async function shortlist(): Promise<ShortRow[]> {
 
 export async function writeShortlist(): Promise<{ count: number; path: string; mdPath: string; csv: string; md: string }> {
   const rows = await shortlist();
-  const cols: Array<keyof ShortRow> = ['stub', 'id', 'persona', 'territory', 'field', 'platform', 'format', 'text', 'angle', 'structure', 'tone', 'features', 'flags', 'note'];
+  const cols: Array<keyof ShortRow> = ['stub', 'id', 'persona', 'territory', 'region', 'field', 'platform', 'format', 'text', 'angle', 'structure', 'tone', 'features', 'flags', 'note'];
   const csv = toCsv([cols as string[], ...rows.map(x => cols.map(c => String(x[c])))]);
-  const md = ['# Shortlist', '', 'Naming stubs follow PERSONA_TERRITORY_FORMAT_v#_PLATFORM (add _YYMMDD at trafficking).', ''];
+  const md = ['# Shortlist', '', `Naming codes follow ${CURRENT_PATTERN} (add _YYMMDD at trafficking). Codes signed off before 30 Sep keep the earlier PERSONA_TERRITORY_FORMAT_v#_PLATFORM. The visual letter is settled at Ready for production.`, ''];
   let last = '';
   for (const x of rows) {
-    const g = `${x.persona} · ${x.territory}`;
+    const g = `${x.persona} · ${x.territory}${x.region === 'CA' ? ' · Canada' : ''}`;
     if (g !== last) { md.push(`## ${g}`, ''); last = g; }
     const oneLine = (t: string) => t.replace(/\s*\n\s*/g, ' ');
     md.push(`- \`${x.stub}\` (${x.field}): ${oneLine(x.text)}${x.note ? ` *(${oneLine(x.note)})*` : ''}`);
@@ -1689,8 +1774,14 @@ export async function meta() {
     }])),
     // Source codes → titles, for plain-words sources on flags.
     sources: Object.fromEntries(Object.entries((r as any).sources || {}).map(([k, v]: [string, any]) => [k, v?.title || k])),
+    // The fix in plain words, from the rules file where an item carries one (v2.7+); the page has its own for the rest.
+    what_to_do: Object.fromEntries([...r.compliance, ...r.brand, ...r.clarity, ...((r as any).disclaimer ? [(r as any).disclaimer] : [])]
+      .filter((i: any) => i.what_to_do).map((i: any) => [i.id, i.what_to_do])),
     territories: r.territories,
     formats: FORMATS,
+    // Where ads run, and the naming code's pattern (utils/namingCode.ts), for the page's help text.
+    regions: REGIONS,
+    code_pattern: CURRENT_PATTERN,
     fields: r.fields,
     structures: r.structures,
     tone_controls: r.tone_controls,

@@ -109,7 +109,7 @@ test('mock batch: generate, check, export, ingest round trip', async () => {
   assert.equal(r.edited, 1);
   assert.equal(r.shortlist, 2);
   const sl = await S.shortlist();
-  assert.match(sl[0].stub, /^OWN_CALM_UGC_v\d_META$/);
+  assert.match(sl[0].stub, /^OWN_CALM_UGC_A\d_US_META$/);
   assert.equal((await S.loadTaste()).length, 2);
 });
 

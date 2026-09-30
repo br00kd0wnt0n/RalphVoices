@@ -7,7 +7,7 @@
 // Only OPENAI_API_KEY is read from backend/.env (its DATABASE_URL is production).
 //
 // Usage (from backend/):
-//   npx tsx scripts/studio.ts brief    --territory DINK_NEVER [--persona DINK] [--fields meta_primary,meta_headline,tiktok_hook]
+//   npx tsx scripts/studio.ts brief    --territory DINK_NEVER [--persona DINK] [--region US|CA] [--fields meta_primary,meta_headline,tiktok_hook]
 //                                      [--tone dw=2,pp=3,sl=2] [--ban word]... [--ban-idea "..."]... [--ref "..."]... [--n 20] [--model gpt-4o] [--name NAME]
 //   npx tsx scripts/studio.ts estimate --brief NAME
 //   npx tsx scripts/studio.ts generate --brief NAME [--yes] [--no-check]
@@ -147,6 +147,11 @@ const PLANTED: Array<{ text: string; field: string; expect: string; severity?: S
   // Rules v2.2: trust claims and superlatives need substantiation (two lines kept on 28 Sep only got 'truncated').
   { text: 'Trupanion: trusted by pet parents across the country', field: 'meta_primary', expect: 'COMP_SUPERLATIVE', severity: 'warn' },
   { text: 'Is pet insurance the ultimate adulting?', field: 'meta_headline', expect: 'COMP_SUPERLATIVE', severity: 'warn' },
+  // Rules v2.7 (Trupanion brand notes, 29 Sep): cheek at the pet's chaos is fine, insults aren't; protection, never an investment.
+  { text: 'Two incomes. No kids. One sock-eating idiot.', field: 'meta_primary', expect: 'BR_PET_RESPECT' },
+  { text: 'Two incomes. No kids. One sock-eating little monster.', field: 'meta_primary', expect: 'BR_PET_RESPECT', absent: true },
+  { text: 'Is pet insurance worth it?', field: 'meta_headline', expect: 'COMP_NOT_INVESTMENT' },
+  { text: "Protection you'll use for life, like your own health insurance.", field: 'meta_primary', expect: 'COMP_NOT_INVESTMENT', absent: true },
 ];
 
 async function main() {
@@ -154,7 +159,7 @@ async function main() {
   switch (command) {
     case 'brief': {
       const b = S.makeBrief({
-        name: opt('name') || undefined, persona: opt('persona') || undefined, territory: opt('territory'),
+        name: opt('name') || undefined, persona: opt('persona') || undefined, territory: opt('territory'), region: (opt('region') || undefined) as any,
         fields: list(opt('fields')), tone: parseTone(opt('tone')) as S.Tone,
         banned_words: opts('ban'), banned_ideas: opts('ban-idea'), reference_lines: opts('ref'),
         n: Number(opt('n', '20')), model: opt('model') || undefined,

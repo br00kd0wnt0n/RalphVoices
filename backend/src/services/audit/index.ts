@@ -17,6 +17,7 @@ import { CONFIG } from './config.js';
 import { COPY_FIELDS, type SignedOffCopy } from './copyMatch.js';
 import { auditAsset, estimateAsset, type Persona, type Progress } from './engine.js';
 import { parseStub } from './rules.js';
+import { parseCode } from '../../utils/namingCode.js';
 import { detectTools, type Tools } from './tools.js';
 import type { Asset, AssetAudit, Flag, Frame, Rubric, Rules } from './types.js';
 
@@ -30,7 +31,7 @@ export const REPORT_VERSION = 1;
 export interface AuditFile { name: string; mime: string; data?: Buffer; path?: string }
 
 export interface AuditInput {
-  stub: string;                        // PERSONA_TERRITORY_FORMAT_v#_PLATFORM
+  stub: string;                        // naming code, either form (utils/namingCode.ts)
   persona?: string;                    // intended persona; defaults to the stub's
   files: AuditFile[];                  // one image (static), several (carousel, in name order) or one video
   copy?: SignedOffCopy;                // the signed-off copy for the stub: checked, and matched against the asset
@@ -247,9 +248,9 @@ export function toReport(a: AssetAudit, rules: Rules & { territories?: Record<st
   const cross = a.flags.filter(f => f.persona && a.persona && f.persona !== a.persona && f.severity === 'grey');
   const own = a.flags.filter(f => !cross.includes(f));
   const yn = (id: string) => (a.items[id] ? { p: a.items[id].p, ok: a.items[id].p >= 0.5 } : { p: null, ok: null });
-  const parts = a.stub?.split('_') || [];
-  const territory = parts.length >= 5 ? parts.slice(1, -3).join('_') : null;
-  const terrKey = a.stub ? parts.slice(0, -3).join('_') : '';
+  const code = a.stub ? parseCode(a.stub, null) : null;
+  const territory = code && !('error' in code) ? code.territory : null;
+  const terrKey = code && !('error' in code) ? `${code.persona}_${code.territory}` : '';
   const tagged = Object.entries(a.features).filter(([, p]) => p >= CONFIG.feature_threshold).map(([k]) => k).sort();
   return {
     report_version: REPORT_VERSION,
