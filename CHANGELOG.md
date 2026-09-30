@@ -4,6 +4,20 @@ All notable changes to Ralph Voices are documented here.
 
 ## Unreleased
 
+- **Studio: Build & sign off redesigned** (Nick's screen before Tue 6 Oct's R1). Frontend only; no backend or data changes.
+  - **Numbered steps per visual:** ① the text on the image (a carousel's cards; for TikTok the hook sits in each ad) → ② the ads → ③ which ad you expect to lead and why → ④ sign off. Steps ③ and ④ apply to the whole set, at the bottom, and a sticky bar shows "3 ads on 1 visual · no red flags · Lead: Visual A · Ad 1 · Sign off". There's no side panel any more.
+  - **Each ad looks like a feed ad:**
+    - Meta: primary text on top (full, wrapping), the image with the visual's on-image text (or the carousel's card strip), then headline and description with a CTA.
+    - TikTok: a 9:16 frame with the hook and the caption below.
+    - Each is labelled "Visual A · Ad 1", with the code small and grey underneath (click to copy).
+  - **Choosing copy:** clicking a slot opens a tray of the kept lines for that field: full text, characters against the visible limit, short flag labels, and which ads already use each line ("In use" / "Not used yet"). "Use in all ads on visual A" for headlines and descriptions. Edit in place with ✎ (the existing versioning). Empty slots say "Choose primary text".
+  - **Flags** are plain labels at the slot they concern ("Headline repeats the primary text", "Direct pay caveat is missing", "Too alike: Visual A · Ad 2"), with the rule and source on hover. Red flags show inline with Fix the wording / Override with a reason, and still block sign-off.
+  - **One status per ad:** Draft, Signed off or Edited since sign-off. No Pre-flight or compliance chips here.
+  - **Less clutter:** sign-off history is a collapsed link. An ad's "⋯" menu moves it to another visual or a new one, or removes it. There's "+ Ad" per visual and "+ New visual".
+  - **Gone:** the separate "Kept lines" list (it's the tray now), the truncating dropdowns, and codes everywhere.
+  - **Assets:** carousel thumbnails take their size's shape (4:5 cards aren't squashed into squares).
+
+  The draft rules are in `frontend/src/lib/buildDraft.ts`. Tests: `backend/tests/studioBuildDraft.test.ts` (placing a line, use in all ads, cards, add/move/remove ads, names, where a line is used). Handoff: `docs/build-log/studio-build-redesign.md`.
 - **Studio: multi-size Pre-flight, and rounds shown as months.** Brook, 30 Sep (the client's workback schedule); no migration.
   - **Sizes.** A code's asset is a set of sizes (the WBS: statics and hero videos in 1:1, 4:5 and 9:16; carousels in 1:1 and 4:5; TikTok in 9:16), uploaded together.
     - **Detection:** each file's size is read from its pixels (PNG, JPEG, GIF or WebP headers, snapped to 1:1 / 4:5 / 9:16 within 5%) or its name ("_4x5"). On the Assets screen the browser reads it (videos too) and the person can correct it. A carousel is its cards in each size, in order within each size.
