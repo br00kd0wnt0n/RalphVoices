@@ -165,6 +165,8 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   }));
 
   // ----- Ready for production (after Shortlist) -----
+  // Ready to traffic per code for the handoff pack, when Pre-flight (and so Compliance) is on.
+  const trafficOf: R.TrafficOf | undefined = o.preflight ? stub => o.preflight!.service.traffic(stub) : undefined;
   const pt = (q: any) => ({ persona: q.persona ? String(q.persona) : undefined, territory: q.territory ? String(q.territory) : undefined, region: q.region ? String(q.region).toUpperCase() : undefined });
   const json = (v: unknown) => { try { return v ? JSON.parse(String(v)) : undefined; } catch { throw new Error('visuals and include are JSON'); } };
   r.get('/ready', wrap(async (req, res) => {
@@ -190,9 +192,9 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     res.json(await R.recheckLine(req.params.id, req.params.line, o.api(req), o.who(req)));
   }));
   r.get('/lines/:line/versions', wrap(async (req, res) => res.json(await S.getStore().listLineVersions(req.params.line))));
-  r.get('/handoff.csv', wrap(async (req, res) => download(res, 'text/csv; charset=utf-8', 'ready-for-production.csv', (await R.handoffPack(pt(req.query))).csv)));
-  r.get('/handoff.md', wrap(async (req, res) => download(res, 'text/markdown; charset=utf-8', 'ready-for-production.md', (await R.handoffPack(pt(req.query))).md)));
-  r.get('/compliance-sheet.csv', wrap(async (req, res) => download(res, 'text/csv; charset=utf-8', 'trupanion-compliance-sheet.csv', (await R.handoffPack(pt(req.query))).complianceCsv)));
+  r.get('/handoff.csv', wrap(async (req, res) => download(res, 'text/csv; charset=utf-8', 'ready-for-production.csv', (await R.handoffPack(pt(req.query), trafficOf)).csv)));
+  r.get('/handoff.md', wrap(async (req, res) => download(res, 'text/markdown; charset=utf-8', 'ready-for-production.md', (await R.handoffPack(pt(req.query), trafficOf)).md)));
+  r.get('/compliance-sheet.csv', wrap(async (req, res) => download(res, 'text/csv; charset=utf-8', 'trupanion-compliance-sheet.csv', (await R.handoffPack(pt(req.query), trafficOf)).complianceCsv)));
 
   // ----- Pre-flight (step 6): finished assets per signed-off naming stub -----
   if (o.preflight) {
@@ -236,11 +238,11 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     }));
     r.post('/preflight/flags/:id/agree', wrap(async (req, res) => res.json(await pf.agree(req.params.id, !!req.body?.agree, req.body?.note, o.who(req)))));
     r.post('/preflight/flags/:id/override', wrap(async (req, res) => {
-      if (!o.preflight!.canSetReady(req)) return res.status(403).json({ error: 'Only the people who mark assets Ready to traffic can override a red flag' });
+      if (!o.preflight!.canSetReady(req)) return res.status(403).json({ error: 'Only the people who mark Pre-flight passed (the creative lead) can override a red flag' });
       res.json(await pf.override(req.params.id, String(req.body?.reason || ''), o.who(req)));
     }));
     r.post('/preflight/stubs/:stub/ready', wrap(async (req, res) => {
-      if (!o.preflight!.canSetReady(req)) return res.status(403).json({ error: 'Ready to traffic is set by the creative lead or an admin' });
+      if (!o.preflight!.canSetReady(req)) return res.status(403).json({ error: 'Pre-flight is marked passed by the creative lead or an admin (Ready to traffic also needs Trupanion’s compliance cleared)' });
       try { res.json(await pf.setReady(req.params.stub, req.body?.ready !== false, o.who(req))); }
       catch (err: any) { if (err.blocking) return res.status(409).json({ error: err.message, blocking: err.blocking }); throw err; }
     }));
@@ -251,7 +253,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     // ----- Compliance (step 7): each asset with its codes' copy and flags; Trupanion's reviewer sets the status -----
     r.get('/compliance', wrap(async (req, res) => res.json(await pf.complianceAssets(pt(req.query)))));
     r.post('/compliance/assets/:upload', wrap(async (req, res) => {
-      if (o.canSetCompliance && !o.canSetCompliance(req)) return res.status(403).json({ error: 'Compliance status is set by the producer (Vivan) or an admin' });
+      if (o.canSetCompliance && !o.canSetCompliance(req)) return res.status(403).json({ error: 'Trupanion’s compliance decisions are recorded by the producer (Vivan) or an admin' });
       res.json(await pf.setAssetCompliance(req.params.upload, req.body || {}, o.who(req)));
     }));
   }
