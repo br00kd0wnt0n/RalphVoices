@@ -636,3 +636,22 @@ test("the visual key keeps region and platform (Studio's visualKey): US A and CA
   const old = parseAdName('FAM_SUMMER_ST_v2_META_261013', N);
   assert.ok(old.ok && old.asset === 'FAM_SUMMER_ST', 'v# names keep PERSONA_TERRITORY_FORMAT');
 });
+
+test('feature ids are not a fixed list: new rules tags (v2.9 lifetime_coverage, support_247) pass through ingest and the model', () => {
+  const feats = loadFeatureCsv(toCsv(['stub', 'features'], [
+    ['FAM_SUMMER_STATIC_A1_US_META', 'lifetime_coverage; support_247'],
+    ['FAM_SUMMER_STATIC_A2_US_META', 'lifetime_coverage'],
+  ]), 'audit', cfg).map;
+  assert.deepEqual(feats.get('FAM_SUMMER_ST_A1_US_META')!.features, ['lifetime_coverage', 'support_247']);
+  const csv = toCsv(HEAD, [
+    ['2026-10-13', 'Ralph Prospecting', 'FAM_META', 'FAM_SUMMER_ST_A1_US_META_261013', '10.00', '10000', '120', '6'],
+    ['2026-10-13', 'Ralph Prospecting', 'FAM_META', 'FAM_SUMMER_ST_A2_US_META_261013', '10.00', '10000', '110', '5'],
+  ]);
+  const r = parseExport(csv, 'meta', cfg, feats);
+  assert.deepEqual(r.rows.map(x => x.features), [['lifetime_coverage', 'support_247'], ['lifetime_coverage']]);
+  assert.deepEqual(r.quarantine, []);
+  const w = aggregate(r.rows.map(fromIngest), '2026-10-12', '2026-10-18');
+  const read = readWeek(w.ads, cfg, { from: '2026-10-12', to: '2026-10-18', quotesAvailable: true });
+  const labels = new Set(read.features.map(e => e.label));
+  assert.ok(labels.has('lifetime_coverage') && labels.has('support_247'), [...labels].join(','));
+});
