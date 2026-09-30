@@ -36,6 +36,8 @@ export interface Line {
   /** Who added a person's line (Write & brief, or Add a line in Review). */
   added_by?: string;
   rechecked_at?: string;
+  /** Carousel on-image text written as a card sequence: its card number and sequence. */
+  card?: number; sequence_id?: string;
 }
 /** Mirrors the backend's isEdited/finalText (engine.ts): a saved edit counts unless the line is cut, whatever button was pressed last. */
 export const isEdited = (l: Pick<Line, 'decision' | 'edited_text' | 'text'>) => !!l.edited_text && l.edited_text !== l.text && l.decision !== 'cut';
@@ -44,6 +46,8 @@ export interface OwnLine { text: string; field: string }
 export interface Brief {
   name?: string; persona: string; territory: string; region?: Region; fields: string[]; tone: Tone;
   banned_words: string[]; banned_ideas: string[]; reference_lines: string[]; own_lines?: OwnLine[]; n: number; model: string;
+  /** Carousel territories with on-image text ticked: card sequences to write, and cards in each. */
+  carousel?: { sequences: number; cards: number };
 }
 export interface RunStats {
   generated: number; near_duplicates_removed: number; similar_flagged: number;
@@ -107,7 +111,7 @@ export interface Signoff {
   lines: Array<SignedField & { stub: string; codes?: string[] }>;
   /** Missing on sign-offs from before live versions (one code per line). */
   versions?: SignedVersion[];
-  on_image?: Array<SignedField & { visual: string; visual_key: string }>;
+  on_image?: Array<SignedField & { visual: string; visual_key: string; card?: number }>;
   checks?: VersionCheck[];
 }
 /** stubs: the codes expected to lead. */
@@ -119,14 +123,15 @@ export type FieldRole = 'required' | 'optional' | 'per_visual';
 /** A kept line on Ready: role, platform, and the codes it's in (in: "A1", "on-image A"). */
 export interface ReadyLine { line: Line; final_text: string; sha256: string; role: FieldRole; platform: string; in: string[]; red: Flag[]; versions: LineVersion[] }
 export interface DraftVersion { visual: string; fields: Record<string, string>; platform?: string }
-export interface ReadyDraft { versions: DraftVersion[]; on_image: Record<string, string> }
+/** on_image: per visual letter, a line id, or on a carousel the cards in order ('' for a card with no text). */
+export interface ReadyDraft { versions: DraftVersion[]; on_image: Record<string, string | string[]> }
 export interface PlannedVersion extends DraftVersion {
   code: string; number: number; platform: string; issues: string[]; checks?: VersionCheck;
   compliance: { status: ComplianceStatus; note?: string; client_by?: string; by?: string; at?: string; send_back?: 'copy' | 'asset' };
 }
 export interface ReadyView {
   persona: string; territory: string; region: Region; lines: ReadyLine[]; draft: ReadyDraft;
-  plan: { versions: PlannedVersion[]; on_image: Array<{ visual: string; visual_key: string; line_id: string; issues: string[] }>; issues: string[]; check_estimate: { usd: number; calls: number } };
+  plan: { versions: PlannedVersion[]; on_image: Array<{ visual: string; visual_key: string; line_id: string; card?: number; issues: string[] }>; issues: string[]; check_estimate: { usd: number; calls: number } };
   /** Per platform (META, TT): the fields a version has, by role. */
   fields: Record<string, { required: string[]; optional: string[]; per_visual: string[] }>;
   signoffs: Signoff[]; expectations: Expectation[]; latest: Signoff | null;
@@ -139,7 +144,7 @@ export interface ActiveRules {
 }
 export interface RulesVersion { version: string; status: 'draft' | 'active' | 'retired'; notes?: string; created_by?: string; created_at: string; activated_by?: string | null; activated_at?: string | null }
 // ---------- Pre-flight ----------
-export interface SignedCopy { line_id: string; field: string; label: string; text: string; version: number }
+export interface SignedCopy { line_id: string; field: string; label: string; text: string; version: number; card?: number }
 export interface PfUpload { id: string; kind: 'static' | 'carousel' | 'video'; files: Array<{ position: number; filename: string; content_type: string; size: number }>; uploaded_by: string; uploaded_at: string; stubs: string[] }
 export interface PfStatus { status: 'open' | 'ready'; ready_by?: string; ready_at?: string; upload_id?: string }
 export interface PfStub {
@@ -168,8 +173,8 @@ export interface PfReport {
   format_note?: string | null;
   history: Array<{ id: string; kind: string; uploaded_by: string; uploaded_at: string; files: number }>;
   audit: null | { id: string; upload_id: string; status: string; engine: string; stale?: string | null; rules_version?: string; usd: number; error?: string; started_by?: string; started_at: string; finished_at: string | null;
-    result: null | { text_found: string; transcript?: string; copy_match?: Array<{ field: string; signed_off: string; found: string; similarity: number; status: string }>; features: Record<string, number>; objection?: string; notes?: string[]; frames_unavailable?: boolean;
-      report?: { copy_match?: Array<{ field: string; signed_off: string; found: string; similarity: number; status: string }>; tagged_features?: string[]; set_aside?: Array<{ rule: string; quote?: string; why: string }> } } };
+    result: null | { text_found: string; transcript?: string; copy_match?: Array<{ field: string; signed_off: string; found: string; similarity: number; status: string; card?: number; found_on?: number }>; features: Record<string, number>; objection?: string; notes?: string[]; frames_unavailable?: boolean;
+      report?: { copy_match?: Array<{ field: string; signed_off: string; found: string; similarity: number; status: string; card?: number; found_on?: number }>; tagged_features?: string[]; set_aside?: Array<{ rule: string; quote?: string; why: string }> } } };
   flags: PfFlag[]; status: PfStatus;
   compliance?: CodeCompliance;
   traffic?: Traffic;

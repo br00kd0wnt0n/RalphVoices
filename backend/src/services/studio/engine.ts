@@ -67,6 +67,8 @@ export interface Brief {
   reference_lines: string[];
   own_lines?: OwnLine[];  // the creative director's own lines, written first
   n: number;
+  /** Carousel territories with on-image text ticked (item E): how many card sequences to write, and cards in each. */
+  carousel?: { sequences: number; cards: number };
   model: string;
   checker_model?: string;
   probe_model?: string;
@@ -132,6 +134,9 @@ export interface Line {
   added_by?: string;
   /** When the final wording was last fully re-checked (after an edit). */
   rechecked_at?: string;
+  /** Carousel on-image text written as a card sequence (item E): its card number and the sequence it belongs to. */
+  card?: number;
+  sequence_id?: string;
 }
 /** `label` is the rule in plain words, from the rules file (shown to Trupanion's reviewers; the reason and name never are). */
 export interface Override { rule: string; label?: string; reason: string; by: string; at: string }
@@ -654,6 +659,10 @@ export function makeBrief(input: Partial<Brief>): Brief {
       .map(o => ({ text: String(o?.text || '').trim(), field: r.fields[o?.field] ? o.field : fields[0] }))
       .filter(o => o.text).slice(0, 40),
     n: Math.max(1, Math.min(60, Number(input.n) || 20)),
+    ...(isCarouselTerritory(t) && fields.some(f => isOnImageField(f, r)) ? { carousel: {
+      sequences: Math.max(1, Math.min(6, Math.round(Number(input.carousel?.sequences) || 3))),
+      cards: Math.max(2, Math.min(10, Math.round(Number(input.carousel?.cards) || 4))),
+    } } : {}),
     model: input.model || 'gpt-4o',
     checker_model: input.checker_model || 'gpt-4o',
     probe_model: input.probe_model || 'gpt-4o-mini',
@@ -776,6 +785,40 @@ export function fieldGuidance(field: string, r: Rules): string {
   return '';
 }
 
+// ---------- carousel card sequences (item E, 30 Sep) ----------
+
+/** Text on the image: a per-visual field (the rules' in_version, or an on_image id). */
+export const isOnImageField = (f: string, r: Pick<Rules, 'fields'>) => ((r.fields[f] as any)?.in_version ? (r.fields[f] as any).in_version === 'per_visual' : /on_image/.test(f));
+export const isCarouselTerritory = (t?: Pick<Territory, 'format'>) => /^CAR/i.test(t?.format || '');
+/** The on-image field written as card sequences for this brief, if any (a carousel territory with on-image ticked). */
+export const sequenceField = (b: Brief, r: Rules) => (b.carousel ? b.fields.find(f => isOnImageField(f, r)) || null : null);
+
+function sequencesUser(r: Rules, b: Brief, field: string, sequences: number, cards: number, guidance?: string): string {
+  const pr = r.personas[b.persona];
+  const f = r.fields[field];
+  const home = r.territories[b.territory]?.angle;
+  const angles = [...new Set([...(home ? [home] : []), ...pr.triggers.map(t => t.id)])].slice(0, Math.max(sequences, 2));
+  return `CAROUSEL SEQUENCES. For this request, ignore the cell format above: write ${sequences} carousel card sequence${sequences === 1 ? '' : 's'} of ${cards} cards each, for ${f.label} (the text on each card's image).
+A sequence is ONE idea told across the cards: card 1 is the hook that stops the scroll, the middle cards build it, card ${cards} pays it off (the end card: short, it may share the card with the disclaimer). Each card must read on its own at a glance and follow from the card before. Don't repeat a card's words on the next card.
+Each card: aim for ${targetChars(f.visible)} characters or fewer (${f.visible} visible). Sentence case.
+Give each sequence a different angle, in this order: ${angles.map(a => `${a} "${pr.triggers.find(t => t.id === a)?.label || a}"`).join('; ')}.
+${guidance ? `Creative director's guidance: ${guidance}
+` : ''}Return JSON: {"sequences":[{"angle":"<angle id>","cards":["<card 1>", "…", "<card ${cards}>"]}]}`;
+}
+
+/** Write card sequences; each card becomes a line (field, card k, sequence_id), numbered later by claimLines. */
+async function writeSequences(api: Api, r: Rules, b: Brief, field: string, own: string[], guidance?: string): Promise<Array<{ angle: string; cards: string[] }>> {
+  const { sequences, cards } = b.carousel!;
+  const res = await api.chat({ stage: 'generate', model: b.model, system: writerSystem(b, r, own, await loadTaste()), user: sequencesUser(r, b, field, sequences, cards, guidance), max_tokens: 40 * sequences * cards + 120, temperature: 0.9, json: true });
+  const angles = new Set(r.personas[b.persona].triggers.map(t => t.id));
+  try {
+    const j = JSON.parse(res.text);
+    return (Array.isArray(j.sequences) ? j.sequences : []).slice(0, sequences)
+      .map((x: any) => ({ angle: angles.has(x?.angle) ? x.angle : r.territories[b.territory]?.angle || r.personas[b.persona].triggers[0].id, cards: (Array.isArray(x?.cards) ? x.cards : []).map((c: any) => String(c || '').trim().replace(/^["“]|["”]$/g, '').trim()).filter(Boolean).slice(0, cards) }))
+      .filter((x: any) => x.cards.length >= 2);
+  } catch { return []; }
+}
+
 /** The length the writer aims for: well inside the visible limit (three quarters of a short field, 60% of a long one). */
 export function targetChars(visible: number): number {
   return Math.round(visible * (visible <= 40 ? 0.75 : 0.6));
@@ -893,12 +936,15 @@ export function estimate(b: Brief, opts: { ownOnly?: boolean } = {}): { usd: num
   // Token counts only; taste examples add a little to the writer prompt and aren't counted.
   const r = loadRules();
   const own = (b.own_lines || []).length;
-  const g = opts.ownOnly ? 0 : b.n;          // lines Studio writes
-  const m = g + own;                         // lines checked
+  // On a carousel, on-image text comes as card sequences (one extra call); the loose lines cover the other fields.
+  const seqF = opts.ownOnly ? null : sequenceField(b, r);
+  const sq = seqF ? b.carousel!.sequences * b.carousel!.cards : 0;   // cards written
+  const g = opts.ownOnly || (seqF && b.fields.length === 1) ? 0 : b.n;   // loose lines Studio writes
+  const m = g + own + sq;                    // lines checked
   const n = Math.ceil(g * 1.25);
   const wsys = estTokens(writerSystem(b, r, (b.own_lines || []).map(o => o.text)));
   const angles = g ? r.personas[b.persona].triggers.length + 1 : 0;
-  const gen = { calls: angles, inTok: angles * (wsys + 200), outTok: n * 60 };
+  const gen = { calls: angles + (sq ? 1 : 0), inTok: angles * (wsys + 200) + (sq ? wsys + 400 : 0), outTok: n * 60 + sq * 25 };
   const tag = { calls: own ? 1 : 0, inTok: own ? 700 + own * 30 : 0, outTok: own * 25 };
   const probeItems = yesNoItems(r).length;
   const chk = { calls: m, inTok: m * 1300, outTok: m * 150 };
@@ -1061,8 +1107,11 @@ export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: 
   }
   const humans = batch.lines.filter(l => l.model === 'human');
 
-  // 2. Studio's lines, around theirs.
-  if (!opts.ownOnly && b.n > 0) {
+  // 2. Studio's lines, around theirs. On a carousel, on-image text is written as card sequences instead (2b).
+  const seqField = sequenceField(b, r);
+  const bLoose: Brief = seqField ? { ...b, fields: b.fields.filter(f => f !== seqField) } : b;
+  if (!opts.ownOnly && b.n > 0 && bLoose.fields.length) {
+    const b = bLoose;
     emit({ type: 'status', message: `Writing ${b.n} lines with ${b.model}${humans.length ? ' around yours' : ''}` });
     const covered = new Set(humans.map(l => `${l.angle}|${l.structure}`));
     const pool = Object.entries(embStore).map(([lid, emb]) => ({ id: lid, emb }));
@@ -1093,6 +1142,29 @@ export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: 
     await claimLines(batch, genLines, embStore, opts.user);
     mine.push(...genLines);
     batch.stats.near_duplicates_removed = batch.dropped.length;
+  }
+  // 2b. Carousel card sequences: one call; each card a line with its card number and sequence.
+  if (!opts.ownOnly && seqField) {
+    emit({ type: 'status', message: `Writing ${b.carousel!.sequences} carousel card sequence${b.carousel!.sequences === 1 ? '' : 's'} (${b.carousel!.cards} cards each)` });
+    const seqs = await writeSequences(api, r, b, seqField, humans.map(l => l.text));
+    const texts = seqs.flatMap(x => x.cards);
+    batch.stats.generated += texts.length;
+    const embs = await api.embed(texts);
+    const taken = new Set(batch.lines.map(l => l.sequence_id).filter(Boolean));
+    let n = taken.size, e = 0;
+    const seqLines: Line[] = [];
+    for (const sq of seqs) {
+      let sid = '';
+      do { sid = `${id}-S${++n}`; } while (taken.has(sid));
+      sq.cards.forEach((text, k) => {
+        const l: Line = { ...newLine(b, r, id, 0, { cell: `s${n}c${k + 1}`, angle: sq.angle, structure: 'scenario', tone: b.tone, field: seqField }, text, b.model), id: tmpId(id), card: k + 1, sequence_id: sid };
+        batch.lines.push(l);
+        embStore[l.id] = embs[e++];
+        seqLines.push(l);
+      });
+    }
+    await claimLines(batch, seqLines, embStore, opts.user);
+    mine.push(...seqLines);
   }
   batch.stats.timings_ms.generate = (batch.stats.timings_ms.generate || 0) + (Date.now() - started);
   await saveBatch(batch, mine.map(l => l.id));

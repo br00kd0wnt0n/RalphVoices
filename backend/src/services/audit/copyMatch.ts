@@ -23,7 +23,8 @@ export const COPY_FIELDS: Record<keyof SignedOffCopy, { field?: string; label: s
   // meta_on_image arrives in rules v2.10: with it, on-image copy gets its limits and the price-lead check; without it they're skipped.
   on_image: { field: 'meta_on_image', label: 'On-image text (signed off)', onAsset: 'must' },
   hook: { field: 'tiktok_hook', label: 'TikTok hook / on-screen text', onAsset: 'must' },
-  headline: { field: 'meta_headline', label: 'Meta headline', onAsset: 'maybe' },
+  // Post copy since 30 Sep (Brook): text on the image is its own field (on_image), so the headline runs below the image.
+  headline: { field: 'meta_headline', label: 'Meta headline', onAsset: 'no' },
   primary_text: { field: 'meta_primary', label: 'Meta primary text', onAsset: 'no' },
   description: { field: 'meta_description', label: 'Meta description', onAsset: 'no' },
   caption: { field: 'tiktok_caption', label: 'TikTok caption', onAsset: 'no' },

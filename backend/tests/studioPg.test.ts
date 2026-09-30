@@ -940,3 +940,71 @@ test('Postgres: leftover reservations older than 2 hours are cleared, newer ones
   assert.match(logs[0], /reserved: preflight x 1-a/);
   assert.deepEqual((await store.listSpend()).map(x => x.label).sort(), ['preflight x', 'reserved: preflight x 2-b']);
 });
+
+// ---------- carousel cards (item E, 30 Sep) ----------
+
+test('carousel: a 4-card visual with A1–A3 → sign-off → Pre-flight card by card (in order passes, swapped amber, missing red) → handoff; a caveat-carrying headline is post copy', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const rules = JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8'));
+  rules.fields.meta_on_image = { platform: 'META', label: 'On-image text', visible: 40, max: 60, source: 'HOUSE: test', in_version: 'per_visual' };
+  rules.territories.OWN_CARDS = { ...rules.territories.OWN_CALM, name: 'Calm, card by card', format: 'CAROUSEL' };
+  await store.putRules('example-carousel', rules, { activate: true, by: 'test' });
+  await S.refreshRules();
+  const CARDS = ['Vet bill at 2am?', 'You pay the vet as normal', 'We sort the rest', 'Calm, covered.'];
+  const run = await S.generate(S.makeBrief({ territory: 'OWN_CARDS', name: 'car', own_lines: [
+    { text: 'Calm at the counter.', field: 'meta_primary' }, { text: 'One less worry on a Sunday.', field: 'meta_primary' }, { text: 'Home by nine, bill sorted.', field: 'meta_primary' },
+    // The headline carries the direct-pay caveat; it isn't on the image, and that's fine now (post copy).
+    { text: 'Paid at checkout, at partner clinics.', field: 'meta_headline' },
+    ...CARDS.map(text => ({ text, field: 'meta_on_image' })),
+  ] }), api, () => {}, { ownOnly: true, user: 'nick' });
+  for (const l of run.lines) {
+    await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+    for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find(x => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'Test line', 'nick');
+  }
+  const ids = run.lines.map(l => l.id);
+  const [p1, p2, p3, head] = ids;
+  const cards = ids.slice(4);
+  const versions = [p1, p2, p3].map(p => ({ visual: 'A', fields: { meta_primary: p, meta_headline: head } }));
+  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CARDS', versions, on_image: { A: cards }, expectation: { codes: ['OWN_CARDS_CAR_A1_US_META'], reason: 'Hook first.' } }, 'nick');
+  const [A1, A2, A3] = signoff.versions!.map(v => v.code);
+  assert.deepEqual([A1, A2, A3], ['OWN_CARDS_CAR_A1_US_META', 'OWN_CARDS_CAR_A2_US_META', 'OWN_CARDS_CAR_A3_US_META']);
+  assert.deepEqual(signoff.on_image!.map(o => o.card), [1, 2, 3, 4]);
+
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
+  const rows = await pf.stubs({ persona: 'OWN', territory: 'OWN_CARDS' });
+  assert.deepEqual(rows.map(r => r.stub), [A1, A2, A3]);
+  assert.deepEqual(rows[0].copy.filter(c => c.card).map(c => [c.card, c.text, c.label]), CARDS.map((t, i) => [i + 1, t, `On-image text, card ${i + 1}`]));
+  const card = (i: number, t: string) => ({ buffer: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from(`fake VOICES_TEXT: ${t}`)]), filename: `card${i + 1}.png`, contentType: 'image/png' });
+  const upload = async (texts: string[]) => {
+    const up = await pf.upload(A1, texts.map((t, i) => card(i, t)), 'nick', [A2, A3]);
+    assert.equal(up.kind, 'carousel');
+    await pf.runAudit(await pf.createAudit(up.upload_id));
+    return Promise.all([A1, A2, A3].map(c => pf.report(c)));
+  };
+  const flagsOf = (rep: any) => rep.flags.filter((f: any) => f.check === 'copy_match').map((f: any) => [f.rule, f.severity]);
+
+  // In order: every card matched, on every code; the caveat headline isn't looked for on the image.
+  for (const rep of await upload(CARDS)) {
+    assert.deepEqual(flagsOf(rep), []);
+    assert.deepEqual(rep.audit!.result.copy_match.filter((r: any) => r.card).map((r: any) => [r.card, r.status]), [[1, 'match'], [2, 'match'], [3, 'match'], [4, 'match']]);
+    assert.ok(rep.post_copy.some((c: any) => c.field === 'meta_headline'), 'the headline is post copy');
+    assert.equal(rep.flags.some((f: any) => f.rule === 'COPY_CAVEAT'), false, 'no red for the caveat headline against the image');
+  }
+  // Cards 2 and 3 swapped: amber on each, saying where it was found.
+  const sw = await upload([CARDS[0], CARDS[2], CARDS[1], CARDS[3]]);
+  for (const rep of sw) assert.deepEqual(flagsOf(rep), [['COPY_CARD_ORDER', 'amber'], ['COPY_CARD_ORDER', 'amber']]);
+  assert.match(sw[0].flags.find((f: any) => f.rule === 'COPY_CARD_ORDER').why, /On card 3, expected card 2/);
+  // Card 3's text missing from the asset: red.
+  const ms = await upload([CARDS[0], CARDS[1], 'Summer, sorted', CARDS[3]]);
+  for (const rep of ms) assert.deepEqual(flagsOf(rep), [['COPY_CARD_MISSING', 'red']]);
+
+  // Compliance shows the cards once for the asset; the handoff lists them in order on every code's row.
+  const cv = await pf.complianceAssets();
+  assert.deepEqual(cv.assets.find((a: any) => a.codes.some((c: any) => c.stub === A1))!.codes.map((c: any) => c.stub), [A1, A2, A3]);
+  const csv = S.parseCsv((await R.handoffPack({ territory: 'OWN_CARDS' })).csv);
+  const h = csv[0];
+  assert.deepEqual(csv.slice(1).map(r => [r[0], ...[1, 2, 3, 4].map(k => r[h.indexOf(`On-image card ${k}`)])]), [A1, A2, A3].map(c => [c, ...CARDS]));
+  await store.putRules('example-1', JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8')), { activate: true, by: 'test' }).catch(() => {});
+});

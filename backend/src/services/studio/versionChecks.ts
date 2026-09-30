@@ -38,12 +38,16 @@ const source = (rule: keyof typeof cfg.sources) => CONFIG.sources[rule];
 
 /** The fields of a version as they'll run: its own fields, then its visual's on-image text. */
 export function adFields(v: Pick<PlannedVersion, 'visual' | 'platform' | 'fields'>, plan: Pick<Plan, 'on_image'>, byId: Map<string, Line>, rules: Pick<Rules, 'fields'>): Field[] {
-  const ids = Object.entries(v.fields).map(([f, id]) => [f, id] as const);
-  for (const o of plan.on_image) {
+  const out: Field[] = [];
+  for (const id of Object.values(v.fields)) { const l = byId.get(id); if (l) out.push({ field: l.field, label: rules.fields[l.field]?.label || l.field, text: finalText(l) }); }
+  // The visual's on-image text; a carousel's cards each count as a field of the ad (field#card), in card order.
+  for (const o of [...plan.on_image].sort((a, b) => (a.card || 0) - (b.card || 0))) {
     const l = byId.get(o.line_id);
-    if (o.visual === v.visual && l && !o.issues?.length) ids.push([l.field, l.id]);
+    if (o.visual !== v.visual || !l || o.issues?.length) continue;
+    const label = rules.fields[l.field]?.label || l.field;
+    out.push(o.card ? { field: `${l.field}#${o.card}`, label: `${label}, card ${o.card}`, text: finalText(l) } : { field: l.field, label, text: finalText(l) });
   }
-  return ids.map(([f, id]) => byId.get(id)).filter(Boolean).map(l => ({ field: l!.field, label: rules.fields[l!.field]?.label || l!.field, text: finalText(l!) }));
+  return out;
 }
 export const contentKey = (fs: Field[]) => sha256(JSON.stringify(fs.map(f => [f.field, f.text])));
 

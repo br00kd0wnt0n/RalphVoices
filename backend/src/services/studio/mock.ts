@@ -35,6 +35,14 @@ function writer(user: string) {
   return JSON.stringify({ lines });
 }
 
+// Carousel card sequences (item E): hook → build → payoff, distinct words on each card.
+const CARDS = [['Vet bill at 2am?', 'You pay the vet as normal', 'We sort the rest', 'Calm, covered.'], ['Summer trip booked', 'Then the limp', 'The vet sees him same day', 'The trip stays booked.'], ['First week home', 'First vet visit', 'Covered from day one', 'Start early.']];
+function sequences(user: string) {
+  const s = Number(/write (\d+) carousel card sequence/.exec(user)?.[1] || 1), k = Number(/of (\d+) cards each/.exec(user)?.[1] || 4);
+  const angles = [...user.matchAll(/([A-Z]+_A\d+) "/g)].map(m => m[1]);
+  return JSON.stringify({ sequences: Array.from({ length: s }, (_, i) => ({ angle: angles[i % Math.max(1, angles.length)], cards: Array.from({ length: k }, (_, j) => CARDS[i % CARDS.length][j] ?? `Card ${j + 1} of sequence ${i + 1}`) })) });
+}
+
 function tagger(sys: string, user: string) {
   const angles = [...sys.matchAll(/^([A-Z]+_A\d+):/gm)].map(m => m[1]);
   const structures = ['question', 'stat', 'testimony', 'scenario', 'joke', 'plain_promise'];
@@ -60,7 +68,7 @@ function checker(user: string) {
 // The version check (versionChecks.ts): a contradiction when one field says the vet is paid directly and another says
 // you're reimbursed, so the flow can be tested.
 function versionConflicts(user: string) {
-  const f = user.split('\n').map(l => /^(\w+) \(.*?\): (.*)$/.exec(l)).filter(Boolean) as RegExpExecArray[];
+  const f = user.split('\n').map(l => /^([\w#]+) \(.*?\): (.*)$/.exec(l)).filter(Boolean) as RegExpExecArray[];
   const direct = f.find(m => /directly|at checkout/i.test(m[2])), back = f.find(m => /reimburse|pay you back/i.test(m[2]));
   const hits = direct && back && direct !== back ? [{ kind: 'contradiction', fields: [direct[1], back[1]], quote: /reimburse\w*|pay you back/i.exec(back[2])![0], why: 'Direct pay in one field, reimbursement in the other' }] : [];
   return JSON.stringify({ hits });
@@ -99,6 +107,7 @@ export function mockClient() {
       let content = '', logprobs: any = null;
       if (params.logprobs) { const p = probe(user); content = p.top[0].token; logprobs = { content: [{ token: content, logprob: p.top[0].logprob, top_logprobs: p.top }] }; }
       else if (params.response_format && /You classify lines of ad copy/.test(sys)) content = tagger(sys, user);
+      else if (params.response_format && /^CAROUSEL SEQUENCES/.test(user)) content = sequences(user);
       else if (params.response_format && /Write exactly one line per cell/.test(sys)) content = writer(user);
       else if (params.response_format && /You check one ad made of several copy fields/.test(sys)) content = versionConflicts(user);
       else if (params.response_format) content = checker(user);
