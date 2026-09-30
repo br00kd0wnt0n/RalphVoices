@@ -16,13 +16,14 @@ async function fresh() {
   S.setStudioDir(dir);
   S.setStore(new FileStore(dir, { rulesPath: path.join(__dirname, '../scripts/studio/rules.example.json') }));
   await S.refreshRules();
-  const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'ke', own_lines: [{ text: 'Calm at the counter, every single time you visit.', field: 'meta_primary' }] }), new S.Api({ mock: true }), () => {}, { ownOnly: true, user: 'nick' });
-  return { run, line: run.lines[0] };
+  const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'ke', own_lines: [{ text: 'Calm at the counter, every single time you visit.', field: 'meta_primary' }, { text: 'Calm, covered.', field: 'meta_headline' }] }), new S.Api({ mock: true }), () => {}, { ownOnly: true, user: 'nick' });
+  return { run, line: run.lines[0], head: run.lines[1] };
 }
 const EDIT = 'Calm at the counter.';
 
 test('edit → save → keep: Shortlist, Ready, sign-off, exports and taste all use the edited wording', async () => {
-  const { run, line } = await fresh();
+  const { run, line, head } = await fresh();
+  await S.setDecision(run.id, head.id, { decision: 'keep' }, 'nick');
   await S.setDecision(run.id, line.id, { decision: 'edit', edited_text: EDIT }, 'nick');
   const kept = await S.setDecision(run.id, line.id, { decision: 'keep' }, 'nick');
   assert.equal(kept.decision, 'edit', 'Keep on an edited line is recorded as an edit');
@@ -30,9 +31,9 @@ test('edit → save → keep: Shortlist, Ready, sign-off, exports and taste all 
 
   assert.equal((await S.shortlist()).find(r => r.id === line.id)!.text, EDIT);
   const view = await R.readyView('OWN', 'OWN_CALM');
-  assert.equal(view.lines[0].final_text, EDIT);
-  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: [line.id], expectation: { line_ids: [line.id], reason: 'Short and plain.' } }, 'nick');
-  assert.equal(signoff.lines[0].text, EDIT);
+  assert.equal(view.lines.find(x => x.line.id === line.id)!.final_text, EDIT);
+  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: [{ visual: 'A', fields: { meta_primary: line.id, meta_headline: head.id } }], expectation: { codes: ['OWN_CALM_UGC_A1_US_META'], reason: 'Short and plain.' } }, 'nick');
+  assert.equal(signoff.versions![0].fields.meta_primary.text, EDIT);
   assert.ok((await R.handoffPack()).csv.includes(EDIT));
   assert.ok((await S.exportBatch(run.id)).md.includes(`*Edited:* ${EDIT}`));
   const taste = (await S.loadTaste()).find(t => t.id === line.id)!;
@@ -64,7 +65,7 @@ test('lines saved before the fix (keep with an edit) read as edited; a cut line 
   Object.assign(l, { decision: 'keep', edited_text: EDIT, decided_at: new Date().toISOString() });
   await S.getStore().saveLine(run.id, l);
   assert.equal((await S.shortlist()).find(r => r.id === line.id)!.text, EDIT);
-  assert.equal((await R.readyView('OWN', 'OWN_CALM')).lines[0].final_text, EDIT);
+  assert.equal((await R.readyView('OWN', 'OWN_CALM')).lines.find(x => x.line.id === line.id)!.final_text, EDIT);
   assert.equal(S.finalText({ ...l, decision: 'cut' }), line.text);
   // A sheet imported with "keep" and an edited wording keeps the edit too.
   const csv = S.toCsv([['id', 'decision', 'edited_text', 'note'], [line.id, 'keep', 'Calm, every time.', '']]);

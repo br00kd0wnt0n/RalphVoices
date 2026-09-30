@@ -265,6 +265,10 @@ export class PgStore implements StudioStore {
     const r = await this.q.query(`SELECT label, usd, by_stage, calls, by_user, at FROM studio_spend ORDER BY at, id`);
     return r.rows.map(x => ({ label: x.label, usd: Number(x.usd), by_stage: x.by_stage, calls: x.calls, user: x.by_user ?? undefined, at: new Date(x.at).toISOString() }));
   }
+  async clearStaleReservations(ms: number): Promise<SpendEntry[]> {
+    const r = await this.q.query(`DELETE FROM studio_spend WHERE label LIKE 'reserved:%' AND at < NOW() - make_interval(secs => $1) RETURNING label, usd, by_user, at`, [ms / 1000]);
+    return r.rows.map(x => ({ label: x.label, usd: Number(x.usd), user: x.by_user ?? undefined, at: new Date(x.at).toISOString() }));
+  }
   async deleteSpend(label: string) { await this.q.query(`DELETE FROM studio_spend WHERE label = $1`, [label]); }
   async addSpend(e: SpendEntry) {
     await this.q.query(`INSERT INTO studio_spend (label, usd, by_stage, calls, by_user, at) VALUES ($1, $2, $3, $4, $5, $6)`,

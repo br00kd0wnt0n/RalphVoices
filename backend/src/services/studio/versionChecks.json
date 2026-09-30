@@ -1,0 +1,14 @@
+{
+  "repeat_run_words": 4,
+  "repeat_overlap": 0.6,
+  "repeat_min_content_words": 3,
+  "repeat_min_shared": 3,
+  "too_alike": 0.85,
+  "conflict_model": "gpt-4o",
+  "conflict_max_tokens": 220,
+  "sources": {
+    "VERSION_REPEAT": "Nick, 30 Sep: the fields of one ad shouldn't say the same thing twice",
+    "VERSION_TOO_ALIKE": "Nick, 30 Sep: the versions on a visual should be different ads",
+    "VERSION_CONFLICT": "Nick, 30 Sep: the fields of one ad have to agree"
+  }
+}

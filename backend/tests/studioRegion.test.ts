@@ -58,12 +58,12 @@ test('Canada: the writer is told Canadian spelling and to feel Canadian; the US 
   for (const sys of us.systems) assert.equal(/CANADA|Canadian/.test(sys), false, 'no region block for the US');
 });
 
-test('region flows from brief to run to line to naming code to sign-off to handoff', async () => {
+test('region flows from brief to run to line to naming code (per version) to sign-off to handoff', async () => {
   await fresh();
   const api = new S.Api({ mock: true });
-  const own = (texts: string[]) => texts.map(text => ({ text, field: 'meta_primary' }));
-  const us = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'us', own_lines: own(['Calm at the counter.', 'One less worry on a Sunday.', 'The vet gets paid, you get home.', 'Calm, even at 2 a.m.']) }), api, () => {}, { ownOnly: true, user: 'nick' });
-  const ca = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'ca', region: 'CA', own_lines: own(['Calm at the counter, eh.', 'Your favourite colour of calm.']) }), api, () => {}, { ownOnly: true, user: 'nick' });
+  const own = (texts: string[], headline: string) => [...texts.map(text => ({ text, field: 'meta_primary' })), { text: headline, field: 'meta_headline' }];
+  const us = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'us', own_lines: own(['Calm at the counter.', 'One less worry on a Sunday.', 'The vet gets paid, you get home.', 'Calm, even at 2 a.m.'], 'Calm, covered.') }), api, () => {}, { ownOnly: true, user: 'nick' });
+  const ca = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'ca', region: 'CA', own_lines: own(['Calm at the counter, eh.', 'Your favourite colour of calm.'], 'Calm, covered, eh.') }), api, () => {}, { ownOnly: true, user: 'nick' });
 
   // Run and lines carry the region; a Canadian line never goes into a US run.
   assert.equal(ca.brief.region, 'CA');
@@ -75,40 +75,41 @@ test('region flows from brief to run to line to naming code to sign-off to hando
 
   await keepAll(us); await keepAll(ca);
   await clearReds(us); await clearReds(ca);
+  // The Shortlist lists lines by field, with no codes yet: codes belong to versions, built at Ready.
+  assert.ok((await S.shortlist()).every(r => r.stub === ''));
 
-  // Shortlist: each region numbers on its own, three lines to a visual.
-  const sl = await S.shortlist();
-  const usCodes = sl.filter(r => r.region === 'US').map(r => r.stub);
-  const caCodes = sl.filter(r => r.region === 'CA').map(r => r.stub);
-  assert.deepEqual(usCodes, ['OWN_CALM_UGC_A1_US_META', 'OWN_CALM_UGC_A2_US_META', 'OWN_CALM_UGC_A3_US_META', 'OWN_CALM_UGC_B1_US_META']);
-  assert.deepEqual(caCodes, ['OWN_CALM_UGC_A1_CA_META', 'OWN_CALM_UGC_A2_CA_META']);
-
-  // Ready for production is per region, and a chosen visual previews its code.
+  // Ready for production is per region. The default pairs each primary text with the headline, three to a visual.
   const usView = await R.readyView('OWN', 'OWN_CALM', 'US');
-  assert.equal(usView.lines.length, 4);
+  assert.equal(usView.lines.length, 5);
   assert.ok(usView.lines.every(x => x.line.region === 'US'));
+  assert.deepEqual(usView.plan.versions.map(v => v.code), ['OWN_CALM_UGC_A1_US_META', 'OWN_CALM_UGC_A2_US_META', 'OWN_CALM_UGC_A3_US_META', 'OWN_CALM_UGC_B1_US_META']);
   const caView = await R.readyView('OWN', 'OWN_CALM', 'CA');
   assert.deepEqual(caView.lines.map(x => x.line.id).sort(), ca.lines.map(l => l.id).sort());
-  const [u1, u2, u3, u4] = us.lines.map(l => l.id);
-  const preview = await R.readyView('OWN', 'OWN_CALM', 'US', { [u3]: 'B', [u4]: 'B' }, [u1, u2, u3, u4]);
-  const code = (v: typeof preview, id: string) => v.lines.find(x => x.line.id === id)!.stub;
-  assert.deepEqual([u1, u2, u3, u4].map(id => code(preview, id)), ['OWN_CALM_UGC_A1_US_META', 'OWN_CALM_UGC_A2_US_META', 'OWN_CALM_UGC_B1_US_META', 'OWN_CALM_UGC_B2_US_META']);
+  assert.deepEqual(caView.plan.versions.map(v => v.code), ['OWN_CALM_UGC_A1_CA_META', 'OWN_CALM_UGC_A2_CA_META'], 'Canada numbers on its own');
+  // Moving versions to visual B previews their codes.
+  const [u1, u2, u3, u4, uh] = us.lines.map(l => l.id);
+  const V = (visual: string, p: string, h = uh) => ({ visual, fields: { meta_primary: p, meta_headline: h } });
+  const usDraft = [V('A', u1), V('A', u2), V('B', u3), V('B', u4)];
+  const preview = await R.readyView('OWN', 'OWN_CALM', 'US', { versions: usDraft, on_image: {} });
+  assert.deepEqual(preview.plan.versions.map(v => v.code), ['OWN_CALM_UGC_A1_US_META', 'OWN_CALM_UGC_A2_US_META', 'OWN_CALM_UGC_B1_US_META', 'OWN_CALM_UGC_B2_US_META']);
   await assert.rejects(() => R.readyView('OWN', 'OWN_CALM', 'UK' as any), /Region/);
-  await assert.rejects(() => R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region: 'US', line_ids: [ca.lines[0].id], expectation: { line_ids: [ca.lines[0].id], reason: 'x' } }, 'nick'), /Not kept lines/);
+  await assert.rejects(() => R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region: 'US', versions: [V('A', ca.lines[0].id, ca.lines[2].id)], expectation: { codes: ['OWN_CALM_UGC_A1_US_META'], reason: 'x' } }, 'nick'), /Not kept lines/);
 
   // Sign off US (with the visuals chosen above), then Canada.
-  const exp = (id: string) => ({ line_ids: [id], reason: 'Plain promise first.' });
-  const usSo = (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region: 'US', line_ids: [u1, u2, u3, u4], visuals: { [u3]: 'B', [u4]: 'B' }, expectation: exp(u1) }, 'nick')).signoff;
-  assert.deepEqual(usSo.lines.map(x => x.stub), ['OWN_CALM_UGC_A1_US_META', 'OWN_CALM_UGC_A2_US_META', 'OWN_CALM_UGC_B1_US_META', 'OWN_CALM_UGC_B2_US_META'], 'the codes the screen showed');
+  const exp = (code: string) => ({ codes: [code], reason: 'Plain promise first.' });
+  const usSo = (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region: 'US', versions: usDraft, expectation: exp('OWN_CALM_UGC_A1_US_META') }, 'nick')).signoff;
+  assert.deepEqual(usSo.versions!.map(v => v.code), ['OWN_CALM_UGC_A1_US_META', 'OWN_CALM_UGC_A2_US_META', 'OWN_CALM_UGC_B1_US_META', 'OWN_CALM_UGC_B2_US_META'], 'the codes the screen showed');
   assert.equal(usSo.region, 'US');
-  const caSo = (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region: 'CA', line_ids: ca.lines.map(l => l.id), expectation: exp(ca.lines[0].id) }, 'nick')).signoff;
+  const [c1, c2, ch] = ca.lines.map(l => l.id);
+  const caSo = (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region: 'CA', versions: [V('A', c1, ch), V('A', c2, ch)], expectation: exp('OWN_CALM_UGC_A1_CA_META') }, 'nick')).signoff;
   assert.equal(caSo.region, 'CA');
   assert.equal(caSo.id, 'OWN_CALM-CA-ready-v2', 'one count per persona × territory, so the database unique key holds');
-  assert.deepEqual(caSo.lines.map(x => x.stub), ['OWN_CALM_UGC_A1_CA_META', 'OWN_CALM_UGC_A2_CA_META']);
-  // Every signed-off version carries its code.
-  assert.equal((await S.getStore().listLineVersions(ca.lines[0].id))[0].stub, 'OWN_CALM_UGC_A1_CA_META');
+  assert.deepEqual(caSo.versions!.map(v => v.code), ['OWN_CALM_UGC_A1_CA_META', 'OWN_CALM_UGC_A2_CA_META']);
+  // Every signed-off line version carries its code(s).
+  assert.equal((await S.getStore().listLineVersions(c1))[0].stub, 'OWN_CALM_UGC_A1_CA_META');
+  assert.equal((await S.getStore().listLineVersions(ch))[0].stub, 'OWN_CALM_UGC_A1_CA_META,OWN_CALM_UGC_A2_CA_META');
   // A later US sign-off doesn't push Canada out of the handoff (the latest counts per region).
-  await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region: 'US', line_ids: [u1, u2], expectation: exp(u1) }, 'nick');
+  await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region: 'US', versions: usDraft.slice(0, 2), expectation: exp('OWN_CALM_UGC_A1_US_META') }, 'nick');
   assert.equal((await R.readyView('OWN', 'OWN_CALM', 'CA')).latest!.id, caSo.id);
 
   const pack = await R.handoffPack();
@@ -125,33 +126,28 @@ test('region flows from brief to run to line to naming code to sign-off to hando
   assert.equal(S.parseCsv((await R.handoffPack({ region: 'CA' })).csv).length, 3);
 });
 
-test('a line signed off under the earlier v# code keeps it; new lines get the new form', async () => {
+test('a sign-off from before versions (one code per line, v# or A1) is still read; a complete version gets a new code', async () => {
   await fresh();
   const api = new S.Api({ mock: true });
-  const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'old', own_lines: [{ text: 'Calm at the counter.', field: 'meta_primary' }] }), api, () => {}, { ownOnly: true, user: 'nick' });
-  const old = run.lines[0];
-  await S.setDecision(run.id, old.id, { decision: 'keep' }, 'nick');
-  // What a sign-off from before the change looks like: no region, a v# code on the sign-off, the line and its version.
+  const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'old', own_lines: [{ text: 'Calm at the counter.', field: 'meta_primary' }, { text: 'Calm, covered.', field: 'meta_headline' }] }), api, () => {}, { ownOnly: true, user: 'nick' });
+  const [old, head] = run.lines;
+  for (const l of run.lines) await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+  // What a sign-off from before looks like: no region, no versions, a v# code per line.
   const st = S.getStore();
   const h = S.lineHash(old);
   await st.saveLineVersion({ line_id: old.id, batch_id: run.id, version: 1, field: old.field, text: old.text, sha256: h, created_by: 'nick', created_at: '2026-09-28T12:00:00Z', signoff_id: 'OWN_CALM-ready-v1', stub: 'OWN_CALM_UGC_v1_META' });
   await st.saveSignoff({ id: 'OWN_CALM-ready-v1', persona: 'OWN', territory: 'OWN_CALM', version: 1, ready_by: 'nick', ready_at: '2026-09-28T12:00:00Z', sha256: 'x', expectation_id: 'e',
     lines: [{ line_id: old.id, batch_id: run.id, version: 1, sha256: h, stub: 'OWN_CALM_UGC_v1_META', field: old.field, text: old.text, chars: old.chars, overrides: [] }] });
-  const l = (await S.loadBatch(run.id)).lines[0];
-  l.ready = { signoff_id: 'OWN_CALM-ready-v1', version: 1, sha256: h, ready_by: 'nick', ready_at: '2026-09-28T12:00:00Z', stub: 'OWN_CALM_UGC_v1_META' };
-  await st.saveLine(run.id, l);
-
-  // A new line in the same persona × territory, and an edit to the old one.
-  const more = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'new', own_lines: [{ text: 'One less worry on a Sunday.', field: 'meta_primary' }] }), api, () => {}, { ownOnly: true, user: 'nick' });
-  await S.setDecision(more.id, more.lines[0].id, { decision: 'keep' }, 'nick');
-  await S.setDecision(run.id, old.id, { decision: 'edit', edited_text: 'Calm at the counter. Every time.' }, 'nick');
+  // Read as it was: one code, one field, in the handoff.
+  const rows = S.parseCsv((await R.handoffPack()).csv);
+  assert.deepEqual(rows.slice(1).map(r => r[0]), ['OWN_CALM_UGC_v1_META']);
+  assert.equal(rows[1][rows[0].indexOf('Meta primary text')], 'Calm at the counter.');
+  // Ready starts from it, and says what a live version now needs.
   const view = await R.readyView('OWN', 'OWN_CALM');
-  assert.equal(view.lines.find(x => x.line.id === old.id)!.stub, 'OWN_CALM_UGC_v1_META');
-  assert.equal(view.lines.find(x => x.line.id === old.id)!.fixed, true);
-  assert.equal(view.lines.find(x => x.line.id === more.lines[0].id)!.stub, 'OWN_CALM_UGC_A1_US_META');
-  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: [old.id, more.lines[0].id], expectation: { line_ids: [old.id], reason: 'The one we know.' } }, 'nick');
-  assert.deepEqual(signoff.lines.map(x => x.stub).sort(), ['OWN_CALM_UGC_A1_US_META', 'OWN_CALM_UGC_v1_META']);
-  const versions = await st.listLineVersions(old.id);
-  assert.deepEqual(versions.map((v: any) => v.stub), ['OWN_CALM_UGC_v1_META', 'OWN_CALM_UGC_v1_META'], 'the old line keeps its code on the new version too');
-  assert.equal((await st.listLineVersions(more.lines[0].id))[0].stub, 'OWN_CALM_UGC_A1_US_META');
+  assert.deepEqual(view.plan.versions.map(v => v.code), ['OWN_CALM_UGC_v1_META']);
+  assert.match(view.plan.issues.join(' '), /needs headline/);
+  // Made complete, it's a different ad: a new code in the current form, and the v# code is never reused.
+  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: [{ visual: 'A', fields: { meta_primary: old.id, meta_headline: head.id } }], expectation: { codes: ['OWN_CALM_UGC_A1_US_META'], reason: 'The one we know.' } }, 'nick');
+  assert.deepEqual(signoff.versions!.map(v => v.code), ['OWN_CALM_UGC_A1_US_META']);
+  assert.ok((await S.signedCodes()).includes('OWN_CALM_UGC_v1_META'), 'old codes stay taken');
 });

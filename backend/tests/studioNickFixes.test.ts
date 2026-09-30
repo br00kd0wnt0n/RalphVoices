@@ -45,6 +45,7 @@ async function keptRun() {
   const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'sl', own_lines: [
     { text: 'Calm at the counter.', field: 'meta_primary' },
     { text: 'One less worry on a Sunday.', field: 'meta_primary' },
+    { text: 'Calm, covered.', field: 'meta_headline' },
   ] }), new S.Api({ mock: true }), () => {}, { ownOnly: true, user: 'nick' });
   for (const l of run.lines) await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
   return run;
@@ -52,9 +53,9 @@ async function keptRun() {
 
 test('2. cutting on the Shortlist is the same decision as in Review, with undo; a signed-off line says to change the set at Ready', async () => {
   const run = await keptRun();
-  const [a, b] = run.lines;
+  const [a, b, h] = run.lines;
   let rows = await S.shortlist();
-  assert.equal(rows.length, 2);
+  assert.equal(rows.length, 3);
   assert.equal(rows[0].batch, run.id);
   assert.equal(rows[0].decision, 'keep');
 
@@ -69,7 +70,7 @@ test('2. cutting on the Shortlist is the same decision as in Review, with undo; 
   assert.ok((await S.shortlist()).some(r => r.id === a.id));
 
   // Signed off at Ready: refused from the Shortlist, with the reason.
-  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: [b.id], expectation: { line_ids: [b.id], reason: 'Plain.' } }, 'nick');
+  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: [{ visual: 'A', fields: { meta_primary: b.id, meta_headline: h.id } }], expectation: { codes: ['OWN_CALM_UGC_A1_US_META'], reason: 'Plain.' } }, 'nick');
   rows = await S.shortlist();
   assert.equal(rows.find(r => r.id === b.id)!.signed_off, signoff.id);
   await assert.rejects(() => S.setDecision(run.id, b.id, { decision: 'cut', source: 'shortlist' }, 'vivan'), /Signed off at Ready for production .*take it out of the set there/);
@@ -90,5 +91,7 @@ test('3. a line added mid-review goes into the same run as your line, with the r
   assert.equal(added.field, 'meta_headline');
   assert.equal(added.status, 'checked');
   await S.setDecision(run.id, added.id, { decision: 'keep' }, 'nick');
-  assert.ok((await S.shortlist()).find(r => r.id === added.id)!.stub.endsWith('_CA_META'));
+  const row = (await S.shortlist()).find(r => r.id === added.id)!;
+  assert.equal(row.region, 'CA');
+  assert.equal(row.stub, '', 'its code comes at Ready, with its version');
 });
