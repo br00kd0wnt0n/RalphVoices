@@ -277,7 +277,7 @@ export function Studio() {
       <header className="sticky top-0 z-20 flex min-h-16 flex-wrap items-center py-2 md:h-16 md:flex-nowrap md:py-0 gap-3 border-b border-[#272B34] bg-[#16181D] px-4 min-[1440px]:gap-4 min-[1440px]:px-6">
         {HOSTED && <a href="/" title="Back to Voices" className="-mr-2 hidden rounded-lg p-1.5 text-[#858B96] hover:bg-[#1C1F26] hover:text-[#ECEDEF] sm:block"><ArrowLeft className="h-4 w-4" aria-label="Back to Voices" /></a>}
         <span className="hidden min-[1440px]:block"><Lockup onHome={() => setTab('home')} /></span>
-        <button onClick={() => setTab('home')} className="shrink-0 min-[1440px]:hidden" aria-label="VOICES Studio: the round" title="Voices Studio × Trupanion"><img src="/ralph-world.png" alt="Ralph" className="h-7 w-7 object-contain" /></button>
+        <button onClick={() => setTab('home')} className="shrink-0 min-[1440px]:hidden" aria-label="VOICES Studio: this month" title="Voices Studio × Trupanion"><img src="/ralph-world.png" alt="Ralph" className="h-7 w-7 object-contain" /></button>
         <nav aria-label="Studio steps" className="order-last flex w-full min-w-0 flex-nowrap items-center md:order-none md:w-auto gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <GhostButton active={tab === 'howto'} onClick={() => setTab('howto')} title="How it works" aria-label="How it works" className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-2 py-1.5 text-sm">
             <HelpCircle className="h-4 w-4" aria-hidden />
@@ -375,7 +375,7 @@ function ViewBar({ meta, view, setView, what }: { meta: Meta; view: ViewFilter; 
         {(meta.regions || ['US', 'CA']).map(r => <option key={r} value={r}>{REGION_NAMES[r]}</option>)}
       </select>
       {(view.persona !== 'all' || view.territory !== 'all' || view.region !== 'all') && <button className="text-xs text-[#858B96] underline-offset-2 hover:text-[#ECEDEF] hover:underline" onClick={() => setView(ALL_VIEW)}>show all</button>}
-      <span className="ml-auto hidden text-xs text-[#646A75] md:inline">{what}: everything in the round · filters this view only</span>
+      <span className="ml-auto hidden text-xs text-[#646A75] md:inline">{what}: everything this month · filters this view only</span>
     </div>
   );
 }

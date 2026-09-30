@@ -2,7 +2,7 @@
 // them. The per-field counts default to the rules' fields.<id>.default_count, else an even split of n.
 import { useEffect, useRef, useState } from 'react';
 import { toggleField as toggleFieldIn } from '@/lib/studioFields';
-import { studio, type Batch, type Brief, type Meta, type OwnLine, type RunSummary, type Tone, REGION_NAMES } from '@/lib/studioApi';
+import { roundName, studio, type Batch, type Brief, type Meta, type OwnLine, type RunSummary, type Tone, REGION_NAMES } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { personaColor, personaEdge, tint } from '@/lib/personaColors';
 import { CanadaNote, Chip, GhostButton, Intro, Label, PersonaChip, PersonaPanel, PinkButton, angleLabel, fieldOrder, regionOf, territoryName, when, type Ctx } from './ui';
@@ -279,7 +279,7 @@ function RunsList({ user, tick, meta, ctx, onContinue }: { user: string; tick: n
         {here.slice(0, 30).map(r => (
           <li key={r.id} className="flex items-center gap-3 rounded-lg border border-l-4 border-[#272B34] px-3 py-2" style={personaEdge(r.persona)}>
             <div className="min-w-0 flex-1">
-              <div className="truncate text-base font-medium">{when(r.updated)}{r.created_by ? ` · ${r.created_by.split('@')[0]}` : ''}{r.round && r.round !== meta.rounds?.active && <Chip tone={meta.rounds?.rounds.find(x => x.id === r.round)?.test ? 'amber' : 'outline'} className="ml-2 text-xs">{r.round}{meta.rounds?.rounds.find(x => x.id === r.round)?.test ? ' TEST' : ''}</Chip>}</div>
+              <div className="truncate text-base font-medium">{when(r.updated)}{r.created_by ? ` · ${r.created_by.split('@')[0]}` : ''}{r.round && r.round !== meta.rounds?.active && <Chip tone={meta.rounds?.rounds.find(x => x.id === r.round)?.test ? 'amber' : 'outline'} className="ml-2 text-xs">{roundName(meta.rounds, r.round)}</Chip>}</div>
               <div className="text-sm text-[#858B96]">
                 {r.lines} lines{r.yours ? ` (${r.yours} yours)` : ''} · {r.kept} kept
                 {r.unchecked > 0 && <span className="text-amber-300"> · {r.unchecked} unchecked</span>}

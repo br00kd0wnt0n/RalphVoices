@@ -27,7 +27,7 @@ import {
   complianceFor, defaultDraft, fieldRole, planDraft, platformOf, signoffOnImage, signoffVersions, versionFields,
 } from './versions.js';
 import { type VersionCheck, checkVersions, estimateConflicts, seedConflicts, uncheckedAds } from './versionChecks.js';
-import { TEST_SUFFIX, inView, roundOf, roundView, type RoundView } from './rounds.js';
+import { TEST_SUFFIX, inView, labelOf, roundOf, roundView, type RoundView } from './rounds.js';
 
 /** Someone else changed what this request was based on (e.g. signed the same set off first): reload and try again. */
 export class ConflictError extends Error { status = 409; }
@@ -350,6 +350,8 @@ export interface HandoffRow {
   fields: Record<string, { text: string; chars: number; version: number; line_id: string }>;
   on_image: { text: string; chars: number; version: number; line_id: string } | null;
   round: string;
+  /** The round as people see it ("Month 1"). */
+  month: string;
   /** A carousel visual's on-image text, card by card (the same set on every code of the visual). */
   cards: Array<{ card: number; text: string; chars: number; version: number; line_id: string }>;
   compliance: string; compliance_note: string;
@@ -403,7 +405,7 @@ export async function handoffRows(filter: { persona?: string; territory?: string
       }
       const p = parseCode(v.code, null);
       rows.push({
-        stub: v.code, region: regionOfSignoff(s), round: roundOf(s), visual: v.visual, number: v.number, persona: s.persona, territory: s.territory,
+        stub: v.code, region: regionOfSignoff(s), round: roundOf(s), month: labelOf(view.state, roundOf(s)), visual: v.visual, number: v.number, persona: s.persona, territory: s.territory,
         platform: v.platform || ('error' in p ? '' : p.platform), format: r.territories[s.territory]?.format || '',
         fields: Object.fromEntries(Object.entries(v.fields).map(([f, x]) => [f, { text: x.text, chars: x.chars, version: x.version, line_id: x.line_id }])),
         on_image: oi ? { text: oi.text, chars: oi.chars, version: oi.version, line_id: oi.line_id } : null,
@@ -432,9 +434,9 @@ export async function handoffPack(filter: { persona?: string; territory?: string
   const nCards = Math.max(0, ...rows.flatMap(x => x.cards.map(c => c.card)));
   const cardCols = Array.from({ length: nCards }, (_, i) => `On-image card ${i + 1}`);
   const cardVals = (x: HandoffRow) => Array.from({ length: nCards }, (_, i) => x.cards.find(c => c.card === i + 1)?.text || '');
-  const head = ['Naming code', 'Region', 'Round', 'Visual', 'Version', 'Persona', 'Territory', 'Platform', 'Format', ...fieldCols.map(label), ...(hasOnImage ? ['On-image text (the visual)'] : []), ...cardCols,
+  const head = ['Naming code', 'Region', 'Month', 'Visual', 'Version', 'Persona', 'Territory', 'Platform', 'Format', ...fieldCols.map(label), ...(hasOnImage ? ['On-image text (the visual)'] : []), ...cardCols,
     'Compliance status', 'Compliance note', 'Ready to traffic', 'Red flag overridden', 'Ready for production by', 'Ready for production at', 'Changed since sign-off'];
-  const csv = toCsv([head, ...rows.map(x => [x.stub, x.region, x.round, x.visual, String(x.number), x.persona, x.territory, x.platform, x.format,
+  const csv = toCsv([head, ...rows.map(x => [x.stub, x.region, x.month, x.visual, String(x.number), x.persona, x.territory, x.platform, x.format,
     ...fieldCols.map(f => x.fields[f]?.text || ''), ...(hasOnImage ? [x.on_image?.text || ''] : []), ...cardVals(x),
     STATUS_WORDS[x.compliance] || x.compliance, x.compliance_note, x.traffic, x.overrides, x.ready_by, x.ready_at, x.changed_since])]);
 
