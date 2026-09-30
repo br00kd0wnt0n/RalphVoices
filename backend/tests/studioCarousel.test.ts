@@ -143,3 +143,15 @@ test('Pre-flight card match: in order passes, a card on the wrong card is amber,
   const reworded = cardMatch(copy, read(['Vet bill at 2am?', 'You pay the vet like normal', 'We sort the rest']));
   assert.deepEqual(reworded.flags.map(f => [f.rule, f.severity]), [['COPY_MATCH', 'amber']]);
 });
+
+test('per-field counts on a carousel: the on-image count gives way to the card sequences; the other fields keep theirs', async () => {
+  await fresh();
+  const b = S.makeBrief({ territory: 'OWN_CARDS', fields: ['meta_primary', 'meta_headline', 'meta_on_image'], field_counts: { meta_primary: 3, meta_headline: 2, meta_on_image: 4 }, carousel: { sequences: 1, cards: 3 }, name: 'cards-counts' });
+  assert.deepEqual(S.looseCounts(b, 'meta_on_image'), { field_counts: { meta_primary: 3, meta_headline: 2 }, n: 5 });
+  const run = await S.generate(b, new S.Api({ mock: true }));
+  const loose = (f: string) => run.lines.filter(l => l.field === f && !l.sequence_id && l.model !== 'human').length;
+  assert.equal(loose('meta_primary'), 3);
+  assert.equal(loose('meta_headline'), 2);
+  assert.equal(loose('meta_on_image'), 0, 'no loose on-image lines on a carousel');
+  assert.equal(run.lines.filter(l => l.sequence_id).length, 3, 'one sequence of three cards');
+});
