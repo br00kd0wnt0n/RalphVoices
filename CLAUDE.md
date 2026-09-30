@@ -339,6 +339,10 @@ VOICES v2 build 1: `backend/scripts/studio.ts` (CLI and `serve`) over `backend/s
 - Hosted (phase 3, off by default): `ENABLE_STUDIO=true` mounts `/api/studio` (`backend/src/routes/studio.ts`) behind `authMiddleware` plus `STUDIO_EMAILS`/`ADMIN_EMAILS` (`utils/studioAccess.ts`, fails closed), on `PgStore(pool)`, with a monthly budget `STUDIO_MONTHLY_CAP_USD` (default 50). Endpoints are shared with `serve` in `services/studio/router.ts`; change them there. Rules upload/activate are admin-only. Handoff: `docs/build-log/B1-studio-p3.md`.
 - Run instructions, timings and gaps: `docs/build-log/B1-lite.md`.
 
+## Weekly read, B3 (live ad performance)
+
+VOICES v2 build 3 as a CLI: `backend/scripts/weekly.ts` over pure modules in `backend/src/services/weekly/` (naming, ingest, window, model, note, simulate, stats; `store.ts` is the only database code). Tables `live_ingests`, `live_ads`, `live_metrics` and `live_reads`, plus the view `live_latest_reads` (latest read per naming stub) (migration 016). Thresholds, column mapping, the prospecting/retargeting rule and wording rules live in `backend/config/weekly-read.json` (versioned; change with a dated entry). Local database only: the CLI refuses non-local hosts and never loads `backend/.env`. Notes, ledgers and simulated exports are written to `Claude outputs/voices-r1/weekly/` (client material, never committed). Ad-name forms (newer `PERSONA_TERRITORY_FORMAT_A2_REGION_PLATFORM_YYMMDD`, older `_v#_PLATFORM_`) are config (`naming.forms`), not code. Features join to Studio and B2 by naming stub, as text, never as a foreign key to `studio_*`. Run instructions, thresholds and open items for Add3: `docs/build-log/B3-weekly-read.md`.
+
 ## Pre-flight audit, B2 (script)
 
 VOICES v2 build 2: `backend/scripts/audit.ts` (CLI) over `backend/src/services/audit/` (self-contained; imports nothing from Studio or weekly code). No database, no auth, no deploy. Reads the rules from `Claude outputs/voices-r1/studio/studio-rules.json` and the M3 rubric from `Claude outputs/voices-r1/rubric.json`; the OpenAI key from `~/.config/voices/openai.key` (never `dotenv.config()`). Assets in `Claude outputs/voices-r1/assets/<round>/`, named by naming code, either form (a folder of numbered cards is a carousel; `.mp4/.mov` is video; `<stub>.txt` is sidecar copy). Output in `Claude outputs/voices-r1/audit/<round>/`: `reports/<stub>.md`, `summary.md`, `features.csv` (for B3's `weekly.ts features --file`), `flag-sheet.csv`, `audit.json`, `calls.jsonl`; `audit/spend.json` is cumulative ($10 cap, `--yes` over $2).
@@ -364,7 +368,7 @@ DATABASE_URL=postgresql://postgres@127.0.0.1:54329/voices_dev JWT_SECRET=local-d
 ## Tests
 
 ```bash
-cd backend && npm test   # node:test via tsx; RalphScore parity fixtures, concept-response score parsing, retry
+cd backend && npm test   # node:test via tsx; RalphScore parity fixtures, concept-response score parsing, retry, weekly read
 ```
 
 ## Type Checking
