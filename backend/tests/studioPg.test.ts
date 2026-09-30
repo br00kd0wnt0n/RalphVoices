@@ -272,7 +272,9 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   const hand = S.parseCsv(await pf.handoffCsv());
   assert.deepEqual(hand[0].slice(0, 2), ['Naming code', 'Region']);
   assert.equal(hand[0][7], 'Status');
-  assert.equal(hand.find(r => r[0] === stub)![7], 'Ready to traffic');
+  // Pre-flight passed isn't Ready to traffic until Trupanion's compliance is cleared (Brook, 30 Sep).
+  assert.equal(hand.find(r => r[0] === stub)![7], 'Pre-flight passed · Compliance pending');
+  assert.equal(hand.find(r => r[0] === stub)![hand[0].indexOf('Ready to traffic')], 'no');
   assert.equal(hand.find(r => r[0] === postStub)![7], 'Not uploaded');
   assert.equal(/approved/i.test(await pf.handoffCsv()), false);
 
@@ -443,15 +445,14 @@ test('Compliance after Pre-flight: per asset, copy and visual together; changes 
   assert.equal((await pf.codeCompliance(A3, null)).on_asset, false);
 
   // Changes requested needs a note and says what goes back.
-  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', note: 'x' }, 'vivan'), /what goes back/);
-  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', send_back: 'asset' }, 'vivan'), /what needs changing/);
-  // Clearing an asset that went through with an overridden red flag needs a note (if the example lines had any).
-  const anyOverride = signoff.lines.some(x => x.overrides?.length);
-  if (anyOverride) await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'cleared' }, 'vivan'), /add a note/);
+  // The decision is Trupanion's: who made it is required; the producer only records it.
+  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'cleared', note: 'fine' }, 'vivan'), /who at Trupanion/);
+  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', note: 'x', client_by: 'J. Doe' }, 'vivan'), /what goes back/);
+  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', send_back: 'asset', client_by: 'J. Doe' }, 'vivan'), /what needs changing/);
 
   // Back to the visual: the codes stop being Ready to traffic, and Pre-flight shows the note.
   await pf.setReady(A1, true, 'nick').catch(() => {});
-  await pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', note: 'Disclaimer too small on the last card', send_back: 'asset' }, 'vivan');
+  await pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', note: 'Disclaimer too small on the last card', send_back: 'asset', client_by: 'J. Doe (Trupanion legal)' }, 'vivan');
   view = await pf.complianceAssets();
   assert.equal(view.assets[0].status, 'changes_requested');
   assert.equal((await pf.report(A1)).status.status, 'open');
@@ -469,10 +470,10 @@ test('Compliance after Pre-flight: per asset, copy and visual together; changes 
   assert.equal(c.status, 'pending');
   assert.match(c.note!, /New upload after "Changes requested": Disclaimer too small/);
   // Cleared (with a note, since the lines went through with overrides in this example).
-  await pf.setAssetCompliance(up2.upload_id, { status: 'cleared', note: 'Cleared by J. Doe, Trupanion legal' }, 'vivan');
+  await pf.setAssetCompliance(up2.upload_id, { status: 'cleared', client_by: 'J. Doe (Trupanion legal)' }, 'vivan');
   assert.equal((await pf.complianceAssets()).assets[0].status, 'cleared');
   // The old upload can't be reviewed any more.
-  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'cleared', note: 'x' }, 'vivan'), /replaced/);
+  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'cleared', client_by: 'J. Doe' }, 'vivan'), /replaced/);
 
   // Handoffs: per code (copy) and per asset.
   const hand = S.parseCsv(await pf.handoffCsv());
@@ -483,4 +484,92 @@ test('Compliance after Pre-flight: per asset, copy and visual together; changes 
   const copy = S.parseCsv((await R.handoffPack()).csv);
   const cc = copy[0].indexOf('Compliance status');
   assert.equal(copy.find(r => r[0] === A2)![cc], 'Cleared');
+});
+
+test('Ready to traffic needs Pre-flight passed AND compliance cleared, per code on a shared visual (Brook, 30 Sep)', { skip }, async () => {
+  const { Preflight, COMPLIANCE_GATE_FROM } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const R = await import('../src/services/studio/ready.js');
+  const tables = ['studio_asset_status', 'studio_audit_agreements', 'studio_audit_flags', 'studio_audits', 'studio_upload_files', 'studio_asset_uploads', 'studio_expectations', 'studio_line_versions', 'studio_signoffs', 'studio_edits', 'studio_line_embeddings', 'studio_lines', 'studio_batches', 'studio_taste', 'studio_spend'];
+  await (store as any).db.query(`TRUNCATE ${tables.join(', ')} RESTART IDENTITY CASCADE`);
+  const api = new S.Api({ mock: true });
+  const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'gate', own_lines: [
+    { text: 'Calm at the counter.', field: 'meta_headline' }, { text: 'One less worry.', field: 'meta_headline' }, { text: 'Home by nine.', field: 'meta_headline' },
+  ] }), api, () => {}, { ownOnly: true, user: 'nick' });
+  for (const l of run.lines) {
+    await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+    for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find(x => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'Test line for the traffic gate', 'nick');
+  }
+  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: run.lines.map(l => l.id), expectation: { line_ids: [run.lines[0].id], reason: 'Plain.' } }, 'nick');
+  const [A1, A2, A3] = signoff.lines.map(x => x.stub).sort();
+  const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
+  const png = () => [{ buffer: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from('fake VOICES_TEXT: Calm at the counter. One less worry. Home by nine.')]), filename: 'v.png', contentType: 'image/png' }];
+  const up = await pf.upload(A1, png(), 'nick', [A2, A3]);
+  await pf.runAudit(await pf.createAudit(up.upload_id));
+  for (const x of [A1, A2, A3]) await pf.setReady(x, true, 'nick');
+  const t = async (x: string) => pf.traffic(x);
+
+  // Pre-flight passed alone isn't Ready to traffic; the two parts are shown apart.
+  assert.equal((await t(A1)).ready, false);
+  assert.equal((await t(A1)).words, 'Pre-flight passed · Compliance pending');
+
+  // Per code on one shared upload: A1 and A2 cleared, A3's copy sent back.
+  await pf.setAssetCompliance(up.upload_id, { status: 'cleared', codes: [A1, A2], client_by: 'J. Doe (Trupanion legal)' }, 'vivan');
+  await pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', codes: [A3], send_back: 'copy', note: 'Say "at participating hospitals"', client_by: 'J. Doe (Trupanion legal)' }, 'vivan');
+  assert.equal((await t(A1)).ready, true);
+  assert.equal((await t(A1)).words, 'Ready to traffic');
+  assert.equal((await t(A2)).ready, true);
+  const a3 = await t(A3);
+  assert.equal(a3.ready, false);
+  assert.equal(a3.words, 'Pre-flight passed · Compliance changes requested');
+  assert.match(a3.blocker!, /changes to the copy/);
+  // Who at Trupanion decided is on the record; the producer only recorded it.
+  const c1 = await pf.codeCompliance(A1, up.upload_id);
+  assert.equal(c1.client_by, 'J. Doe (Trupanion legal)');
+  assert.equal(c1.by, 'vivan');
+  // The page groups the asset under "changes requested" while showing each code's own status.
+  const asset = (await pf.complianceAssets()).assets[0];
+  assert.equal(asset.status, 'changes_requested');
+  assert.deepEqual(asset.codes.map(c => [c.stub, c.compliance.status, c.traffic.ready]), [[A1, 'cleared', true], [A2, 'cleared', true], [A3, 'changes_requested', false]]);
+  // A code not on this upload any more is refused by name.
+  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'cleared', codes: ['OWN_CALM_UGC_Z9_US_META'], client_by: 'x' }, 'vivan'), /Not on this upload now/);
+
+  // Add3 only sees cleared codes marked ready: both handoffs.
+  const hand = S.parseCsv(await pf.handoffCsv());
+  const rt = hand[0].indexOf('Ready to traffic');
+  assert.deepEqual([A1, A2, A3].map(x => hand.find(r => r[0] === x)![rt]), ['yes', 'yes', 'no']);
+  assert.equal(hand.find(r => r[0] === A1)![hand[0].indexOf('Cleared at Trupanion by')], 'J. Doe (Trupanion legal)');
+  const pack = S.parseCsv((await R.handoffPack({}, x => pf.traffic(x))).csv);
+  const pr = pack[0].indexOf('Ready to traffic');
+  assert.deepEqual([A1, A2, A3].map(x => pack.find(r => r[0] === x)![pr]), ['Ready to traffic', 'Ready to traffic', 'Pre-flight passed · Compliance changes requested']);
+
+  // Edited wording takes a code out of Ready to traffic until it's signed off (and reviewed) again.
+  const l2 = signoff.lines.find(x => x.stub === A2)!;
+  await S.setDecision(l2.batch_id, l2.line_id, { decision: 'edit', edited_text: 'One less worry, every time.' }, 'nick');
+  assert.equal((await t(A2)).ready, false);
+  assert.match((await t(A2)).words, /Wording edited since sign-off/);
+
+  // A new upload takes everything out: Pre-flight is open again and compliance is pending on the new asset.
+  const up2 = await pf.upload(A1, png(), 'nick', [A2, A3]);
+  assert.equal((await t(A1)).ready, false);
+  assert.equal((await t(A1)).words, 'Pre-flight open · Compliance pending');
+  void up2;
+
+  // Marked ready before the gate, with no compliance recorded: stays ready, and says so.
+  const run2 = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'legacy', own_lines: [{ text: 'Calm on a Sunday.', field: 'meta_headline' }] }), api, () => {}, { ownOnly: true, user: 'nick' });
+  const l = run2.lines[0];
+  await S.setDecision(run2.id, l.id, { decision: 'keep' }, 'nick');
+  for (const f of R.unresolvedRed((await S.loadBatch(run2.id)).lines[0])) await R.overrideFlag(run2.id, l.id, f.rule, 'Test line for the traffic gate', 'nick');
+  const legacyCode = (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: [l.id], expectation: { line_ids: [l.id], reason: 'Old.' } }, 'nick')).signoff.lines[0].stub;
+  const up3 = await pf.upload(legacyCode, png(), 'nick');
+  await pf.runAudit(await pf.createAudit(up3.upload_id));
+  await pf.setReady(legacyCode, true, 'nick');
+  await (store as any).db.query(`UPDATE studio_asset_status SET ready_at = $2 WHERE stub = $1`, [legacyCode, new Date(Date.parse(COMPLIANCE_GATE_FROM) - 86400000)]);
+  const legacy = await t(legacyCode);
+  assert.equal(legacy.ready, true);
+  assert.equal(legacy.legacy, true);
+  assert.equal(legacy.words, 'Ready to traffic · compliance not recorded');
+  // Once a decision is recorded, the gate applies.
+  await pf.setAssetCompliance(up3.upload_id, { status: 'changes_requested', send_back: 'copy', note: 'Check the claim', client_by: 'J. Doe' }, 'vivan');
+  assert.equal((await t(legacyCode)).ready, false);
 });

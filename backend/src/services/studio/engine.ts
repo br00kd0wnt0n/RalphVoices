@@ -118,7 +118,9 @@ export interface Line {
   /** Trupanion compliance review: pending (default), cleared or changes_requested. Doesn't block sign-off. */
   compliance?: { status: ComplianceStatus; note?: string; by?: string; at?: string; sha256?: string;  // sha256: the wording it was reviewed on
     /** Set when reviewed at the Compliance step (after Pre-flight): the asset it was reviewed with, and where changes go back to. */
-    upload_id?: string; code?: string; send_back?: 'copy' | 'asset' };
+    upload_id?: string; code?: string; send_back?: 'copy' | 'asset';
+    /** Who at Trupanion made the decision. The producer (Vivan) coordinates and records it; she doesn't sign off compliance herself. */
+    client_by?: string };
   /** The line's place in the latest Ready for production sign-off. */
   ready?: { signoff_id: string; version: number; sha256: string; ready_by: string; ready_at: string; stub: string; changed_since?: boolean };
   /** When the final wording was last fully re-checked (after an edit). */

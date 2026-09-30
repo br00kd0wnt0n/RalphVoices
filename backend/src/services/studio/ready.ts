@@ -90,7 +90,7 @@ export async function overrideFlag(batchId: string, lineId: string, rule: string
 }
 
 /** Compliance review status for a line. Anyone on the Studio list can set it; it never blocks sign-off. */
-export async function setCompliance(batchId: string, lineId: string, status: string, note: string | undefined, user?: string, asset?: { upload_id: string; code: string; sha256: string; send_back?: 'copy' | 'asset' }): Promise<Line> {
+export async function setCompliance(batchId: string, lineId: string, status: string, note: string | undefined, user?: string, asset?: { upload_id: string; code: string; sha256: string; send_back?: 'copy' | 'asset'; client_by?: string }): Promise<Line> {
   if (!COMPLIANCE.includes(status as ComplianceStatus)) throw new Error(`Compliance status must be one of ${COMPLIANCE.join(', ')}`);
   const { line } = await lineAt(batchId, lineId);
   // A line that went through with an overridden red flag can only be cleared with a note saying who cleared it.
@@ -100,7 +100,7 @@ export async function setCompliance(batchId: string, lineId: string, status: str
   const before = { compliance: line.compliance || { status: 'pending' } };
   // At the Compliance step the review is of the signed-off wording on a given asset; from Ready (older), of the current wording.
   line.compliance = { status: status as ComplianceStatus, note: note ? String(note) : undefined, by: user, at: new Date().toISOString(), sha256: asset?.sha256 || lineHash(line),
-    ...(asset ? { upload_id: asset.upload_id, code: asset.code, send_back: status === 'changes_requested' ? asset.send_back : undefined } : {}) };
+    ...(asset ? { upload_id: asset.upload_id, code: asset.code, send_back: status === 'changes_requested' ? asset.send_back : undefined, client_by: asset.client_by } : {}) };
   return write(batchId, line, before, { compliance: line.compliance }, user);
 }
 
@@ -253,10 +253,14 @@ export interface HandoffRow {
   /** For Trupanion's reviewers: the rules to look at on this line, in plain words (no reasons or names). */
   check_specifically: string;
   ready_by: string; ready_at: string; changed_since: string;
+  /** From Pre-flight and Compliance when the Studio has the database ("Ready to traffic", or what's outstanding); '' otherwise. */
+  traffic: string;
 }
+/** Ready to traffic per code, from Pre-flight (preflight.ts traffic()); the file store has none. */
+export type TrafficOf = (stub: string) => Promise<{ ready: boolean; words: string }>;
 
 /** The latest sign-off per persona × territory × region, one row per line, with the signed-off wording. */
-export async function handoffRows(filter: { persona?: string; territory?: string; region?: string } = {}): Promise<HandoffRow[]> {
+export async function handoffRows(filter: { persona?: string; territory?: string; region?: string } = {}, trafficOf?: TrafficOf): Promise<HandoffRow[]> {
   const r = loadRules();
   const rows: HandoffRow[] = [];
   for (const s of await latestSignoffs(filter)) {
@@ -277,6 +281,7 @@ export async function handoffRows(filter: { persona?: string; territory?: string
         check_specifically: ovs.length ? `Please check specifically: ${ovs.map(o => labelOf(o).replace(/\.$/, '')).join('; ')}` : '',
         ready_by: s.ready_by, ready_at: s.ready_at,
         changed_since: current?.ready?.signoff_id === s.id && current.ready.changed_since ? 'yes: a newer version exists' : '',
+        traffic: trafficOf ? (await trafficOf(x.stub)).words : '',
       });
     }
   }
@@ -285,11 +290,11 @@ export async function handoffRows(filter: { persona?: string; territory?: string
 
 const STATUS_WORDS: Record<string, string> = { pending: 'Pending', cleared: 'Cleared', changes_requested: 'Changes requested' };
 
-export async function handoffPack(filter: { persona?: string; territory?: string; region?: string } = {}) {
-  const rows = await handoffRows(filter);
+export async function handoffPack(filter: { persona?: string; territory?: string; region?: string } = {}, trafficOf?: TrafficOf) {
+  const rows = await handoffRows(filter, trafficOf);
   const cols: Array<[keyof HandoffRow, string]> = [
     ['stub', 'Naming code'], ['region', 'Region'], ['visual', 'Visual'], ['persona', 'Persona'], ['territory', 'Territory'], ['placement', 'Field'], ['platform', 'Platform'], ['format', 'Format'],
-    ['text', 'Final text'], ['chars', 'Characters'], ['version', 'Version'], ['compliance', 'Compliance status'], ['compliance_note', 'Compliance note'], ['overrides', 'Red flag overridden'],
+    ['text', 'Final text'], ['chars', 'Characters'], ['version', 'Version'], ['compliance', 'Compliance status'], ['compliance_note', 'Compliance note'], ['traffic', 'Ready to traffic'], ['overrides', 'Red flag overridden'],
     ['ready_by', 'Ready for production by'], ['ready_at', 'Ready for production at'], ['changed_since', 'Changed since sign-off'],
   ];
   const csv = toCsv([cols.map(c => c[1]), ...rows.map(x => cols.map(([k]) => k === 'compliance' ? STATUS_WORDS[x.compliance] || x.compliance : String(x[k])))]);
@@ -308,7 +313,7 @@ export async function handoffPack(filter: { persona?: string; territory?: string
       const e = expectations.filter(y => y.signoff_id === so).pop();
       if (e) md.push(`**Expected to lead:** ${e.line_ids.map(id => `\`${rows.find(r => r.line_id === id)?.stub || id}\``).join(', ')}. ${e.reason.replace(/\s*\n\s*/g, ' ')}`, '');
     }
-    md.push(`- \`${x.stub}\` (${x.placement}, ${x.chars} chars, v${x.version}): ${x.text.replace(/\s*\n\s*/g, ' ')}  \n  Compliance: ${STATUS_WORDS[x.compliance] || x.compliance}${x.compliance_note ? ` (${x.compliance_note})` : ''}${x.overrides ? ` · Red flag overridden: ${x.overrides}` : ''}${x.changed_since ? ` · ${x.changed_since}` : ''}`);
+    md.push(`- \`${x.stub}\` (${x.placement}, ${x.chars} chars, v${x.version}): ${x.text.replace(/\s*\n\s*/g, ' ')}  \n  Compliance: ${STATUS_WORDS[x.compliance] || x.compliance}${x.compliance_note ? ` (${x.compliance_note})` : ''}${x.traffic ? ` · ${x.traffic}` : ''}${x.overrides ? ` · Red flag overridden: ${x.overrides}` : ''}${x.changed_since ? ` · ${x.changed_since}` : ''}`);
   }
 
   // For Trupanion's compliance team: the words only, nothing internal.
