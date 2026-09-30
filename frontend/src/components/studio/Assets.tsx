@@ -74,7 +74,8 @@ export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: Vie
   const canCompliance = meta.can_set_compliance !== false;
   // The producer (compliance emails, not an admin or the creative lead) starts on what's waiting for Trupanion, across every set.
   const producer = canCompliance && !meta.user?.admin && !canReady;
-  const [filter, setFilter] = useState<Filter>(producer ? 'awaiting' : 'needs');
+  // A link to one code (?stub=, or an old ?asset=) opens on All, so the code is in the list whatever its status.
+  const [filter, setFilter] = useState<Filter>(params.get('stub') || params.get('asset') ? 'all' : producer ? 'awaiting' : 'needs');
   const [format, setFormat] = useState<string>('all');
   const [stubs, setStubs] = useState<PfStub[] | null>(null);
   const [comp, setComp] = useState<ComplianceView | null>(null);
@@ -234,7 +235,7 @@ export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: Vie
             {!row && <div className="text-base text-[#858B96]">Choose a code.</div>}
             {row && !report && <div className="text-base text-[#858B96]">Loading…</div>}
             {row && report && report.stub === row.s.stub && (
-              <CodeView meta={meta} row={row} report={report} stubs={stubs || []} canReady={canReady} canCompliance={canCompliance} progress={progress} pending={pending} files={files} setFiles={setFiles}
+              <CodeView meta={meta} row={row} report={report} stubs={stubs || []} canReady={canReady} canCompliance={canCompliance} producer={producer} progress={progress} pending={pending} files={files} setFiles={setFiles}
                 onUpload={upload} onAudit={runAudit} onChanged={refresh} onError={setError} />
             )}
           </main>
@@ -244,8 +245,8 @@ export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: Vie
   );
 }
 
-function CodeView({ meta, row, report, stubs, canReady, canCompliance, progress, pending, files, setFiles, onUpload, onAudit, onChanged, onError }: {
-  meta: Meta; row: CodeRow; report: PfReport; stubs: PfStub[]; canReady: boolean; canCompliance: boolean; progress: string;
+function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer, progress, pending, files, setFiles, onUpload, onAudit, onChanged, onError }: {
+  meta: Meta; row: CodeRow; report: PfReport; stubs: PfStub[]; canReady: boolean; canCompliance: boolean; producer: boolean; progress: string;
   pending: { upload_id: string; estimate: { usd: number; seconds: number } } | null;
   files: File[]; setFiles: (f: File[]) => void; onUpload: (also: string[]) => void; onAudit: (uploadId: string) => void;
   onChanged: () => Promise<void>; onError: (m: string) => void;
@@ -395,7 +396,7 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, progress,
           )}
         </div>
 
-        <div className="space-y-4">
+        <div className="flex flex-col gap-4">
           <section className="rounded-xl border border-[#272B34] bg-[#16181D] p-4">
             <h2 className="mb-2 text-lg font-semibold">Copy match</h2>
             {!auditedLatest && <p className="text-sm text-[#858B96]">{report.on_asset_copy.length ? 'Run the checks to compare the asset with the signed-off wording.' : 'Nothing to compare: this code’s copy runs in the post.'}</p>}
@@ -432,8 +433,9 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, progress,
             )}
           </section>
 
+          {/* The producer's decision comes first for her; for everyone else it follows the checks. */}
           {row.asset
-            ? <Decision meta={meta} asset={row.asset} stub={row.s.stub} can={canCompliance} onChanged={onChanged} onError={onError} />
+            ? <div className={producer ? 'order-first' : ''}><Decision meta={meta} asset={row.asset} stub={row.s.stub} can={canCompliance} onChanged={onChanged} onError={onError} /></div>
             : <section className="rounded-xl border border-[#272B34] bg-[#16181D] p-4 text-sm text-[#858B96]"><h2 className="mb-1 text-lg font-semibold text-[#ECEDEF]">Trupanion’s decision</h2>Once the asset is uploaded, Trupanion reviews it with its copy and flags.</section>}
         </div>
       </div>

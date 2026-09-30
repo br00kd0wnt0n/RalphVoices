@@ -117,7 +117,7 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
       {error && <div className="rounded-lg border-2 border-red-500/45 bg-red-500/10 p-3 text-base text-red-200">{error}</div>}
       {done && <div className="flex flex-wrap items-center gap-3 rounded-lg border-2 border-emerald-500/50 bg-emerald-500/10 p-3 text-base text-emerald-100"><span className="mr-auto">{done}</span><PinkButton className="px-4 py-1.5 text-base" onClick={onNext}>Next: Assets →</PinkButton></div>}
       {!view && !error && <div className="text-base text-[#858B96]">Loading…</div>}
-      {view && !view.lines.length && !view.latest && <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#272B34] bg-[#16181D] p-5 text-base text-[#A3A8B1]"><span className="mr-auto">Nothing kept yet for {territoryName(t)}. Keep lines in Review first.</span><GhostButton className="text-base" onClick={onReview}>Go to Review</GhostButton></div>}
+      {view && !view.lines.length && !view.latest && <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#272B34] bg-[#16181D] p-5 text-base text-[#A3A8B1]"><span className="mr-auto">Nothing kept yet for {territoryName(t).replace(/\.$/, '')}{meta.rounds && meta.rounds.active ? ` in ${meta.rounds.active}` : ''}. Keep lines in Review first.</span><GhostButton className="text-base" onClick={onReview}>Go to Review</GhostButton></div>}
 
       {view && plan && draft && (view.lines.length > 0 || !!view.latest) && (
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr_380px]">

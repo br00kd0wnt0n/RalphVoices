@@ -182,16 +182,16 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
                     // On a carousel territory, on-image text is written as card sequences: sequences × cards, not a count.
                     const cards = on && carousel && /on_image/.test(k);
                     return (
-                      <div key={k} className={cn('flex items-center gap-2 rounded-lg px-2 py-1.5', on ? 'bg-[#101216]' : '')}>
+                      <div key={k} className={cn('group flex flex-wrap items-center gap-2 rounded-lg px-2 py-1.5', on ? 'bg-[#101216]' : '')}>
                         <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
                           <input type="checkbox" aria-label={f.label} className="h-4 w-4 accent-[#D94D8F]" checked={on} onChange={() => toggleField(k)} />
                           <span className={cn('truncate', on ? 'text-[#ECEDEF]' : 'text-[#858B96]')} title={f.label}>{shortField(meta, k)}</span>
                           <span className="shrink-0 text-xs text-[#646A75]">{f.visible} visible</span>
                         </label>
-                        {!(on && brief.fields.length === 1) && <button onClick={() => onlyField(k)} title={`Write ${f.label} only`} className="shrink-0 rounded px-1.5 text-xs text-[#646A75] hover:bg-[#272B34] hover:text-[#ECEDEF]">only</button>}
+                        {!(on && brief.fields.length === 1) && <button onClick={() => onlyField(k)} title={`Write ${f.label} only`} className="shrink-0 rounded px-1.5 text-xs text-[#646A75] opacity-0 transition hover:bg-[#272B34] hover:text-[#ECEDEF] focus:opacity-100 group-hover:opacity-100">only</button>}
                         {on && !cards && <input type="number" min={0} max={60} aria-label={`How many ${f.label}`} value={counts[k]} onChange={e => setCount(k, Number(e.target.value))}
                           className="w-16 rounded-lg border-2 border-[#343946] px-2 py-1 text-right font-mono text-base" />}
-                        {cards && <span className="flex items-center gap-1 text-sm text-[#A3A8B1]" title="Carousel: card sequences, each one idea (card 1 the hook … the end card)">
+                        {cards && <span className="flex basis-full items-center justify-end gap-1 text-sm text-[#A3A8B1]" title="Carousel: card sequences, each one idea (card 1 the hook … the end card)">
                           <input type="number" min={1} max={6} aria-label="Card sequences" value={seq.sequences} onChange={e => set({ carousel: { ...seq, sequences: Math.max(1, Math.min(6, Number(e.target.value) || 1)) } })} className="w-12 rounded-lg border-2 border-[#343946] px-1.5 py-1 text-right font-mono" />
                           × <input type="number" min={2} max={10} aria-label="Cards in each" value={seq.cards} onChange={e => set({ carousel: { ...seq, cards: Math.max(2, Math.min(10, Number(e.target.value) || 4)) } })} className="w-12 rounded-lg border-2 border-[#343946] px-1.5 py-1 text-right font-mono" /> cards
                         </span>}
@@ -277,7 +277,7 @@ function RunsList({ user, tick, meta, ctx, onContinue }: { user: string; tick: n
         <GhostButton active={!mine} className="px-2 py-1 text-sm" onClick={() => setMine(false)}>All</GhostButton>
         <GhostButton active={mine} className="px-2 py-1 text-sm" onClick={() => setMine(true)}>Mine</GhostButton>
       </div>
-      {!here.length && <p className="text-base text-[#858B96]">No runs for {territoryName(meta.territories[ctx.territory]) || 'this territory'}{ctx.region === 'CA' ? ` (${REGION_NAMES.CA})` : ''} yet.</p>}
+      {!here.length && <p className="text-base text-[#858B96]">No runs for {territoryName(meta.territories[ctx.territory]).replace(/\.$/, '') || 'this territory'}{ctx.region === 'CA' ? ` (${REGION_NAMES.CA})` : ''} yet.</p>}
       <ul className="max-h-60 space-y-2 overflow-y-auto">
         {here.slice(0, 30).map(r => (
           <li key={r.id} className="flex items-center gap-3 rounded-lg border border-l-4 border-[#272B34] px-3 py-2" style={personaEdge(r.persona)}>

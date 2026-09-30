@@ -80,7 +80,7 @@ export function Review({ meta, ctx, batch, setBatch, status, running, onMore, on
                     <option key={r.id} value={r.id} title={r.id}>{when(r.updated)}{r.created_by ? ` · ${r.created_by.split('@')[0]}` : ''} · {r.lines} lines{r.round && r.round !== meta.rounds?.active ? ` · ${r.round}${meta.rounds?.rounds.find(x => x.id === r.round)?.test ? ' TEST' : ''}` : ''}</option>
                   ))}
                 </select>
-              ) : <p className="text-base text-[#858B96]">No runs for {territoryName(meta.territories[ctx.territory])} yet: write lines on Write.</p>}
+              ) : <p className="text-base text-[#858B96]">No runs for {territoryName(meta.territories[ctx.territory]).replace(/\.$/, '')} yet: write lines on Write.</p>}
               {b && <div className="mt-1 text-sm text-[#858B96]">{checked} of {lines.length} checked{yours ? ` · ${yours} yours` : ''} · writer {b.brief.model}{b.stats.near_duplicates_removed ? ` · ${b.stats.near_duplicates_removed} near-duplicates removed` : ''}</div>}
             </div>
             {b && <GhostButton className="text-base" disabled={running} onClick={onMoreRun}>{yours ? 'Generate around your lines' : 'Generate more in this run'}</GhostButton>}
@@ -301,7 +301,7 @@ function KeptTray({ meta, ctx, onCount }: { meta: Meta; ctx: Ctx; onCount: (n: n
           ))}
         </div>
       )}
-      {rows && !rows.length && <div className="text-base text-[#858B96]">Nothing kept yet for {territoryName(meta.territories[ctx.territory])}{regionOf(ctx) === 'CA' ? ' (Canada)' : ''}. Keep or edit lines, or import a curated sheet from the Export menu.</div>}
+      {rows && !rows.length && <div className="text-base text-[#858B96]">Nothing kept yet for {territoryName(meta.territories[ctx.territory]).replace(/\.$/, '')}{regionOf(ctx) === 'CA' ? ' (Canada)' : ''}. Keep or edit lines, or import a curated sheet from the Export menu.</div>}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {byField.map(([field, rs]) => (
           <section key={field} className="rounded-xl border border-l-4 border-[#272B34] bg-[#16181D] p-4" style={personaEdge(ctx.persona)}>

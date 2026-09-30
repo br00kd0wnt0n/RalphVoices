@@ -269,10 +269,11 @@ export function Studio() {
 
   return (
     <div className={cn(shell, 'bg-[#0E0F12]')} style={{ fontSize: 16 }}>
-      <header className="sticky top-0 z-20 flex h-16 flex-nowrap items-center gap-3 border-b border-[#272B34] bg-[#16181D] px-4 min-[1440px]:gap-4 min-[1440px]:px-6">
+      <header className="sticky top-0 z-20 flex min-h-16 flex-wrap items-center py-2 md:h-16 md:flex-nowrap md:py-0 gap-3 border-b border-[#272B34] bg-[#16181D] px-4 min-[1440px]:gap-4 min-[1440px]:px-6">
         {HOSTED && <a href="/" title="Back to Voices" className="-mr-2 hidden rounded-lg p-1.5 text-[#858B96] hover:bg-[#1C1F26] hover:text-[#ECEDEF] sm:block"><ArrowLeft className="h-4 w-4" aria-label="Back to Voices" /></a>}
-        <span className="hidden md:block"><Lockup onHome={() => setTab('home')} /></span>
-        <nav aria-label="Studio steps" className="flex min-w-0 flex-nowrap items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <span className="hidden min-[1440px]:block"><Lockup onHome={() => setTab('home')} /></span>
+        <button onClick={() => setTab('home')} className="shrink-0 min-[1440px]:hidden" aria-label="VOICES Studio: the round" title="Voices Studio × Trupanion"><img src="/ralph-world.png" alt="Ralph" className="h-7 w-7 object-contain" /></button>
+        <nav aria-label="Studio steps" className="order-last flex w-full min-w-0 flex-nowrap items-center md:order-none md:w-auto gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <GhostButton active={tab === 'howto'} onClick={() => setTab('howto')} title="How it works" aria-label="How it works" className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-2 py-1.5 text-sm">
             <HelpCircle className="h-4 w-4" aria-hidden />
           </GhostButton>
@@ -348,7 +349,7 @@ function ViewBar({ meta, view, setView, what }: { meta: Meta; view: ViewFilter; 
   const sel = 'min-w-0 rounded-lg border border-[#343946] bg-[#101216] px-2.5 py-1.5 text-sm font-medium text-[#ECEDEF]';
   const pc = view.persona === 'all' ? null : personaColor(view.persona);
   return (
-    <div className="sticky top-16 z-10 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-[#272B34] bg-[#121419]/95 px-4 py-2 backdrop-blur sm:px-6">
+    <div className="z-10 md:sticky md:top-16 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-[#272B34] bg-[#121419]/95 px-4 py-2 backdrop-blur sm:px-6">
       <span className="text-xs font-semibold uppercase tracking-wider text-[#646A75]">Showing</span>
       <span className="flex min-w-0 items-center gap-1.5 rounded-lg border pl-2.5" style={pc ? { borderColor: tint(pc.base, 0.6), background: tint(pc.base, 0.12) } : { borderColor: '#343946' }}>
         {pc ? <PersonaDot persona={view.persona} /> : <span className="h-2.5 w-2.5 rounded-full border border-[#646A75]" aria-hidden />}
@@ -380,7 +381,7 @@ function ContextBar({ meta, ctx, setCtx, step, onNewTerritory }: { meta: Meta; c
   const territories = Object.entries(meta.territories).filter(([, x]) => x.persona === ctx.persona && x.status !== 'retired');
   const sel = 'min-w-0 rounded-lg border border-[#343946] bg-[#101216] px-2.5 py-1.5 text-sm font-medium text-[#ECEDEF]';
   return (
-    <div className="sticky top-16 z-10 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-[#272B34] bg-[#121419]/95 px-4 py-2 backdrop-blur sm:px-6">
+    <div className="z-10 md:sticky md:top-16 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-[#272B34] bg-[#121419]/95 px-4 py-2 backdrop-blur sm:px-6">
       <span className="text-xs font-semibold uppercase tracking-wider text-[#646A75]">Working on</span>
       {/* The persona: a dot and a tinted chip in its deck colour. */}
       <span className="flex min-w-0 items-center gap-1.5 rounded-lg border pl-2.5" style={{ borderColor: tint(pc.base, 0.6), background: tint(pc.base, 0.12) }}>

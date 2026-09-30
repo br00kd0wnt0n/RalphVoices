@@ -133,7 +133,7 @@ function Pipeline({ c }: { c: Counts }) {
           </span>
         ))}
       </div>
-      {c.changes > 0 && <div className="text-xs font-semibold text-red-200">{c.changes} changes requested</div>}
+      {c.changes > 0 && <div className="text-xs font-semibold text-red-200">{c.changes} with changes requested</div>}
     </div>
   );
 }

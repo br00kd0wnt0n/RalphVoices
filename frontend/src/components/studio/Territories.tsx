@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { studio, type Meta, type Territory } from '@/lib/studioApi';
 import { personaColor, personaEdge } from '@/lib/personaColors';
-import { PersonaDot, Chip, GhostButton, Intro, Label, PINK, PersonaPanel, PinkButton, plainSource, personaKeys, territoryName } from './ui';
+import { PersonaDot, Chip, GhostButton, Intro, Label, PersonaPanel, PinkButton, plainSource, personaKeys, territoryName } from './ui';
 
 export function Territories({ meta, onSaved, onBrief }: { meta: Meta; onSaved: () => void; onBrief: (code: string) => void }) {
   const [editing, setEditing] = useState<string | null>(null); // code, or 'new:<persona>'
@@ -89,7 +89,7 @@ function TerritoryEditor({ meta, code, territory, persona, onDone }: { meta: Met
     try { const r = await studio.saveTerritory(code || null, { ...d, persona }, note); onDone(true, r.code); } catch (e: any) { setError(e.message); }
   }
   return (
-    <div className="space-y-3 rounded-xl border-2 bg-[#16181D] p-5" style={{ borderColor: PINK }}>
+    <div className="space-y-3 rounded-xl border-2 border-l-4 border-[#343946] bg-[#16181D] p-5" style={personaEdge(persona)}>
       <div><Label>Name</Label><input className="w-full rounded-lg border-2 border-[#343946] px-3 py-2 text-base bg-[#101216] text-[#ECEDEF] placeholder:text-[#646A75]" value={d.name} onChange={e => setD({ ...d, name: e.target.value })} /></div>
       <div><Label>Premise</Label><textarea rows={3} className="w-full rounded-lg border-2 border-[#343946] px-3 py-2 text-base bg-[#101216] text-[#ECEDEF] placeholder:text-[#646A75]" value={d.premise} onChange={e => setD({ ...d, premise: e.target.value })} /></div>
       <div className="grid grid-cols-2 gap-3">
