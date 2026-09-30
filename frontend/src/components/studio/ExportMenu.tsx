@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Download } from 'lucide-react';
 import { studio, type Batch, type Meta } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
-import { territoryName, type Ctx } from './ui';
+import { PersonaDot, territoryName, type Ctx } from './ui';
 
 export function ExportMenu({ meta, ctx, batch, onImported }: { meta: Meta | null; ctx: Ctx; batch: Batch | null; onImported: (msg: string) => void }) {
   const [open, setOpen] = useState(false);
@@ -19,6 +19,7 @@ export function ExportMenu({ meta, ctx, batch, onImported }: { meta: Meta | null
   }, [open]);
   const q = `?persona=${encodeURIComponent(ctx.persona)}&territory=${encodeURIComponent(ctx.territory)}&region=${ctx.region}`;
   const set = territoryName(meta?.territories[ctx.territory]) || ctx.territory;
+  const persona = (meta?.personas[ctx.persona]?.name || ctx.persona).replace(/\s*\(.*\)$/, '');
   const run = batch && batch.brief.territory === ctx.territory ? batch : null;
   const dl = (path: string, name: string) => { setOpen(false); studio.download(path, name).catch(e => onImported(`Download failed: ${e.message}`)); };
   async function importSheet(file: File) {
@@ -50,8 +51,8 @@ export function ExportMenu({ meta, ctx, batch, onImported }: { meta: Meta | null
           <Item onClick={() => dl('/shortlist.md', 'shortlist.md')}>Kept lines, every set (Markdown)</Item>
           <Item disabled={!run} onClick={() => run && dl(`/batches/${encodeURIComponent(run.id)}/export.md`, `${run.id}.md`)}>This run (Markdown)</Item>
           <Head>Handoff pack (signed-off versions)</Head>
-          <Item onClick={() => dl(`/handoff.csv${q}`, 'ready-for-production.csv')}>{set}: CSV</Item>
-          <Item onClick={() => dl(`/handoff.md${q}`, 'ready-for-production.md')}>{set}: Markdown</Item>
+          <Item onClick={() => dl(`/handoff.csv${q}`, 'ready-for-production.csv')}><span className="flex items-center gap-1.5"><PersonaDot persona={ctx.persona} />{persona} · {set}: CSV</span></Item>
+          <Item onClick={() => dl(`/handoff.md${q}`, 'ready-for-production.md')}><span className="flex items-center gap-1.5"><PersonaDot persona={ctx.persona} />{persona} · {set}: Markdown</span></Item>
           <Item onClick={() => dl('/handoff.csv', 'ready-for-production.csv')}>Every set: CSV</Item>
           <Item onClick={() => dl('/compliance-sheet.csv', 'trupanion-compliance-sheet.csv')} title="The final words only: no internal flags, objections or names">Compliance sheet for Trupanion</Item>
           {meta?.preflight?.enabled && (

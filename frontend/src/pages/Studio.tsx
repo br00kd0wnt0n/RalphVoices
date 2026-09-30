@@ -11,13 +11,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { HOSTED, getUser, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type Line, type Meta, type Region, type StudioEvent, REGION_NAMES } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { ArrowLeft, HelpCircle, Map as MapIcon, ScrollText, Shuffle } from 'lucide-react';
-import { Chip, GhostButton, Lockup, PINK, initials, params, personaKeys, regionOf, sameCtx, setTerritoryNames, setWhatToDo, territoryName, type Ctx } from '@/components/studio/ui';
+import { Chip, GhostButton, Lockup, PINK, PersonaDot, initials, params, personaKeys, regionOf, sameCtx, setTerritoryNames, setWhatToDo, territoryName, type Ctx } from '@/components/studio/ui';
 import { Home } from '@/components/studio/Home';
 import { Write, countsFor } from '@/components/studio/Write';
 import { Review } from '@/components/studio/Review';
 import { Build } from '@/components/studio/Build';
 import { Assets } from '@/components/studio/Assets';
-import { Territories } from '@/components/studio/Territories';
+import { Territories, TerritoryDrawer } from '@/components/studio/Territories';
+import { personaColor, tint } from '@/lib/personaColors';
 import { Rules } from '@/components/studio/Rules';
 import { Compare } from '@/components/studio/Compare';
 import { ExportMenu } from '@/components/studio/ExportMenu';
@@ -80,6 +81,16 @@ export function Studio() {
   const [runsTick, setRunsTick] = useState(0);
   const [attached, setAttached] = useState<string | null>(null); // the run new lines go into, if any
   const [admin, setAdmin] = useState(false); // hosted, before rules exist (meta can't load yet)
+  // The territory drawer (Write's "Edit territory" and "+ New territory"): a code to edit, null for a new one.
+  const [drawer, setDrawer] = useState<{ code: string | null } | null>(null);
+  /** After a save in the drawer: refresh, and select the territory (a new one), or the persona's first if it was retired. */
+  async function territorySaved(code: string) {
+    setDrawer(null);
+    const m = await refreshMeta();
+    const t = m.territories[code];
+    if (t && t.status !== 'retired') setCtx({ persona: t.persona, territory: code, region: ctx.region });
+    else if (code === ctx.territory) { const first = Object.entries(m.territories).find(([, x]) => x.persona === ctx.persona && x.status !== 'retired')?.[0] || ''; setCtx({ ...ctx, territory: first }); }
+  }
   const esRef = useRef<{ close: () => void } | null>(null);
 
   // The brief follows the context: a new persona brings its default fields and their counts.
@@ -274,7 +285,8 @@ export function Studio() {
           {meta?.mock && <Chip tone="amber" className="hidden sm:inline-flex">mock</Chip>}
         </div>
       </header>
-      {showCtx && <ContextBar meta={meta!} ctx={ctx} setCtx={setCtx} step={stepIndex} />}
+      {showCtx && <ContextBar meta={meta!} ctx={ctx} setCtx={setCtx} step={stepIndex} onNewTerritory={() => setDrawer({ code: null })} />}
+      {drawer && meta && <TerritoryDrawer meta={meta} persona={ctx.persona} code={drawer.code} onClose={() => setDrawer(null)} onSaved={c => { territorySaved(c).catch(e => setErr(e.message)); }} />}
       {running && (
         <div className={cn('sticky z-10 flex items-center gap-2 border-b border-[#272B34] bg-[#16181D]/95 px-6 py-1.5 text-sm font-medium', showCtx ? 'top-[7.25rem]' : 'top-16')} style={{ color: PINK }}>
           <span className="animate-pulse">●</span> <span className="truncate">{status}</span>
@@ -285,7 +297,7 @@ export function Studio() {
       <main className="px-4 py-6 sm:px-6">
         {tab === 'home' && <Home onStart={() => setTab('write')} />}
         {meta && tab === 'write' && <Write meta={meta} brief={brief} setBrief={setBrief} ctx={ctx} setCtx={setCtx} run={run} running={running} user={user} runsTick={runsTick} onContinue={continueRun}
-          attachedRun={attached && batch?.id === attached ? batch : null} onNewRun={() => setAttached(null)} onTerritories={() => setTab('territories')} />}
+          attachedRun={attached && batch?.id === attached ? batch : null} onNewRun={() => setAttached(null)} onTerritories={() => setTab('territories')} onEditTerritory={code => setDrawer({ code })} />}
         {meta && tab === 'review' && <Review meta={meta} ctx={ctx} batch={batch} setBatch={setBatch} status={status} running={running} onMore={more} onMoreRun={() => run({ into: batch })} onAddLine={addLine}
           onDecided={() => setRunsTick(t => t + 1)} onBuild={() => setTab('build')} initialFilter={openKept ? 'kept' : undefined} />}
         {meta && tab === 'build' && <Build meta={meta} ctx={ctx} user={user} onNext={() => setTab('assets')} onReview={() => setTab('review')} />}
@@ -298,19 +310,25 @@ export function Studio() {
 }
 
 /** The persistent context bar: persona × territory × region, chosen once for Write, Review, Build & sign off and Assets. */
-function ContextBar({ meta, ctx, setCtx, step }: { meta: Meta; ctx: Ctx; setCtx: (c: Ctx) => void; step: number }) {
+function ContextBar({ meta, ctx, setCtx, step, onNewTerritory }: { meta: Meta; ctx: Ctx; setCtx: (c: Ctx) => void; step: number; onNewTerritory: () => void }) {
+  const pc = personaColor(ctx.persona);
   const territories = Object.entries(meta.territories).filter(([, x]) => x.persona === ctx.persona && x.status !== 'retired');
   const sel = 'min-w-0 rounded-lg border border-[#343946] bg-[#101216] px-2.5 py-1.5 text-sm font-medium text-[#ECEDEF]';
   return (
     <div className="sticky top-16 z-10 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-[#272B34] bg-[#121419]/95 px-4 py-2 backdrop-blur sm:px-6">
       <span className="text-xs font-semibold uppercase tracking-wider text-[#646A75]">Working on</span>
-      <select aria-label="Persona" className={sel} value={ctx.persona}
-        onChange={e => { const p = e.target.value; const first = Object.entries(meta.territories).find(([, x]) => x.persona === p && x.status !== 'retired')?.[0] || ''; setCtx({ persona: p, territory: first, region: ctx.region }); }}>
-        {personaKeys(meta.personas).map(k => <option key={k} value={k}>{meta.personas[k].name}</option>)}
-      </select>
+      {/* The persona: a dot and a tinted chip in its deck colour. */}
+      <span className="flex min-w-0 items-center gap-1.5 rounded-lg border pl-2.5" style={{ borderColor: tint(pc.base, 0.6), background: tint(pc.base, 0.12) }}>
+        <PersonaDot persona={ctx.persona} />
+        <select aria-label="Persona" className="min-w-0 rounded-lg py-1.5 pl-0.5 pr-2 text-sm font-semibold" style={{ background: 'transparent', color: pc.light }} value={ctx.persona}
+          onChange={e => { const p = e.target.value; const first = Object.entries(meta.territories).find(([, x]) => x.persona === p && x.status !== 'retired')?.[0] || ''; setCtx({ persona: p, territory: first, region: ctx.region }); }}>
+          {personaKeys(meta.personas).map(k => <option key={k} value={k} style={{ background: '#101216', color: '#ECEDEF' }}>{meta.personas[k].name}</option>)}
+        </select>
+      </span>
       <span className="text-[#4A505D]" aria-hidden>×</span>
-      <select aria-label="Territory" className={cn(sel, 'max-w-[22rem]')} value={ctx.territory} onChange={e => setCtx({ ...ctx, territory: e.target.value })}>
+      <select aria-label="Territory" className={cn(sel, 'max-w-[22rem]')} value={ctx.territory} onChange={e => { if (e.target.value === '__new') onNewTerritory(); else setCtx({ ...ctx, territory: e.target.value }); }}>
         {territories.map(([k, x]) => <option key={k} value={k}>{territoryName(x)}</option>)}
+        <option value="__new">+ New territory…</option>
       </select>
       <span className="text-[#4A505D]" aria-hidden>×</span>
       <select aria-label="Region" className={sel} value={ctx.region} onChange={e => setCtx({ ...ctx, region: e.target.value as Region })}>

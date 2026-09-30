@@ -4,7 +4,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { studio, REGION_NAMES, type DraftVersion, type Meta, type PfStub, type ReadyDraft, type ReadyView } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
-import { Chip, CodeChip, GhostButton, Intro, Label, LineHistory, NAMING_TIP, Overrides, PINK, PinkButton, Src, chipName, codeState, fieldOrder, sevTone, territoryName, when, type Ctx } from './ui';
+import { personaEdge } from '@/lib/personaColors';
+import { PersonaChip, Chip, CodeChip, GhostButton, Intro, Label, LineHistory, NAMING_TIP, Overrides, PINK, PinkButton, Src, chipName, codeState, fieldOrder, sevTone, territoryName, when, type Ctx } from './ui';
 
 export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: Ctx; user: string; onNext: () => void; onReview: () => void }) {
   const pt = ctx;
@@ -120,6 +121,7 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr_380px]">
           <div className="space-y-5">
             <div className={cn('flex flex-wrap items-center gap-3 rounded-lg border px-4 py-2.5 text-base', reds || plan.issues.length ? 'border-red-500/45 bg-red-500/10 text-red-100' : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-100')}>
+              <PersonaChip meta={meta} persona={pt.persona} short />
               <span className="font-semibold">{plan.versions.length} version{plan.versions.length === 1 ? '' : 's'} from {view.lines.length} kept lines</span>
               <span>·</span>
               <span>{plan.issues.length ? `${plan.issues.length} to finish` : reds ? `${reds} red flag${reds === 1 ? '' : 's'} to resolve` : 'Complete, no red flags left'}</span>
@@ -139,7 +141,7 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
                   const oiFields = view.fields[p].per_visual;
                   const oi = plan.on_image.find(o => o.visual === letter && oiFields.includes(byId.get(o.line_id)?.line.field || ''));
                   return (
-                    <div key={letter} className="rounded-xl border border-[#272B34] bg-[#121419] p-4">
+                    <div key={letter} className="rounded-xl border border-l-4 border-[#272B34] bg-[#121419] p-4" style={personaEdge(pt.persona)}>
                       <div className="mb-3 flex flex-wrap items-center gap-3">
                         <span className="rounded-md bg-[#D94D8F]/15 px-2.5 py-1 font-mono text-base font-semibold text-[#F2C4DA]">Visual {letter}</span>
                         {oiFields.map(f => (

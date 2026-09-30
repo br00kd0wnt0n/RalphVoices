@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { studio, finalText, isEdited, type Batch, type Line, type Meta, type RunSummary, type ShortRow } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
-import { Chip, GhostButton, Intro, Label, LineHistory, Overrides, PINK, PinkButton, Src, chipName, fieldOrder, params, plainSource, regionOf, sameCtx, sevTone, territoryName, toneWords, when, whatToDo, type Ctx } from './ui';
+import { personaEdge } from '@/lib/personaColors';
+import { Chip, GhostButton, Intro, Label, LineHistory, Overrides, PINK, PersonaChip, PinkButton, Src, chipName, fieldOrder, params, plainSource, regionOf, sameCtx, sevTone, territoryName, toneWords, when, whatToDo, type Ctx } from './ui';
 
 type Filter = 'all' | 'compliance' | 'open' | 'kept';
 const shortField = (meta: Meta, f: string) => (meta.fields[f]?.label || f).replace(/^(Meta|TikTok) /, '').replace(/\s*\(.*\)$/, '').replace(/^./, c => c.toUpperCase());
@@ -71,7 +72,7 @@ export function Review({ meta, ctx, batch, setBatch, status, running, onMore, on
           <KeptCount ctx={ctx} tick={lines.filter(l => l.decision === 'keep' || l.decision === 'edit').length} onCount={setKept} />
           <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#272B34] bg-[#16181D] px-4 py-3">
             <div className="mr-auto min-w-0">
-              <Label>Run</Label>
+              <div className="flex items-center gap-2"><Label>Run</Label><PersonaChip meta={meta} persona={ctx.persona} short className="mb-1.5" /></div>
               {b || here.length ? (
                 <select aria-label="Run" className="max-w-full rounded-lg border-2 border-[#343946] bg-[#101216] px-3 py-1.5 text-base" value={b?.id || ''} onChange={e => studio.batch(e.target.value).then(setBatch)}>
                   {!b && <option value="">Choose a run…</option>}
@@ -125,7 +126,7 @@ function AddLine({ meta, batch, running, onAdd }: { meta: Meta; batch: Batch; ru
     try { await onAdd(text.trim(), field); setText(''); } catch { /* shown above */ } finally { setBusy(false); }
   }
   return (
-    <section className="flex flex-wrap items-center gap-2 rounded-xl border-2 border-dashed border-[#D94D8F]/60 bg-[#16181D] p-3" title="Goes into this run as your line, checked like the ones you write first">
+    <section className="flex flex-wrap items-center gap-2 rounded-xl border-2 border-dashed border-[#4A505D] bg-[#16181D] p-3" title="Goes into this run as your line, checked like the ones you write first">
       <span className="text-sm font-semibold uppercase tracking-wider text-[#858B96]">Add a line</span>
       <input aria-label="A new line for this run" className="min-w-0 flex-1 rounded-lg border-2 border-[#343946] px-3 py-2 text-lg sm:min-w-[18rem]" placeholder="A new idea for this run…" value={text}
         onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') add(); }} />
@@ -160,7 +161,7 @@ function LineCard({ meta, line, onChange, onMore }: { meta: Meta; line: Line; on
   const border = kept ? 'border-emerald-500' : line.decision === 'cut' ? 'border-[#343946] opacity-50' : line.model === 'human' ? 'border-[#D94D8F]/60' : 'border-[#272B34]';
 
   return (
-    <div className={cn('rounded-xl border-2 bg-[#16181D] p-5', border)}>
+    <div className={cn('rounded-xl border-2 border-l-4 bg-[#16181D] p-5', border)} style={personaEdge(line.persona)}>
       <div className="mb-2 flex flex-wrap items-center gap-2 text-sm text-[#858B96]">
         {line.model === 'human' && <Chip tone="outline" className="border-[#D94D8F] font-semibold text-[#D94D8F]">yours</Chip>}
         <span>{shortField(meta, line.field)}</span>
@@ -281,6 +282,7 @@ function KeptTray({ meta, ctx, onCount }: { meta: Meta; ctx: Ctx; onCount: (n: n
 
   return (
     <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2 text-sm text-[#A3A8B1]"><PersonaChip meta={meta} persona={ctx.persona} /> <span>{territoryName(meta.territories[ctx.territory])}{regionOf(ctx) === 'CA' ? ' · Canada' : ''}: kept lines from every run, by field</span></div>
       {msg && <div className="rounded-lg border border-red-500/45 bg-red-500/10 p-3 text-base text-red-200">{msg}</div>}
       {cut.length > 0 && (
         <div className="space-y-1.5 rounded-lg border border-[#343946] bg-[#16181D] p-3 text-base">
@@ -295,7 +297,7 @@ function KeptTray({ meta, ctx, onCount }: { meta: Meta; ctx: Ctx; onCount: (n: n
       {rows && !rows.length && <div className="text-base text-[#858B96]">Nothing kept yet for {territoryName(meta.territories[ctx.territory])}{regionOf(ctx) === 'CA' ? ' (Canada)' : ''}. Keep or edit lines, or import a curated sheet from the Export menu.</div>}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {byField.map(([field, rs]) => (
-          <section key={field} className="rounded-xl border border-[#272B34] bg-[#16181D] p-4">
+          <section key={field} className="rounded-xl border border-l-4 border-[#272B34] bg-[#16181D] p-4" style={personaEdge(ctx.persona)}>
             <h2 className="mb-2 text-base font-bold">{shortField(meta, field)} <span className="font-normal text-[#858B96]">({rs.length})</span></h2>
             <ul className="divide-y divide-[#272B34]">
               {rs.map(r => (

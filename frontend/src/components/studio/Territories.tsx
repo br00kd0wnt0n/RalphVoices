@@ -2,7 +2,8 @@
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { studio, type Meta, type Territory } from '@/lib/studioApi';
-import { Chip, GhostButton, Intro, Label, PINK, PersonaPanel, PinkButton, plainSource, personaKeys, territoryName } from './ui';
+import { personaColor, personaEdge } from '@/lib/personaColors';
+import { PersonaDot, Chip, GhostButton, Intro, Label, PINK, PersonaPanel, PinkButton, plainSource, personaKeys, territoryName } from './ui';
 
 export function Territories({ meta, onSaved, onBrief }: { meta: Meta; onSaved: () => void; onBrief: (code: string) => void }) {
   const [editing, setEditing] = useState<string | null>(null); // code, or 'new:<persona>'
@@ -22,7 +23,7 @@ export function Territories({ meta, onSaved, onBrief }: { meta: Meta; onSaved: (
         return (
           <section key={pk}>
             <div className="mb-3 flex items-center gap-3">
-              <h2 className="text-lg font-semibold">{p.name}</h2>
+              <h2 className="flex items-center gap-2 text-lg font-semibold" style={{ color: personaColor(pk).light }}><PersonaDot persona={pk} />{p.name}</h2>
               <GhostButton className="px-3 py-1 text-sm" onClick={() => setEditing(`new:${pk}`)}>+ New territory</GhostButton>
             </div>
             <PersonaPanel meta={meta} persona={pk} className="mb-3" />
@@ -50,7 +51,7 @@ function TerritoryCard({ meta, code, t, onEdit, onBrief, onSaved }: { meta: Meta
     onSaved();
   }
   return (
-    <div className={cn('flex flex-col rounded-xl border-2 bg-[#16181D] p-5', retired ? 'border-[#272B34] opacity-60' : 'border-[#272B34]')}>
+    <div className={cn('flex flex-col rounded-xl border-2 border-l-4 bg-[#16181D] p-5', retired ? 'border-[#272B34] opacity-60' : 'border-[#272B34]')} style={personaEdge(t.persona)}>
       <div className="mb-1 flex flex-wrap items-center gap-2">
         <h3 className="text-lg font-bold">{territoryName(t)}</h3>
         <Chip tone={t.origin === 'pitch' ? 'grey' : 'outline'} className={t.origin !== 'pitch' ? 'border-[#D94D8F] text-[#D94D8F]' : ''}>{t.origin === 'new' ? 'new' : t.origin === 'edited' ? 'edited' : t.status === 'springboard' ? 'from the research' : 'from the pitch'}</Chip>
@@ -79,13 +80,13 @@ function TerritoryCard({ meta, code, t, onEdit, onBrief, onSaved }: { meta: Meta
   );
 }
 
-function TerritoryEditor({ meta, code, territory, persona, onDone }: { meta: Meta; code?: string; territory?: Territory; persona: string; onDone: (saved: boolean) => void }) {
+function TerritoryEditor({ meta, code, territory, persona, onDone }: { meta: Meta; code?: string; territory?: Territory; persona: string; onDone: (saved: boolean, code?: string) => void }) {
   const p = meta.personas[persona];
   const [d, setD] = useState({ name: territory?.name || '', premise: territory?.premise || '', angle: territory?.angle || p.triggers[0].id, format: territory?.format || 'STATIC' });
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
   async function save() {
-    try { await studio.saveTerritory(code || null, { ...d, persona }, note); onDone(true); } catch (e: any) { setError(e.message); }
+    try { const r = await studio.saveTerritory(code || null, { ...d, persona }, note); onDone(true, r.code); } catch (e: any) { setError(e.message); }
   }
   return (
     <div className="space-y-3 rounded-xl border-2 bg-[#16181D] p-5" style={{ borderColor: PINK }}>
@@ -108,6 +109,50 @@ function TerritoryEditor({ meta, code, territory, persona, onDone }: { meta: Met
       <div className="flex gap-2">
         <PinkButton className="px-4 py-2 text-base" disabled={!d.name.trim()} onClick={save}>{code ? 'Save changes' : 'Add territory'}</PinkButton>
         <GhostButton onClick={() => onDone(false)}>Cancel</GhostButton>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The territory editor as a drawer over Write (no page jump, so the brief isn't lost): edit the selected territory or
+ * add one, retire or restore it, and "Show retired" to bring one back. onSaved gets the territory's code.
+ */
+export function TerritoryDrawer({ meta, persona, code, onClose, onSaved }: { meta: Meta; persona: string; code: string | null; onClose: () => void; onSaved: (code: string) => void }) {
+  const [showRetired, setShowRetired] = useState(false);
+  const [error, setError] = useState('');
+  const t = code ? meta.territories[code] : undefined;
+  const retired = Object.entries(meta.territories).filter(([, x]) => x.persona === persona && x.status === 'retired');
+  async function setStatus(c: string, status: 'active' | 'retired') {
+    const note = window.prompt(status === 'active' ? 'Why restore it?' : 'Why retire it? (e.g. client feedback, 28 Sep)') ?? null;
+    if (note === null) return;
+    try { await studio.saveTerritory(c, { status }, note); onSaved(c); } catch (e: any) { setError(e.message); }
+  }
+  return (
+    <div className="fixed inset-0 z-40 flex justify-end bg-black/50" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }} role="dialog" aria-modal="true" aria-label={t ? `Edit ${territoryName(t)}` : 'New territory'}>
+      <div className="h-full w-full max-w-xl space-y-4 overflow-y-auto border-l border-[#343946] bg-[#0E0F12] p-5 shadow-2xl">
+        <div className="flex items-center gap-2">
+          <h2 className="mr-auto flex items-center gap-2 text-xl font-semibold" style={{ color: personaColor(persona).light }}><PersonaDot persona={persona} />{t ? `Edit: ${territoryName(t)}` : `New territory for ${meta.personas[persona]?.name || persona}`}</h2>
+          <button onClick={onClose} aria-label="Close" className="rounded-lg px-2 text-2xl leading-none text-[#858B96] hover:text-[#ECEDEF]">×</button>
+        </div>
+        <p className="text-sm text-[#858B96]">Every change keeps who made it and why; the pitch version stays on record. The full list and history are under Territories, top right.</p>
+        <TerritoryEditor key={code || 'new'} meta={meta} persona={persona} code={code || undefined} territory={t} onDone={(saved, c) => { if (saved && c) onSaved(c); else onClose(); }} />
+        {t && t.status !== 'retired' && <GhostButton onClick={() => setStatus(code!, 'retired')}>Retire this territory…</GhostButton>}
+        {error && <p className="text-base text-red-300">{error}</p>}
+        <div className="border-t border-[#272B34] pt-3">
+          <GhostButton active={showRetired} onClick={() => setShowRetired(!showRetired)}>Show retired ({retired.length})</GhostButton>
+          {showRetired && (
+            <ul className="mt-3 space-y-2">
+              {!retired.length && <li className="text-sm text-[#858B96]">None retired.</li>}
+              {retired.map(([c, x]) => (
+                <li key={c} className="flex items-center gap-3 rounded-lg border border-l-4 border-[#272B34] px-3 py-2" style={personaEdge(x.persona)}>
+                  <span className="min-w-0 flex-1 truncate">{territoryName(x)}{x.note ? <span className="text-sm text-[#858B96]"> · {x.note}</span> : null}</span>
+                  <GhostButton onClick={() => setStatus(c, 'active')}>Restore</GhostButton>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </div>
   );

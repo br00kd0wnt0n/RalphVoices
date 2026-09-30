@@ -6,7 +6,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { studio, type CodeCompliance, type ComplianceAsset, type ComplianceStatus, type ComplianceView, type Meta, type PfFlag, type PfReport, type PfStub, type StudioEvent } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
-import { AuthMedia, Chip, CodeChip, COMPLIANCE_TONE, COMPLIANCE_WORDS, COPY_STATUS, GhostButton, Intro, Label, NAMING_TIP, PINK, PinkButton, SEV_ORDER, chipName, codeState, inRegion, params, personaName, plainSource, regionOf, sameCtx, territoryName, when, whatToDo, type Ctx } from './ui';
+import { personaEdge } from '@/lib/personaColors';
+import { AuthMedia, PersonaChip, Chip, CodeChip, COMPLIANCE_TONE, COMPLIANCE_WORDS, COPY_STATUS, GhostButton, Intro, Label, NAMING_TIP, PINK, PinkButton, SEV_ORDER, chipName, codeState, inRegion, params, plainSource, regionOf, sameCtx, territoryName, when, whatToDo, type Ctx } from './ui';
 
 type Filter = 'needs' | 'awaiting' | 'changes' | 'ready' | 'all';
 const FILTERS: Array<[Filter, string]> = [['needs', 'Needs upload or review'], ['awaiting', 'Awaiting Trupanion'], ['changes', 'Changes requested'], ['ready', 'Ready to traffic'], ['all', 'All']];
@@ -182,8 +183,8 @@ export function Assets({ meta, ctx, onBuild }: { meta: Meta; ctx: Ctx; onBuild: 
           <aside className="space-y-4 lg:sticky lg:top-32 lg:max-h-[calc(100vh-9rem)] lg:self-start lg:overflow-y-auto">
             {!shown.length && <p className="rounded-xl border border-[#272B34] bg-[#16181D] p-4 text-sm text-[#858B96]">Nothing here. <button className="underline" onClick={() => setFilter('all')}>Show all</button></p>}
             {[...groups.entries()].map(([k, rs]) => (
-              <section key={k} className="rounded-xl border border-[#272B34] bg-[#16181D] p-3">
-                <div className="mb-2 px-1 text-sm font-semibold">{personaName(meta, rs[0].s.persona)} · {territoryName(meta.territories[rs[0].s.territory]) || rs[0].s.territory}{inRegion(rs[0].s.region)}</div>
+              <section key={k} className="rounded-xl border border-l-4 border-[#272B34] bg-[#16181D] p-3" style={personaEdge(rs[0].s.persona)}>
+                <div className="mb-2 space-y-1 px-1"><PersonaChip meta={meta} persona={rs[0].s.persona} short /><div className="text-sm font-semibold">{territoryName(meta.territories[rs[0].s.territory]) || rs[0].s.territory}{inRegion(rs[0].s.region)}</div></div>
                 <ul className="space-y-1.5">
                   {byVisual(rs).map(([visual, group]) => group.map((r, gi) => (
                     <li key={r.s.stub} className={cn(visual && group.length > 1 && gi > 0 && '-mt-1 ml-3 border-l-2 border-[#343946] pl-2')}>
@@ -247,11 +248,11 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, progress,
 
   return (
     <>
-      <div className="space-y-3 rounded-xl border border-[#272B34] bg-[#16181D] px-5 py-4">
+      <div className="space-y-3 rounded-xl border border-l-4 border-[#272B34] bg-[#16181D] px-5 py-4" style={personaEdge(report.persona)}>
         <div className="flex flex-wrap items-center gap-3">
           <div className="mr-auto min-w-0">
             <div className="flex flex-wrap items-center gap-2"><span className="break-all font-mono text-lg font-semibold" title={NAMING_TIP}>{report.stub}</span><CodeChip state={stateOf(row)} /></div>
-            <div className="text-sm text-[#858B96]">{personaName(meta, report.persona)} · {territoryName(meta.territories[report.territory]) || report.territory}{inRegion(report.region)} · signed off in {report.signoff_id}</div>
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-[#858B96]"><PersonaChip meta={meta} persona={report.persona} short /><span>{territoryName(meta.territories[report.territory]) || report.territory}{inRegion(report.region)} · signed off in {report.signoff_id}</span></div>
           </div>
           {canReady && (ready
             ? <GhostButton className="text-base" onClick={() => act(() => studio.pfReady(report.stub, false))} title={`Pre-flight passed by ${report.status.ready_by}, ${when(report.status.ready_at)}`}>Take back Pre-flight</GhostButton>
@@ -539,7 +540,7 @@ function Decision({ meta, asset, stub, can, onChanged, onError }: { meta: Meta; 
           </div>
         </>
       )}
-      <p className="text-xs text-[#646A75]">{personaName(meta, asset.persona)} · {territoryName(meta.territories[asset.territory])}{inRegion(asset.region)} · the decision is Trupanion’s; Studio records it.</p>
+      <p className="flex flex-wrap items-center gap-2 text-xs text-[#646A75]"><PersonaChip meta={meta} persona={asset.persona} short /> {territoryName(meta.territories[asset.territory])}{inRegion(asset.region)} · the decision is Trupanion’s; Studio records it.</p>
     </section>
   );
 }

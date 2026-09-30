@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { studio, type Batch, type Brief, type Meta, type OwnLine, type RunSummary, type Tone, REGION_NAMES } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
-import { CanadaNote, Chip, GhostButton, Intro, Label, PINK, PersonaPanel, PinkButton, angleLabel, fieldOrder, inRegion, regionOf, territoryName, when, type Ctx } from './ui';
+import { personaColor, personaEdge, tint } from '@/lib/personaColors';
+import { CanadaNote, Chip, GhostButton, Intro, Label, PersonaChip, PersonaPanel, PinkButton, angleLabel, fieldOrder, regionOf, territoryName, when, type Ctx } from './ui';
 
 /** A field's starting count: the rules' default_count, else an even split of n over the ticked fields. */
 export function defaultCount(meta: Meta, f: string, fields: string[], n: number): number {
@@ -16,14 +17,22 @@ export function countsFor(meta: Meta, fields: string[], n: number, prev: Record<
 }
 const shortField = (meta: Meta, f: string) => (meta.fields[f]?.label || f).replace(/^(Meta|TikTok) /, '').replace(/\s*\(.*\)$/, '').replace(/^./, c => c.toUpperCase());
 
-export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, runsTick, onContinue, attachedRun, onNewRun, onTerritories }: {
+export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, runsTick, onContinue, attachedRun, onNewRun, onTerritories, onEditTerritory }: {
   meta: Meta; brief: Brief; setBrief: (b: Brief) => void; ctx: Ctx; setCtx: (c: Ctx) => void; run: (o?: { ownOnly?: boolean }) => void; running: boolean;
   user: string; runsTick: number; onContinue: (id: string, opts?: { resume?: boolean }) => void;
   attachedRun: Batch | null; onNewRun: () => void; onTerritories: () => void;
+  /** Open the territory drawer: a code to edit it, null for a new one. */
+  onEditTerritory: (code: string | null) => void;
 }) {
   const [more, setMore] = useState(false);
   const territories = Object.entries(meta.territories).filter(([, x]) => x.persona === ctx.persona && x.status !== 'retired');
   const t = meta.territories[ctx.territory];
+  const pc = personaColor(ctx.persona);
+  // "Territory changed since this run": the open run (or the latest for this territory) predates the territory's last edit.
+  const [latestRun, setLatestRun] = useState<RunSummary | null>(null);
+  useEffect(() => { studio.batches().then(rs => setLatestRun(rs.find(r => r.territory === ctx.territory && regionOf(r) === ctx.region) || null)).catch(() => setLatestRun(null)); }, [ctx.territory, ctx.region, runsTick]);
+  const runAt = attachedRun ? (attachedRun.updated || attachedRun.created) : latestRun?.updated;
+  const changedSinceRun = !!(t?.updated_at && runAt && t.updated_at > runAt);
   const set = (patch: Partial<Brief>) => setBrief({ ...brief, ...patch });
   const setTone = (k: keyof Tone, v: number) => set({ tone: { ...brief.tone, [k]: v } });
   const own: OwnLine[] = brief.own_lines?.length ? brief.own_lines : [{ text: '', field: brief.fields[0] || 'meta_primary' }];
@@ -76,26 +85,34 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
 
       {/* The territory picker: the persona's territories (the persona and region are in the bar above). */}
       <section>
-        <div className="mb-2 flex items-center gap-3">
-          <Label>Territory · {meta.personas[ctx.persona]?.name}{inRegion(ctx.region)}</Label>
-          <button onClick={onTerritories} className="mb-1.5 text-xs text-[#858B96] underline-offset-2 hover:text-[#ECEDEF] hover:underline">edit territories</button>
+        <div className="mb-2 flex flex-wrap items-center gap-3">
+          <Label>Territory</Label>
+          <PersonaChip meta={meta} persona={ctx.persona} short className="mb-1.5" />
+          {t && <button onClick={() => onEditTerritory(ctx.territory)} className="mb-1.5 text-sm font-medium text-[#C9CCD2] underline-offset-2 hover:text-[#ECEDEF] hover:underline">Edit territory</button>}
+          <button onClick={onTerritories} className="mb-1.5 text-xs text-[#646A75] underline-offset-2 hover:text-[#ECEDEF] hover:underline">all territories and history</button>
         </div>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
           {territories.map(([code, x]) => (
             <button key={code} onClick={() => setCtx({ ...ctx, territory: code })} aria-pressed={code === ctx.territory}
-              className={cn('rounded-xl border-2 bg-[#16181D] px-4 py-3 text-left transition', code === ctx.territory ? 'border-[#D94D8F] bg-[#D94D8F]/10' : 'border-[#272B34] hover:border-[#4A505D]')}>
-              <div className="flex items-center gap-2"><span className="font-semibold">{territoryName(x)}</span>{x.origin && x.origin !== 'pitch' && <Chip tone="outline" className="text-xs">{x.origin}</Chip>}</div>
+              className={cn('rounded-xl border-2 border-l-4 bg-[#16181D] px-4 py-3 text-left transition', code === ctx.territory ? '' : 'border-[#272B34] hover:border-[#4A505D]')}
+              style={code === ctx.territory ? { borderColor: pc.edge, background: tint(pc.base, 0.1) } : personaEdge(ctx.persona)}>
+              <div className="flex items-center gap-2"><span className="font-semibold" style={code === ctx.territory ? { color: pc.light } : undefined}>{territoryName(x)}</span>{x.origin && x.origin !== 'pitch' && <Chip tone="outline" className="text-xs">{x.origin}</Chip>}</div>
               <div className="text-sm text-[#858B96]">{x.format} · {angleLabel(meta, x.persona, x.angle)}</div>
               {x.headline && <div className="mt-1 truncate text-sm text-[#C9CCD2]" title={x.headline}>“{x.headline}”</div>}
             </button>
           ))}
+          <button onClick={() => onEditTerritory(null)} className="rounded-xl border-2 border-dashed border-[#343946] px-4 py-3 text-left text-[#858B96] transition hover:border-[#6B7280] hover:text-[#ECEDEF]">
+            <div className="font-semibold">+ New territory</div>
+            <div className="text-sm">For {meta.personas[ctx.persona]?.name}</div>
+          </button>
         </div>
         {t && <p className="mt-2 px-1 text-sm text-[#A3A8B1]">{t.premise}</p>}
+        {changedSinceRun && <p className="mt-1 px-1 text-sm text-amber-200" title={`Edited by ${t!.updated_by || 'someone'}, ${when(t!.updated_at)}`}>Territory changed since this run: generate again to use it.</p>}
       </section>
       {ctx.region === 'CA' && <CanadaNote className="text-base" />}
 
       {attachedRun ? (
-        <div className="flex flex-wrap items-center gap-3 rounded-xl border-2 px-4 py-3 text-base" style={{ borderColor: PINK, background: 'rgba(217,77,143,0.10)' }}>
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border-2 px-4 py-3 text-base" style={{ borderColor: pc.edge, background: tint(pc.base, 0.1) }}>
           <span>Adding to the run from {when(attachedRun.created)}{attachedRun.created_by ? ` by ${attachedRun.created_by.split('@')[0]}` : ''} <span className="text-[#A3A8B1]">({attachedRun.lines.length} line{attachedRun.lines.length === 1 ? '' : 's'})</span></span>
           <GhostButton className="ml-auto px-3 py-1 text-sm" onClick={onNewRun}>Start a new run</GhostButton>
         </div>
@@ -104,7 +121,7 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
       <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[1.6fr_1fr]">
         <div className="space-y-5">
           {/* Your lines: the first action */}
-          <section className="rounded-xl border-2 bg-[#16181D] p-5" style={{ borderColor: PINK }}>
+          <section className="rounded-xl border-2 border-l-4 border-[#343946] bg-[#16181D] p-5" style={personaEdge(ctx.persona)}>
             <div className="mb-3 flex flex-wrap items-baseline gap-x-3">
               <h2 className="shrink-0 text-lg font-semibold">Your lines</h2>
               <span className="text-sm text-[#858B96]">One per row; paste several at once.</span>
@@ -239,7 +256,7 @@ function RunsList({ user, tick, meta, ctx, onContinue }: { user: string; tick: n
       {!here.length && <p className="text-base text-[#858B96]">No runs for {territoryName(meta.territories[ctx.territory]) || 'this territory'}{ctx.region === 'CA' ? ` (${REGION_NAMES.CA})` : ''} yet.</p>}
       <ul className="max-h-60 space-y-2 overflow-y-auto">
         {here.slice(0, 30).map(r => (
-          <li key={r.id} className="flex items-center gap-3 rounded-lg border border-[#272B34] px-3 py-2">
+          <li key={r.id} className="flex items-center gap-3 rounded-lg border border-l-4 border-[#272B34] px-3 py-2" style={personaEdge(r.persona)}>
             <div className="min-w-0 flex-1">
               <div className="truncate text-base font-medium">{when(r.updated)}{r.created_by ? ` · ${r.created_by.split('@')[0]}` : ''}</div>
               <div className="text-sm text-[#858B96]">

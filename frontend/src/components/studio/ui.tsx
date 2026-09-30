@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react';
 import { studio, type Flag, type Meta, type Territory, type Tone, type Line, type EditRecord, type LineVersion, type ComplianceStatus, type Region, REGION_NAMES, CANADA_NOTE } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
+import { personaColor, personaEdge, tint } from '@/lib/personaColors';
 import { HelpCircle } from 'lucide-react';
 
 export const PINK = '#D94D8F';
@@ -153,9 +154,9 @@ export function PersonaPanel({ meta, persona, region, open: startOpen = false, c
   if (!p) return null;
   const c = p.context;
   return (
-    <section className={cn('rounded-xl border border-[#272B34] bg-[#16181D]', className)}>
+    <section className={cn('rounded-xl border border-l-4 border-[#272B34] bg-[#16181D]', className)} style={personaEdge(persona)}>
       <button onClick={() => setOpen(!open)} aria-expanded={open} className="flex w-full items-center justify-between px-4 py-3 text-left">
-        <span><span className="text-sm font-semibold uppercase tracking-wider text-[#858B96]">Who this is</span> <span className="ml-1 text-base font-semibold">{p.name}</span></span>
+        <span className="flex flex-wrap items-center gap-x-2"><span className="text-sm font-semibold uppercase tracking-wider text-[#858B96]">Who this is</span> <span className="flex items-center gap-1.5 text-base font-semibold" style={{ color: personaColor(persona).light }}><PersonaDot persona={persona} />{p.name}</span></span>
         <span className="text-[#646A75]">{open ? '−' : '+'}</span>
       </button>
       {region === 'CA' && <CanadaNote className="mx-4 mb-3" />}
@@ -349,6 +350,22 @@ export function codeState(x: { signed: boolean; edited?: boolean; passed?: boole
 export function CodeChip({ state, title, className }: { state: CodeState; title?: string; className?: string }) {
   const s = CODE_STATE[state];
   return <span title={title || s.tip} className={cn('inline-flex shrink-0 items-center whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-semibold', s.cls, className)}>{s.words}</span>;
+}
+
+// ---------- persona colour (lib/personaColors.ts): an accent, never a background ----------
+
+export function PersonaDot({ persona, className }: { persona?: string | null; className?: string }) {
+  return <span aria-hidden className={cn('inline-block h-2.5 w-2.5 shrink-0 rounded-full', className)} style={{ background: personaColor(persona).edge }} />;
+}
+/** A dot and the persona's name in its light tint, on a faint fill of its colour. */
+export function PersonaChip({ meta, persona, short, className }: { meta: Meta; persona: string; short?: boolean; className?: string }) {
+  const c = personaColor(persona);
+  const name = meta.personas[persona]?.name || persona;
+  return (
+    <span className={cn('inline-flex max-w-full items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-semibold', className)} style={{ borderColor: tint(c.base, 0.55), background: tint(c.base, 0.12), color: c.light }} title={name}>
+      <PersonaDot persona={persona} className="h-2 w-2" /><span className="truncate">{short ? name.replace(/\s*\(.*\)$/, '') : name}</span>
+    </span>
+  );
 }
 
 // ---------- the context: persona × territory × region, chosen once ----------
