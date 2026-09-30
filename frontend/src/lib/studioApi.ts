@@ -59,6 +59,8 @@ export interface RunSummary {
   lines: number; yours: number; kept: number; undecided: number; usd: number;
   /** Lines left unchecked when a run was interrupted (e.g. a server restart). */
   unchecked: number;
+  /** The run's round (none before rounds: R1). */
+  round?: string;
 }
 export interface FieldSpec { platform: string; label: string; visible: number; max: number; source: string }
 export interface Territory {
@@ -96,8 +98,10 @@ export interface Meta {
   preflight?: { enabled: boolean; storage?: string; engine?: string; can_set_ready?: boolean };
   /** Hosted: the signed-in person. */
   user?: { email: string; name: string | null; admin: boolean } | null;
+  /** The rounds and the active one; can_edit: may this person create rounds and set the active one (admins). */
+  rounds?: RoundsState & { can_edit: boolean };
 }
-export interface ShortRow { stub: string; id: string; batch?: string; decision?: string; signed_off?: string; persona: string; territory: string; region?: Region; field: string; platform: string; format: string; text: string; angle: string; structure: string; note: string; flags: string; compliance_flags: string[]; warn_flags: string[] }
+export interface ShortRow { stub: string; id: string; batch?: string; decision?: string; signed_off?: string; round?: string; persona: string; territory: string; region?: Region; field: string; platform: string; format: string; text: string; angle: string; structure: string; note: string; flags: string; compliance_flags: string[]; warn_flags: string[] }
 export interface CompareLine { id: string; label: string; field: string; text: string; chars: number; angle: string; structure: string; favourite?: boolean; note?: string; stars?: Record<string, boolean> }
 export interface CompareSet { name: string; brief: Brief; n_per_model: number; lines: CompareLine[]; created: string; revealed?: boolean; revealed_by?: string; revealed_at?: string }
 export interface Reveal { labels: Record<string, string>; tally: Record<string, number>; by_person?: Record<string, Record<string, number>> }
@@ -148,6 +152,8 @@ export interface SignedCopy { line_id: string; field: string; label: string; tex
 export interface PfUpload { id: string; kind: 'static' | 'carousel' | 'video'; files: Array<{ position: number; filename: string; content_type: string; size: number }>; uploaded_by: string; uploaded_at: string; stubs: string[] }
 export interface PfStatus { status: 'open' | 'ready'; ready_by?: string; ready_at?: string; upload_id?: string }
 export interface PfStub {
+  /** The round of its sign-off; test: a test round's code (never handed off). */
+  round?: string; test?: boolean;
   stub: string; persona: string; territory: string; signoff_id: string; ready_by: string; ready_at: string; copy: SignedCopy[];
   region: Region;
   /** Codes on the same visual share it (null for an earlier v# code): suggested as one upload. */
@@ -207,6 +213,23 @@ export type StudioEvent =
 // Who is working. Locally there's no sign-in, so the page asks once and
 // remembers the name in this browser; hosted, it's the signed-in email.
 const USER_KEY = 'voices-studio-user';
+
+// ---------- rounds ----------
+/** A round (R1, R2…; R0 a test run-through): stamped on new runs and sign-offs; views show the active one by default. */
+export interface Round { id: string; name: string; from?: string; test?: boolean; created_by?: string; created_at?: string }
+export interface RoundsState { active: string; rounds: Round[] }
+const ROUND_VIEW_KEY = 'voices-studio-round-view';
+/** 'active': this round only (the default); 'all': every round, test rounds marked. Sent as ?round=all on every request. */
+export type RoundViewMode = 'active' | 'all';
+let roundViewMode: RoundViewMode = (() => { try { return localStorage.getItem(ROUND_VIEW_KEY) === 'all' ? 'all' : 'active'; } catch { return 'active'; } })();
+export const getRoundView = (): RoundViewMode => roundViewMode;
+export function setRoundView(v: RoundViewMode) {
+  roundViewMode = v;
+  try { localStorage.setItem(ROUND_VIEW_KEY, v); } catch { /* private mode: this page only */ }
+}
+const withRound = (path: string) => (roundViewMode === 'all' ? `${path}${path.includes('?') ? '&' : '?'}round=all` : path);
+/** A round's label: "R1 · Round one", or "R0 · TEST · Test run-through". */
+export const roundLabel = (r?: Round | null) => (r ? `${r.id}${r.test ? ' · TEST' : ''} · ${r.name}` : '');
 let signedIn = '';
 export function setSignedInUser(email: string) { signedIn = email; }
 export function getUser(): string {
@@ -221,7 +244,7 @@ function headers(extra?: HeadersInit): Record<string, string> {
   return { ...(HOSTED ? authHeaders() : { 'X-Studio-User': getUser() }), ...((extra as Record<string, string>) || {}) };
 }
 async function raw(path: string, init?: RequestInit): Promise<Response> {
-  const res = await fetch(`${STUDIO_API}${path}`, { ...init, headers: headers(init?.headers) });
+  const res = await fetch(`${STUDIO_API}${withRound(path)}`, { ...init, headers: headers(init?.headers) });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw Object.assign(new Error(body.message || body.error || `HTTP ${res.status}`), { status: res.status, body });
@@ -354,6 +377,9 @@ export const studio = {
   // Rules versions (hosted only)
   rules: () => req<RulesVersion[]>('/rules'),
   activateRules: (version: string) => req<RulesVersion[]>(`/rules/${enc(version)}/activate`, { method: 'POST' }),
+  /** Rounds (admin): create or rename one (optionally making it active), or set the active round. */
+  saveRound: (round: { id: string; name: string; from?: string; test?: boolean; activate?: boolean }) => req<RoundsState>('/rounds', { method: 'POST', body: JSON.stringify(round) }),
+  activateRound: (id: string) => req<RoundsState>(`/rounds/${enc(id)}/activate`, { method: 'POST' }),
   uploadRules: (version: string, rules: unknown, notes: string, activate = false) => req<RulesVersion[]>('/rules', { method: 'POST', body: JSON.stringify({ version, rules, notes, activate }) }),
 
   download,

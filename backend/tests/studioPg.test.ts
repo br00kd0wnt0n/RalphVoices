@@ -283,11 +283,12 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   assert.equal(feats[1][1], 'direct_vet_pay');
   const hand = S.parseCsv(await pf.handoffCsv());
   assert.deepEqual(hand[0].slice(0, 2), ['Naming code', 'Region']);
-  assert.equal(hand[0][7], 'Status');
+  assert.equal(hand[0][8], 'Status');
+  assert.equal(hand[0][2], 'Round');
   // Pre-flight passed isn't Ready to traffic until Trupanion's compliance is cleared (Brook, 30 Sep).
-  assert.equal(hand.find(r => r[0] === stub)![7], 'Pre-flight passed · Compliance pending');
+  assert.equal(hand.find(r => r[0] === stub)![8], 'Pre-flight passed · Compliance pending');
   assert.equal(hand.find(r => r[0] === stub)![hand[0].indexOf('Ready to traffic')], 'no');
-  assert.equal(hand.find(r => r[0] === postStub)![7], 'Not uploaded');
+  assert.equal(hand.find(r => r[0] === postStub)![8], 'Not uploaded');
   assert.equal(/approved/i.test(await pf.handoffCsv()), false);
 
   // 6. Carousel and video kinds.
@@ -318,7 +319,7 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   (other as any).findStub = async (x: string) => x === postStub ? { ...(await realFind(x)), signoff: { ...(await realFind(x)).signoff, persona: 'DINK', territory: 'DINK_NEVER' } } : realFind(x);
   await assert.rejects(() => other.upload(headlineStub, [{ buffer: png('x'), filename: 'x.png', contentType: 'image/png' }], 'nick', [postStub]), /same persona and territory only/);
   const hand2 = S.parseCsv(await pf.handoffCsv());
-  assert.equal(hand2.find(r => r[0] === postStub)![6], headlineStub, 'the handoff says which codes share the visual');
+  assert.equal(hand2.find(r => r[0] === postStub)![7], headlineStub, 'the handoff says which codes share the visual');
 
   // An OpenAI outage fails the audit as retryable; running it again on the same upload works.
   const { FatalError } = await import('../src/services/audit/api.js');
@@ -1007,4 +1008,45 @@ test('carousel: a 4-card visual with A1–A3 → sign-off → Pre-flight card by
   const h = csv[0];
   assert.deepEqual(csv.slice(1).map(r => [r[0], ...[1, 2, 3, 4].map(k => r[h.indexOf(`On-image card ${k}`)])]), [A1, A2, A3].map(c => [c, ...CARDS]));
   await store.putRules('example-1', JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8')), { activate: true, by: 'test' }).catch(() => {});
+});
+
+// ---------- rounds (Brook, 30 Sep): R0 test round, then R1 ----------
+
+test('rounds on Postgres: Pre-flight lists the active round; a test round\'s codes never reach the asset handoff or B3\'s features; R1 starts at A', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const Rounds = await import('../src/services/studio/rounds.js');
+  await (store as any).db.query(`DELETE FROM studio_inputs WHERE key = 'rounds'`);
+  await store.putRules('example-rounds', JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8')), { activate: true, by: 'test' }).catch(() => {});
+  await S.refreshRules();
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
+  const png = (t: string) => [{ buffer: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from(`fake VOICES_TEXT: ${t}`)]), filename: 'a.png', contentType: 'image/png' }];
+  const signAndAudit = async (name: string) => {
+    const run = await keptRun(R, api, [`${name} primary.`], { name });
+    const versions = adsOf(run.prims, run.head);
+    const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions, expectation: { codes: [await leadOf(R, versions)], reason: name } }, 'nick');
+    const code = signoff.versions[0].code;
+    const up = await pf.upload(code, png('Calm, covered.'), 'nick');
+    await pf.runAudit(await pf.createAudit(up.upload_id));
+    return code;
+  };
+
+  await Rounds.saveRound({ id: 'R0', name: 'Test run-through', test: true, activate: true }, 'brook');
+  assert.equal((await Rounds.getRounds()).active, 'R0', 'stored in studio_inputs');
+  const c0 = await signAndAudit('r0');
+  assert.equal(c0, 'OWN_CALM_UGC_A1_US_META_TEST');
+  await Rounds.setActiveRound('R1');
+  const c1 = await signAndAudit('r1');
+  assert.equal(c1, 'OWN_CALM_UGC_A1_US_META', 'R1 starts at A');
+
+  assert.deepEqual((await pf.stubs()).map(s => [s.stub, s.round, s.test]), [[c1, 'R1', false]], 'the active round by default');
+  assert.deepEqual((await pf.stubs({ round: 'all' })).map(s => [s.stub, s.test]).sort(), [[c1, false], [c0, true]].sort());
+  assert.deepEqual((await pf.complianceAssets()).assets.flatMap((a: any) => a.codes.map((c: any) => c.stub)), [c1]);
+  const hand = S.parseCsv(await pf.handoffCsv('all'));
+  assert.deepEqual(hand.slice(1).map(r => [r[0], r[2]]), [[c1, 'R1']], 'asset handoff: never a test code');
+  const feats = S.parseCsv(await pf.featuresCsv());
+  assert.equal(feats[0].at(-1), 'round');
+  assert.deepEqual(feats.slice(1).map(r => [r[0], r.at(-1)]), [[c1, 'R1']], 'features for B3: every real round, never a test round');
+  await (store as any).db.query(`DELETE FROM studio_inputs WHERE key = 'rounds'`);
 });

@@ -75,7 +75,8 @@ export interface PlannedVersion extends DraftVersion { code: string; number: num
 export interface PlannedOnImage { visual: string; visual_key: string; line_id: string; card?: number; issues: string[] }
 export interface Plan { versions: PlannedVersion[]; on_image: PlannedOnImage[]; issues: string[] }
 
-interface Ctx { persona: string; territory: string; region: Region; format: string; rules: Pick<Rules, 'fields'> }
+/** suffix: '_TEST' for a test round's codes (rounds.ts), so they never reach Add3 or share a code with a real round. */
+interface Ctx { persona: string; territory: string; region: Region; format: string; rules: Pick<Rules, 'fields'>; suffix?: string }
 
 /**
  * The versions a set of kept lines would make if nobody changed anything: the last sign-off's, if there is one;
@@ -189,7 +190,7 @@ export function planDraft(draft: Draft, lines: Line[], ctx: Ctx, signedCodes: st
     // (A code from before versions has no visual letter: it matches on its lines alone.)
     const prev = previous.find(p => (p.visual === visual || !p.visual) && (p.platform === platform || !p.platform) && !used.has(p.code) && sameLines(fields, p));
     if (prev) { code = prev.code; used.add(code); book.take(code); }
-    else if (/^[A-Z]$/.test(visual)) code = book.assign({ persona: ctx.persona, territory: ctx.territory, format: ctx.format, platform, region: ctx.region }, visual);
+    else if (/^[A-Z]$/.test(visual)) code = book.assign({ persona: ctx.persona, territory: ctx.territory, format: ctx.format, platform, region: ctx.region }, visual, ctx.suffix);
     const p = parseCode(code, null);
     planned.push({ visual, platform, fields, code, number: 'error' in p ? 0 : p.line ?? 0, issues: vIssues });
     for (const x of vIssues) issues.push(`${code || `Version ${i + 1}`}: ${x}`);

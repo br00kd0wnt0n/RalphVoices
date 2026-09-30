@@ -7,10 +7,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { HOSTED, getUser, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type CompareSet, type Flag, type Line, type Meta, type OwnLine, type RunSummary, type ShortRow, type StudioEvent, type Territory, type Tone, type EditRecord, type LineVersion, type Reveal, type ComplianceStatus, type ReadyView, type ReadyDraft, type DraftVersion, type RulesVersion, type ActiveRules, type RuleEntry, type PfStub, type PfReport, type PfFlag, type ComplianceView, type ComplianceAsset, type Region, REGION_NAMES, CANADA_NOTE, isEdited, finalText } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
+import { LivePage, RoundBadge, RoundsPanel } from './StudioRounds';
 import { ArrowLeft, HelpCircle, ScrollText, Shuffle } from 'lucide-react';
 
 const PINK = '#D94D8F';
-type Tab = 'home' | 'territories' | 'brief' | 'review' | 'shortlist' | 'ready' | 'preflight' | 'compliance' | 'compare' | 'rules';
+type Tab = 'home' | 'territories' | 'brief' | 'review' | 'shortlist' | 'ready' | 'preflight' | 'compliance' | 'compare' | 'rules' | 'live';
 // The writing flow, in order. Blind compare sits apart from it; Live comes later (B3b).
 const FLOW: Array<[Tab, string]> = [['territories', 'Territories'], ['brief', 'Write & brief'], ['review', 'Review'], ['shortlist', 'Shortlist'], ['ready', 'Ready for production'], ['preflight', 'Pre-flight'], ['compliance', 'Compliance']];
 // Below 1600 px (and inside the tools.ralph.world frame) the bar uses short labels; the full name is in the tooltip.
@@ -222,6 +223,8 @@ export function Studio() {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [err, setErr] = useState('');
   const [tab, setTabState] = useState<Tab>((params.get('tab') as Tab) || 'home');
+  // "This round / All rounds" (header): the views reload with the new filter.
+  const [roundKey, setRoundKey] = useState(0);
   // Every step opens at the top, so moving on never looks like staying put.
   // The step bar, the screen and the address all follow this one value: no hover or focus is left looking like the current step.
   const setTab = useCallback((t: Tab) => {
@@ -404,15 +407,16 @@ export function Studio() {
             </span>
           ))}
           <span className="flex items-center">
-            {/* B3b: live results next to each signed-off line. No route or API yet. */}
-            <span aria-disabled="true" title="Coming soon: live results next to each signed-off line, from the first weeks in market"
-              className="flex cursor-not-allowed items-center gap-1 whitespace-nowrap rounded-lg px-1.5 py-1.5 text-sm text-[#4A505D]">
+            {/* B3b: live results next to each signed-off ad. For now, a page explaining what's coming. */}
+            <button onClick={() => setTab('live')} title="Coming soon: live results next to each signed-off ad, from the first weeks in market"
+              className={cn('flex items-center gap-1 whitespace-nowrap rounded-lg px-1.5 py-1.5 text-sm', tab === 'live' ? 'text-[#ECEDEF]' : 'text-[#4A505D] hover:text-[#858B96]')}>
               Live <span className="rounded-full border border-[#343946] px-1.5 py-px text-[10px] uppercase tracking-wide">soon</span>
-            </span>
+            </button>
           </span>
         </nav>
         <div className="ml-auto flex shrink-0 flex-nowrap items-center gap-2.5 text-sm text-[#858B96]">
           <span className="mr-1 h-5 w-px bg-[#343946]" aria-hidden />
+          <RoundBadge meta={meta} onViewChange={() => setRoundKey(k => k + 1)} />
           <button onClick={() => setTab('compare')} title="Blind compare: a separate exercise, outside the writing flow" aria-label="Blind compare" className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-dashed border-[#4B55A8] bg-[#1B2150] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#232A5C]">
             <Shuffle className="h-4 w-4" aria-hidden /> Compare
           </button>
@@ -431,8 +435,10 @@ export function Studio() {
         </div>
       )}
       {err && <div className="mx-8 mt-4 rounded-lg border-2 border-red-500/45 bg-red-500/10 p-4 text-base text-red-200">{err}</div>}
-      <main className="px-6 py-6">
+      <main key={roundKey} className="px-6 py-6">
         {tab === 'home' && <Home onStart={() => setTab('territories')} />}
+        {tab === 'live' && <LivePage />}
+        {tab === 'rules' && meta?.rounds && <RoundsPanel meta={meta} onSaved={() => refreshMeta().catch(() => {})} />}
         {meta && tab === 'territories' && <Territories meta={meta} onSaved={() => refreshMeta()} onBrief={code => { const t = meta.territories[code]; setBrief(b => ({ ...b, persona: t.persona, territory: code, fields: b.persona === t.persona && b.fields.length ? b.fields : meta.personas[t.persona].default_fields })); setTab('brief'); }} />}
         {meta && tab === 'brief' && <BriefPanel meta={meta} brief={brief} run={run} running={running} user={user} runsTick={runsTick} onContinue={continueRun}
           setBrief={setBrief}
@@ -714,7 +720,7 @@ function RunsList({ user, tick, meta, onContinue }: { user: string; tick: number
         {runs.slice(0, 30).map(r => (
           <li key={r.id} className="flex items-center gap-3 rounded-lg border border-[#272B34] px-3 py-2">
             <div className="min-w-0 flex-1">
-              <div className="truncate text-base font-medium">{meta.territories[r.territory]?.name || r.territory}{r.region === 'CA' && <Chip tone="outline" className="ml-2 text-xs">{REGION_NAMES.CA}</Chip>}</div>
+              <div className="truncate text-base font-medium">{meta.territories[r.territory]?.name || r.territory}{r.region === 'CA' && <Chip tone="outline" className="ml-2 text-xs">{REGION_NAMES.CA}</Chip>}{r.round && r.round !== meta.rounds?.active && <Chip tone={meta.rounds?.rounds.find(x => x.id === r.round)?.test ? 'amber' : 'outline'} className="ml-2 text-xs">{r.round}{meta.rounds?.rounds.find(x => x.id === r.round)?.test ? ' TEST' : ''}</Chip>}</div>
               <div className="text-sm text-[#858B96]">
                 {new Date(r.updated).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · {r.lines} lines{r.yours ? ` (${r.yours} yours)` : ''} · {r.kept} kept{!mine && r.created_by ? ` · ${r.created_by}` : ''}
                 {r.unchecked > 0 && <span className="text-amber-300"> · {r.unchecked} unchecked</span>}
@@ -897,7 +903,7 @@ function Review({ meta, batch, setBatch, status, running, onMore, onMoreRun, onA
         </div>
         <select className="rounded-lg border-2 border-[#343946] bg-[#101216] px-3 py-1.5 text-base" value={batch.id} onChange={e => studio.batch(e.target.value).then(setBatch)}>
           {[...batches, ...(batches.some(b => b.id === batch.id) ? [] : [{ id: batch.id, territory: batch.brief.territory, updated: batch.updated || batch.created, created_by: batch.created_by || '' } as RunSummary])].map(b => (
-            <option key={b.id} value={b.id} title={b.id}>{territoryName(meta.territories[b.territory]) || b.territory} · {new Date(b.updated).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}{b.created_by ? ` · ${b.created_by.split('@')[0]}` : ''}</option>
+            <option key={b.id} value={b.id} title={b.id}>{territoryName(meta.territories[b.territory]) || b.territory} · {new Date(b.updated).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}{b.created_by ? ` · ${b.created_by.split('@')[0]}` : ''}{b.round && b.round !== meta.rounds?.active ? ` · ${b.round}${meta.rounds?.rounds.find(r => r.id === b.round)?.test ? ' TEST' : ''}` : ''}</option>
           ))}
         </select>
         <PinkButton className="px-4 py-2 text-base" disabled={running} onClick={onMoreRun}>{yours ? 'Generate around your lines' : 'Generate more in this run'}</PinkButton>
@@ -1166,6 +1172,7 @@ function Shortlist({ meta, batch, onReady }: { meta: Meta; batch: Batch | null; 
                 <tr key={r.id} className="border-t border-[#272B34] align-top">
                   <td className="py-2 pr-4">
                     {r.text}
+                    {r.round && r.round !== meta.rounds?.active && <Chip tone={meta.rounds?.rounds.find(x => x.id === r.round)?.test ? 'amber' : 'outline'} className="ml-2 text-xs">{r.round}{meta.rounds?.rounds.find(x => x.id === r.round)?.test ? ' TEST' : ''}</Chip>}
                     {((r.compliance_flags?.length ?? 0) > 0 || (r.warn_flags?.length ?? 0) > 0) && (
                       <div className="mt-1 flex flex-wrap gap-1">
                         {(r.compliance_flags || []).map(f => <Chip key={f} tone="red" className="text-xs">{chipName(f)}</Chip>)}

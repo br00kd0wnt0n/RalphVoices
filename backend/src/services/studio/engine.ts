@@ -21,6 +21,7 @@ import { FileStore, mergeBatchHeader, type StudioStore } from './store.js';
 import { CURRENT_PATTERN, DEFAULT_REGION, REGIONS, type Region } from '../../utils/namingCode.js';
 import { CodeBook, regionOf } from './codes.js';
 import { signoffVersions } from './versions.js';
+import { activeRound, inView, roundOf, roundView, type RoundView } from './rounds.js';
 
 // ---------- paths ----------
 
@@ -69,6 +70,8 @@ export interface Brief {
   n: number;
   /** Carousel territories with on-image text ticked (item E): how many card sequences to write, and cards in each. */
   carousel?: { sequences: number; cards: number };
+  /** The round the run belongs to (rounds.ts), stamped when the run is created; none reads as R1. */
+  round?: string;
   model: string;
   checker_model?: string;
   probe_model?: string;
@@ -137,6 +140,8 @@ export interface Line {
   /** Carousel on-image text written as a card sequence (item E): its card number and the sequence it belongs to. */
   card?: number;
   sequence_id?: string;
+  /** Its run's round, stamped when written (lines from before rounds read their run's, else R1). */
+  round?: string;
 }
 /** `label` is the rule in plain words, from the rules file (shown to Trupanion's reviewers; the reason and name never are). */
 export interface Override { rule: string; label?: string; reason: string; by: string; at: string }
@@ -574,7 +579,9 @@ export class Api {
   /** Record this run's spend in the cumulative ledger (studio/spend.json). */
   async commit(label: string, user?: string) {
     if (this.mock || !this.runTotal()) return;
-    await getStore().addSpend({ label, usd: round(this.runTotal(), 4), by_stage: Object.fromEntries(Object.entries(this.runUsd).map(([k, v]) => [k, round(v, 4)])), calls: this.runCalls, at: new Date().toISOString(), user: user ?? this.user });
+    // Labelled with the round (a test round's spend is real money and counts toward the cap).
+    const roundId = (await activeRound()).id;
+    await getStore().addSpend({ label: `${label} · ${roundId}`, usd: round(this.runTotal(), 4), by_stage: Object.fromEntries(Object.entries(this.runUsd).map(([k, v]) => [k, round(v, 4)])), calls: this.runCalls, at: new Date().toISOString(), user: user ?? this.user });
   }
 
 }
@@ -663,6 +670,7 @@ export function makeBrief(input: Partial<Brief>): Brief {
       sequences: Math.max(1, Math.min(6, Math.round(Number(input.carousel?.sequences) || 3))),
       cards: Math.max(2, Math.min(10, Math.round(Number(input.carousel?.cards) || 4))),
     } } : {}),
+    ...(input.round ? { round: String(input.round) } : {}),
     model: input.model || 'gpt-4o',
     checker_model: input.checker_model || 'gpt-4o',
     probe_model: input.probe_model || 'gpt-4o-mini',
@@ -726,8 +734,15 @@ export interface TasteExample {
   text: string; original?: string; decision: 'keep' | 'edit' | 'cut'; note: string; batch: string; at: string;
   /** Who made the decision. */
   by?: string;
+  /** The line's round: a test round's taste never feeds a real round's writer. */
+  round?: string;
 }
 export async function loadTaste(): Promise<TasteExample[]> { return getStore().getTaste(); }
+/** The taste a brief's writer learns from: everything, except that a real round never learns from a test round. */
+export async function tasteFor(b: Pick<Brief, 'round'>): Promise<TasteExample[]> {
+  const [all, v] = await Promise.all([loadTaste(), roundView()]);
+  return v.isTest(roundOf(b)) ? all : all.filter(t => !v.isTest(roundOf(t)));
+}
 
 // ---------- writer prompt ----------
 
@@ -809,7 +824,7 @@ ${guidance ? `Creative director's guidance: ${guidance}
 /** Write card sequences; each card becomes a line (field, card k, sequence_id), numbered later by claimLines. */
 async function writeSequences(api: Api, r: Rules, b: Brief, field: string, own: string[], guidance?: string): Promise<Array<{ angle: string; cards: string[] }>> {
   const { sequences, cards } = b.carousel!;
-  const res = await api.chat({ stage: 'generate', model: b.model, system: writerSystem(b, r, own, await loadTaste()), user: sequencesUser(r, b, field, sequences, cards, guidance), max_tokens: 40 * sequences * cards + 120, temperature: 0.9, json: true });
+  const res = await api.chat({ stage: 'generate', model: b.model, system: writerSystem(b, r, own, await tasteFor(b)), user: sequencesUser(r, b, field, sequences, cards, guidance), max_tokens: 40 * sequences * cards + 120, temperature: 0.9, json: true });
   const angles = new Set(r.personas[b.persona].triggers.map(t => t.id));
   try {
     const j = JSON.parse(res.text);
@@ -908,9 +923,10 @@ export interface RunSummary {
   lines: number; yours: number; kept: number; undecided: number; usd: number;
   /** Lines not yet checked (a run interrupted by a restart); resume checks them. */
   unchecked: number;
+  round: string;
 }
-/** Saved runs, newest activity first; pass a name to list one person's runs. */
-export async function listBatches(user?: string): Promise<RunSummary[]> {
+/** Saved runs, newest activity first; pass a name to list one person's runs, and a round view to list one round's. */
+export async function listBatches(user?: string, view?: RoundView): Promise<RunSummary[]> {
   const st = getStore();
   // Planted-line checks (adhoc-*) are tests, not runs.
   const ids = (await st.listBatchIds()).filter(x => !x.startsWith('adhoc-'));
@@ -923,10 +939,10 @@ export async function listBatches(user?: string): Promise<RunSummary[]> {
       lines: b.lines.length, yours: b.lines.filter(l => l.model === 'human').length,
       kept: b.lines.filter(l => l.decision === 'keep' || l.decision === 'edit').length,
       undecided: b.lines.filter(l => !l.decision).length, usd: b.stats.usd_total,
-      unchecked: b.lines.filter(l => l.status !== 'checked').length,
+      unchecked: b.lines.filter(l => l.status !== 'checked').length, round: roundOf(b.brief),
     });
   }
-  return out.filter(r => !user || r.created_by.toLowerCase() === user.toLowerCase()).sort((a, b) => b.updated.localeCompare(a.updated));
+  return out.filter(r => (!user || r.created_by.toLowerCase() === user.toLowerCase()) && (!view || inView(view, r.round))).sort((a, b) => b.updated.localeCompare(a.updated));
 }
 
 // ---------- estimate ----------
@@ -971,7 +987,7 @@ const DUP = Number(process.env.STUDIO_DUP ?? 0.9);
 const SIMILAR = Number(process.env.STUDIO_SIMILAR ?? 0.85);
 
 async function writeCells(api: Api, r: Rules, b: Brief, cells: Cell[], model: string, stage: string, extra?: { guidance?: string; sibling?: string; own?: string[] }): Promise<Array<{ cell: Cell; text: string }>> {
-  const system = writerSystem(b, r, extra?.own, await loadTaste());
+  const system = writerSystem(b, r, extra?.own, await tasteFor(b));
   const byAngle = new Map<string, Cell[]>();
   for (const c of cells) byAngle.set(c.angle, [...(byAngle.get(c.angle) || []), c]);
   const out: Array<{ cell: Cell; text: string }> = [];
@@ -1004,6 +1020,7 @@ function newLine(b: Brief, r: Rules, batchId: string, idx: number, cell: Cell, t
     structure: cell.structure, tone: cell.tone, tone_label: toneLabel(cell.tone),
     features: [], flags: [], status: 'generated', model, prompt_version: regionOf({}, b) === 'CA' ? `${PROMPT_VERSION}+ca` : PROMPT_VERSION,
     decision: '', edited_text: '', note: '',
+    ...(b.round ? { round: b.round } : {}),
   };
 }
 
@@ -1080,6 +1097,9 @@ export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: 
   if (mismatch) throw Object.assign(new Error(mismatch), { status: 409 });
   const r = loadRules();
   const existing = opts.batchId && (await batchExists(opts.batchId)) ? await loadBatch(opts.batchId) : null;
+  // A new run belongs to the active round; lines added to a run keep the run's round.
+  b = existing ? { ...b, round: existing.brief.round } : { ...b, round: b.round || (await activeRound()).id };
+  if (!b.round) delete b.round;
   const id = existing?.id || opts.batchId || (await newBatchId(b.territory));
   const started = Date.now();
   const batch: Batch = existing || { id, brief: b, created: new Date().toISOString(), lines: [], dropped: [], stats: { generated: 0, near_duplicates_removed: 0, similar_flagged: 0, timings_ms: {}, usd: {}, calls: {}, tokens: {}, usd_total: 0 } };
@@ -1557,7 +1577,7 @@ export async function checkTexts(persona: string, territory: string, items: Arra
 
 // ---------- export ----------
 
-export const CSV_COLUMNS = ['id', 'persona', 'territory', 'field', 'text', 'chars', 'angle', 'structure', 'tone', 'features', 'flags', 'objection', 'decision', 'edited_text', 'note'];
+export const CSV_COLUMNS = ['id', 'persona', 'territory', 'field', 'text', 'chars', 'angle', 'structure', 'tone', 'features', 'flags', 'objection', 'decision', 'edited_text', 'note', 'round'];
 
 function csvCell(v: unknown): string {
   let s = v === undefined || v === null ? '' : String(v);
@@ -1576,7 +1596,7 @@ export async function exportBatch(batchId: string): Promise<{ csv: string; md: s
   const r = loadRules();
   const rows = [CSV_COLUMNS, ...batch.lines.map(l => [
     l.id, l.persona, l.territory, l.field, l.text, String(l.chars), `${l.angle} ${l.angle_label}`, l.structure, l.tone_label,
-    l.features.join('; '), l.flags.map(flagText).join(' | '), l.objection || '', l.decision || '', l.edited_text || '', l.note || '',
+    l.features.join('; '), l.flags.map(flagText).join(' | '), l.objection || '', l.decision || '', l.edited_text || '', l.note || '', roundOf(l, batch.brief),
   ])];
   const csv = toCsv(rows);
   const md = markdownView(batch, r);
@@ -1700,7 +1720,7 @@ async function putTaste(l: Line) {
   if (d === 'keep' || d === 'edit' || (d === 'cut' && l.note)) {
     await getStore().putTaste({
       id: l.id, persona: l.persona, territory: l.territory, field: l.field, angle: l.angle, structure: l.structure, tone_label: l.tone_label,
-      text: finalText(l), original: isEdited(l) ? l.text : undefined, decision: d, note: l.note || '', batch: l.batch, at: new Date().toISOString(), by: l.decided_by,
+      text: finalText(l), original: isEdited(l) ? l.text : undefined, decision: d, note: l.note || '', batch: l.batch, at: new Date().toISOString(), by: l.decided_by, round: roundOf(l),
     } satisfies TasteExample);
   } else await getStore().deleteTaste(l.id);
 }
@@ -1763,14 +1783,14 @@ export async function lineHistory(lineId: string) { return getStore().listEdits(
 
 // ---------- shortlist ----------
 
-export interface ShortRow { stub: string; id: string; batch: string; decision: string; signed_off: string; persona: string; territory: string; region: Region; field: string; platform: string; format: string; text: string; angle: string; structure: string; tone: string; features: string; flags: string; note: string; compliance_flags: string[]; warn_flags: string[] }
+export interface ShortRow { stub: string; id: string; batch: string; decision: string; signed_off: string; round: string; persona: string; territory: string; region: Region; field: string; platform: string; format: string; text: string; angle: string; structure: string; tone: string; features: string; flags: string; note: string; compliance_flags: string[]; warn_flags: string[] }
 
-/** Kept and edited lines in every run, each with its region (the run's), oldest first within a persona and territory. */
-export async function keptLines(): Promise<Line[]> {
+/** Kept and edited lines (in a round view's runs, or every run), each with its region and round (the run's), oldest first within a persona and territory. */
+export async function keptLines(view?: RoundView): Promise<Line[]> {
   const lines: Line[] = [];
-  for (const b of await listBatches()) {
+  for (const b of await listBatches(undefined, view)) {
     const batch = await loadBatch(b.id);
-    lines.push(...batch.lines.filter(l => l.decision === 'keep' || l.decision === 'edit').map(l => ({ ...l, region: regionOf(l, batch.brief) })));
+    lines.push(...batch.lines.filter(l => l.decision === 'keep' || l.decision === 'edit').map(l => ({ ...l, region: regionOf(l, batch.brief), round: roundOf(l, batch.brief) })));
   }
   // US before Canada within a persona and territory.
   const key = (l: Line) => `${l.persona}|${l.territory}|${l.region === DEFAULT_REGION ? 0 : 1}${l.region}|${l.id}`;
@@ -1783,14 +1803,17 @@ export function codeInput(l: Pick<Line, 'persona' | 'territory' | 'field' | 'reg
   return { persona: l.persona, territory: l.territory, format: r.territories[l.territory]?.format || 'STATIC', platform: r.fields[l.field]?.platform || 'META', region: regionOf(l) };
 }
 
-/** Every naming code signed off so far (they're never handed out again). */
-export async function signedCodes(): Promise<string[]> {
-  return ((await getStore().listSignoffs()) as any[]).flatMap(s => signoffVersions(s).map(v => v.code));
+/**
+ * Every naming code signed off so far (they're never handed out again), or only the sign-offs whose round passes
+ * `keep`: a real round allocates as if a test round never happened (R1 starts at A); a test round among test rounds.
+ */
+export async function signedCodes(keep?: (round: string) => boolean): Promise<string[]> {
+  return ((await getStore().listSignoffs()) as any[]).filter(s => !keep || keep(roundOf(s))).flatMap(s => signoffVersions(s).map(v => v.code));
 }
 
-export async function shortlist(): Promise<ShortRow[]> {
+export async function shortlist(view?: RoundView): Promise<ShortRow[]> {
   const r = loadRules();
-  const lines = await keptLines();
+  const lines = await keptLines(view);
   // Codes belong to live versions, built at Ready: a signed-off line shows the code(s) it's in; the others have none yet.
   return lines.map(l => {
     const t = r.territories[l.territory];
@@ -1799,7 +1822,7 @@ export async function shortlist(): Promise<ShortRow[]> {
     return {
       stub: signed ? (l.ready!.codes || [l.ready!.stub]).join(' ') : '', id: l.id, batch: l.batch, decision: l.decision || '',
       // Signed off at Ready: the set it's in (it can't be cut from the Shortlist; change the set at Ready instead).
-      signed_off: l.ready && !l.ready.superseded_by ? l.ready.signoff_id : '', persona: l.persona, territory: l.territory, region: regionOf(l), field: l.field,
+      signed_off: l.ready && !l.ready.superseded_by ? l.ready.signoff_id : '', round: roundOf(l), persona: l.persona, territory: l.territory, region: regionOf(l), field: l.field,
       platform, format: t?.format || '', text: finalText(l),
       angle: `${l.angle} ${l.angle_label}`, structure: l.structure, tone: l.tone_label, features: l.features.join('; '),
       flags: l.flags.map(flagText).join(' | '), note: l.note || '',
@@ -1809,9 +1832,9 @@ export async function shortlist(): Promise<ShortRow[]> {
   });
 }
 
-export async function writeShortlist(): Promise<{ count: number; path: string; mdPath: string; csv: string; md: string }> {
-  const rows = await shortlist();
-  const cols: Array<keyof ShortRow> = ['stub', 'id', 'persona', 'territory', 'region', 'field', 'platform', 'format', 'text', 'angle', 'structure', 'tone', 'features', 'flags', 'note'];
+export async function writeShortlist(view?: RoundView): Promise<{ count: number; path: string; mdPath: string; csv: string; md: string }> {
+  const rows = await shortlist(view ?? await roundView());
+  const cols: Array<keyof ShortRow> = ['stub', 'id', 'round', 'persona', 'territory', 'region', 'field', 'platform', 'format', 'text', 'angle', 'structure', 'tone', 'features', 'flags', 'note'];
   const csv = toCsv([cols as string[], ...rows.map(x => cols.map(c => String(x[c])))]);
   const md = ['# Shortlist', '', `Kept lines by field. At Ready for production they're combined into live versions (one ad each, e.g. primary text + headline), and each version gets a code, ${CURRENT_PATTERN} (add _YYMMDD at trafficking). A line already signed off shows its code(s).`, ''];
   let last = '';

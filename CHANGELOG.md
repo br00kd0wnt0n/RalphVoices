@@ -4,6 +4,20 @@ All notable changes to Ralph Voices are documented here.
 
 ## Unreleased
 
+- **Studio: rounds, a TEST round for the run-through, and the Live page.** Brook, 30 Sep; no migration (JSONB and `studio_inputs`).
+  - **Rounds.** An admin creates rounds (id R + number, name, start date, optional **test** flag) and sets the active one, in Rules. The header shows the active round (TEST marked) and a "This round / All rounds" view. New runs, their lines, taste rows and sign-offs are stamped with the round. Line versions and expectations follow their sign-off. Anything from before rounds reads as **R1** (Nick's first runs are round one).
+  - **Views default to the active round:** runs, Review, the Shortlist, Ready (which always works in one round), Pre-flight, Compliance, and the Shortlist and handoff exports. "All rounds" shows the rest, with other rounds marked on runs and Shortlist rows.
+  - **Round in exports:** a Round column in the handoff CSV and the asset handoff, a `round` column in the Shortlist and run exports, and `round` in the features export for B3.
+  - **A test round (R0)** is for Brook's production run-through:
+    - hidden by default;
+    - its codes end in `_TEST`;
+    - it's never in the handoff, the asset handoff or B3's features;
+    - it doesn't use up codes: a real round allocates as if it never happened, so R1 starts at A;
+    - its taste never feeds a real round's writer;
+    - its spend is real money: counted toward the cap and labelled with the round (every spend row now carries its round).
+  - **Live** (nav, still marked "soon") opens a page explaining the live results coming from the first weeks in market, in B3's terms.
+
+  Tests: `studioRounds.test.ts` (stamping; unstamped reads as R1; admin validation; default filter and "all"; R0 hidden from R1 and the handoff; R1 codes start at A; R0 taste excluded; spend counted and labelled). A Postgres rounds test (Pre-flight lists the active round; the asset handoff and B3 features never carry a test code; the features `round` column). Handoff: `docs/build-log/studio-rounds.md`.
 - **Studio: carousel cards, and the Meta headline as post copy.** Item E of live versions (Brook, 30 Sep); no migration.
   - **Card sequences.** On a CAROUSEL territory with on-image text ticked, Write & brief asks for card sequences instead of loose lines: 3 sequences × 4 cards by default (up to 6 × 10). A sequence is one idea: card 1 is the hook, the middle cards build it, the last card pays it off. Each card is written against its own visible limit. Each card is stored as a line with `card` and `sequence_id`. Review shows "card 2 of 4 · sequence S1" and has **Keep the whole sequence**, as well as keeping card by card. The estimate prices the sequences.
   - **Ready: cards per visual.** A carousel visual has card slots (4 by default, up to 10), shared by every version on the visual. Each card can be swapped for another line, cards can be reordered, and a whole sequence can be applied at once. The sign-off stores each card with its number (`on_image[].card`).
