@@ -17,7 +17,8 @@ import { LivePage, RoundBadge, RoundsPanel } from './StudioRounds';
 import { Board, type Step } from '@/components/studio/Board';
 import { ALL_VIEW, Chip, GhostButton, Lockup, PINK, PersonaDot, initials, params, personaKeys, regionOf, sameCtx, setTerritoryNames, setWhatToDo, territoryName, type Ctx, type ViewFilter } from '@/components/studio/ui';
 import { Home } from '@/components/studio/Home';
-import { Write, countsFor, formatFields } from '@/components/studio/Write';
+import { Write, countsFor } from '@/components/studio/Write';
+import { applyPlace } from '@/lib/studioFields';
 import { Review } from '@/components/studio/Review';
 import { Build } from '@/components/studio/Build';
 import { Assets } from '@/components/studio/Assets';
@@ -103,14 +104,18 @@ export function Studio() {
   }
   const esRef = useRef<{ close: () => void } | null>(null);
 
-  // The brief follows the context. The fields start from the territory's format (then the ticked fields stay as they
-  // are when the persona or territory changes); counts from the rules' default_count.
+  // The brief follows the context. Fields: the territory's format defaults (the server's default_fields) until the
+  // person changes them, then kept across persona and territory changes (studioFields.ts applyPlace); counts from the
+  // rules' default_count.
+  const [fieldNote, setFieldNote] = useState('');
   useEffect(() => {
     if (!meta) return;
     setBrief(b => {
-      const fields = b.fields.length ? b.fields : formatFields(meta, ctx.territory, ctx.persona);
+      const r = applyPlace(meta, b, { persona: ctx.persona, territory: ctx.territory });
+      if (b.fields.length) setFieldNote(r.note);
+      const fields = r.brief.fields;
       const field_counts = countsFor(meta, fields, 20, b.field_counts);
-      return { ...b, persona: ctx.persona, territory: ctx.territory, region: ctx.region, fields, field_counts, n: Math.max(1, Object.values(field_counts).reduce((a, x) => a + x, 0)) };
+      return { ...r.brief, region: ctx.region, fields, field_counts, n: Math.max(1, Object.values(field_counts).reduce((a, x) => a + x, 0)) };
     });
   }, [meta, ctx.persona, ctx.territory, ctx.region]);
   // New lines go into the attached run only while it's for the same persona, territory and region.
@@ -322,7 +327,7 @@ export function Studio() {
         {tab === 'howto' && <Home onStart={() => setTab('write')} />}
         {tab === 'live' && <LivePage />}
         {meta && tab === 'write' && <Write meta={meta} brief={brief} setBrief={setBrief} ctx={ctx} setCtx={setCtx} run={run} running={running} user={user} runsTick={runsTick} onContinue={continueRun}
-          attachedRun={attached && batch?.id === attached ? batch : null} onNewRun={() => setAttached(null)} onTerritories={() => setTab('territories')} onEditTerritory={code => setDrawer({ code })} />}
+          attachedRun={attached && batch?.id === attached ? batch : null} onNewRun={() => setAttached(null)} onTerritories={() => setTab('territories')} onEditTerritory={code => setDrawer({ code })} fieldNote={fieldNote} />}
         {meta && tab === 'review' && <Review meta={meta} ctx={ctx} batch={batch} setBatch={setBatch} status={status} running={running} onMore={more} onMoreRun={() => run({ into: batch })} onAddLine={addLine}
           onDecided={() => setRunsTick(t => t + 1)} onBuild={() => setTab('build')} initialFilter={openKept ? 'kept' : undefined} />}
         {meta && tab === 'build' && <Build meta={meta} ctx={ctx} user={user} onNext={() => setTab('assets')} onReview={() => setTab('review')} />}

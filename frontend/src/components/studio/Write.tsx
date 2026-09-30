@@ -1,6 +1,7 @@
 // Step 1, Write: the territory (picked at the top), your lines first, then how many of each field Studio writes around
 // them. The per-field counts default to the rules' fields.<id>.default_count, else an even split of n.
 import { useEffect, useRef, useState } from 'react';
+import { toggleField as toggleFieldIn } from '@/lib/studioFields';
 import { studio, type Batch, type Brief, type Meta, type OwnLine, type RunSummary, type Tone, REGION_NAMES } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { personaColor, personaEdge, tint } from '@/lib/personaColors';
@@ -11,29 +12,20 @@ export function defaultCount(meta: Meta, f: string, fields: string[], n: number)
   const d = meta.fields[f]?.default_count;
   return typeof d === 'number' ? d : Math.max(1, Math.round(n / Math.max(1, fields.length)));
 }
-/**
- * The fields a territory's format starts with: static and carousel → primary, headline, on-image; video and UGC →
- * primary, headline; a TikTok format → hook, caption. Anything else: the persona's default fields.
- */
-export function formatFields(meta: Meta, territory: string, persona: string): string[] {
-  const f = String(meta.territories[territory]?.format || '').toUpperCase();
-  const want = /^(STATIC|CAROUSEL)/.test(f) ? ['meta_primary', 'meta_headline', 'meta_on_image']
-    : /^(VIDEO|UGC)/.test(f) ? ['meta_primary', 'meta_headline']
-    : /^(TT|TIKTOK)/.test(f) ? ['tiktok_hook', 'tiktok_caption'] : meta.personas[persona]?.default_fields || [];
-  return want.filter(k => meta.fields[k]);
-}
 /** Counts for a set of fields: the ones already set are kept. */
 export function countsFor(meta: Meta, fields: string[], n: number, prev: Record<string, number> = {}): Record<string, number> {
   return Object.fromEntries(fields.map(f => [f, prev[f] ?? defaultCount(meta, f, fields, n)]));
 }
 const shortField = (meta: Meta, f: string) => (meta.fields[f]?.label || f).replace(/^(Meta|TikTok) /, '').replace(/\s*\(.*\)$/, '').replace(/^./, c => c.toUpperCase());
 
-export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, runsTick, onContinue, attachedRun, onNewRun, onTerritories, onEditTerritory }: {
+export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, runsTick, onContinue, attachedRun, onNewRun, onTerritories, onEditTerritory, fieldNote }: {
   meta: Meta; brief: Brief; setBrief: (b: Brief) => void; ctx: Ctx; setCtx: (c: Ctx) => void; run: (o?: { ownOnly?: boolean }) => void; running: boolean;
   user: string; runsTick: number; onContinue: (id: string, opts?: { resume?: boolean }) => void;
   attachedRun: Batch | null; onNewRun: () => void; onTerritories: () => void;
   /** Open the territory drawer: a code to edit it, null for a new one. */
   onEditTerritory: (code: string | null) => void;
+  /** "Fields set for a static: …" when a new territory applied its defaults. */
+  fieldNote?: string;
 }) {
   const [more, setMore] = useState(false);
   const territories = Object.entries(meta.territories).filter(([, x]) => x.persona === ctx.persona && x.status !== 'retired');
@@ -61,25 +53,28 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
   const seqOn = carousel && brief.fields.some(f => /on_image/.test(f));
   const counts = countsFor(meta, brief.fields, brief.n, brief.field_counts);
   const total = Object.entries(counts).reduce((a, [f, x]) => a + (seqOn && /on_image/.test(f) ? seq.sequences * seq.cards : x), 0);
-  const toggleField = (f: string) => {
-    const fields = brief.fields.includes(f) ? brief.fields.filter(x => x !== f) : [...brief.fields, f].sort((a, b) => fieldOrder(meta, a) - fieldOrder(meta, b));
+  // Ticking marks the fields as the person's own choice (studioFields.ts): a new territory then keeps them.
+  const pick = (f: string, only: boolean) => {
+    const b = toggleFieldIn(brief, f, only);
+    const fields = [...b.fields].sort((x, y) => fieldOrder(meta, x) - fieldOrder(meta, y));
     const next = countsFor(meta, fields, brief.n, brief.field_counts);
-    set({ fields, field_counts: next, n: Math.max(1, Object.values(next).reduce((a, x) => a + x, 0)) });
+    setBrief({ ...b, fields, field_counts: next, n: Math.max(1, Object.values(next).reduce((a, x) => a + x, 0)) });
   };
+  const toggleField = (f: string) => pick(f, false);
   /** "only": this field and nothing else. */
-  const onlyField = (f: string) => { const next = countsFor(meta, [f], brief.n, brief.field_counts); set({ fields: [f], field_counts: next, n: Math.max(1, next[f] || 1) }); };
+  const onlyField = (f: string) => pick(f, true);
   const setCount = (f: string, v: number) => {
     const next = { ...counts, [f]: Math.max(0, Math.min(60, Math.floor(v) || 0)) };
     set({ field_counts: next, n: Math.max(1, Object.values(next).reduce((a, x) => a + x, 0)) });
   };
 
   // The cost before running (debounced; the server prices the brief as sent).
-  const [est, setEst] = useState<{ usd: number; minutes: number } | null>(null);
+  const [est, setEst] = useState<{ usd: number; minutes: number; summary?: string } | null>(null);
   useEffect(() => {
     if (!brief.fields.length) { setEst(null); return; }
     const h = setTimeout(() => {
       studio.estimate({ ...brief, field_counts: counts, n: Math.max(1, Object.values(counts).reduce((a, x) => a + x, 0)), ...(seqOn ? { carousel: seq } : {}), own_lines: written }, total === 0)
-        .then(e => setEst({ usd: e.usd, minutes: Math.max(0, ...Object.values(e.minutes_at_budget || {})) })).catch(() => setEst(null));
+        .then(e => setEst({ usd: e.usd, minutes: Math.max(0, ...Object.values(e.minutes_at_budget || {})), summary: e.allocation?.summary })).catch(() => setEst(null));
     }, 400);
     return () => clearTimeout(h);
   }, [JSON.stringify(counts), JSON.stringify(seq), brief.persona, brief.territory, brief.model, written.length]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -170,8 +165,9 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
           <section className="rounded-xl border border-[#272B34] bg-[#16181D] p-5">
             <div className="mb-3 flex flex-wrap items-baseline gap-x-3">
               <h2 className="text-lg font-semibold">Studio writes</h2>
-              <span className="text-sm text-[#858B96]">Tick the fields, set how many of each. Defaults come from the rules.</span>
+              <span className="text-sm text-[#858B96]">Tick the fields, set how many of each. Defaults come from the territory’s format and the rules.</span>
             </div>
+            {fieldNote && <p className="-mt-1 mb-2 text-sm text-amber-200">{fieldNote}</p>}
             <div className="grid grid-cols-1 gap-x-6 gap-y-1 md:grid-cols-2">
               {platforms.map(pl => (
                 <div key={pl}>
@@ -216,7 +212,8 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
             <div className="mr-auto min-w-0">
               <div className="text-base font-semibold">{written.length ? `${written.length} of yours` : 'None of yours yet'} + Studio writes {total}</div>
               <div className="text-sm text-[#858B96]">
-                {brief.fields.filter(f => counts[f] || (seqOn && /on_image/.test(f))).map(f => seqOn && /on_image/.test(f) ? `${seq.sequences} × ${seq.cards} carousel cards` : `${counts[f]} ${shortField(meta, f).toLowerCase()}`).join(' · ') || 'Set a count to generate'}
+                {/* Exactly what Generate writes: the server's allocation (the counts generate keeps to). */}
+                {est?.summary ? `Generate writes ${est.summary}` : brief.fields.filter(f => counts[f] || (seqOn && /on_image/.test(f))).map(f => seqOn && /on_image/.test(f) ? `${seq.sequences} × ${seq.cards} carousel cards` : `${counts[f]} ${shortField(meta, f).toLowerCase()}`).join(' · ') || 'Set a count to generate'}
                 {est ? ` · about $${est.usd.toFixed(2)}${meta.mock ? ' (mock: free)' : ''}` : ''}
               </div>
             </div>
