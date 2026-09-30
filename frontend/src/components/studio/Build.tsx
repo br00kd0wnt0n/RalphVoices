@@ -97,7 +97,7 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
   }
   const t = meta.territories[pt.territory];
   const label = (f: string) => meta.fields[f]?.label || f;
-  const short = (f: string) => label(f).replace(/^(Meta|TikTok) /, '');
+  const short = (f: string) => { const x = label(f).replace(/^(Meta|TikTok) /, ''); return x.charAt(0).toUpperCase() + x.slice(1); };
   const carousel = /^CAR/i.test(t?.format || '');
   const color = personaColor(pt.persona);
 
@@ -188,7 +188,7 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
                     {hookField && oiFields.length === 0 && <p className="mb-3 text-sm text-[#858B96]">The hook goes on the video: choose it in each ad below.</p>}
 
                     <Step n={++step} title="The ads" hint="Click a slot to choose a line. Each ad is one naming code.">
-                      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                         {vs.map(({ d, i, p: pv }) => (
                           <AdPreview key={i} meta={meta} view={view} draft={draft} version={d} index={i} planned={pv} platform={p} name={nameOf(i)} status={statusOf(i)} carousel={carousel}
                             cards={cards} byId={byId} lead={!!pv?.code && lead.has(pv.code)} activeSlot={slot} nameOfCode={nameOfCode}
@@ -520,7 +520,7 @@ function AdPreview({ meta, view, draft, version, index, planned, platform, name,
               </div>
             ) : (
               <button onClick={() => oiField && onSlot({ kind: 'image', visual: version.visual, field: oiField })} disabled={!oiField}
-                className="flex aspect-square w-full items-center justify-center p-6 text-center text-2xl font-bold leading-tight text-white" style={{ background: `linear-gradient(160deg, ${tint(tone.base, 0.45)}, #16181D)` }}
+                className="flex aspect-[4/3] w-full items-center justify-center p-6 text-center text-xl font-bold leading-tight text-white" style={{ background: `linear-gradient(160deg, ${tint(tone.base, 0.45)}, #16181D)` }}
                 aria-label={oi ? `On-image text: ${oi.final_text}` : oiField ? 'Choose the on-image text' : 'The image'}>
                 {oi ? oi.final_text : <span className="text-base font-normal text-[#A3A8B1]">{oiField ? 'Choose the on-image text (step ①)' : 'The image'}</span>}
               </button>

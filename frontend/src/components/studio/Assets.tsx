@@ -69,6 +69,9 @@ function byVisual(rs: CodeRow[]): Array<[string, CodeRow[]]> {
   return [...groups.entries()].map(([k, g]) => [k.startsWith('u:') ? g[0].s.upload!.files.map(f => f.filename).join(', ') : k.startsWith('v:') ? 'not uploaded yet' : '', g]);
 }
 
+/** A thumbnail box in the shape of its size (a 4:5 card isn't squashed into a square). */
+const ASPECT: Record<string, string> = { '1:1': 'aspect-square', '4:5': 'aspect-[4/5]', '9:16': 'aspect-[9/16]' };
+
 export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: ViewFilter; setView: (v: ViewFilter) => void; onBuild: () => void }) {
   const enabled = !!meta.preflight?.enabled;
   const canReady = !!meta.preflight?.can_set_ready;
@@ -327,7 +330,7 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
                 <div className={cn('grid gap-2', up.kind === 'carousel' ? 'grid-cols-3' : 'grid-cols-1')}>
                   {(shownSize?.fs || up.files).map(f => (
                     <div key={f.position}>
-                      <AuthMedia path={studio.pfFile(up.id, f.position)} video={up.kind === 'video'} alt={f.filename} className={up.kind === 'carousel' ? 'aspect-square w-full' : 'max-h-96 w-full'} />
+                      <AuthMedia path={studio.pfFile(up.id, f.position)} video={up.kind === 'video'} alt={f.filename} className={up.kind === 'carousel' ? cn('w-full', ASPECT[shownSize?.z || '1:1']) : 'max-h-96 w-full'} />
                       {up.kind === 'carousel' && <div className="mt-0.5 text-center text-xs text-[#858B96]">card {(f.position % 100) + 1}</div>}
                     </div>
                   ))}
