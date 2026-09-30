@@ -1,5 +1,5 @@
 // The Ready for production acceptance scenario (Brook, 28 Sep; live versions,
-// 1 Oct), shared by studioReady.test.ts (file store) and studioPg.test.ts
+// 30 Sep), shared by studioReady.test.ts (file store) and studioPg.test.ts
 // (Postgres, run in sequence with the other database tests so they don't
 // truncate each other). Two primary texts share one headline: versions A1 and A2.
 import assert from 'node:assert/strict';

@@ -208,7 +208,7 @@ export class Preflight {
 
   /**
    * The signed-off lines behind a code (one live version): its fields, and its visual's on-image text, which belongs to
-   * the visual and so is on every code of it (Brook, 1 Oct).
+   * the visual and so is on every code of it (Brook, 30 Sep).
    */
   private partsOf(s: Signoff, stub: string): SignedField[] {
     const v = signoffVersions(s).find(x => x.code === stub);

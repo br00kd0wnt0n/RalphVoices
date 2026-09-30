@@ -76,7 +76,7 @@ function repeat(a: Field, b: Field): { quote: string; why: string } | null {
   if (small < CONFIG.repeat_min_content_words) return null;
   const shared = [...ca].filter(w => cb.has(w));
   const overlap = shared.length / small;
-  if (overlap >= CONFIG.repeat_overlap) return { quote: shared.join(', '), why: `${Math.round(overlap * 100)}% of the words are the same` };
+  if (shared.length >= CONFIG.repeat_min_shared && overlap >= CONFIG.repeat_overlap) return { quote: shared.join(', '), why: `${Math.round(overlap * 100)}% of the words are the same` };
   return null;
 }
 
@@ -125,9 +125,10 @@ Find only real problems BETWEEN fields:
 - contradiction: two fields say opposite things
 - undercut: one field weakens or takes back another's claim
 - tone: the fields clash in voice (e.g. a joke headline on a grave primary text)
-- repeat: two fields make the same point in different words
+- repeat: one field only restates another and adds nothing
+A headline picking up the primary text's key word or theme is normal and fine: that's an echo, not a repeat.
 Most ads have none. Don't comment on a single field on its own, on style, or on compliance.
-Reply as JSON: {"hits":[{"kind":"contradiction|undercut|tone|repeat","fields":["<field id>", "<field id>"],"quote":"<exact words from the copy>","why":"<12 words or fewer>"}]}. No problems: {"hits":[]}.`;
+Reply as JSON: {"hits":[{"kind":"contradiction|undercut|tone|repeat","fields":["<field id>", "<field id>"],"quote":"<words copied exactly from one field>","why":"<12 words or fewer>"}]}. No problems: {"hits":[]}.`;
 const userOf = (fs: Field[]) => fs.map(f => `${f.field} (${f.label}): ${f.text}`).join('\n');
 
 /** Rough cost of the conflicts check for these versions (the ones whose wording hasn't been checked yet). */

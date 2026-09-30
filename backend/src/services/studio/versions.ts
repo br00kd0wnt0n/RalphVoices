@@ -1,4 +1,4 @@
-// Live versions: one naming code = one ad (Brook, 1 Oct). Add3 run up to three
+// Live versions: one naming code = one ad (Brook, 30 Sep). Add3 run up to three
 // copy versions per visual, each as its own ad, and a version is a SET of
 // fields: Meta primary text + headline (+ description), or a TikTok caption
 // (+ hook). At Ready for production the creative lead builds the versions from
@@ -174,7 +174,7 @@ export function planDraft(draft: Draft, lines: Line[], ctx: Ctx, signedCodes: st
 
 /**
  * A line's compliance status for one code. Set at the Compliance step per code (compliance_by_code); a status set per
- * line before versions (1 Oct) counts for the code it was given with, or for any code if it names none.
+ * line before versions (30 Sep) counts for the code it was given with, or for any code if it names none.
  */
 export function complianceFor(l: Pick<Line, 'compliance' | 'compliance_by_code'>, code: string) {
   return l.compliance_by_code?.[code] ?? (l.compliance && (!l.compliance.code || l.compliance.code === code) ? l.compliance : undefined);

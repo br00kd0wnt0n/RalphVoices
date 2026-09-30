@@ -21,7 +21,7 @@ import {
   type Api, type Batch, type ComplianceStatus, type Flag, type Line, type LineVersion,
   checkBatch, finalText, getStore, keptLines, lineHash, loadBatch, loadRules, runLock, sha256, signedCodes, toCsv,
 } from './engine.js';
-import { DEFAULT_REGION, REGION_NAMES, parseCode, type Region } from '../../utils/namingCode.js';
+import { DEFAULT_REGION, REGION_NAMES, parseCode, territoryToken, type Region } from '../../utils/namingCode.js';
 import {
   type Draft, type SignedField, type SignedOnImage, type SignedVersion,
   complianceFor, defaultDraft, fieldRole, planDraft, platformOf, signoffOnImage, signoffVersions, versionFields,
@@ -47,7 +47,7 @@ export interface Signoff {
   ready_by: string; ready_at: string; sha256: string;
   /** Every line signed off, once each. stub: its first code (or its visual key, for on-image text); codes: every code it's in. */
   lines: Array<SignedField & { stub: string; codes?: string[] }>;
-  /** The live versions, one code each (sign-offs from before 1 Oct have none: one code per line, see signoffVersions). */
+  /** The live versions, one code each (sign-offs from before 30 Sep have none: one code per line, see signoffVersions). */
   versions?: SignedVersion[];
   /** Text on the image, one per visual. */
   on_image?: SignedOnImage[];
@@ -268,7 +268,14 @@ async function signOffLocked(input: { persona: string; territory: string; expect
   const expCodes = [...new Set(exp.codes || [])];
   const reason = String(exp.reason || '').trim();
   if (!expCodes.length || !reason) throw new Error('Record which version(s) you expect to lead, and why');
-  if (expCodes.some(c => !codes.includes(c))) throw new Error('The expected leaders must be among the versions being signed off');
+  const unknown = expCodes.filter(c => !codes.includes(c));
+  if (unknown.length) {
+    // A code these versions would have had, taken by a sign-off made meanwhile: the codes moved on.
+    const taken = new Set(await signedCodes());
+    const ours = unknown.every(c => { const p = parseCode(c, null); return !('error' in p) && taken.has(c) && p.persona === persona && p.territory === territoryToken(persona, territory) && p.region === region; });
+    if (ours) throw new ConflictError(`The codes changed since the screen loaded (${view.latest ? `${view.latest.ready_by} signed off v${view.latest.version}` : 'someone signed off'}): reload, then choose the version(s) you expect to lead again`);
+    throw new Error('The expected leaders must be among the versions being signed off');
+  }
 
   const st = getStore();
   const now = new Date().toISOString();

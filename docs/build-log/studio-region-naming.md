@@ -71,22 +71,24 @@ The letter is set at **Ready for production**, not at the Pre-flight upload. Onc
 
 I haven't touched B3's code. For `services/weekly/naming.ts` to match:
 
+> **Live versions (30 Sep): the `<line>` digit is now a version number.** One code is one ad: a set of fields (Meta primary text + headline, optional description; TikTok caption, optional hook) built at Ready for production. `A2` means visual A, version 2, not "copy line 2". The format, the regex and the visual key are unchanged, so B3's parser needs no change; only what the digit means. A line can serve several codes (one headline in A1 and A2), and the visual's on-image text belongs to every code on that visual. Codes signed off before versions (one code per line) keep their codes and are still read.
+
 ```
-Current:  PERSONA _ TERRITORY _ FORMAT _ [VISUAL][LINE] _ REGION _ PLATFORM [_ YYMMDD] [_ suffix…]
+Current:  PERSONA _ TERRITORY _ FORMAT _ [VISUAL][VERSION] _ REGION _ PLATFORM [_ YYMMDD] [_ suffix…]
 Earlier:  PERSONA _ TERRITORY _ FORMAT _ v# _ PLATFORM [_ YYMMDD] [_ suffix…]     (still valid; keep reading it)
 
 PERSONA    DINK | CUR | FAM
 TERRITORY  one or more tokens (SUMMER, DAY_ONE); a repeated persona prefix (FAM_FAM_SUMMER) is dropped
 FORMAT     ST | CAR | VID | UGC | TT   (aliases STATIC, CAROUSEL, VIDEO, TIKTOK as today)
 VISUAL     one letter A–Z               \
-LINE       1–99, no leading zero        /  one token, regex ^[A-Z][1-9]\d?$  e.g. A2, B1, C12
+VERSION    1–99, no leading zero        /  one token, regex ^[A-Z][1-9]\d?$  e.g. A2, B1, C12  (was LINE; same digits)
 REGION     US | CA
 PLATFORM   META | TT                    (aliases FB, IG → META; TIKTOK → TT, as today)
 YYMMDD     trafficking date, as today (YYYYMMDD accepted with a warning)
 ```
 
-- **Join key** (what Studio stores, `signoff.lines[].stub`, and what Pre-flight's features CSV `stub` column carries):
-  - new form: `PERSONA_TERRITORY_FORMAT_<visual><line>_REGION_PLATFORM`, e.g. `FAM_SUMMER_ST_A2_US_META`;
+- **Join key** (what Studio stores, `signoff.versions[].code`, earlier `signoff.lines[].stub`, and what Pre-flight's features CSV `stub` column carries):
+  - new form: `PERSONA_TERRITORY_FORMAT_<visual><version>_REGION_PLATFORM`, e.g. `FAM_SUMMER_ST_A2_US_META`;
   - earlier form: `PERSONA_TERRITORY_FORMAT_v#_PLATFORM`, e.g. `FAM_SUMMER_ST_v2_META`.
 - **The visual** (B3's `asset` field) is the key without the line number: `FAM_SUMMER_ST_A_US_META`. Codes sharing it run on one visual. For v# codes it stays `PERSONA_TERRITORY_FORMAT`, as today.
 - **Anchoring:** parse by anchoring on the `[A-Z]\d+` token that is followed by a region token and then a platform token (or on `v#` for the earlier form).

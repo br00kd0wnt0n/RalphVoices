@@ -768,6 +768,10 @@ test('4. racing sign-offs: one wins, the other gets a clear 409; one version cou
   assert.equal(ok.length, 1, 'one wins');
   assert.equal(no[0].reason.status, 409);
   assert.match(no[0].reason.message, /(nick|brook) just signed this set off \(v1/);
+  // Without expect_latest (a script, not the page), the loser's codes move on: a clear 409, not "must be among the versions".
+  const late = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: adsOf(ids.slice(2, 4), run.head), expectation: { codes: [lead], reason: 'late' } }, 'nick').catch((e: any) => e);
+  assert.equal(late.status, 409);
+  assert.match(late.message, /The codes changed since the screen loaded \((nick|brook) signed off v1\)/);
   const db = (store as any).db;
   assert.equal(Number((await db.query(`SELECT count(*) FROM studio_line_versions v WHERE v.signoff_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM studio_signoffs s WHERE s.id = v.signoff_id)`)).rows[0].count), 0, 'no orphan line versions');
   const fieldsOfCode = new Map<string, Set<string>>();
@@ -836,7 +840,7 @@ test('8. an edit after sign-off: Ready and Compliance show it as needing review,
   assert.equal(c.stale, 'Wording edited since sign-off');
 });
 
-// ---------- live versions end to end (Brook, 1 Oct): one code = one ad ----------
+// ---------- live versions end to end (Brook, 30 Sep): one code = one ad ----------
 
 test('live versions: A1–A3 share a headline and visual A has on-image text → one shared upload, on-image matched on all three, compliance per code, handoff one row per code', { skip }, async () => {
   const { R, api } = await freshStudio();

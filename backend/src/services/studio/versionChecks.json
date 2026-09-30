@@ -2,6 +2,7 @@
   "repeat_run_words": 4,
   "repeat_overlap": 0.6,
   "repeat_min_content_words": 3,
+  "repeat_min_shared": 3,
   "too_alike": 0.85,
   "conflict_model": "gpt-4o",
   "conflict_max_tokens": 220,
