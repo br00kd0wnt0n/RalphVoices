@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { studio, type CodeCompliance, type ComplianceAsset, type ComplianceStatus, type ComplianceView, type Meta, type PfFlag, type PfReport, type PfStub, type StudioEvent } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
+import { SIZES, detectFileSize } from '@/lib/studioSizes';
 import { personaEdge } from '@/lib/personaColors';
 import { personaColor, tint } from '@/lib/personaColors';
 import { AuthMedia, PersonaChip, PersonaDot, inViewFilter, personaKeys, type ViewFilter, Chip, CodeChip, COMPLIANCE_TONE, COMPLIANCE_WORDS, COPY_STATUS, GhostButton, Intro, Label, NAMING_TIP, PINK, PinkButton, SEV_ORDER, chipName, codeState, inRegion, params, plainSource, regionOf, territoryName, when, whatToDo } from './ui';
@@ -83,7 +84,7 @@ export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: Vie
   const [report, setReport] = useState<PfReport | null>(null);
   const [error, setError] = useState('');
   const [progress, setProgress] = useState('');
-  const [pending, setPending] = useState<{ upload_id: string; estimate: { usd: number; seconds: number } } | null>(null);
+  const [pending, setPending] = useState<{ upload_id: string; estimate: { usd: number; seconds: number; sizes?: number } } | null>(null);
   const [files, setFiles] = useState<File[]>([]);
   const esRef = useRef<{ close: () => void } | null>(null);
   useEffect(() => () => esRef.current?.close(), []);
@@ -118,11 +119,11 @@ export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: Vie
 
   if (!enabled) return <div className="max-w-3xl rounded-xl border border-[#272B34] bg-[#16181D] p-6 text-base text-[#A3A8B1]">Assets need the database: in <code>backend/</code>, run <code>npx tsx scripts/studio.ts serve --store pg --database-url …</code> (hosted Studio has it on).</div>;
 
-  async function upload(also: string[]) {
+  async function upload(also: string[], sizes: string[] = []) {
     if (!sel || !files.length) return;
     setError(''); setProgress('Uploading…');
     try {
-      const r = await studio.pfUpload(sel, files, also);
+      const r = await studio.pfUpload(sel, files, also, sizes);
       if (r.format_notes?.length) setError(r.format_notes.join(' '));
       setPending({ upload_id: r.upload_id, estimate: r.estimate });
       setFiles([]); setProgress('');
@@ -194,7 +195,7 @@ export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: Vie
 
       {stubs && !scoped.length && (
         <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#272B34] bg-[#16181D] p-5 text-base text-[#A3A8B1]">
-          <span className="mr-auto">{view.persona !== 'all' || view.territory !== 'all' || view.region !== 'all' || format !== 'all' ? 'Nothing signed off for this filter.' : 'Nothing signed off yet in this round.'} Each code gets its asset here once it’s signed off.</span>
+          <span className="mr-auto">{view.persona !== 'all' || view.territory !== 'all' || view.region !== 'all' || format !== 'all' ? 'Nothing signed off for this filter.' : 'Nothing signed off yet this month.'} Each code gets its asset here once it’s signed off.</span>
           {(view.persona !== 'all' || view.territory !== 'all' || view.region !== 'all' || format !== 'all') && <GhostButton onClick={() => { setView({ persona: 'all', territory: 'all', region: 'all' }); setFormat('all'); }}>Show all</GhostButton>}
           <GhostButton onClick={onBuild}>Build & sign off</GhostButton>
         </div>
@@ -247,8 +248,8 @@ export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: Vie
 
 function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer, progress, pending, files, setFiles, onUpload, onAudit, onChanged, onError }: {
   meta: Meta; row: CodeRow; report: PfReport; stubs: PfStub[]; canReady: boolean; canCompliance: boolean; producer: boolean; progress: string;
-  pending: { upload_id: string; estimate: { usd: number; seconds: number } } | null;
-  files: File[]; setFiles: (f: File[]) => void; onUpload: (also: string[]) => void; onAudit: (uploadId: string) => void;
+  pending: { upload_id: string; estimate: { usd: number; seconds: number; sizes?: number } } | null;
+  files: File[]; setFiles: (f: File[]) => void; onUpload: (also: string[], sizes: string[]) => void; onAudit: (uploadId: string) => void;
   onChanged: () => Promise<void>; onError: (m: string) => void;
 }) {
   report = { ...report, same_visual_as: report.same_visual_as ?? [], on_asset_copy: report.on_asset_copy ?? report.copy, post_copy: report.post_copy ?? [] };
@@ -260,6 +261,18 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
   const cross = (current ? report.flags : []).filter(f => f.cross_persona);
   const openRed = main.filter(f => f.severity === 'red' && !f.override).length;
   const auditForLatest = current;
+  // Sizes (the client's WBS): each chosen file's size, read in the browser and correctable; the asset by size.
+  const [fileSizes, setFileSizes] = useState<string[]>([]);
+  useEffect(() => {
+    let live = true;
+    setFileSizes(files.map(() => ''));
+    Promise.all(files.map(detectFileSize)).then(z => { if (live) setFileSizes(z.map(x => x || '')); });
+    return () => { live = false; };
+  }, [files]);
+  const expected = report.sizes?.expected || [];
+  const bySize = up ? SIZES.map(z => ({ z, fs: up.files.filter(f => (f.aspect || expected[0] || '1:1') === z) })).filter(g => g.fs.length) : [];
+  const [sizeTab, setSizeTab] = useState('');
+  const shownSize = bySize.find(g => g.z === sizeTab) || bySize[0];
   const auditedLatest = auditForLatest && a!.status === 'done';
   const ready = report.status.status === 'ready';
   const readyBlock = !up ? 'Upload the asset first.' : !auditForLatest ? 'Run the checks on this upload first.' : a!.status === 'running' || a!.status === 'queued' ? 'The checks are still running.' : a!.status === 'failed' ? 'The checks failed; run them again.' : openRed ? `${openRed} red flag${openRed === 1 ? '' : 's'} to fix (a new upload) or override.` : '';
@@ -305,11 +318,17 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
             <Label>The asset</Label>
             {up ? (
               <>
+                {(bySize.length > 1 || (report.sizes?.missing.length ?? 0) > 0) && (
+                  <div className="mb-2 flex flex-wrap items-center gap-1.5" role="tablist" aria-label="Sizes">
+                    {bySize.map(g => <GhostButton key={g.z} role="tab" aria-selected={shownSize?.z === g.z} active={shownSize?.z === g.z} className="px-2.5 py-0.5 text-sm" onClick={() => setSizeTab(g.z)}>{g.z}</GhostButton>)}
+                    {report.sizes?.missing.map(z => <Chip key={z} tone="amber" className="text-xs" title="Expected for this format; Pre-flight can still pass, and the handoff notes it">{z} not uploaded</Chip>)}
+                  </div>
+                )}
                 <div className={cn('grid gap-2', up.kind === 'carousel' ? 'grid-cols-3' : 'grid-cols-1')}>
-                  {up.files.map(f => (
+                  {(shownSize?.fs || up.files).map(f => (
                     <div key={f.position}>
                       <AuthMedia path={studio.pfFile(up.id, f.position)} video={up.kind === 'video'} alt={f.filename} className={up.kind === 'carousel' ? 'aspect-square w-full' : 'max-h-96 w-full'} />
-                      {up.kind === 'carousel' && <div className="mt-0.5 text-center text-xs text-[#858B96]">card {f.position + 1}</div>}
+                      {up.kind === 'carousel' && <div className="mt-0.5 text-center text-xs text-[#858B96]">card {(f.position % 100) + 1}</div>}
                     </div>
                   ))}
                 </div>
@@ -320,7 +339,21 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
             {report.format_note && <p className="mt-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">{report.format_note}</p>}
             <div className="mt-3 space-y-2 border-t border-[#272B34] pt-3">
               <input key={up?.id || 'none'} type="file" multiple accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime" onChange={e => setFiles([...(e.target.files || [])])} className="max-w-full text-sm" />
-              <p className="text-xs text-[#646A75]">One image (static), several (carousel cards, in order), or one video. A new upload replaces the asset and reopens it for review.</p>
+              <p className="text-xs text-[#646A75]">Every size at once: {expected.length ? expected.join(', ') : '1:1, 4:5, 9:16'} for this code. One image or video per size; a carousel's cards in order within each size. Sizes are read from the files; correct any below. A new upload replaces the asset and reopens it for review.</p>
+              {files.length > 0 && (
+                <ul className="space-y-1 rounded-lg border border-[#272B34] px-3 py-2 text-sm">
+                  {files.map((f, i) => (
+                    <li key={`${f.name}-${i}`} className="flex items-center gap-2">
+                      <span className="min-w-0 flex-1 truncate">{f.name}</span>
+                      <select aria-label={`Size of ${f.name}`} className="rounded border border-[#343946] bg-[#101216] px-1 py-0.5 text-xs" value={fileSizes[i] || ''}
+                        onChange={e => setFileSizes(cur => cur.map((x, j) => (j === i ? e.target.value : x)))}>
+                        <option value="">{`Size? (${expected[0] || '1:1'} if not set)`}</option>
+                        {SIZES.map(z => <option key={z} value={z}>{z}</option>)}
+                      </select>
+                    </li>
+                  ))}
+                </ul>
+              )}
               {siblings.length > 0 && files.length > 0 && (
                 <fieldset className="rounded-lg border border-[#272B34] px-3 py-2">
                   <legend className="px-1 text-xs text-[#858B96]">Also use this visual for (codes signed off on this visual are ticked)</legend>
@@ -333,12 +366,12 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
                 </fieldset>
               )}
               <div className="flex flex-wrap items-center gap-2">
-                <PinkButton className="px-4 py-1.5 text-base" disabled={!files.length || !!progress} onClick={() => onUpload(also)}>{up ? 'Upload a new version' : 'Upload'}</PinkButton>
+                <PinkButton className="px-4 py-1.5 text-base" disabled={!files.length || !!progress} onClick={() => onUpload(also, fileSizes)}>{up ? 'Upload a new version' : 'Upload'}</PinkButton>
                 {files.length > 0 && <span className="text-sm text-[#858B96]">{files.length} file{files.length === 1 ? '' : 's'}</span>}
               </div>
               {(pending || (up && !auditForLatest)) && !progress && (
                 <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[#343946] bg-[#101216] px-3 py-2 text-sm">
-                  <span>{pending ? `About $${pending.estimate.usd.toFixed(2)} and ${secs(pending.estimate.seconds)} to check.` : 'Not checked yet.'}</span>
+                  <span>{pending ? `About $${pending.estimate.usd.toFixed(2)} and ${secs(pending.estimate.seconds)} to check${(pending.estimate.sizes ?? 1) > 1 ? ` (${pending.estimate.sizes} sizes, one check each)` : ''}.` : 'Not checked yet.'}</span>
                   <PinkButton className="ml-auto px-3 py-1 text-sm" onClick={() => onAudit(pending?.upload_id || up!.id)}>Run the checks</PinkButton>
                 </div>
               )}
@@ -406,7 +439,7 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
                   <thead><tr className="text-xs uppercase text-[#858B96]"><th className="pb-1 pr-3">Field</th><th className="pb-1 pr-3">Signed off</th><th className="pb-1 pr-3">On the asset</th><th className="pb-1">Result</th></tr></thead>
                   <tbody>{copyRows.map((r, i) => (
                     <tr key={i} className="border-t border-[#272B34] align-top">
-                      <td className="py-1.5 pr-3 text-[#858B96]">{r.field}{r.card ? `, card ${r.card}` : ''}</td>
+                      <td className="py-1.5 pr-3 text-[#858B96]">{r.size ? `${r.size} · ` : ''}{r.field}{r.card ? `, card ${r.card}` : ''}</td>
                       <td className="py-1.5 pr-3">{r.signed_off}</td>
                       <td className="py-1.5 pr-3 text-[#C9CCD2]">{r.found || '–'}</td>
                       <td className="py-1.5"><Chip tone={COPY_STATUS[r.status]?.tone || 'grey'} className="text-xs">{r.found_on ? `on card ${r.found_on}` : COPY_STATUS[r.status]?.words || r.status}</Chip></td>

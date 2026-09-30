@@ -155,7 +155,7 @@ export interface ActiveRules {
 export interface RulesVersion { version: string; status: 'draft' | 'active' | 'retired'; notes?: string; created_by?: string; created_at: string; activated_by?: string | null; activated_at?: string | null }
 // ---------- Pre-flight ----------
 export interface SignedCopy { line_id: string; field: string; label: string; text: string; version: number; card?: number }
-export interface PfUpload { id: string; kind: 'static' | 'carousel' | 'video'; files: Array<{ position: number; filename: string; content_type: string; size: number }>; uploaded_by: string; uploaded_at: string; stubs: string[] }
+export interface PfUpload { id: string; kind: 'static' | 'carousel' | 'video'; files: Array<{ position: number; filename: string; content_type: string; size: number; aspect?: '1:1' | '4:5' | '9:16' | null }>; uploaded_by: string; uploaded_at: string; stubs: string[] }
 export interface PfStatus { status: 'open' | 'ready'; ready_by?: string; ready_at?: string; upload_id?: string }
 export interface PfStub {
   /** The round of its sign-off; test: a test round's code (never handed off). */
@@ -165,6 +165,8 @@ export interface PfStub {
   /** Codes on the same visual share it (null for an earlier v# code): suggested as one upload. */
   visual_key: string | null;
   upload: PfUpload | null;
+  /** The sizes the code is expected in (by format), uploaded, and missing (amber; noted in the handoff). */
+  sizes?: PfSizes;
   /** Ready to traffic = Pre-flight passed AND compliance cleared (status is only the Pre-flight part). */
   traffic: Traffic;
   audit: { id: string; status: string; usd: number; red: number; amber: number; grey: number; open_red: number; finished_at: string | null; error: string | null; stale?: string | null } | null;
@@ -173,20 +175,24 @@ export interface PfStub {
 export interface PfFlag {
   id: string; rule: string; severity: 'red' | 'amber' | 'grey'; label: string; source: string; quote?: string; why?: string; where?: string;
   check?: string; persona?: string; cross_persona?: boolean;
+  /** The size the flag is about (1:1, 4:5, 9:16), on a code with several. */
+  size?: string;
   frame?: { upload_id?: string; position?: number; label?: string; description?: string };
   override: { reason: string; by: string; at: string } | null;
   agreements: Array<{ by: string; agree: boolean; note?: string; at: string }>;
   mine: boolean | null;
 }
+export interface PfSizes { expected: string[]; uploaded: string[]; missing: string[] }
 export interface PfReport {
   stub: string; persona: string; territory: string; region: Region; visual_key: string | null; signoff_id: string; copy: SignedCopy[]; upload: PfUpload | null;
+  sizes?: PfSizes;
   same_visual_as: string[]; on_asset_copy: SignedCopy[]; post_copy: SignedCopy[];
   /** Set when the upload's type doesn't fit the code's format (a note, never a block). */
   format_note?: string | null;
   history: Array<{ id: string; kind: string; uploaded_by: string; uploaded_at: string; files: number }>;
   audit: null | { id: string; upload_id: string; status: string; engine: string; stale?: string | null; rules_version?: string; usd: number; error?: string; started_by?: string; started_at: string; finished_at: string | null;
-    result: null | { text_found: string; transcript?: string; copy_match?: Array<{ field: string; signed_off: string; found: string; similarity: number; status: string; card?: number; found_on?: number }>; features: Record<string, number>; objection?: string; notes?: string[]; frames_unavailable?: boolean;
-      report?: { copy_match?: Array<{ field: string; signed_off: string; found: string; similarity: number; status: string; card?: number; found_on?: number }>; tagged_features?: string[]; set_aside?: Array<{ rule: string; quote?: string; why: string }> } } };
+    result: null | { text_found: string; transcript?: string; copy_match?: Array<{ field: string; signed_off: string; found: string; similarity: number; status: string; card?: number; found_on?: number; size?: string }>; features: Record<string, number>; objection?: string; notes?: string[]; frames_unavailable?: boolean;
+      report?: { copy_match?: Array<{ field: string; signed_off: string; found: string; similarity: number; status: string; card?: number; found_on?: number; size?: string }>; tagged_features?: string[]; set_aside?: Array<{ rule: string; quote?: string; why: string }> } } };
   flags: PfFlag[]; status: PfStatus;
   compliance?: CodeCompliance;
   traffic?: Traffic;
@@ -222,7 +228,8 @@ const USER_KEY = 'voices-studio-user';
 
 // ---------- rounds ----------
 /** A round (R1, R2…; R0 a test run-through): stamped on new runs and sign-offs; views show the active one by default. */
-export interface Round { id: string; name: string; from?: string; test?: boolean; created_by?: string; created_at?: string; /** When the round's assets are due (YYYY-MM-DD). */ assets_due?: string }
+/** label: what people see ("Month 1", "Test"); the id (R1…) is what's stored and stamped. */
+export interface Round { id: string; name: string; label?: string; from?: string; test?: boolean; created_by?: string; created_at?: string; /** When the round's assets are due (YYYY-MM-DD). */ assets_due?: string }
 export interface RoundsState { active: string; rounds: Round[] }
 const ROUND_VIEW_KEY = 'voices-studio-round-view';
 /** 'active': this round only (the default); 'all': every round, test rounds marked. Sent as ?round=all on every request. */
@@ -234,8 +241,13 @@ export function setRoundView(v: RoundViewMode) {
   try { localStorage.setItem(ROUND_VIEW_KEY, v); } catch { /* private mode: this page only */ }
 }
 const withRound = (path: string) => (roundViewMode === 'all' ? `${path}${path.includes('?') ? '&' : '?'}round=all` : path);
-/** A round's label: "R1 · Round one", or "R0 · TEST · Test run-through". */
-export const roundLabel = (r?: Round | null) => (r ? `${r.id}${r.test ? ' · TEST' : ''} · ${r.name}` : '');
+/**
+ * A round as people see it: "Month 1", "Test", or the admin's label (the client's schedule uses "R1/R2" for review
+ * rounds, so Studio shows months; the ids R0, R1… are unchanged underneath). Mirrors the server's monthLabel.
+ */
+export const roundLabel = (r?: Pick<Round, 'id' | 'label' | 'test'> | null) => (r ? r.label?.trim() || (r.test ? 'Test' : `Month ${Number(r.id.replace(/^R/i, '')) || r.id}`) : '');
+/** The label for a round id, from /meta's rounds. */
+export const roundName = (rounds: RoundsState | undefined, id?: string) => (id ? roundLabel(rounds?.rounds.find(r => r.id === id) || { id }) : '');
 let signedIn = '';
 export function setSignedInUser(email: string) { signedIn = email; }
 export function getUser(): string {
@@ -386,12 +398,14 @@ export const studio = {
   // Pre-flight
   pfStubs: () => req<PfStub[]>('/preflight/stubs'),
   /** Upload the visual for a stub; `also`: other signed-off stubs that run on the same visual. */
-  pfUpload: async (stub: string, files: File[], also: string[] = []) => {
+  /** sizes: each file's size (1:1, 4:5, 9:16; '' to let the server read it), in file order. */
+  pfUpload: async (stub: string, files: File[], also: string[] = [], sizes: string[] = []) => {
     const form = new FormData();
     for (const f of files) form.append('files', f, f.name);
     if (also.length) form.append('also', also.join(','));
+    if (sizes.length) form.append('sizes', sizes.join(','));
     const res = await raw(`/preflight/stubs/${enc(stub)}/uploads`, { method: 'POST', body: form });
-    return (await res.json()) as { upload_id: string; kind: string; storage: string; estimate: { usd: number; seconds: number }; format_notes?: string[] };
+    return (await res.json()) as { upload_id: string; kind: string; storage: string; estimate: { usd: number; seconds: number; sizes?: number }; format_notes?: string[]; sizes?: Array<{ size: string; files: string[] }> };
   },
   pfAudit: (uploadId: string, confirm = false) => req<{ audit: string; job: string; estimate: { usd: number; seconds: number } }>(`/preflight/uploads/${enc(uploadId)}/audit`, { method: 'POST', body: JSON.stringify({ confirm }) }),
   complianceView: () => req<ComplianceView>('/compliance'),
@@ -410,7 +424,7 @@ export const studio = {
   rules: () => req<RulesVersion[]>('/rules'),
   activateRules: (version: string) => req<RulesVersion[]>(`/rules/${enc(version)}/activate`, { method: 'POST' }),
   /** Rounds (admin): create or rename one (optionally making it active), or set the active round. */
-  saveRound: (round: { id: string; name: string; from?: string; test?: boolean; activate?: boolean; assets_due?: string }) => req<RoundsState>('/rounds', { method: 'POST', body: JSON.stringify(round) }),
+  saveRound: (round: { id: string; name: string; label?: string; from?: string; test?: boolean; activate?: boolean; assets_due?: string }) => req<RoundsState>('/rounds', { method: 'POST', body: JSON.stringify(round) }),
   activateRound: (id: string) => req<RoundsState>(`/rounds/${enc(id)}/activate`, { method: 'POST' }),
   uploadRules: (version: string, rules: unknown, notes: string, activate = false) => req<RulesVersion[]>('/rules', { method: 'POST', body: JSON.stringify({ version, rules, notes, activate }) }),
 

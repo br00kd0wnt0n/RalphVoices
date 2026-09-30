@@ -27,7 +27,7 @@ export function Board({ meta, onOpen, onHowItWorks, onRoundSaved }: {
       .then(([runs, kept, stubs, rules]) => setData({ runs, kept, stubs, rules })).catch(e => setError(e.message));
   }, [meta.preflight?.enabled]);
   if (error) return <div className="rounded-lg border-2 border-red-500/45 bg-red-500/10 p-4 text-base text-red-200">{error}</div>;
-  if (!data) return <div className="text-base text-[#858B96]">Loading the round…</div>;
+  if (!data) return <div className="text-base text-[#858B96]">Loading the month…</div>;
 
   const cell = (persona: string, territory: string): Counts => {
     const c = zero();
@@ -58,7 +58,7 @@ export function Board({ meta, onOpen, onHowItWorks, onRoundSaved }: {
       <div className="flex flex-wrap items-start gap-4">
         <div className="mr-auto">
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-2xl font-bold tracking-tight" style={HEADING_FONT}>{active ? roundLabel(active) : 'This round'}</h1>
+            <h1 className="text-2xl font-bold tracking-tight" style={HEADING_FONT}>{active ? roundLabel(active) : 'This month'}</h1>
             {active?.test && <span className="rounded-full border border-amber-400 bg-amber-400/15 px-2 py-0.5 text-xs font-semibold text-amber-100">TEST: never handed off</span>}
           </div>
           <p className="text-base text-[#A3A8B1]">Where every persona × territory stands. Click a cell to work on it. <button className="underline underline-offset-2 hover:text-[#ECEDEF]" onClick={onHowItWorks}>How it works</button></p>
@@ -108,14 +108,14 @@ export function Board({ meta, onOpen, onHowItWorks, onRoundSaved }: {
             <tr className="align-top">
               <th scope="row" className="rounded-xl border border-[#272B34] bg-[#121419] px-3 py-3 text-sm font-semibold text-[#C9CCD2]">All personas</th>
               <td colSpan={cols} className="rounded-xl border border-[#272B34] bg-[#121419] px-3 py-2.5 text-sm text-[#858B96]">
-                {grand.runs} run{grand.runs === 1 ? '' : 's'} in the round{grand.changes ? <span className="ml-2 font-semibold text-red-200">· {grand.changes} with changes requested</span> : null}
+                {grand.runs} run{grand.runs === 1 ? '' : 's'} this month{grand.changes ? <span className="ml-2 font-semibold text-red-200">· {grand.changes} with changes requested</span> : null}
               </td>
               <td className="rounded-xl border-2 border-[#343946] bg-[#121419] px-3 py-2.5"><Pipeline c={grand} /></td>
             </tr>
           </tbody>
         </table>
       </div>
-      <p className="text-sm text-[#646A75]">Lines kept → ads signed off (codes) → assets uploaded → cleared by Trupanion → ready to traffic. A red cell has changes requested. Totals follow the round in the header (“All rounds” counts every round).</p>
+      <p className="text-sm text-[#646A75]">Lines kept → ads signed off (codes) → assets uploaded → cleared by Trupanion → ready to traffic. A red cell has changes requested. Totals follow the month in the header (“All months” counts every month).</p>
     </div>
   );
 }

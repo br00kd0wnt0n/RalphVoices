@@ -21,7 +21,8 @@ import type pg from 'pg';
 import * as S from './engine.js';
 import { latestSignoffs, setCompliance, type Signoff } from './ready.js';
 import { complianceFor, platformOf, signoffOnImage, signoffVersions, type SignedField } from './versions.js';
-import { roundOf, roundView } from './rounds.js';
+import { getRounds, labelOf, roundOf, roundView } from './rounds.js';
+import { SIZES, detectSize, expectedSizes, parseSize, roleOf, sizeOfRole, slotOf, type Size } from './sizes.js';
 import { DEFAULT_REGION, parseCode, visualKey, type Region } from '../../utils/namingCode.js';
 import { downloadPrivateObject, getPrivateObject, getPrivateObjectStream, isR2Enabled, putPrivateObject } from '../r2.js';
 import { FatalError } from '../audit/api.js';
@@ -70,7 +71,10 @@ export interface StubRow {
   visual_key: string | null;
   signoff_id: string; ready_by: string; ready_at: string;
   copy: SignedCopy[];
-  upload: { id: string; kind: AssetKind; files: Array<{ position: number; filename: string; content_type: string; size: number }>; uploaded_by: string; uploaded_at: string; stubs: string[] } | null;
+  /** files[].aspect: the file's size (1:1, 4:5, 9:16); null on an upload from before sizes (read as its detected size). */
+  upload: { id: string; kind: AssetKind; files: Array<{ position: number; filename: string; content_type: string; size: number; aspect: Size | null }>; uploaded_by: string; uploaded_at: string; stubs: string[] } | null;
+  /** The sizes this code is expected in (by format), those uploaded, and those missing (amber, noted in the handoff). */
+  sizes: { expected: Size[]; uploaded: Size[]; missing: Size[] };
   audit: { id: string; status: string; usd: number; red: number; amber: number; grey: number; open_red: number; finished_at: string | null; error: string | null; stale: string | null } | null;
   /** Pre-flight passed (the creative lead's mark on the latest upload). Not the same as Ready to traffic: see `traffic`. */
   status: { status: 'open' | 'ready'; ready_by?: string; ready_at?: string; upload_id?: string };
@@ -276,17 +280,26 @@ export class Preflight {
     await this.expireStuck();
     const out: StubRow[] = [];
     const view = await roundView(filter.round);
+    const rules = await S.getStore().getRules();
     for (const s of await latestSignoffs({ ...filter, view })) {
       for (const stub of signoffVersions(s).map(v => v.code).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) {
+        const upload = await this.latestUpload(stub);
         out.push({
           stub, persona: s.persona, territory: s.territory, region: s.region || DEFAULT_REGION, visual_key: visualKey(stub), signoff_id: s.id, ready_by: s.ready_by, ready_at: s.ready_at,
           copy: this.copyFor(s, stub),
-          upload: await this.latestUpload(stub), audit: await this.latestAuditSummary(stub), status: await this.status(stub), traffic: await this.traffic(stub),
+          upload, sizes: this.sizesOf(stub, upload, rules), audit: await this.latestAuditSummary(stub), status: await this.status(stub), traffic: await this.traffic(stub),
           round: roundOf(s), test: view.isTest(roundOf(s)),
         });
       }
     }
     return out;
+  }
+
+  /** The sizes a code is expected in, uploaded (an upload from before sizes: its first expected size), and missing. */
+  private sizesOf(stub: string, upload: StubRow['upload'], rules: any): StubRow['sizes'] {
+    const expected = expectedSizes(stub, rules);
+    const uploaded = upload ? SIZES.filter(x => upload.files.some(f => (f.aspect || expected[0]) === x)) : [];
+    return { expected, uploaded, missing: upload ? expected.filter(x => !uploaded.includes(x)) : [...expected] };
   }
 
   private async findStub(stub: string): Promise<{ signoff: Signoff; copy: SignedCopy[] }> {
@@ -297,7 +310,11 @@ export class Preflight {
   // ---------- uploads ----------
 
   /** Upload the visual for a stub; `also` lists other signed-off stubs that run on the same visual. */
-  async upload(stub: string, files: UploadFile[], user?: string, also: string[] = []): Promise<{ upload_id: string; kind: AssetKind; storage: 'r2' | 'db'; stubs: string[]; format_notes: string[]; estimate: { usd: number; seconds: number } }> {
+  /**
+   * `sizes`: each file's size (1:1, 4:5, 9:16), as the person set it; otherwise read from the image, or the file name,
+   * else the code's first expected size. A carousel is its cards in each size (card order within a size).
+   */
+  async upload(stub: string, files: UploadFile[], user?: string, also: string[] = [], sizes: Array<string | null | undefined> = []): Promise<{ upload_id: string; kind: AssetKind; storage: 'r2' | 'db'; stubs: string[]; format_notes: string[]; sizes: Array<{ size: Size; files: string[] }>; estimate: { usd: number; seconds: number; sizes: number } }> {
     if (!files.length) throw new Error('Choose a file to upload');
     const { signoff } = await this.findStub(stub);
     const stubs = [stub, ...new Set(also.filter(x => x && x !== stub))];
@@ -311,7 +328,18 @@ export class Preflight {
       // The visual letter was fixed at sign-off; a shared upload across letters is allowed, with a note.
       if (visualKey(x) && visualKey(stub) && visualKey(x) !== visualKey(stub)) notes.push(`${x} was signed off on another visual than ${stub} (the letters differ). The codes stay as signed off; check the same asset is meant for both.`);
     }
-    const kind = kindOf(files);
+    // Files by size, in the order given within each size (card order).
+    const expected = expectedSizes(stub, await S.getStore().getRules());
+    const sized = files.map((f, i) => ({ f, size: parseSize(sizes[i]) || detectSize({ filename: f.filename, buffer: f.buffer, path: f.path }) || expected[0] }));
+    const groups = SIZES.map(size => ({ size, files: sized.filter(x => x.size === size).map(x => x.f) })).filter(g => g.files.length);
+    const kinds = groups.map(g => kindOf(g.files));
+    if (new Set(kinds).size > 1) throw new Error(`Every size should be the same kind of asset (got ${groups.map((g, i) => `${g.size}: ${kinds[i]}`).join(', ')})`);
+    const kind = kinds[0];
+    if (kind === 'carousel' && new Set(groups.map(g => g.files.length)).size > 1) notes.push(`The sizes have different numbers of cards (${groups.map(g => `${g.size}: ${g.files.length}`).join(', ')}). Check each size has every card.`);
+    const missing = expected.filter(x => !groups.some(g => g.size === x));
+    if (missing.length) notes.push(`${missing.join(' and ')} not uploaded: shown as a missing size (amber) until it is.`);
+    const extra = groups.filter(g => !expected.includes(g.size)).map(g => g.size);
+    if (extra.length) notes.push(`${extra.join(' and ')} isn't expected for this code (${expected.join(', ')}); it's audited all the same.`);
     const cap = this.storage === 'r2' ? R2_FILE_CAP : DB_FILE_CAP;
     const big = files.find(f => sizeOf(f) > cap);
     if (big) throw new Error(`${big.filename} is ${fmtMb(sizeOf(big))}; the limit is ${fmtMb(cap)} per file${this.storage === 'db' ? ' when files are kept in the database (local; production uses R2)' : ''}`);
@@ -319,7 +347,7 @@ export class Preflight {
     await this.db.query(
       `INSERT INTO studio_asset_uploads (id, stub, persona, territory, signoff_id, kind, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [uploadId, stub, signoff.persona, signoff.territory, signoff.id, kind, user ?? null]);
-    for (let i = 0; i < files.length; i++) await this.putFile(uploadId, stub, i, files[i], 'asset');
+    for (const g of groups) for (let i = 0; i < g.files.length; i++) await this.putFile(uploadId, stub, slotOf(g.size) * 100 + i, g.files[i], roleOf(g.size));
     for (const x of stubs) {
       await this.db.query(`INSERT INTO studio_upload_stubs (upload_id, stub) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [uploadId, x]);
       // A new upload replaces what was ready: each stub it serves is open until it's reviewed again.
@@ -329,12 +357,13 @@ export class Preflight {
     // A new visual reopens Compliance for every code it serves: a review was of the earlier asset (kept in the history).
     for (const x of stubs) await this.reopenCompliance(x, uploadId, user);
     // The estimate is worked out now, from the files already here, and reused by the audit (no second download).
-    const estimate = await this.estimateFrom({ stub, persona: signoff.persona, territory: signoff.territory, kind }, files);
+    // One audit per size: the estimate is the sum.
+    const estimate = await this.estimateSizes({ stub, persona: signoff.persona, territory: signoff.territory, kind }, groups.map(g => g.files));
     await this.db.query(`UPDATE studio_asset_uploads SET estimate = $2 WHERE id = $1`, [uploadId, estimate]);
-    return { upload_id: uploadId, kind, storage: this.storage, stubs, format_notes: [...stubs.map(x => formatNote(x, kind)).filter(Boolean) as string[], ...notes], estimate };
+    return { upload_id: uploadId, kind, storage: this.storage, stubs, format_notes: [...stubs.map(x => formatNote(x, kind)).filter(Boolean) as string[], ...notes], sizes: groups.map(g => ({ size: g.size, files: g.files.map(f => f.filename) })), estimate };
   }
 
-  private async putFile(uploadId: string, stub: string, position: number, f: UploadFile, role: 'asset' | 'frame') {
+  private async putFile(uploadId: string, stub: string, position: number, f: UploadFile, role: string) {
     const storage = this.storage;
     const key = storage === 'r2' ? `studio/preflight/${safe(stub)}/${uploadId}/${role === 'frame' ? 'frames/' : ''}${position}-${safe(f.filename)}` : null;
     if (storage === 'r2') await putPrivateObject(key!, f.buffer ?? { path: f.path!, size: sizeOf(f) }, f.contentType);
@@ -362,16 +391,22 @@ export class Preflight {
   }
 
   /** Copy an upload's asset files to a folder (streamed from R2), in card order. */
+  /** Each file with its size: as stored, or (an upload from before sizes) read from the file, else null. */
   private async materialise(uploadId: string, dir: string) {
-    const rows = (await this.db.query(`SELECT position, filename, content_type, storage, r2_key FROM studio_upload_files WHERE upload_id = $1 AND role = 'asset' ORDER BY position`, [uploadId])).rows;
-    const out: Array<{ position: number; path: string; filename: string; contentType: string }> = [];
+    const rows = (await this.db.query(`SELECT position, filename, content_type, storage, r2_key, role FROM studio_upload_files WHERE upload_id = $1 AND role LIKE 'asset%' ORDER BY position`, [uploadId])).rows;
+    const out: Array<{ position: number; path: string; filename: string; contentType: string; aspect: Size | null }> = [];
     for (const f of rows) {
       const p = path.join(dir, `${f.position}-${safe(f.filename)}`);
       if (f.storage === 'r2') await downloadPrivateObject(f.r2_key, p);
       else fs.writeFileSync(p, (await this.db.query(`SELECT data FROM studio_upload_files WHERE upload_id = $1 AND position = $2`, [uploadId, f.position])).rows[0].data);
-      out.push({ position: f.position, path: p, filename: f.filename, contentType: f.content_type });
+      out.push({ position: f.position, path: p, filename: f.filename, contentType: f.content_type, aspect: sizeOfRole(f.role) || detectSize({ filename: f.filename, path: p }) });
     }
     return out;
+  }
+  /** Files grouped by size, in size order; a file with no size goes to the code's first expected size. */
+  private bySize<T extends { aspect: Size | null }>(rows: T[], stub: string, rules: any): Array<{ size: Size; rows: T[] }> {
+    const first = expectedSizes(stub, rules)[0];
+    return SIZES.map(size => ({ size, rows: rows.filter(r => (r.aspect || first) === size) })).filter(g => g.rows.length);
   }
 
   /** The latest upload serving a stub (its own, or a shared visual). */
@@ -379,7 +414,8 @@ export class Preflight {
     const u = (await this.db.query(
       `SELECT u.* FROM studio_asset_uploads u JOIN studio_upload_stubs us ON us.upload_id = u.id WHERE us.stub = $1 ORDER BY u.uploaded_at DESC LIMIT 1`, [stub])).rows[0];
     if (!u) return null;
-    const files = (await this.db.query(`SELECT position, filename, content_type, size FROM studio_upload_files WHERE upload_id = $1 AND role = 'asset' ORDER BY position`, [u.id])).rows;
+    const files = (await this.db.query(`SELECT position, filename, content_type, size, role FROM studio_upload_files WHERE upload_id = $1 AND role LIKE 'asset%' ORDER BY position`, [u.id])).rows
+      .map(({ role, ...f }) => ({ ...f, size: Number(f.size), aspect: sizeOfRole(role) }));
     const stubs = (await this.db.query(`SELECT stub FROM studio_upload_stubs WHERE upload_id = $1 ORDER BY stub`, [u.id])).rows.map(x => x.stub);
     return { id: u.id, kind: u.kind, files, uploaded_by: u.uploaded_by, uploaded_at: new Date(u.uploaded_at).toISOString(), stubs };
   }
@@ -396,6 +432,13 @@ export class Preflight {
     });
   }
 
+  /** One audit per size: the estimate is the sum over the sizes uploaded. */
+  private async estimateSizes(u: { stub: string; persona: string; territory: string; kind: AssetKind }, groups: UploadFile[][]): Promise<{ usd: number; seconds: number; sizes: number }> {
+    let usd = 0, seconds = 0;
+    for (const g of groups) { const e = await this.estimateFrom(u, g); usd += e.usd; seconds += e.seconds; }
+    return { usd: Math.round(usd * 10000) / 10000, seconds, sizes: groups.length };
+  }
+
   /** The estimate stored at upload; for an older upload, worked out once from the stored files and kept. */
   async estimate(uploadId: string): Promise<{ usd: number; seconds: number }> {
     const u = (await this.db.query(`SELECT * FROM studio_asset_uploads WHERE id = $1`, [uploadId])).rows[0];
@@ -404,7 +447,7 @@ export class Preflight {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-estimate-'));
     try {
       const files = await this.materialise(uploadId, tmp);
-      const e = await this.estimateFrom(u, files);
+      const e = await this.estimateSizes(u, this.bySize(files, u.stub, await S.getStore().getRules()).map(g => g.rows));
       await this.db.query(`UPDATE studio_asset_uploads SET estimate = $2 WHERE id = $1`, [uploadId, e]);
       return e;
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
@@ -445,36 +488,81 @@ export class Preflight {
     };
     try {
       const rows = await this.materialise(a.upload_id, tmp);
-      const files = rows.map(f => ({ path: f.path, filename: f.filename, contentType: f.contentType }));
       const { copy } = await this.findStub(a.stub);
       const rules = await S.getStore().getRules();   // the full file: B2 uses the visual-only items Studio's text checks skip
       const rubric = await S.rubricFor(rules);
       if (!rubric) throw new Error('The live rules have no M3 rubric: an admin uploads studio-rules.json v2.6 or later in the Rules view');
-      emit({ type: 'status', message: `Auditing ${a.stub} (${a.kind})` });
-      const result = await this.engine.run({ stub: a.stub, persona: a.persona, territory: a.territory, kind: a.kind, files, copy, rules, rubric }, message => { heartbeat(); emit({ type: 'status', message }); });
-      // Copy match is Studio's, per stub the visual serves (the engine's own copy flags are replaced by these).
-      result.flags = result.flags.filter(f => f.check !== 'copy_match');
-      result.flags.push(...disclaimerCheck(rules, result.asset_text || [{ where: a.kind === 'static' ? 'image' : 'asset', text: result.text_found }], a.kind, rows.length));
+      // One audit per size (Meta picks the size per placement, so each has to stand on its own). Flags say which size.
+      const groups = this.bySize(rows, a.stub, rules);
+      const multi = groups.length > 1 || expectedSizes(a.stub, rules).length > 1;
+      const tag = (size: Size, f: AuditFlag): AuditFlag & { size?: Size } => (multi ? { ...f, label: `${size}: ${f.label}`, size } : f);
       const served = (await this.db.query(`SELECT stub FROM studio_upload_stubs WHERE upload_id = $1 ORDER BY stub`, [a.upload_id])).rows.map(x => x.stub);
       const copyByStub: Record<string, any[]> = {};
-      const perStub: Array<{ stub: string; flag: AuditFlag }> = [];
-      for (const st of served) {
-        const cm = copyMatchForStub((await this.findStub(st)).copy, result.asset_text || [{ where: 'asset', text: result.text_found }], rules, a.kind);
-        copyByStub[st] = cm.rows;
-        for (const f of cm.flags) perStub.push({ stub: st, flag: f });
+      // Each flag with the files of its size (its frame points into them) and, for copy match, the code it's for.
+      const found: Array<{ flag: AuditFlag; rows: typeof rows; stub: string | null; raw?: AuditFlag; size?: Size }> = [];
+      const results: Array<{ size: Size; result: AuditResult }> = [];
+      for (const g of groups) {
+        emit({ type: 'status', message: `Auditing ${a.stub} (${a.kind}${multi ? `, ${g.size}` : ''})` });
+        const files = g.rows.map(f => ({ path: f.path, filename: f.filename, contentType: f.contentType }));
+        const r = await this.engine.run({ stub: a.stub, persona: a.persona, territory: a.territory, kind: a.kind, files, copy, rules, rubric }, message => { heartbeat(); emit({ type: 'status', message: multi ? `${g.size}: ${message}` : message }); });
+        results.push({ size: g.size, result: r });
+        const text = r.asset_text || [{ where: a.kind === 'static' ? 'image' : 'asset', text: r.text_found }];
+        // Copy match is Studio's, per stub the visual serves (the engine's own copy flags are replaced by these).
+        for (const f of r.flags.filter(f => f.check !== 'copy_match')) found.push({ flag: tag(g.size, f), rows: g.rows, stub: null, raw: f, size: g.size });
+        for (const f of disclaimerCheck(rules, text, a.kind, g.rows.length)) found.push({ flag: tag(g.size, f), rows: g.rows, stub: null, raw: f, size: g.size });
+        for (const st of served) {
+          const cm = copyMatchForStub((await this.findStub(st)).copy, r.asset_text || [{ where: 'asset', text: r.text_found }], rules, a.kind);
+          copyByStub[st] = [...(copyByStub[st] || []), ...cm.rows.map(x => (multi ? { ...x, size: g.size } : x))];
+          for (const f of cm.flags) found.push({ flag: tag(g.size, f), rows: g.rows, stub: st, raw: f, size: g.size });
+        }
       }
+      // The same finding in every size uploaded (a cross-persona note, a banned word in the shared copy) is one flag, not
+      // one per size.
+      if (groups.length > 1) {
+        const keyOf = (x: (typeof found)[number]) => JSON.stringify([x.stub, x.raw!.rule, x.raw!.severity, x.raw!.label, x.raw!.quote ?? '', x.raw!.why ?? '']);
+        const sizesBy = new Map<string, Set<Size>>();
+        for (const x of found) if (x.raw) sizesBy.set(keyOf(x), (sizesBy.get(keyOf(x)) || new Set()).add(x.size!));
+        const kept: typeof found = [];
+        const done = new Set<string>();
+        for (const x of found) {
+          if (!x.raw || sizesBy.get(keyOf(x))!.size < groups.length) { kept.push(x); continue; }
+          if (done.has(keyOf(x))) continue;
+          done.add(keyOf(x));
+          kept.push({ ...x, flag: x.raw });
+        }
+        found.splice(0, found.length, ...kept);
+      }
+      // An expected size not uploaded: amber (not red); Pre-flight can still be marked passed, and the handoff notes it.
+      for (const st of served) {
+        for (const m of expectedSizes(st, rules).filter(x => !groups.some(g => g.size === x))) {
+          found.push({ stub: st, rows: [], flag: { rule: 'SIZE_MISSING', severity: 'amber', label: `${m} not uploaded`, check: 'sizes', size: m,
+            source: 'Asset sizes (client WBS: statics and videos 1:1, 4:5 and 9:16; carousels 1:1 and 4:5; TikTok 9:16)',
+            why: `Meta picks the size per placement; without ${m} it crops another size to fit` } as AuditFlag });
+        }
+      }
+      // One result for the upload: the sizes together (features: the strongest reading of any size).
+      const features: Record<string, number> = {};
+      for (const { result: r } of results) for (const [k, v] of Object.entries(r.features || {})) features[k] = Math.max(features[k] ?? 0, v);
+      const result: AuditResult = {
+        ...results[0].result, flags: [], features,
+        usd: results.reduce((t, x) => t + (x.result.usd || 0), 0),
+        text_found: results.map(x => (multi ? `[${x.size}] ${x.result.text_found}` : x.result.text_found)).join('\n'),
+        asset_text: results.flatMap(x => (x.result.asset_text || []).map(t => (multi ? { ...t, where: `${x.size} ${t.where}` } : t))),
+        notes: [...new Set(results.flatMap(x => x.result.notes || []))],
+        frames_unavailable: results.some(x => x.result.frames_unavailable),
+      };
       // Frames the flags rest on are kept as thumbnails next to the upload.
       let framePos = 1000;
       const flags: Array<any> = [];
-      for (const [f, forStub] of [...result.flags.map(f => [f, null] as const), ...perStub.map(x => [x.flag, x.stub] as const)]) {
+      for (const { flag: f, rows: gRows, stub: forStub } of [...found.filter(x => !x.stub), ...found.filter(x => x.stub)]) {
         const { frame, ...rest } = f;
         let frameRef: { upload_id?: string; position?: number; label?: string; description?: string } | undefined;
         if (frame?.path && fs.existsSync(frame.path)) {
           const pos = framePos++;
           await this.putFile(a.upload_id, a.stub, pos, { buffer: fs.readFileSync(frame.path), filename: path.basename(frame.path), contentType: /\.png$/i.test(frame.path) ? 'image/png' : 'image/jpeg' }, 'frame');
           frameRef = { upload_id: a.upload_id, position: pos, label: frame.label };
-        } else if (frame && frame.asset_position !== undefined && frame.asset_position < rows.length) {
-          frameRef = { upload_id: a.upload_id, position: rows[frame.asset_position].position, label: frame.label };
+        } else if (frame && frame.asset_position !== undefined && frame.asset_position < gRows.length) {
+          frameRef = { upload_id: a.upload_id, position: gRows[frame.asset_position].position, label: frame.label };
         } else if (frame) frameRef = { label: frame.label, description: frame.description };
         flags.push({ ...rest, frame: frameRef, for_stub: forStub });
       }
@@ -485,7 +573,7 @@ export class Preflight {
           [`${auditId}-F${String(i + 1).padStart(2, '0')}`, auditId, for_stub || a.stub, i + 1, rule, severity, body, for_stub]);
       }
       const { flags: _f, ...rest } = result;
-      const stored = { ...rest, copy_match_by_stub: copyByStub, logic_version: PREFLIGHT_LOGIC_VERSION };
+      const stored = { ...rest, copy_match_by_stub: copyByStub, logic_version: PREFLIGHT_LOGIC_VERSION, sizes: results.map(x => ({ size: x.size, usd: x.result.usd || 0, files: groups.find(g => g.size === x.size)!.rows.map(f => f.filename) })) };
       await this.db.query(`UPDATE studio_audits SET status = 'done', result = $2, usd = $3, rules_version = $4, finished_at = NOW() WHERE id = $1`,
         [auditId, stored, result.usd || 0, rules?.version ?? null]);
       if (result.usd) await S.getStore().addSpend({ label: `preflight ${a.stub}`, usd: Math.round(result.usd * 10000) / 10000, at: new Date().toISOString(), user: user || a.started_by || undefined });
@@ -547,6 +635,7 @@ export class Preflight {
     const result = a?.result ? { ...a.result, copy_match: a.result.copy_match_by_stub?.[stub] ?? a.result.report?.copy_match } : null;
     return {
       stub, persona: signoff.persona, territory: signoff.territory, region: signoff.region || DEFAULT_REGION, visual_key: visualKey(stub), signoff_id: signoff.id, copy, upload, history,
+      sizes: this.sizesOf(stub, upload, await S.getStore().getRules()),
       same_visual_as: upload ? upload.stubs.filter(x => x !== stub) : [],
       format_note: upload ? formatNote(stub, upload.kind) : null,
       on_asset_copy: copy.filter(c => !POST_COPY_FIELDS.has(c.field)), post_copy: copy.filter(c => POST_COPY_FIELDS.has(c.field)),
@@ -672,7 +761,8 @@ export class Preflight {
   /** The asset handoff list: stub, file, status, open flags. */
   /** The asset handoff to Add3: the active round's codes (or `round`), never a test round's. */
   async handoffCsv(round?: string): Promise<string> {
-    const rows = [['Naming code', 'Region', 'Round', 'Persona', 'Territory', 'Kind', 'File', 'Same visual as', 'Status', 'Ready to traffic', 'Pre-flight passed by', 'Pre-flight passed at', 'Open red flags', 'Amber flags', 'Overridden red flags', 'Compliance', 'Compliance note', 'Cleared at Trupanion by', 'Compliance recorded by']];
+    const rounds = await getRounds();
+    const rows = [['Naming code', 'Region', 'Month', 'Persona', 'Territory', 'Kind', 'File', 'Sizes missing', 'Same visual as', 'Status', 'Ready to traffic', 'Pre-flight passed by', 'Pre-flight passed at', 'Open red flags', 'Amber flags', 'Overridden red flags', 'Compliance', 'Compliance note', 'Cleared at Trupanion by', 'Compliance recorded by']];
     for (const s of await this.stubs({ round })) {
       if (s.test) continue;
       let open = '', amber = '', overridden = '';
@@ -685,7 +775,10 @@ export class Preflight {
       // Add3 only ever sees "Ready to traffic" on a code Trupanion has cleared (or one marked ready before the gate, which says so).
       const status = s.traffic.ready || s.status.status === 'ready' ? s.traffic.words : !s.upload ? 'Not uploaded' : s.audit?.status === 'done' ? 'Needs review' : s.audit ? `Audit ${s.audit.status}` : 'Not audited';
       const c = await this.codeCompliance(s.stub, s.upload?.id ?? null);
-      rows.push([s.stub, s.region, s.round, s.persona, s.territory, s.upload?.kind || '', s.upload?.files.map(f => f.filename).join(' | ') || '', s.upload?.stubs.filter(x => x !== s.stub).join(' | ') || '', status, s.traffic.ready ? 'yes' : 'no',
+      // Files per size ("1:1: a.png | 4:5: b.png"), and the expected sizes not uploaded (Pre-flight can still pass without them).
+      const first = s.sizes.expected[0];
+      const files = s.upload ? SIZES.map(z => ({ z, fs: s.upload!.files.filter(f => (f.aspect || first) === z) })).filter(x => x.fs.length).map(x => `${x.z}: ${x.fs.map(f => f.filename).join(', ')}`).join(' | ') : '';
+      rows.push([s.stub, s.region, labelOf(rounds, s.round), s.persona, s.territory, s.upload?.kind || '', files, s.sizes.missing.join(', '), s.upload?.stubs.filter(x => x !== s.stub).join(' | ') || '', status, s.traffic.ready ? 'yes' : 'no',
         s.status.status === 'ready' ? s.status.ready_by || '' : '', s.status.status === 'ready' ? s.status.ready_at || '' : '', open, amber, overridden,
         COMPLIANCE_WORDS[c.status], c.note || '', c.client_by || '', c.by ? `${c.by}, ${c.at?.slice(0, 16).replace('T', ' ')}` : '']);
     }

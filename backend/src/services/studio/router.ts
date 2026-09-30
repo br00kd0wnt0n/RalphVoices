@@ -275,14 +275,17 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     fs.mkdirSync(uploadDir, { recursive: true });
     const files = multer({ storage: multer.diskStorage({ destination: uploadDir }), limits: { fileSize: R2_FILE_CAP, files: 20 } });
     r.get('/preflight/stubs', wrap(async (req, res) => res.json(await pf.stubs(pt(req.query)))));
-    r.post('/preflight/stubs/:stub/uploads', (req, res, next) => files.array('files', 20)(req, res, (err: any) => {
+    // Up to 40 files: a carousel is its cards in each size (10 cards × 3 sizes at most, plus room).
+    r.post('/preflight/stubs/:stub/uploads', (req, res, next) => files.array('files', 40)(req, res, (err: any) => {
       if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? `A file is over the ${Math.round(R2_FILE_CAP / 1048576)} MB limit` : String(err.message || err) });
       next();
     }), wrap(async (req, res) => {
       const list = ((req as any).files || []) as Express.Multer.File[];
       const also = ([] as string[]).concat((req.body?.also as any) || []).flatMap(x => String(x).split(',')).map(x => x.trim()).filter(Boolean);
       try {
-        res.json(await pf.upload(req.params.stub, list.map(f => ({ path: f.path, size: f.size, filename: f.originalname, contentType: f.mimetype })), o.who(req), also));
+        // sizes: each file's size as the page set it (1:1, 4:5, 9:16; '' to let the server read it), in file order.
+        const sizes = ([] as string[]).concat((req.body?.sizes as any) || []).flatMap(x => String(x).split(',')).map(x => x.trim());
+        res.json(await pf.upload(req.params.stub, list.map(f => ({ path: f.path, size: f.size, filename: f.originalname, contentType: f.mimetype })), o.who(req), also, sizes));
       } finally {
         for (const f of list) fs.rm(f.path, { force: true }, () => {});
       }
