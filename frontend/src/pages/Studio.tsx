@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { HOSTED, getUser, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type CompareSet, type Flag, type Line, type Meta, type OwnLine, type RunSummary, type ShortRow, type StudioEvent, type Territory, type Tone, type EditRecord, type LineVersion, type Reveal, type ComplianceStatus, type ReadyView, type ReadyDraft, type DraftVersion, type RulesVersion, type ActiveRules, type RuleEntry, type PfStub, type PfReport, type PfFlag, type ComplianceView, type ComplianceAsset, type Region, REGION_NAMES, CANADA_NOTE, isEdited, finalText } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { LivePage, RoundBadge, RoundsPanel } from './StudioRounds';
+import { applyPlace, toggleField } from '@/lib/studioFields';
 import { ArrowLeft, HelpCircle, ScrollText, Shuffle } from 'lucide-react';
 
 const PINK = '#D94D8F';
@@ -264,7 +265,8 @@ export function Studio() {
     return m;
   }), []);
   useEffect(() => {
-    refreshMeta().then(m => setBrief(b => ({ ...b, fields: m.personas[b.persona]?.default_fields || [] })))
+    // The territory's default fields (a territory the rules don't have: the first persona's first territory).
+    refreshMeta().then(m => setBrief(b => applyPlace(m, b, m.territories[b.territory] ? {} : { persona: personaKeys(m.personas)[0] }).brief))
       .catch(async (e: any) => {
         if (HOSTED && e.body?.error === 'no_rules') {
           // First run after a deploy: nothing works until an admin uploads and activates the rules.
@@ -439,7 +441,7 @@ export function Studio() {
         {tab === 'home' && <Home onStart={() => setTab('territories')} />}
         {tab === 'live' && <LivePage />}
         {tab === 'rules' && meta?.rounds && <RoundsPanel meta={meta} onSaved={() => refreshMeta().catch(() => {})} />}
-        {meta && tab === 'territories' && <Territories meta={meta} onSaved={() => refreshMeta()} onBrief={code => { const t = meta.territories[code]; setBrief(b => ({ ...b, persona: t.persona, territory: code, fields: b.persona === t.persona && b.fields.length ? b.fields : meta.personas[t.persona].default_fields })); setTab('brief'); }} />}
+        {meta && tab === 'territories' && <Territories meta={meta} onSaved={() => refreshMeta()} onBrief={code => { const t = meta.territories[code]; setBrief(b => applyPlace(meta, b, { persona: t.persona, territory: code }).brief); setTab('brief'); }} />}
         {meta && tab === 'brief' && <BriefPanel meta={meta} brief={brief} run={run} running={running} user={user} runsTick={runsTick} onContinue={continueRun}
           setBrief={setBrief}
           attachedRun={attached && batch?.id === attached ? batch : null} onNewRun={() => setAttached(null)} />}
@@ -534,6 +536,16 @@ function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onCon
   const territories = Object.entries(meta.territories).filter(([, x]) => x.persona === brief.persona && x.status !== 'retired');
   const t = meta.territories[brief.territory];
   const set = (patch: Partial<Brief>) => setBrief({ ...brief, ...patch });
+  // A new persona or territory keeps the ticked fields (studioFields.ts); a note says when defaults were applied.
+  const [fieldNote, setFieldNote] = useState('');
+  const place = (patch: { persona?: string; territory?: string }) => { const r = applyPlace(meta, brief, patch); setBrief(r.brief); setFieldNote(r.note); };
+  // What will be written, from the server's allocation (the counts generate keeps to).
+  const [plan, setPlan] = useState<{ summary: string; total: number } | null>(null);
+  useEffect(() => {
+    if (!brief.fields.length) { setPlan(null); return; }
+    const t = setTimeout(() => { studio.estimate(brief).then(e => setPlan(e.allocation || null)).catch(() => setPlan(null)); }, 300);
+    return () => clearTimeout(t);
+  }, [brief.territory, brief.fields.join(), brief.n, brief.carousel?.sequences, brief.carousel?.cards, (brief.own_lines || []).filter(o => o.text.trim()).length]); // eslint-disable-line react-hooks/exhaustive-deps
   const setTone = (k: keyof Tone, v: number) => set({ tone: { ...brief.tone, [k]: v } });
   const own: OwnLine[] = brief.own_lines?.length ? brief.own_lines : [{ text: '', field: brief.fields[0] || 'meta_primary' }];
   const written = own.filter(o => o.text.trim());
@@ -569,13 +581,13 @@ function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onCon
         <div>
           <Label>Persona</Label>
           <select className="rounded-lg border-2 border-[#343946] bg-[#101216] px-3 py-2 text-base" value={brief.persona}
-            onChange={e => { const p = e.target.value; const first = Object.entries(meta.territories).find(([, x]) => x.persona === p && x.status !== 'retired')?.[0] || ''; set({ persona: p, territory: first, fields: meta.personas[p].default_fields, own_lines: own.map(o => ({ ...o, field: meta.personas[p].default_fields[0] })) }); }}>
+            onChange={e => place({ persona: e.target.value })}>
             {personaKeys(meta.personas).map(k => <option key={k} value={k}>{meta.personas[k].name}</option>)}
           </select>
         </div>
         <div>
           <Label>Territory</Label>
-          <select className="rounded-lg border-2 border-[#343946] bg-[#101216] px-3 py-2 text-base" value={brief.territory} onChange={e => set({ territory: e.target.value })}>
+          <select className="rounded-lg border-2 border-[#343946] bg-[#101216] px-3 py-2 text-base" value={brief.territory} onChange={e => place({ territory: e.target.value })}>
             {territories.map(([k, x]) => <option key={k} value={k}>{territoryName(x)}{x.origin === 'new' ? ' (new)' : x.origin === 'edited' ? ' (edited)' : ''}</option>)}
           </select>
         </div>
@@ -591,9 +603,15 @@ function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onCon
           <div className="flex flex-wrap gap-1.5">
             {Object.entries(meta.fields).map(([k, f]) => {
               const on = brief.fields.includes(k);
-              return <GhostButton key={k} active={on} className="px-2.5 py-1.5 text-sm" onClick={() => set({ fields: on ? brief.fields.filter(x => x !== k) : [...brief.fields, k] })}>{f.label} · {f.visible} chars visible</GhostButton>;
+              return (
+                <span key={k} className="inline-flex items-center">
+                  <GhostButton active={on} className="px-2.5 py-1.5 text-sm" onClick={e => { setFieldNote(''); setBrief(toggleField(brief, k, e.altKey)); }}>{f.label} · {f.visible} chars visible</GhostButton>
+                  <button className="ml-0.5 px-1 text-xs text-[#646A75] hover:text-[#ECEDEF]" title={`Only ${f.label} (or alt-click the field)`} aria-label={`Only ${f.label}`} onClick={() => { setFieldNote(''); setBrief(toggleField(brief, k, true)); }}>only</button>
+                </span>
+              );
             })}
           </div>
+          {fieldNote && <p className="mt-1.5 text-sm text-amber-200">{fieldNote}</p>}
           {/^CAR/i.test(meta.territories[brief.territory]?.format || '') && brief.fields.some(f => /on_image/.test(f)) && (() => {
             const c = brief.carousel || { sequences: 3, cards: 4 };
             return (
@@ -605,7 +623,7 @@ function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onCon
                 <label className="flex items-center gap-1">Cards each
                   <input type="number" min={2} max={10} className="w-14 rounded border border-[#343946] bg-[#16181D] px-1.5 py-0.5 text-[#ECEDEF]" value={c.cards} onChange={e => set({ carousel: { ...c, cards: Math.max(2, Math.min(10, Number(e.target.value) || 4)) } })} />
                 </label>
-                <span className="text-xs text-[#646A75]">Each sequence is one idea: card 1 the hook, then the build, then the end card. {c.sequences * c.cards} cards, on top of the lines for the other fields.</span>
+                <span className="text-xs text-[#646A75]">Each sequence is one idea: card 1 the hook, then the build, then the end card. {c.sequences * c.cards} cards, out of the lines Studio writes; the other ticked fields share the rest.</span>
               </div>
             );
           })()}
@@ -652,9 +670,10 @@ function BriefPanel({ meta, brief, setBrief, run, running, user, runsTick, onCon
           <button onClick={() => { setOwn([...own, { text: '', field: own[own.length - 1]?.field || brief.fields[0] }]); setFocusRow(own.length); }} className="mt-2 text-base font-medium text-[#858B96] hover:text-[#ECEDEF]">+ Add a line</button>
 
           <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-[#272B34] pt-4">
+            {plan && <p className="w-full text-sm text-[#C9CCD2]" title="Exactly what Generate writes, per field">Generate writes: {plan.summary}</p>}
             <PinkButton disabled={running || !written.length} onClick={() => run({ ownOnly: true })}>Check my lines{written.length ? ` (${written.length})` : ''}</PinkButton>
             <GhostButton disabled={running || !brief.fields.length} onClick={() => run()} className="px-4 py-3 text-base">
-              {written.length ? `Check mine + generate ${brief.n} around them` : `Generate ${brief.n} lines`}
+              {written.length ? `Check mine + generate ${plan?.total ?? brief.n} around them` : `Generate ${plan?.total ?? brief.n} lines`}
             </GhostButton>
           </div>
         </section>

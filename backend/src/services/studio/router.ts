@@ -136,7 +136,8 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   }));
   r.post('/estimate', wrap(async (req, res) => {
     const b = S.makeBrief(req.body.brief || {});
-    res.json({ brief: b, ...S.estimate(b, { ownOnly: !!req.body.own_only }), spent: await spent() });
+    // allocation: what will be written, per field (the Write screen's summary line), from the same counts generate keeps to.
+    res.json({ brief: b, ...S.estimate(b, { ownOnly: !!req.body.own_only }), allocation: S.allocation(b, { ownOnly: !!req.body.own_only }), spent: await spent() });
   }));
 
   // ----- runs -----

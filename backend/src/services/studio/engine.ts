@@ -649,7 +649,7 @@ export function makeBrief(input: Partial<Brief>): Brief {
   const persona = String(input.persona || t.persona);
   const pr = r.personas[persona];
   if (!pr) throw new Error(`Unknown persona ${persona}`);
-  const fields = (input.fields && input.fields.length ? input.fields : pr.default_fields);
+  const fields = (input.fields && input.fields.length ? input.fields : defaultFields(territory, r));
   for (const f of fields) if (!r.fields[f]) throw new Error(`Unknown field ${f}. Known: ${Object.keys(r.fields).join(', ')}`);
   // Short by default (Nick, 29 Sep: lines were too wordy).
   const tone = { dry_warm: 3, playful_plain: 3, short_long: 1, ...(input.tone || {}) };
@@ -808,6 +808,48 @@ export const isCarouselTerritory = (t?: Pick<Territory, 'format'>) => /^CAR/i.te
 /** The on-image field written as card sequences for this brief, if any (a carousel territory with on-image ticked). */
 export const sequenceField = (b: Brief, r: Rules) => (b.carousel ? b.fields.find(f => isOnImageField(f, r)) || null : null);
 
+// ---------- which fields a brief writes (Nick, 30 Sep: asked for on-image copy, got hooks and primary text) ----------
+
+/** Default fields by the territory's format; the persona's defaults for a format not listed (or fields the rules lack). */
+const FORMAT_FIELDS: Record<string, string[]> = {
+  STATIC: ['meta_primary', 'meta_headline', 'meta_on_image'], CAROUSEL: ['meta_primary', 'meta_headline', 'meta_on_image'],
+  VIDEO: ['meta_primary', 'meta_headline'], UGC: ['meta_primary', 'meta_headline'],
+  TIKTOK: ['tiktok_hook', 'tiktok_caption'], TT: ['tiktok_hook', 'tiktok_caption'],
+};
+export function defaultFields(territory: string, r: Rules = loadRules()): string[] {
+  const t = r.territories[territory];
+  const want = (FORMAT_FIELDS[String(t?.format || '').toUpperCase()] || []).filter(f => r.fields[f]);
+  return want.length ? want : r.personas[t?.persona || '']?.default_fields || [];
+}
+
+/**
+ * How many lines each field gets. On a carousel with on-image ticked, the card sequences come first (sequences ×
+ * cards, out of n); the rest of n is shared evenly by the other ticked fields, in the order they're ticked.
+ * Generation keeps to these counts (dedupe losses aside), and the estimate shows them before running.
+ */
+export function fieldQuota(b: Brief, r: Rules = loadRules()): Record<string, number> {
+  const seqF = sequenceField(b, r);
+  const cards = seqF ? b.carousel!.sequences * b.carousel!.cards : 0;
+  const loose = b.fields.filter(f => f !== seqF);
+  const n = Math.max(0, b.n - cards);
+  return Object.fromEntries(loose.map((f, i) => [f, loose.length ? Math.floor(n / loose.length) + (i < n % loose.length ? 1 : 0) : 0]));
+}
+/** What a brief will write, in words and numbers (the Write screen's summary line, from the estimate). */
+export function allocation(b: Brief, opts: { ownOnly?: boolean } = {}, r: Rules = loadRules()) {
+  const short = (f: string) => (r.fields[f]?.label || f).replace(/^(Meta|TikTok) /, '').replace(/ text$/, '').toLowerCase();
+  const own = (b.own_lines || []).filter(o => o.text.trim()).length;
+  if (opts.ownOnly) return { total: own, fields: [] as Array<{ field: string; count: number }>, sequences: null, summary: `Checks your ${own} line${own === 1 ? '' : 's'}; writes nothing new` };
+  const seqF = sequenceField(b, r);
+  const sequences = seqF ? { field: seqF, sequences: b.carousel!.sequences, cards: b.carousel!.cards } : null;
+  const fields = Object.entries(fieldQuota(b, r)).map(([field, count]) => ({ field, count })).filter(x => x.count > 0);
+  const total = fields.reduce((t, x) => t + x.count, 0) + (sequences ? sequences.sequences * sequences.cards : 0);
+  const parts = [
+    ...(sequences ? [`${sequences.sequences} card sequence${sequences.sequences === 1 ? '' : 's'} × ${sequences.cards} cards (${short(sequences.field)})`] : []),
+    ...fields.map(x => `${x.count} ${short(x.field)}`),
+  ];
+  return { total, fields, sequences, summary: `${total} line${total === 1 ? '' : 's'}: ${parts.join(' · ') || 'nothing (tick a field)'}${own ? `, around your ${own}` : ''}` };
+}
+
 function sequencesUser(r: Rules, b: Brief, field: string, sequences: number, cards: number, guidance?: string): string {
   const pr = r.personas[b.persona];
   const f = r.fields[field];
@@ -955,7 +997,7 @@ export function estimate(b: Brief, opts: { ownOnly?: boolean } = {}): { usd: num
   // On a carousel, on-image text comes as card sequences (one extra call); the loose lines cover the other fields.
   const seqF = opts.ownOnly ? null : sequenceField(b, r);
   const sq = seqF ? b.carousel!.sequences * b.carousel!.cards : 0;   // cards written
-  const g = opts.ownOnly || (seqF && b.fields.length === 1) ? 0 : b.n;   // loose lines Studio writes
+  const g = opts.ownOnly ? 0 : Object.values(fieldQuota(b, r)).reduce((t, x) => t + x, 0);   // loose lines Studio writes
   const m = g + own + sq;                    // lines checked
   const n = Math.ceil(g * 1.25);
   const wsys = estTokens(writerSystem(b, r, (b.own_lines || []).map(o => o.text)));
@@ -1130,17 +1172,23 @@ export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: 
   // 2. Studio's lines, around theirs. On a carousel, on-image text is written as card sequences instead (2b).
   const seqField = sequenceField(b, r);
   const bLoose: Brief = seqField ? { ...b, fields: b.fields.filter(f => f !== seqField) } : b;
-  if (!opts.ownOnly && b.n > 0 && bLoose.fields.length) {
+  // Each field's count (fieldQuota): lines are kept per field up to it, so what's written is what the Write screen said.
+  const quota = fieldQuota(b, r);
+  const looseN = Object.values(quota).reduce((t, x) => t + x, 0);
+  if (!opts.ownOnly && looseN > 0 && bLoose.fields.length) {
     const b = bLoose;
-    emit({ type: 'status', message: `Writing ${b.n} lines with ${b.model}${humans.length ? ' around yours' : ''}` });
+    const keptBy: Record<string, number> = Object.fromEntries(b.fields.map(f => [f, 0]));
+    emit({ type: 'status', message: `Writing ${looseN} lines with ${b.model}${humans.length ? ' around yours' : ''}` });
     const covered = new Set(humans.map(l => `${l.angle}|${l.structure}`));
     const pool = Object.entries(embStore).map(([lid, emb]) => ({ id: lid, emb }));
     const kept: Array<{ cell: Cell; text: string; emb: number[] }> = [];
     const gen0 = batch.lines.filter(l => l.model !== 'human').length;
     let offset = gen0 ? Math.ceil(gen0 * 1.25) : 0;
-    for (let round_ = 0; round_ < 3 && kept.length < b.n; round_++) {
-      const want = round_ === 0 ? Math.ceil(b.n * 1.25) : Math.max(3, Math.ceil((b.n - kept.length) * 1.5));
-      const cells = planCells(b, want, offset, '', round_ === 0 ? covered : new Set());
+    for (let round_ = 0; round_ < 3 && kept.length < looseN; round_++) {
+      const want = round_ === 0 ? Math.ceil(looseN * 1.25) : Math.max(3, Math.ceil((looseN - kept.length) * 1.5));
+      // Later rounds only write the fields still short of their count.
+      const short = b.fields.filter(f => keptBy[f] < (quota[f] || 0));
+      const cells = planCells(round_ === 0 ? b : { ...b, fields: short.length ? short : b.fields }, want, offset, '', round_ === 0 ? covered : new Set());
       offset = nextOffset(cells, offset + want);
       const written = await writeCells(api, r, b, cells, b.model, 'generate', { own: humans.map(l => l.text) });
       batch.stats.generated += written.length;
@@ -1150,7 +1198,7 @@ export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: 
         for (const p of pool) { const s = cosine(embs[i], p.emb); if (s > best) { best = s; bestId = p.id; } }
         kept.forEach(k => { const s = cosine(embs[i], k.emb); if (s > best) { best = s; bestId = k.cell.cell; } });
         if (best >= DUP) batch.dropped.push({ text: w.text, cell: w.cell.cell, dup_of: bestId, similarity: round(best) });
-        else if (kept.length < b.n) kept.push({ ...w, emb: embs[i] });
+        else if ((keptBy[w.cell.field] ?? 0) < (quota[w.cell.field] || 0)) { kept.push({ ...w, emb: embs[i] }); keptBy[w.cell.field]++; }
       });
     }
     const genLines = kept.map(k => {
@@ -1959,7 +2007,8 @@ export async function meta() {
     // The fix in plain words, from the rules file where an item carries one (v2.7+); the page has its own for the rest.
     what_to_do: Object.fromEntries([...r.compliance, ...r.brand, ...r.clarity, ...((r as any).disclaimer ? [(r as any).disclaimer] : [])]
       .filter((i: any) => i.what_to_do).map((i: any) => [i.id, i.what_to_do])),
-    territories: r.territories,
+    // Each territory's default fields (by its format), for Write & brief.
+    territories: Object.fromEntries(Object.entries(r.territories).map(([k, v]) => [k, { ...v, default_fields: defaultFields(k, r) }])),
     formats: FORMATS,
     // Where ads run, and the naming code's pattern (utils/namingCode.ts), for the page's help text.
     regions: REGIONS,

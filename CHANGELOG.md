@@ -4,6 +4,14 @@ All notable changes to Ralph Voices are documented here.
 
 ## Unreleased
 
+- **Studio Write: the fields you tick are what gets written** (Nick, 30 Sep: asked for Meta on-image copy, got TikTok hooks and primary text). No migration.
+  - **Defaults follow the territory's format:** static or carousel → primary, headline, on-image; video or UGC → primary, headline; TikTok → hook, caption; the persona's defaults for any other format (`defaultFields`, sent on `/meta`). They're applied on first load, and on a new territory only while the fields haven't been changed in this brief.
+  - **Changing persona or territory keeps the ticked fields.** They were silently reset to the persona's defaults before. When defaults are applied, a one-line note says so ("Fields set for a carousel: primary, headline, on-image").
+  - **"only" on each field** (or alt-click) makes it the single ticked field.
+  - **What Generate writes is shown above the button,** from the counts generation keeps to (`fieldQuota`, returned by `/estimate` as `allocation`): e.g. "20 lines: 3 card sequences × 4 cards (on-image) · 4 primary · 4 headline". Card sequences now come out of the run's total, and the other fields share the rest evenly. Generation keeps each field to its count, dedupe losses aside.
+  - **Your own lines' field picker** follows the ticked fields.
+
+  Logic for the page is in `frontend/src/lib/studioFields.ts`. Tests: `backend/tests/studioWriteFields.test.ts` (format defaults; persona and territory changes keep touched fields; "only"; only-on-image writes only on-image lines, and card sequences on a carousel; the summary matches the batch's field counts).
 - **Studio: rounds, a TEST round for the run-through, and the Live page.** Brook, 30 Sep; no migration (JSONB and `studio_inputs`).
   - **Rounds.** An admin creates rounds (id R + number, name, start date, optional **test** flag) and sets the active one, in Rules. The header shows the active round (TEST marked) and a "This round / All rounds" view. New runs, their lines, taste rows and sign-offs are stamped with the round. Line versions and expectations follow their sign-off. Anything from before rounds reads as **R1** (Nick's first runs are round one).
   - **Views default to the active round:** runs, Review, the Shortlist, Ready (which always works in one round), Pre-flight, Compliance, and the Shortlist and handoff exports. "All rounds" shows the rest, with other rounds marked on runs and Shortlist rows.

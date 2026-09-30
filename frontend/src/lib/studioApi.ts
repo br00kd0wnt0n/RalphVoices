@@ -48,6 +48,8 @@ export interface Brief {
   banned_words: string[]; banned_ideas: string[]; reference_lines: string[]; own_lines?: OwnLine[]; n: number; model: string;
   /** Carousel territories with on-image text ticked: card sequences to write, and cards in each. */
   carousel?: { sequences: number; cards: number };
+  /** Client only: the person has changed the fields in this brief, so a new territory keeps them (studioFields.ts). */
+  fields_touched?: boolean;
 }
 export interface RunStats {
   generated: number; near_duplicates_removed: number; similar_flagged: number;
@@ -68,6 +70,8 @@ export interface Territory {
   /** The pitched headline ("headline as sold"), from the concept cards (rules v2.4+). */
   headline?: string; headline_source?: string; headline_note?: string; pitched_name?: string; name_note?: string;
   status?: string; origin?: 'pitch' | 'edited' | 'new'; note?: string; updated_by?: string; updated_at?: string;
+  /** The fields a brief for it starts with, by its format (server's defaultFields). */
+  default_fields?: string[];
   history?: Array<{ at: string; by: string; note: string; before: Partial<Territory> | null }>;
 }
 export interface PersonaContext {
@@ -306,7 +310,7 @@ function events(job: string, on: (e: StudioEvent) => void): { close: () => void 
 export const studio = {
   meta: () => req<Meta>('/meta'),
   estimate: (brief: Brief, ownOnly = false) =>
-    req<{ usd: number; calls: number; spent: number; minutes_at_budget: Record<string, number> }>('/estimate', { method: 'POST', body: JSON.stringify({ brief, own_only: ownOnly }) }),
+    req<{ usd: number; calls: number; spent: number; minutes_at_budget: Record<string, number>; allocation: { total: number; summary: string; fields: Array<{ field: string; count: number }>; sequences: { field: string; sequences: number; cards: number } | null } }>('/estimate', { method: 'POST', body: JSON.stringify({ brief, own_only: ownOnly }) }),
   /** Start a run, or continue one (batch). ownOnly checks the creative director's lines without writing more. */
   generate: (brief: Brief, opts: { confirm?: boolean; batch?: string; ownOnly?: boolean } = {}) =>
     req<{ batch: string; job: string; estimate: number }>('/generate', { method: 'POST', body: JSON.stringify({ brief, confirm: !!opts.confirm, batch: opts.batch, own_only: !!opts.ownOnly }) }),
