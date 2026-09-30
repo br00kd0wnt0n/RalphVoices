@@ -5,7 +5,11 @@
 // runs per stub, on on-asset fields only (post copy travels with the ad). People agree or disagree
 // with each flag (the round's agreement rate is Brook's 90% target), red flags
 // are fixed by a new upload or overridden with a reason, and the stub is marked
-// "Ready to traffic". Exports: the features CSV for B3 and an asset handoff list.
+// "Ready to traffic". Then Compliance (step 7): Trupanion's reviewer sees each
+// asset with its codes' copy and flags, and sets pending / cleared / changes
+// requested with a note; changes go back to Ready (copy) or Pre-flight (a new
+// upload), and a new upload reopens the review. Exports: the features CSV for
+// B3 and an asset handoff list.
 // Tables: migration 017. Files: R2 (production) or Postgres (local, 25 MB cap).
 // Wording: "Ready to traffic", never "approved". No scores.
 
@@ -15,7 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type pg from 'pg';
 import * as S from './engine.js';
-import { latestSignoffs, type Signoff } from './ready.js';
+import { latestSignoffs, setCompliance, type Signoff } from './ready.js';
 import { DEFAULT_REGION, parseCode, visualKey, type Region } from '../../utils/namingCode.js';
 import { downloadPrivateObject, getPrivateObject, getPrivateObjectStream, isR2Enabled, putPrivateObject } from '../r2.js';
 import { FatalError } from '../audit/api.js';
@@ -239,6 +243,8 @@ export class Preflight {
       await this.setStatusRow(x, 'open', uploadId, null, null);
       await S.getStore().recordEdit({ line_id: `asset:${x}`, batch_id: 'preflight', before: null, after: { upload: uploadId, kind, files: files.map(f => f.filename), same_visual_as: stubs.filter(y => y !== x) }, by: user || 'unknown', at: new Date().toISOString() });
     }
+    // A new visual reopens Compliance for every code it serves: a review was of the earlier asset (kept in the history).
+    for (const x of stubs) await this.reopenCompliance(x, uploadId, user);
     // The estimate is worked out now, from the files already here, and reused by the audit (no second download).
     const estimate = await this.estimateFrom({ stub, persona: signoff.persona, territory: signoff.territory, kind }, files);
     await this.db.query(`UPDATE studio_asset_uploads SET estimate = $2 WHERE id = $1`, [uploadId, estimate]);
@@ -463,6 +469,7 @@ export class Preflight {
       on_asset_copy: copy.filter(c => !POST_COPY_FIELDS.has(c.field)), post_copy: copy.filter(c => POST_COPY_FIELDS.has(c.field)),
       audit: a ? { id: a.id, upload_id: a.upload_id, status: a.status, engine: a.engine, rules_version: a.rules_version, usd: Number(a.usd), error: a.error, started_by: a.started_by, started_at: new Date(a.started_at).toISOString(), finished_at: a.finished_at ? new Date(a.finished_at).toISOString() : null, result, stale: staleness(a) } : null,
       flags, status: await this.status(stub),
+      compliance: await this.codeCompliance(stub, upload?.id ?? null),
     };
   }
 
@@ -576,7 +583,7 @@ export class Preflight {
 
   /** The asset handoff list: stub, file, status, open flags. */
   async handoffCsv(): Promise<string> {
-    const rows = [['Naming code', 'Region', 'Persona', 'Territory', 'Kind', 'File', 'Same visual as', 'Status', 'Ready to traffic by', 'Ready to traffic at', 'Open red flags', 'Amber flags', 'Overridden red flags']];
+    const rows = [['Naming code', 'Region', 'Persona', 'Territory', 'Kind', 'File', 'Same visual as', 'Status', 'Ready to traffic by', 'Ready to traffic at', 'Open red flags', 'Amber flags', 'Overridden red flags', 'Compliance', 'Compliance note', 'Compliance by']];
     for (const s of await this.stubs()) {
       let open = '', amber = '', overridden = '';
       if (s.audit) {
@@ -586,8 +593,142 @@ export class Preflight {
         overridden = f.filter(x => x.severity === 'red' && x.override).map(x => `${x.body.label || x.rule} (overridden by ${x.override.by}: “${x.override.reason}”)`).join('; ');
       }
       const status = s.status.status === 'ready' ? 'Ready to traffic' : !s.upload ? 'Not uploaded' : s.audit?.status === 'done' ? 'Needs review' : s.audit ? `Audit ${s.audit.status}` : 'Not audited';
-      rows.push([s.stub, s.region, s.persona, s.territory, s.upload?.kind || '', s.upload?.files.map(f => f.filename).join(' | ') || '', s.upload?.stubs.filter(x => x !== s.stub).join(' | ') || '', status, s.status.ready_by || '', s.status.ready_at || '', open, amber, overridden]);
+      const c = await this.codeCompliance(s.stub, s.upload?.id ?? null);
+      rows.push([s.stub, s.region, s.persona, s.territory, s.upload?.kind || '', s.upload?.files.map(f => f.filename).join(' | ') || '', s.upload?.stubs.filter(x => x !== s.stub).join(' | ') || '', status, s.status.ready_by || '', s.status.ready_at || '', open, amber, overridden,
+        COMPLIANCE_WORDS[c.status], c.note || '', c.by ? `${c.by}, ${c.at?.slice(0, 16).replace('T', ' ')}` : '']);
     }
     return S.toCsv(rows);
   }
+
+  // ---------- Compliance (step 7, after Pre-flight): copy and visual together ----------
+
+  /** The signed-off lines behind a code, as they stand now. */
+  private async codeLines(stub: string): Promise<Array<{ signed: Signoff['lines'][number]; line: S.Line | undefined }>> {
+    const { signoff } = await this.findStub(stub);
+    const out = [];
+    for (const x of signoff.lines.filter(l => l.stub === stub)) {
+      let line: S.Line | undefined;
+      try { line = (await S.loadBatch(x.batch_id)).lines.find(l => l.id === x.line_id); } catch { /* run removed: the signed record stands */ }
+      out.push({ signed: x, line });
+    }
+    return out;
+  }
+
+  /**
+   * A code's compliance status on its current asset. A review counts only for
+   * the signed-off wording it was given on, and (at this step) the upload it was
+   * given with; otherwise the code is pending again, and says why. Statuses set
+   * per line on Ready before this step existed are read the same way.
+   */
+  async codeCompliance(stub: string, uploadId: string | null): Promise<CodeCompliance> {
+    const lines = await this.codeLines(stub);
+    const each = lines.map(({ signed, line }) => {
+      const c = line?.compliance;
+      if (!c || c.status === 'pending') return { status: 'pending' as const, note: c?.note, stale: undefined as string | undefined, c };
+      if (c.sha256 && c.sha256 !== signed.sha256) return { status: 'pending' as const, note: c.note, stale: 'Reviewed on a different wording', c };
+      if (c.upload_id && uploadId && c.upload_id !== uploadId) return { status: 'pending' as const, note: c.note, stale: 'Reviewed on an earlier upload', c };
+      return { status: c.status, note: c.note, stale: undefined, c };
+    });
+    const status: S.ComplianceStatus = each.some(e => e.status === 'changes_requested') ? 'changes_requested' : each.length && each.every(e => e.status === 'cleared') ? 'cleared' : 'pending';
+    const latest = each.map(e => e.c).filter(Boolean).sort((a, b) => String(b!.at || '').localeCompare(String(a!.at || '')))[0];
+    return {
+      status, note: latest?.note, by: latest?.by, at: latest?.at, send_back: status === 'changes_requested' ? latest?.send_back : undefined,
+      stale: each.find(e => e.stale)?.stale, on_asset: !!latest?.upload_id,
+      overrides: lines.flatMap(({ signed }) => (signed.overrides || []).map(o => o.label || o.rule)),
+    };
+  }
+
+  /** A new upload: reviews given with an earlier asset go back to pending (the history keeps them). */
+  private async reopenCompliance(stub: string, uploadId: string, user?: string) {
+    for (const { line } of await this.codeLines(stub)) {
+      const c = line?.compliance;
+      if (!line || !c?.upload_id || c.upload_id === uploadId || c.status === 'pending') continue;
+      const before = { compliance: c };
+      line.compliance = { ...c, status: 'pending', note: `New upload after "${COMPLIANCE_WORDS[c.status]}"${c.note ? `: ${c.note}` : ''}`, upload_id: uploadId, send_back: undefined, at: new Date().toISOString(), by: user };
+      await S.getStore().saveLine(line.batch, line);
+      await S.getStore().recordEdit({ line_id: line.id, batch_id: line.batch, before, after: { compliance: line.compliance, reopened_by_upload: uploadId }, by: user || 'unknown', at: line.compliance.at! });
+    }
+  }
+
+  /**
+   * Every asset for the Compliance step: the latest upload per code, grouped by
+   * the visual (codes sharing an upload together), with each code's copy and
+   * status, the audit's flags, and codes still waiting for their asset.
+   */
+  async complianceAssets(filter: { persona?: string; territory?: string; region?: string } = {}) {
+    const stubs = await this.stubs(filter);
+    const byUpload = new Map<string, StubRow[]>();
+    const waiting: StubRow[] = [];
+    for (const s of stubs) {
+      if (!s.upload) { waiting.push(s); continue; }
+      byUpload.set(s.upload.id, [...(byUpload.get(s.upload.id) || []), s]);
+    }
+    const assets = [];
+    for (const [uploadId, ss] of byUpload) {
+      const a = (await this.db.query(`SELECT * FROM studio_audits WHERE upload_id = $1 ORDER BY started_at DESC LIMIT 1`, [uploadId])).rows[0] || null;
+      const flags = a ? (await this.db.query(`SELECT * FROM studio_audit_flags WHERE audit_id = $1 AND (for_stub IS NULL OR for_stub = ANY($2)) ORDER BY position`, [a.id, ss.map(s => s.stub)])).rows
+        .map(r => ({ id: r.id, rule: r.rule, severity: r.severity, for_stub: r.for_stub, label: r.body.label, quote: r.body.quote, why: r.body.why, where: r.body.where, source: r.body.source, cross_persona: !!r.body.cross_persona, override: r.override || null })) : [];
+      const codes = [];
+      for (const s of ss) codes.push({ stub: s.stub, copy: s.copy, ready: s.status, compliance: await this.codeCompliance(s.stub, uploadId) });
+      const st = codes.map(c => c.compliance.status);
+      assets.push({
+        upload_id: uploadId, persona: ss[0].persona, territory: ss[0].territory, region: ss[0].region, upload: ss[0].upload!,
+        audit: a ? { id: a.id, status: a.status, finished_at: a.finished_at ? new Date(a.finished_at).toISOString() : null, stale: staleness(a) } : null,
+        flags, codes,
+        status: (st.includes('changes_requested') ? 'changes_requested' : st.every(x => x === 'cleared') ? 'cleared' : 'pending') as S.ComplianceStatus,
+      });
+    }
+    const rank: Record<string, number> = { changes_requested: 1, pending: 0, cleared: 2 };
+    assets.sort((x, y) => rank[x.status] - rank[y.status] || x.territory.localeCompare(y.territory) || x.codes[0].stub.localeCompare(y.codes[0].stub));
+    return { assets, waiting: waiting.map(s => ({ stub: s.stub, persona: s.persona, territory: s.territory, region: s.region, copy: s.copy })) };
+  }
+
+  /**
+   * Set compliance for one asset: every code it serves, every signed-off line
+   * of those codes. "Changes requested" says where it goes back to: 'copy'
+   * (Ready for production, to edit and sign off again) or 'asset' (Pre-flight,
+   * for a new upload; the codes stop being Ready to traffic). Clearing an asset
+   * with an overridden red flag (copy or Pre-flight) needs a note.
+   */
+  async setAssetCompliance(uploadId: string, input: { status: string; note?: string; send_back?: string; codes?: string[] }, user?: string) {
+    const status = String(input.status || '');
+    if (!['pending', 'cleared', 'changes_requested'].includes(status)) throw new Error('Compliance status must be one of pending, cleared, changes_requested');
+    const note = String(input.note || '').trim();
+    const sendBack = input.send_back === 'copy' || input.send_back === 'asset' ? input.send_back : undefined;
+    if (status === 'changes_requested' && !sendBack) throw new Error('Say what goes back: the copy (Ready for production) or the visual (Pre-flight)');
+    if (status === 'changes_requested' && !note) throw new Error('Say what needs changing (the note goes back with it)');
+    const served = (await this.db.query(`SELECT stub FROM studio_upload_stubs WHERE upload_id = $1 ORDER BY stub`, [uploadId])).rows.map(r => r.stub);
+    if (!served.length) throw new Error('No such upload');
+    // Only codes whose current asset this is (a code may have moved on to a newer upload).
+    const current: string[] = [];
+    for (const x of served) if ((await this.latestUpload(x))?.id === uploadId) current.push(x);
+    const codes = input.codes?.length ? current.filter(x => input.codes!.includes(x)) : current;
+    if (!codes.length) throw new Error('This upload has been replaced: review the newer one');
+    if (status === 'cleared' && !note) {
+      const a = await this.latestAuditRow(codes[0]);
+      const pfOverridden = a ? (await this.db.query(`SELECT 1 FROM studio_audit_flags WHERE audit_id = $1 AND severity = 'red' AND override IS NOT NULL LIMIT 1`, [a.id])).rowCount : 0;
+      const copyOverridden = (await Promise.all(codes.map(c => this.codeLines(c)))).flat().some(x => x.signed.overrides?.length);
+      if (pfOverridden || copyOverridden) throw new Error('This asset went through with an overridden red flag: add a note to clear it (e.g. who at Trupanion cleared it)');
+    }
+    for (const code of codes) {
+      for (const { signed } of await this.codeLines(code)) {
+        await setCompliance(signed.batch_id, signed.line_id, status, note || undefined, user, { upload_id: uploadId, code, sha256: signed.sha256, send_back: sendBack });
+      }
+      // The visual goes back to Pre-flight: it's no longer Ready to traffic until a new upload is reviewed.
+      if (status === 'changes_requested' && sendBack === 'asset') await this.setStatusRow(code, 'open', null, null, null);
+      await S.getStore().recordEdit({ line_id: `asset:${code}`, batch_id: 'compliance', before: null, after: { compliance: status, note, send_back: sendBack, upload: uploadId }, by: user || 'unknown', at: new Date().toISOString() });
+    }
+    return { upload_id: uploadId, codes, status };
+  }
 }
+
+export interface CodeCompliance {
+  status: S.ComplianceStatus; note?: string; by?: string; at?: string; send_back?: 'copy' | 'asset';
+  /** Why a review no longer counts (a different wording or an earlier upload). */
+  stale?: string;
+  /** Set at the Compliance step with the asset (not per line on Ready, as before). */
+  on_asset: boolean;
+  /** Red flags on the copy that were overridden at Ready: Trupanion is asked to check these specifically. */
+  overrides: string[];
+}
+const COMPLIANCE_WORDS: Record<string, string> = { pending: 'Pending', cleared: 'Cleared', changes_requested: 'Changes requested' };

@@ -30,7 +30,7 @@ export interface Line {
   objection?: string; status: 'generated' | 'checking' | 'checked'; model: string; parent?: string;
   decision?: '' | 'keep' | 'cut' | 'edit'; edited_text?: string; note?: string; decided_by?: string; decided_at?: string;
   overrides?: Override[];
-  compliance?: { status: ComplianceStatus; note?: string; by?: string; at?: string; sha256?: string };
+  compliance?: { status: ComplianceStatus; note?: string; by?: string; at?: string; sha256?: string; upload_id?: string; code?: string; send_back?: 'copy' | 'asset' };
   ready?: ReadyMark;
   rechecked_at?: string;
 }
@@ -88,7 +88,7 @@ export interface Meta {
   /** Hosted: the signed-in person. */
   user?: { email: string; name: string | null; admin: boolean } | null;
 }
-export interface ShortRow { stub: string; id: string; persona: string; territory: string; region?: Region; field: string; platform: string; format: string; text: string; angle: string; structure: string; note: string; flags: string; compliance_flags: string[]; warn_flags: string[] }
+export interface ShortRow { stub: string; id: string; batch?: string; decision?: string; signed_off?: string; persona: string; territory: string; region?: Region; field: string; platform: string; format: string; text: string; angle: string; structure: string; note: string; flags: string; compliance_flags: string[]; warn_flags: string[] }
 export interface CompareLine { id: string; label: string; field: string; text: string; chars: number; angle: string; structure: string; favourite?: boolean; note?: string; stars?: Record<string, boolean> }
 export interface CompareSet { name: string; brief: Brief; n_per_model: number; lines: CompareLine[]; created: string; revealed?: boolean; revealed_by?: string; revealed_at?: string }
 export interface Reveal { labels: Record<string, string>; tally: Record<string, number>; by_person?: Record<string, Record<string, number>> }
@@ -140,7 +140,21 @@ export interface PfReport {
     result: null | { text_found: string; transcript?: string; copy_match?: Array<{ field: string; signed_off: string; found: string; similarity: number; status: string }>; features: Record<string, number>; objection?: string; notes?: string[]; frames_unavailable?: boolean;
       report?: { copy_match?: Array<{ field: string; signed_off: string; found: string; similarity: number; status: string }>; tagged_features?: string[]; set_aside?: Array<{ rule: string; quote?: string; why: string }> } } };
   flags: PfFlag[]; status: PfStatus;
+  compliance?: CodeCompliance;
 }
+/** A code's compliance status on its current asset (Compliance step, after Pre-flight). */
+export interface CodeCompliance {
+  status: ComplianceStatus; note?: string; by?: string; at?: string; send_back?: 'copy' | 'asset';
+  stale?: string; on_asset: boolean; overrides: string[];
+}
+export interface ComplianceAsset {
+  upload_id: string; persona: string; territory: string; region: Region; upload: PfUpload;
+  audit: { id: string; status: string; finished_at: string | null; stale?: string | null } | null;
+  flags: Array<{ id: string; rule: string; severity: 'red' | 'amber' | 'grey'; for_stub: string | null; label: string; quote?: string; why?: string; where?: string; source?: string; cross_persona: boolean; override: { reason: string; by: string; at: string } | null }>;
+  codes: Array<{ stub: string; copy: SignedCopy[]; ready: PfStatus; compliance: CodeCompliance }>;
+  status: ComplianceStatus;
+}
+export interface ComplianceView { assets: ComplianceAsset[]; waiting: Array<{ stub: string; persona: string; territory: string; region: Region; copy: SignedCopy[] }> }
 
 export type StudioEvent =
   | { type: 'status'; message: string }
@@ -234,7 +248,7 @@ export const studio = {
     req<{ batch: string; job: string; estimate: number }>('/generate', { method: 'POST', body: JSON.stringify({ brief, confirm: !!opts.confirm, batch: opts.batch, own_only: !!opts.ownOnly }) }),
   batches: (user?: string) => req<RunSummary[]>(`/batches${qs({ user })}`),
   batch: (id: string) => req<Batch>(`/batches/${enc(id)}`),
-  decide: (batch: string, line: string, patch: Partial<Pick<Line, 'decision' | 'edited_text' | 'note'>>) =>
+  decide: (batch: string, line: string, patch: Partial<Pick<Line, 'decision' | 'edited_text' | 'note'>> & { source?: 'shortlist' }) =>
     req<Line>(lineUrl(batch, line), { method: 'PATCH', body: JSON.stringify(patch) }),
   history: (line: string) => req<EditRecord[]>(`/lines/${enc(line)}/history`),
   versions: (line: string) => req<LineVersion[]>(`/lines/${enc(line)}/versions`),
@@ -278,6 +292,9 @@ export const studio = {
     return (await res.json()) as { upload_id: string; kind: string; storage: string; estimate: { usd: number; seconds: number }; format_notes?: string[] };
   },
   pfAudit: (uploadId: string, confirm = false) => req<{ audit: string; job: string; estimate: { usd: number; seconds: number } }>(`/preflight/uploads/${enc(uploadId)}/audit`, { method: 'POST', body: JSON.stringify({ confirm }) }),
+  complianceView: () => req<ComplianceView>('/compliance'),
+  setAssetCompliance: (upload: string, body: { status: ComplianceStatus; note?: string; send_back?: 'copy' | 'asset' }) =>
+    req<{ upload_id: string; codes: string[]; status: ComplianceStatus }>(`/compliance/assets/${enc(upload)}`, { method: 'POST', body: JSON.stringify(body) }),
   pfReport: (stub: string) => req<PfReport>(`/preflight/stubs/${enc(stub)}/report`),
   pfFile: (uploadId: string, position: number) => `/preflight/files/${enc(uploadId)}/${position}`,
   pfAgree: (flagId: string, agree: boolean, note?: string) => req<unknown>(`/preflight/flags/${enc(flagId)}/agree`, { method: 'POST', body: JSON.stringify({ agree, note }) }),

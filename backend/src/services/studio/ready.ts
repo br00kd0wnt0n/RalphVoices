@@ -6,7 +6,9 @@
 // becomes a new version, never a rewrite. The team's expectations (which
 // line(s) should lead, and why) are dated, hashed and locked with the
 // sign-off, for B4 (expected vs actual). Compliance status (pending, cleared,
-// changes requested) is tracked per line and doesn't block.
+// changes requested) is set later, at the Compliance step after Pre-flight
+// (per asset, copy and visual together; preflight.ts), stored on each line,
+// and doesn't block sign-off.
 //
 // Wording: "Ready for production", never "approved" (creative sign-off isn't
 // compliance clearance); the only exception is the compliance status
@@ -88,7 +90,7 @@ export async function overrideFlag(batchId: string, lineId: string, rule: string
 }
 
 /** Compliance review status for a line. Anyone on the Studio list can set it; it never blocks sign-off. */
-export async function setCompliance(batchId: string, lineId: string, status: string, note: string | undefined, user?: string): Promise<Line> {
+export async function setCompliance(batchId: string, lineId: string, status: string, note: string | undefined, user?: string, asset?: { upload_id: string; code: string; sha256: string; send_back?: 'copy' | 'asset' }): Promise<Line> {
   if (!COMPLIANCE.includes(status as ComplianceStatus)) throw new Error(`Compliance status must be one of ${COMPLIANCE.join(', ')}`);
   const { line } = await lineAt(batchId, lineId);
   // A line that went through with an overridden red flag can only be cleared with a note saying who cleared it.
@@ -96,7 +98,9 @@ export async function setCompliance(batchId: string, lineId: string, status: str
     throw new Error('This line has an overridden red flag: add a note to clear it (e.g. who at Trupanion cleared it)');
   }
   const before = { compliance: line.compliance || { status: 'pending' } };
-  line.compliance = { status: status as ComplianceStatus, note: note ? String(note) : undefined, by: user, at: new Date().toISOString(), sha256: lineHash(line) };
+  // At the Compliance step the review is of the signed-off wording on a given asset; from Ready (older), of the current wording.
+  line.compliance = { status: status as ComplianceStatus, note: note ? String(note) : undefined, by: user, at: new Date().toISOString(), sha256: asset?.sha256 || lineHash(line),
+    ...(asset ? { upload_id: asset.upload_id, code: asset.code, send_back: status === 'changes_requested' ? asset.send_back : undefined } : {}) };
   return write(batchId, line, before, { compliance: line.compliance }, user);
 }
 

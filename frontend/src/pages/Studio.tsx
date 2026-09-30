@@ -5,14 +5,14 @@
 // Ready for production, is creative sign-off, never "approval".
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { HOSTED, getUser, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type CompareSet, type Flag, type Line, type Meta, type OwnLine, type RunSummary, type ShortRow, type StudioEvent, type Territory, type Tone, type EditRecord, type LineVersion, type Reveal, type ComplianceStatus, type ReadyView, type RulesVersion, type ActiveRules, type RuleEntry, type PfStub, type PfReport, type PfFlag, type Region, REGION_NAMES, CANADA_NOTE, isEdited, finalText } from '@/lib/studioApi';
+import { HOSTED, getUser, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type CompareSet, type Flag, type Line, type Meta, type OwnLine, type RunSummary, type ShortRow, type StudioEvent, type Territory, type Tone, type EditRecord, type LineVersion, type Reveal, type ComplianceStatus, type ReadyView, type RulesVersion, type ActiveRules, type RuleEntry, type PfStub, type PfReport, type PfFlag, type ComplianceView, type ComplianceAsset, type Region, REGION_NAMES, CANADA_NOTE, isEdited, finalText } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { ArrowLeft, HelpCircle, ScrollText, Shuffle } from 'lucide-react';
 
 const PINK = '#D94D8F';
-type Tab = 'home' | 'territories' | 'brief' | 'review' | 'shortlist' | 'ready' | 'preflight' | 'compare' | 'rules';
+type Tab = 'home' | 'territories' | 'brief' | 'review' | 'shortlist' | 'ready' | 'preflight' | 'compliance' | 'compare' | 'rules';
 // The writing flow, in order. Blind compare sits apart from it; Live comes later (B3b).
-const FLOW: Array<[Tab, string]> = [['territories', 'Territories'], ['brief', 'Write & brief'], ['review', 'Review'], ['shortlist', 'Shortlist'], ['ready', 'Ready for production'], ['preflight', 'Pre-flight']];
+const FLOW: Array<[Tab, string]> = [['territories', 'Territories'], ['brief', 'Write & brief'], ['review', 'Review'], ['shortlist', 'Shortlist'], ['ready', 'Ready for production'], ['preflight', 'Pre-flight'], ['compliance', 'Compliance']];
 // Below 1600 px (and inside the tools.ralph.world frame) the bar uses short labels; the full name is in the tooltip.
 const SHORT: Partial<Record<Tab, string>> = { brief: 'Write', ready: 'Ready' };
 // Deep links for the demo: /studio?tab=review&batch=<id>&open=L07 (opens that line's first flag), &compare=<name>,
@@ -236,7 +236,7 @@ export function Studio() {
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
-  const [brief, setBrief] = useState<Brief>({ persona: 'DINK', territory: 'DINK_NEVER', region: 'US', fields: [], tone: { dry_warm: 3, playful_plain: 3, short_long: 2 }, banned_words: [], banned_ideas: [], reference_lines: [], n: 20, model: 'gpt-4o' });
+  const [brief, setBrief] = useState<Brief>({ persona: 'DINK', territory: 'DINK_NEVER', region: 'US', fields: [], tone: { dry_warm: 3, playful_plain: 3, short_long: 1 }, banned_words: [], banned_ideas: [], reference_lines: [], n: 20, model: 'gpt-4o' });
   const [batch, setBatch] = useState<Batch | null>(null);
   const [status, setStatus] = useState('');
   const [running, setRunning] = useState(false);
@@ -346,6 +346,18 @@ export function Studio() {
     }
   }
 
+  /** Drop a new line into the open run mid-review: your line (model 'human', the run's region), checked like the ones on Write & brief. */
+  async function addLine(text: string, field: string) {
+    if (!batch) return;
+    setErr('');
+    try {
+      const r = await studio.generate({ ...batch.brief, own_lines: [{ text, field }] }, { batch: batch.id, ownOnly: true });
+      setAttached(batch.id);
+      setStatus('Checking your new line…');
+      follow(r.job, batch.id);
+    } catch (e: any) { setErr(e.message); throw e; }
+  }
+
   async function more(line: Line, note: string) {
     if (!batch) return;
     const r = await studio.more(batch.id, line.id, note, 3);
@@ -386,7 +398,7 @@ export function Studio() {
           {FLOW.map(([t, label], i) => (
             <span key={t} className="flex items-center">
               <GhostButton active={tab === t} aria-current={tab === t ? 'step' : undefined} onClick={() => setTab(t)} title={label} aria-label={label} className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-1.5 py-1.5 text-sm hover:border-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D94D8F]">
-                <span className={cn('hidden h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold min-[1280px]:flex', tab === t ? 'bg-[#0E0F12] text-white' : 'bg-[#272B34] text-[#A3A8B1]')}>{i + 1}</span>
+                <span className={cn('hidden h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold min-[1600px]:flex', tab === t ? 'bg-[#0E0F12] text-white' : 'bg-[#272B34] text-[#A3A8B1]')}>{i + 1}</span>
                 {t === 'review' && batch ? `Review (${batch.lines.length})` : SHORT[t] ? <><span className="min-[1600px]:hidden">{SHORT[t]}</span><span className="hidden min-[1600px]:inline">{label}</span></> : label}
               </GhostButton>
             </span>
@@ -425,10 +437,11 @@ export function Studio() {
         {meta && tab === 'brief' && <BriefPanel meta={meta} brief={brief} run={run} running={running} user={user} runsTick={runsTick} onContinue={continueRun}
           setBrief={setBrief}
           attachedRun={attached && batch?.id === attached ? batch : null} onNewRun={() => setAttached(null)} />}
-        {meta && tab === 'review' && <Review meta={meta} batch={batch} setBatch={setBatch} status={status} running={running} onMore={more} onMoreRun={() => run({ into: batch })} onDecided={() => setRunsTick(t => t + 1)} />}
+        {meta && tab === 'review' && <Review meta={meta} batch={batch} setBatch={setBatch} status={status} running={running} onMore={more} onMoreRun={() => run({ into: batch })} onAddLine={addLine} onDecided={() => setRunsTick(t => t + 1)} />}
         {meta && tab === 'shortlist' && <Shortlist meta={meta} batch={batch} onReady={() => setTab('ready')} />}
         {meta && tab === 'ready' && <Ready meta={meta} batch={batch} user={user} onNext={() => setTab('preflight')} />}
         {meta && tab === 'preflight' && <Preflight meta={meta} />}
+        {meta && tab === 'compliance' && <Compliance meta={meta} />}
         {tab === 'rules' && (meta || admin) && <Rules meta={meta} admin={HOSTED && (!!meta?.user?.admin || admin)} onActivated={() => refreshMeta().then(() => setErr('')).catch(() => {})} />}
       </main>
     </div>
@@ -442,8 +455,9 @@ const STEPS: Array<{ title: string; what: string; you: string }> = [
   { title: 'Write & brief', what: 'Your lines come first, checked in seconds; then about 20 more around them, in your voice.', you: 'Write a few lines, pick fields and tone, then generate.' },
   { title: 'Review', what: 'Length, flags with their sources, and a skeptic’s objection.', you: 'Keep, cut, edit, or ask for more like this.' },
   { title: 'Shortlist', what: 'Kept lines get naming codes. Runs are saved to continue later.', you: 'Curate in Sheets and import it back.' },
-  { title: 'Ready for production', what: 'Red flags fixed or overridden with a reason, then the set is locked with your expectations.', you: 'Sign off, and hand over the pack.' },
-  { title: 'Pre-flight', what: 'The finished asset checked against the signed-off copy and the rules.', you: 'Upload, agree or disagree, mark Ready to traffic.' },
+  { title: 'Ready for production', what: 'Red flags fixed or overridden with a reason, then the set is locked with your expectations.', you: 'Sign off the copy.' },
+  { title: 'Pre-flight', what: 'The finished asset checked automatically against the signed-off copy and the rules.', you: 'Upload, agree or disagree, mark Ready to traffic.' },
+  { title: 'Compliance', what: 'Trupanion sees each asset with its copy and flags, together. Changes go back to the copy or the visual.', you: 'Clear it, or request changes with a note; then hand over to Add3.' },
 ];
 
 function Home({ onStart }: { onStart: () => void }) {
@@ -459,7 +473,7 @@ function Home({ onStart }: { onStart: () => void }) {
 
       <section>
         <h2 className="mb-3 text-lg font-semibold">How Voices Studio works</h2>
-        <ol className="grid grid-cols-6 gap-3">
+        <ol className="grid grid-cols-7 gap-3">
           {STEPS.map((st, i) => (
             <li key={st.title}>
               <div className="flex h-full w-full flex-col rounded-xl border border-[#272B34] bg-[#16181D] p-4">
@@ -829,7 +843,7 @@ function TerritoryEditor({ meta, code, territory, persona, onDone }: { meta: Met
 
 // ---------- 2. review grid ----------
 
-function Review({ meta, batch, setBatch, status, running, onMore, onMoreRun, onDecided }: { meta: Meta; batch: Batch | null; setBatch: React.Dispatch<React.SetStateAction<Batch | null>>; status: string; running: boolean; onMore: (l: Line, note: string) => void; onMoreRun: () => void; onDecided: () => void }) {
+function Review({ meta, batch, setBatch, status, running, onMore, onMoreRun, onAddLine, onDecided }: { meta: Meta; batch: Batch | null; setBatch: React.Dispatch<React.SetStateAction<Batch | null>>; status: string; running: boolean; onMore: (l: Line, note: string) => void; onMoreRun: () => void; onAddLine: (text: string, field: string) => Promise<void>; onDecided: () => void }) {
   const [group, setGroup] = useState<'angle' | 'structure'>('angle');
   const [filter, setFilter] = useState<'all' | 'compliance' | 'open' | 'kept'>('all');
   // Lines decided while a filter is on stay where they are until the filter or grouping changes (no jumping under the cursor).
@@ -844,7 +858,11 @@ function Review({ meta, batch, setBatch, status, running, onMore, onMoreRun, onD
   const shown = batch.lines.filter(l => stay.has(l.id) ||
     (filter === 'all' ? true : filter === 'compliance' ? l.flags.some(f => f.severity === 'compliance') : filter === 'open' ? !l.decision : l.decision === 'keep' || l.decision === 'edit'));
   const groups = new Map<string, Line[]>();
-  for (const l of shown) {
+  // Lines that fit on screen first; lines cut off after the visible length go last, the longest overshoot at the bottom.
+  const overBy = (l: Line) => Math.max(0, [...finalText(l)].length - (meta.fields[l.field]?.visible ?? Infinity));
+  const ranked = shown.map((l, i) => ({ l, i })).sort((a, b) => Number(overBy(a.l) > 0) - Number(overBy(b.l) > 0) || overBy(a.l) - overBy(b.l) || a.i - b.i).map(x => x.l);
+  const over = shown.filter(l => overBy(l) > 0).length;
+  for (const l of ranked) {
     const k = group === 'angle' ? `Angle: ${l.angle_label}` : `Structure: ${l.structure.replace('_', ' ')}`;
     groups.set(k, [...(groups.get(k) || []), l]);
   }
@@ -882,6 +900,8 @@ function Review({ meta, batch, setBatch, status, running, onMore, onMoreRun, onD
         </div>
       )}
       {running && <div className="text-base text-[#858B96]">{status}</div>}
+      <AddLine meta={meta} batch={batch} running={running} onAdd={onAddLine} />
+      {over > 0 && <p className="text-sm text-[#858B96]">{over} line{over === 1 ? ' runs' : 's run'} past what shows on screen: listed last in each group.</p>}
       {[...groups.entries()].map(([g, ls]) => (
         <section key={g}>
           <h2 className="mb-3 mt-2 text-lg font-bold first-letter:uppercase">{g} <span className="font-normal text-[#858B96]">({ls.length})</span></h2>
@@ -891,6 +911,34 @@ function Review({ meta, batch, setBatch, status, running, onMore, onMoreRun, onD
         </section>
       ))}
     </div>
+  );
+}
+
+/** A blank slot in Review for a new idea mid-review, without starting a new run (Nick, 29 Sep). */
+function AddLine({ meta, batch, running, onAdd }: { meta: Meta; batch: Batch; running: boolean; onAdd: (text: string, field: string) => Promise<void> }) {
+  const fields = batch.brief.fields?.length ? batch.brief.fields : Object.keys(meta.fields);
+  const [text, setText] = useState('');
+  const [field, setField] = useState(fields[0]);
+  const [busy, setBusy] = useState(false);
+  const f = meta.fields[field];
+  const n = [...text.trim()].length;
+  async function add() {
+    if (!text.trim()) return;
+    setBusy(true);
+    try { await onAdd(text.trim(), field); setText(''); } catch { /* shown above */ } finally { setBusy(false); }
+  }
+  return (
+    <section className="flex flex-wrap items-center gap-2 rounded-xl border-2 border-dashed border-[#D94D8F]/60 bg-[#16181D] p-3">
+      <span className="text-sm font-semibold uppercase tracking-wider text-[#858B96]">Add a line</span>
+      <input aria-label="A new line for this run" className="min-w-[18rem] flex-1 rounded-lg border-2 border-[#343946] px-3 py-2 text-lg" placeholder="A new idea for this run…" value={text}
+        onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') add(); }} />
+      <select aria-label="Field for the new line" value={field} onChange={e => setField(e.target.value)} className="rounded-lg border-2 border-[#343946] bg-[#101216] px-2 py-2 text-sm">
+        {fields.map(k => <option key={k} value={k}>{meta.fields[k]?.label || k}</option>)}
+      </select>
+      <span className={cn('w-16 text-right font-mono text-sm', f && n > f.visible ? 'font-bold text-amber-300' : 'text-[#858B96]')}>{n}/{f?.visible}</span>
+      <PinkButton className="px-4 py-2 text-base" disabled={!text.trim() || busy || running} onClick={add} title={running ? 'Wait for the current checks to finish' : undefined}>Add and check</PinkButton>
+      <span className="w-full text-xs text-[#646A75]">Goes into this run as your line{batch.brief.region === 'CA' ? ' (Canada)' : ''}, checked like the ones you write first. Keep it once its flags arrive, and it goes to the Shortlist.</span>
+    </section>
   );
 }
 
@@ -1002,7 +1050,28 @@ function LineCard({ meta, line, onChange, onMore }: { meta: Meta; line: Line; on
 function Shortlist({ meta, batch, onReady }: { meta: Meta; batch: Batch | null; onReady: () => void }) {
   const [rows, setRows] = useState<ShortRow[]>([]);
   const [msg, setMsg] = useState('');
+  // The last lines cut here, newest first, so a cut can be undone (it goes back to keep or edit, as it was).
+  const [cut, setCut] = useState<Array<{ row: ShortRow; prev: string }>>([]);
+  const [busy, setBusy] = useState<string | null>(null);
   const load = () => studio.shortlist().then(setRows).catch(e => setMsg(e.message));
+  // The same decision as Cut in Review: attributed to you, and it feeds taste the same way.
+  async function cutRow(r: ShortRow) {
+    if (!r.batch) return;
+    setBusy(r.id); setMsg('');
+    try {
+      await studio.decide(r.batch, r.id, { decision: 'cut', source: 'shortlist' });
+      setCut(cur => [{ row: r, prev: r.decision || 'keep' }, ...cur].slice(0, 5));
+      await load();
+    } catch (e: any) { setMsg(e.message); } finally { setBusy(null); }
+  }
+  async function undo(x: { row: ShortRow; prev: string }) {
+    setBusy(x.row.id);
+    try {
+      await studio.decide(x.row.batch!, x.row.id, { decision: x.prev as Line['decision'] });
+      setCut(cur => cur.filter(y => y.row.id !== x.row.id));
+      await load();
+    } catch (e: any) { setMsg(e.message); } finally { setBusy(null); }
+  }
   useEffect(() => { load(); }, []);
   const groups = useMemo(() => {
     const m = new Map<string, ShortRow[]>();
@@ -1047,12 +1116,22 @@ function Shortlist({ meta, batch, onReady }: { meta: Meta; batch: Batch | null; 
         </details>
       </div>
       {msg && <div className="rounded-lg bg-emerald-500/10 p-3 text-base text-emerald-200">{msg}</div>}
+      {cut.length > 0 && (
+        <div className="space-y-1.5 rounded-lg border border-[#343946] bg-[#16181D] p-3 text-base">
+          {cut.map(x => (
+            <div key={x.row.id} className="flex items-center gap-3">
+              <span className="min-w-0 flex-1 truncate text-[#C9CCD2]">Cut: <span className="font-mono text-sm">{x.row.stub}</span> · {x.row.text}</span>
+              <GhostButton disabled={busy === x.row.id} onClick={() => undo(x)}>Undo</GhostButton>
+            </div>
+          ))}
+        </div>
+      )}
       {!rows.length && <div className="text-base text-[#858B96]">Nothing kept yet. Keep or edit lines in Review, or import a curated sheet.</div>}
       {[...groups.entries()].map(([g, rs]) => (
         <section key={g} className="rounded-xl border border-[#272B34] bg-[#16181D] p-5">
           <h2 className="mb-3 text-lg font-bold">{g} <span className="font-normal text-[#858B96]">({rs.length})</span></h2>
           <table className="w-full text-left text-base">
-            <thead><tr className="text-sm uppercase text-[#858B96]"><th className="pb-2 pr-4" title={NAMING_TIP}>Naming code</th><th className="pb-2 pr-4">Field</th><th className="pb-2 pr-4">Line</th><th className="pb-2">Note</th></tr></thead>
+            <thead><tr className="text-sm uppercase text-[#858B96]"><th className="pb-2 pr-4" title={NAMING_TIP}>Naming code</th><th className="pb-2 pr-4">Field</th><th className="pb-2 pr-4">Line</th><th className="pb-2 pr-4">Note</th><th className="pb-2" /></tr></thead>
             <tbody>
               {rs.map(r => (
                 <tr key={r.id} className="border-t border-[#272B34] align-top">
@@ -1067,7 +1146,12 @@ function Shortlist({ meta, batch, onReady }: { meta: Meta; batch: Batch | null; 
                       </div>
                     )}
                   </td>
-                  <td className="py-2 text-base text-[#858B96]">{r.note}</td>
+                  <td className="py-2 pr-4 text-base text-[#858B96]">{r.note}</td>
+                  <td className="py-2 text-right">
+                    {r.signed_off
+                      ? <span className="inline-flex flex-col items-end gap-0.5"><GhostButton disabled title={`Signed off at Ready for production (${r.signed_off}). Take it out of the set there first.`}>Cut</GhostButton><span className="text-xs text-[#646A75]">signed off at Ready</span></span>
+                      : <GhostButton disabled={!r.batch || busy === r.id} onClick={() => cutRow(r)} title="Cut this line (the same as Cut in Review; you can undo it)">Cut</GhostButton>}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1299,7 +1383,7 @@ function Ready({ meta, batch, user, onNext }: { meta: Meta; batch: Batch | null;
       <div className="flex flex-wrap items-start gap-4 rounded-xl border border-[#272B34] bg-[#16181D] p-5">
         <div className="mr-auto max-w-3xl">
           <h1 className="text-2xl font-bold tracking-tight" style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>Ready for production</h1>
-          <p className="mt-1 text-base text-[#A3A8B1]">Creative sign-off on the kept lines for one persona and territory. It isn’t compliance clearance: that’s tracked per line below. Red flags must be fixed or overridden with a reason; amber and grey don’t block. Once signed off, the set is locked, and a later edit becomes a new version.</p>
+          <p className="mt-1 text-base text-[#A3A8B1]">Creative sign-off on the kept lines for one persona and territory. It isn’t compliance clearance: Trupanion reviews copy and visual together at the Compliance step, after Pre-flight. Red flags must be fixed or overridden with a reason; amber and grey don’t block. Once signed off, the set is locked, and a later edit becomes a new version.</p>
         </div>
         <div>
           <Label>Persona × territory</Label>
@@ -1330,7 +1414,7 @@ function Ready({ meta, batch, user, onNext }: { meta: Meta; batch: Batch | null;
                 onVisual={v => setVisuals(cur => ({ ...cur, [x.line.id]: v }))}
                 onInclude={on => setInclude(cur => { const n = new Set(cur); if (on) n.add(x.line.id); else n.delete(x.line.id); return n; })}
                 onLead={on => setLead(cur => { const n = new Set(cur); if (on) n.add(x.line.id); else n.delete(x.line.id); return n; })}
-                onChanged={() => load(true).catch(e => setError(e.message))} onError={setError} canCompliance={meta.can_set_compliance !== false} canOverride={meta.can_override !== false} />
+                onChanged={() => load(true).catch(e => setError(e.message))} onError={setError} canOverride={meta.can_override !== false} />
             ))}
           </div>
 
@@ -1386,9 +1470,9 @@ function Ready({ meta, batch, user, onNext }: { meta: Meta; batch: Batch | null;
 }
 
 const LETTERS = 'ABCDEFGH'.split('');
-function ReadyCard({ meta, item, included, lead, onVisual, onInclude, onLead, onChanged, onError, canCompliance, canOverride }: {
+function ReadyCard({ meta, item, included, lead, onVisual, onInclude, onLead, onChanged, onError, canOverride }: {
   meta: Meta; item: ReadyView['lines'][number]; included: boolean; lead: boolean; onVisual: (letter: string) => void;
-  onInclude: (on: boolean) => void; onLead: (on: boolean) => void; onChanged: () => void; onError: (m: string) => void; canCompliance: boolean; canOverride: boolean;
+  onInclude: (on: boolean) => void; onLead: (on: boolean) => void; onChanged: () => void; onError: (m: string) => void; canOverride: boolean;
 }) {
   const { line, final_text, red, compliance, versions } = item;
   const f = meta.fields[line.field];
@@ -1398,7 +1482,6 @@ function ReadyCard({ meta, item, included, lead, onVisual, onInclude, onLead, on
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(final_text);
   const [checking, setChecking] = useState(false);
-  const [note, setNote] = useState(compliance.note || '');
   const [showHistory, setShowHistory] = useState(false);
   const act = async (fn: () => Promise<unknown>) => { try { await fn(); onChanged(); } catch (e: any) { onError(e.message); } };
   const onOriginal = line.flags.some(x => (x.why || '').includes('on the original wording'));
@@ -1484,26 +1567,19 @@ function ReadyCard({ meta, item, included, lead, onVisual, onInclude, onLead, on
         </div>
       )}
 
+      {compliance.status === 'changes_requested' && compliance.send_back !== 'asset' && (
+        <div className="mt-3 rounded-lg border border-amber-400/50 bg-amber-400/10 p-3 text-base text-amber-100">
+          <span className="font-semibold">Compliance asked for changes to the copy</span>{compliance.note ? `: “${compliance.note}”` : ''}
+          <div className="mt-0.5 text-sm text-amber-200/80">Edit the wording, then sign off again. {compliance.by ? `${compliance.by}, ${when(compliance.at)}` : ''}</div>
+        </div>
+      )}
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[#272B34] pt-3">
+        {/* Compliance is set at its own step, after Pre-flight, with the visual (Nick, 29 Sep); shown here read-only. */}
         <span className="text-sm font-semibold uppercase tracking-wider text-[#858B96]">Compliance</span>
-        {!canCompliance && <span className="text-xs text-[#646A75]">Vivan updates this</span>}
-        {(Object.keys(COMPLIANCE_WORDS) as ComplianceStatus[]).map(st => (
-          <button key={st} disabled={!canCompliance} aria-pressed={compliance.status === st} onClick={() => {
-            // A line that went through with an overridden red flag can only be cleared with a note.
-            let n = note;
-            if (st === 'cleared' && line.overrides?.length && !n.trim()) {
-              n = window.prompt('This line went through with an overridden red flag. Who at Trupanion cleared it?')?.trim() || '';
-              if (!n) return;
-              setNote(n);
-            }
-            act(() => studio.compliance(line.batch, line.id, st, n));
-          }}
-            className={cn('rounded-full border px-3 py-0.5 text-sm font-medium disabled:cursor-default', compliance.status === st ? COMPLIANCE_TONE[st] : cn('border-[#272B34] text-[#646A75]', canCompliance && 'hover:text-[#C9CCD2]'), !canCompliance && compliance.status !== st && 'hidden')}>{COMPLIANCE_WORDS[st]}</button>
-        ))}
-        {!canCompliance ? (note ? <span className="flex-1 text-sm text-[#C9CCD2]">{note}</span> : <span className="flex-1" />) : <input aria-label="Compliance note" className="min-w-[10rem] flex-1 rounded-lg border-2 border-[#272B34] px-3 py-1 text-sm" placeholder="Compliance note" value={note} onChange={e => setNote(e.target.value)}
-          onBlur={() => note !== (compliance.note || '') && act(() => studio.compliance(line.batch, line.id, compliance.status, note))} />}
+        <span className={cn('rounded-full border px-3 py-0.5 text-sm font-medium', COMPLIANCE_TONE[compliance.status])} title="Set at the Compliance step, after Pre-flight, with the visual">{COMPLIANCE_WORDS[compliance.status]}</span>
+        {compliance.note && compliance.status !== 'changes_requested' ? <span className="text-sm text-[#C9CCD2]">{compliance.note}</span> : null}
+        <span className="flex-1 text-xs text-[#646A75]">{compliance.by ? `${compliance.by}, ${when(compliance.at)}${compliance.sha256 && compliance.sha256 !== item.sha256 ? ' · on an earlier wording' : ''}` : 'Reviewed at the Compliance step, with the visual'}</span>
         <button className="text-xs text-[#858B96] hover:text-[#ECEDEF]" onClick={() => { setDraft(final_text); setEditing(true); }} title={line.ready ? 'Editing makes a new version; the signed-off wording is kept' : undefined}>edit wording</button>
-        {compliance.by && <span className="text-xs text-[#858B96]">{compliance.by}, {when(compliance.at)}{compliance.sha256 && compliance.sha256 !== item.sha256 ? ' · on an earlier wording' : ''}</span>}
         <button className="text-xs text-[#646A75] hover:text-[#ECEDEF]" onClick={() => setShowHistory(!showHistory)}>{showHistory ? 'hide history' : `history${versions.length ? ` · ${versions.length} version${versions.length === 1 ? '' : 's'}` : ''}`}</button>
       </div>
       {showHistory && <LineHistory line={line} />}
@@ -1819,6 +1895,12 @@ function PreflightReport({ meta, report, stubs, canReady, progress, pending, fil
                 {up && <PinkButton className="px-3 py-1 text-sm" disabled={!!progress} onClick={() => onAudit(up.id)}>Audit again</PinkButton>}
               </div>
             )}
+            {report.compliance?.status === 'changes_requested' && (
+              <div className="rounded-lg border border-amber-400/50 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
+                <span className="font-semibold">Compliance asked for changes{report.compliance.send_back === 'asset' ? ' to the visual' : ' to the copy'}</span>{report.compliance.note ? `: “${report.compliance.note}”` : ''}
+                <div className="text-amber-200/80">{report.compliance.send_back === 'asset' ? 'Upload a new version; it goes back to Compliance for review.' : 'The copy is edited and signed off again at Ready for production.'} {report.compliance.by ? `${report.compliance.by}, ${when(report.compliance.at)}` : ''}</div>
+              </div>
+            )}
             {report.format_note && <p className="rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">{report.format_note}</p>}
             {report.same_visual_as.length > 0 && <p className="text-sm text-[#A3A8B1]">Same visual as <span className="font-mono">{report.same_visual_as.join(', ')}</span>. Checked once; copy match is for this code’s own lines.</p>}
             <div>
@@ -2007,6 +2089,188 @@ function PfFlagRow({ flag, canOverride, onChanged, onError }: { flag: PfFlag; ca
 }
 
 /** The live rules in plain words, read-only, with sources. Image-only brand rules are marked (Pre-flight uses them). */
+// ---------- 7. Compliance: copy and visual together, after Pre-flight ----------
+
+const SEND_BACK: Record<'copy' | 'asset', string> = { copy: 'The copy (edited and signed off again at Ready for production)', asset: 'The visual (a new upload in Pre-flight)' };
+
+function Compliance({ meta }: { meta: Meta }) {
+  const enabled = !!meta.preflight?.enabled;
+  const can = meta.can_set_compliance !== false;
+  const [view, setView] = useState<ComplianceView | null>(null);
+  const [sel, setSel] = useState<string | null>(params.get('asset'));
+  const [error, setError] = useState('');
+  const load = useCallback(() => studio.complianceView().then(v => {
+    setView(v);
+    setSel(cur => (cur && v.assets.some(a => a.upload_id === cur) ? cur : v.assets[0]?.upload_id ?? null));
+    setError('');
+  }).catch(e => setError(e.message)), []);
+  useEffect(() => { if (enabled) load(); }, [enabled, load]);
+  if (!enabled) return <div className="max-w-3xl rounded-xl border border-[#272B34] bg-[#16181D] p-6 text-base text-[#A3A8B1]">Compliance works on Pre-flight’s uploads, which need the database (hosted Studio has it on).</div>;
+
+  const assets = view?.assets || [];
+  const asset = assets.find(a => a.upload_id === sel) || null;
+  const count = (st: ComplianceStatus) => assets.filter(a => a.status === st).length;
+  const groups: Array<[ComplianceStatus, string]> = [['changes_requested', 'Changes requested'], ['pending', 'To review'], ['cleared', 'Cleared']];
+
+  return (
+    <div className="max-w-[1500px] space-y-5">
+      <div className="flex flex-wrap items-start gap-4 rounded-xl border border-[#272B34] bg-[#16181D] p-5">
+        <div className="mr-auto max-w-3xl">
+          <h1 className="text-2xl font-bold tracking-tight" style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>Compliance</h1>
+          <p className="mt-1 text-base text-[#A3A8B1]">Each finished asset with its signed-off copy and Pre-flight’s flags, reviewed together. Clear it, or request changes with a note: the copy goes back to Ready for production, the visual to Pre-flight. A new upload comes back here for review. When everything is cleared, hand over to Add3.</p>
+          {!can && <p className="mt-2 text-sm text-[#858B96]">Vivan (or an admin) sets the status; you can see it here.</p>}
+        </div>
+        <div className="min-w-[14rem] rounded-lg border border-[#272B34] bg-[#101216] px-4 py-3 text-sm">
+          <div className="text-2xl font-bold">{count('cleared')} <span className="text-base font-medium text-[#858B96]">of {assets.length} assets cleared</span></div>
+          <div className="text-[#858B96]">{count('changes_requested')} with changes requested · {view?.waiting.length || 0} code{view?.waiting.length === 1 ? '' : 's'} waiting for an asset</div>
+        </div>
+        <div className="flex flex-col gap-2">
+          <GhostButton className="text-base" onClick={() => studio.download('/preflight/handoff.csv', 'asset-handoff.csv')} title="Per code: the asset, Ready to traffic and compliance status">Handoff to Add3 (assets)</GhostButton>
+          <GhostButton className="text-base" onClick={() => studio.download('/handoff.csv', 'ready-for-production.csv')}>Handoff CSV (copy, per code)</GhostButton>
+          <GhostButton className="text-base" onClick={() => studio.download('/compliance-sheet.csv', 'trupanion-compliance-sheet.csv')}>Compliance sheet for Trupanion</GhostButton>
+        </div>
+      </div>
+      {error && <div className="rounded-lg border-2 border-red-500/45 bg-red-500/10 p-3 text-base text-red-200">{error}</div>}
+      {view && !assets.length && <div className="text-base text-[#858B96]">Nothing to review yet: assets arrive here once they’re uploaded in Pre-flight.</div>}
+
+      {assets.length > 0 && (
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[360px_1fr]">
+          <aside className="space-y-4 lg:sticky lg:top-24 lg:max-h-[calc(100vh-8rem)] lg:self-start lg:overflow-y-auto">
+            {groups.map(([st, title]) => {
+              const as = assets.filter(a => a.status === st);
+              if (!as.length) return null;
+              return (
+                <section key={st} className="rounded-xl border border-[#272B34] bg-[#16181D] p-3">
+                  <div className="mb-2 px-1 text-sm font-semibold">{title} <span className="font-normal text-[#858B96]">({as.length})</span></div>
+                  <ul className="space-y-1.5">
+                    {as.map(a => (
+                      <li key={a.upload_id}>
+                        <button onClick={() => setSel(a.upload_id)} className={cn('w-full rounded-lg border px-3 py-2 text-left transition', sel === a.upload_id ? 'border-[#D94D8F] bg-[#D94D8F]/10' : 'border-[#272B34] hover:border-[#4A505D]')}>
+                          <div className="truncate text-sm font-medium">{personaName(meta, a.persona)} · {territoryName(meta.territories[a.territory]) || a.territory}{inRegion(a.region)}</div>
+                          <div className="truncate font-mono text-xs text-[#858B96]">{a.codes.map(c => c.stub).join(', ')}</div>
+                          <div className="truncate text-xs text-[#646A75]">{a.upload.kind} · {a.upload.files.map(f => f.filename).join(', ')}</div>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              );
+            })}
+            {!!view?.waiting.length && (
+              <section className="rounded-xl border border-[#272B34] bg-[#16181D] p-3">
+                <div className="mb-2 px-1 text-sm font-semibold text-[#858B96]">Waiting for their asset ({view.waiting.length})</div>
+                <ul className="space-y-1 px-1 text-xs text-[#858B96]">{view.waiting.map(w => <li key={w.stub} className="truncate font-mono">{w.stub}</li>)}</ul>
+              </section>
+            )}
+          </aside>
+          <main className="min-w-0">{asset && <ComplianceAssetView meta={meta} asset={asset} can={can} onChanged={load} onError={setError} />}</main>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ComplianceAssetView({ meta, asset, can, onChanged, onError }: { meta: Meta; asset: ComplianceAsset; can: boolean; onChanged: () => Promise<void>; onError: (m: string) => void }) {
+  const c0 = asset.codes[0]?.compliance;
+  const [note, setNote] = useState('');
+  const [sendBack, setSendBack] = useState<'copy' | 'asset'>('asset');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setNote(''); setSendBack(c0?.send_back || 'asset'); }, [asset.upload_id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const flags = asset.flags.filter(f => !f.cross_persona);
+  const reds = flags.filter(f => f.severity === 'red'), ambers = flags.filter(f => f.severity === 'amber'), greys = flags.filter(f => f.severity === 'grey');
+  const overridden = [...reds.filter(f => f.override).map(f => f.label), ...asset.codes.flatMap(c => c.compliance.overrides)];
+  async function set(status: ComplianceStatus) {
+    let n = note.trim();
+    if (status === 'cleared' && overridden.length && !n) {
+      n = window.prompt('This asset went through with an overridden red flag. Who at Trupanion cleared it?')?.trim() || '';
+      if (!n) return;
+    }
+    setBusy(true);
+    try { await studio.setAssetCompliance(asset.upload_id, { status, note: n || undefined, send_back: status === 'changes_requested' ? sendBack : undefined }); setNote(''); await onChanged(); }
+    catch (e: any) { onError(e.message); } finally { setBusy(false); }
+  }
+  const FlagLine = ({ f }: { f: ComplianceAsset['flags'][number] }) => (
+    <li className="text-sm">
+      <Chip tone={f.severity === 'red' ? 'red' : f.severity === 'amber' ? 'amber' : 'grey'} className="mr-2 text-xs">{f.severity}</Chip>
+      <span className="text-[#ECEDEF]">{f.label}</span>{f.for_stub && <span className="ml-1 font-mono text-xs text-[#858B96]">({f.for_stub})</span>}
+      {f.quote && <span className="ml-1 text-[#A3A8B1]">“{f.quote}”</span>}{f.where && <span className="ml-1 text-xs text-[#646A75]">on {f.where}</span>}
+      {f.override && <div className="ml-1 mt-0.5 text-xs text-amber-200">Overridden by {f.override.by}: “{f.override.reason}”</div>}
+    </li>
+  );
+  return (
+    <div className="space-y-4">
+      <div className={cn('flex flex-wrap items-center gap-3 rounded-xl border-2 px-5 py-4', asset.status === 'cleared' ? 'border-emerald-500/60 bg-emerald-500/10' : asset.status === 'changes_requested' ? 'border-amber-400/60 bg-amber-400/10' : 'border-[#272B34] bg-[#16181D]')}>
+        <div className="mr-auto">
+          <div className="text-lg font-semibold">{personaName(meta, asset.persona)} · {territoryName(meta.territories[asset.territory]) || asset.territory}{inRegion(asset.region)}</div>
+          <div className="font-mono text-sm text-[#858B96]">{asset.codes.map(c => c.stub).join(' · ')}</div>
+        </div>
+        <span className={cn('rounded-full border px-3 py-1 text-sm font-semibold', COMPLIANCE_TONE[asset.status])}>{COMPLIANCE_WORDS[asset.status]}</span>
+        {c0?.by && <span className="text-sm text-[#A3A8B1]">{c0.by}, {when(c0.at)}</span>}
+      </div>
+      {c0?.note && <p className="rounded-lg border border-[#343946] bg-[#101216] px-3 py-2 text-base text-[#C9CCD2]"><span className="text-[#858B96]">Note:</span> {c0.note}{c0.send_back ? <span className="text-[#858B96]"> · sent back: {c0.send_back === 'asset' ? 'the visual' : 'the copy'}</span> : null}</p>}
+      {c0?.stale && <p className="rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">{c0.stale}: review it again.</p>}
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,6fr)_minmax(0,6fr)]">
+        <section className="rounded-xl border border-[#272B34] bg-[#16181D] p-4">
+          <Label>The asset</Label>
+          <div className={cn('grid gap-2', asset.upload.kind === 'carousel' ? 'grid-cols-3' : 'grid-cols-1')}>
+            {asset.upload.files.map(f => (
+              <div key={f.position}>
+                <AuthMedia path={studio.pfFile(asset.upload_id, f.position)} video={asset.upload.kind === 'video'} alt={f.filename} className={asset.upload.kind === 'carousel' ? 'aspect-square w-full' : 'max-h-96 w-full'} />
+                {asset.upload.kind === 'carousel' && <div className="mt-0.5 text-center text-xs text-[#858B96]">card {f.position + 1}</div>}
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 text-sm text-[#858B96]">{asset.upload.kind} · {asset.upload.files.map(f => f.filename).join(', ')} · uploaded by {asset.upload.uploaded_by}, {when(asset.upload.uploaded_at)}</div>
+        </section>
+        <div className="space-y-4">
+          <section className="space-y-3 rounded-xl border border-[#272B34] bg-[#16181D] p-4">
+            <Label>The copy, per code</Label>
+            {asset.codes.map(c => (
+              <div key={c.stub} className="border-l-2 border-[#343946] pl-3">
+                <div className="flex flex-wrap items-center gap-2"><span className="font-mono text-sm">{c.stub}</span>
+                  {c.ready.status === 'ready' && <Chip tone="outline" className="border-emerald-500/60 text-xs text-emerald-300">Ready to traffic</Chip>}
+                  {asset.codes.length > 1 && <span className={cn('rounded-full border px-2 py-px text-xs', COMPLIANCE_TONE[c.compliance.status])}>{COMPLIANCE_WORDS[c.compliance.status]}</span>}
+                </div>
+                {c.copy.map(x => <div key={x.line_id} className="mt-1"><div className="text-xs text-[#858B96]">{x.label} · v{x.version}</div><div className="text-base leading-snug text-[#F2F3F5]">{x.text}</div></div>)}
+                {c.compliance.overrides.length > 0 && <div className="mt-1 text-xs text-amber-200">Please check specifically: {c.compliance.overrides.join('; ')}</div>}
+              </div>
+            ))}
+          </section>
+          <section className="rounded-xl border border-[#272B34] bg-[#16181D] p-4">
+            <Label>Pre-flight flags</Label>
+            {!asset.audit ? <p className="text-sm text-[#858B96]">Not audited yet in Pre-flight.</p>
+              : asset.audit.status !== 'done' ? <p className="text-sm text-[#858B96]">Audit {asset.audit.status}.</p>
+              : !flags.length ? <p className="text-sm text-[#858B96]">No flags.</p>
+              : <ul className="space-y-1.5">{[...reds, ...ambers].map(f => <FlagLine key={f.id} f={f} />)}
+                  {greys.length > 0 && <li><details className="text-sm text-[#858B96]"><summary className="cursor-pointer">{greys.length} note{greys.length === 1 ? '' : 's'}</summary><ul className="mt-1 space-y-1">{greys.map(f => <FlagLine key={f.id} f={f} />)}</ul></details></li>}</ul>}
+            {asset.audit?.stale && <p className="mt-2 text-xs text-amber-200">{asset.audit.stale}</p>}
+          </section>
+        </div>
+      </div>
+
+      {can && (
+        <section className="space-y-3 rounded-xl border-2 bg-[#16181D] p-5" style={{ borderColor: PINK }}>
+          <h2 className="text-lg font-semibold">Your review</h2>
+          <textarea rows={2} className="w-full rounded-lg border-2 border-[#343946] px-3 py-2 text-base" placeholder="Note (required for changes; e.g. who at Trupanion cleared it)" value={note} onChange={e => setNote(e.target.value)} />
+          <fieldset className="text-sm">
+            <legend className="mb-1 text-[#858B96]">If you request changes, what goes back?</legend>
+            {(['asset', 'copy'] as const).map(k => (
+              <label key={k} className="mr-5 inline-flex cursor-pointer items-center gap-2"><input type="radio" name="send-back" className="accent-[#D94D8F]" checked={sendBack === k} onChange={() => setSendBack(k)} />{SEND_BACK[k]}</label>
+            ))}
+          </fieldset>
+          <div className="flex flex-wrap gap-2">
+            <PinkButton className="px-4 py-2 text-base" disabled={busy} onClick={() => set('cleared')}>Cleared</PinkButton>
+            <GhostButton className="px-4 py-2 text-base" disabled={busy || !note.trim()} title={!note.trim() ? 'Say what needs changing first' : undefined} onClick={() => set('changes_requested')}>Request changes</GhostButton>
+            <GhostButton className="px-4 py-2 text-base" disabled={busy || asset.status === 'pending'} onClick={() => set('pending')}>Back to pending</GhostButton>
+          </div>
+          {overridden.length > 0 && <p className="text-xs text-amber-200">Went through with an overridden red flag ({overridden.join('; ')}): clearing needs a note.</p>}
+        </section>
+      )}
+    </div>
+  );
+}
+
 function LiveRules({ active, meta }: { active: ActiveRules; meta: Meta | null }) {
   const sev = (r: RuleEntry) => r.severity === 'compliance'
     ? <Chip tone="red" className="shrink-0 text-xs">breaks a client rule</Chip>
