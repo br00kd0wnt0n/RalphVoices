@@ -36,7 +36,7 @@ export class CodeBook {
    * The code for a line not yet signed off. With `visual`, the next free line
    * number on that visual; without, the first visual with fewer than three lines.
    */
-  assign(l: CodeInput, visual?: string): string {
+  assign(l: CodeInput, visual?: string, suffix = ''): string {
     const base = { persona: l.persona, territory: l.territory, format: l.format, platform: l.platform, region: l.region };
     const letters = visual ? [visual.toUpperCase()] : VISUAL_LETTERS;
     for (const v of letters) {
@@ -45,7 +45,7 @@ export class CodeBook {
       if (!visual && taken.size >= LINES_PER_VISUAL) continue;
       let n = 1;
       while (taken.has(n)) n++;
-      const code = formatCode({ ...base, visual: v, line: n });
+      const code = formatCode({ ...base, visual: v, line: n }) + suffix;
       this.take(code);
       return code;
     }

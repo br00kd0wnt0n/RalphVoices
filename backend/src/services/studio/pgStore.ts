@@ -99,7 +99,7 @@ export class PgStore implements StudioStore {
     const r = await this.q.query(`SELECT value FROM studio_inputs WHERE key = $1`, [key]);
     return r.rows[0]?.value ?? null;
   }
-  async putInput(key: string, value: any) {
+  async putInput(key: InputKey | string, value: any) {
     await this.q.query(`INSERT INTO studio_inputs (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [key, JSON.stringify(value)]);
   }
 

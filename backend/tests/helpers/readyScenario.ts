@@ -97,7 +97,8 @@ export async function scenario() {
   const rows = S.parseCsv(pack.csv);
   assert.equal(rows.length, 3, 'header plus two codes');
   assert.ok(rows.every(r => r.length === rows[0].length), 'every row has the same columns');
-  assert.deepEqual(rows[0].slice(0, 5), ['Naming code', 'Region', 'Visual', 'Version', 'Persona']);
+  assert.deepEqual(rows[0].slice(0, 6), ['Naming code', 'Region', 'Round', 'Visual', 'Version', 'Persona']);
+  assert.ok(rows.slice(1).every(r => r[2] === 'R1'), 'the round column (the active round, R1 by default)');
   const col = (name: string) => { const i = rows[0].indexOf(name); assert.ok(i >= 0, `handoff has a ${name} column`); return i; };
   const [PRIMARY, HEAD, STATUS, NOTE, OVERRIDE, CHANGED] = ['Meta primary text', 'Meta headline', 'Compliance status', 'Compliance note', 'Red flag overridden', 'Changed since sign-off'].map(col);
   const a1 = rows.find(r => r[0] === 'OWN_CALM_UGC_A1_US_META')!, a2 = rows.find(r => r[0] === 'OWN_CALM_UGC_A2_US_META')!;
@@ -105,8 +106,8 @@ export async function scenario() {
   assert.equal(a1[HEAD], 'Calm, covered.');
   assert.equal(a2[HEAD], 'Calm, covered.', 'the shared headline is on both rows');
   assert.equal(a1[CHANGED], 'yes: a newer version of a line exists');
-  assert.ok(rows.slice(1).every(r => r[1] === 'US' && r[2] === 'A'));
-  assert.deepEqual([a1[3], a2[3]], ['1', '2']);
+  assert.ok(rows.slice(1).every(r => r[1] === 'US' && r[3] === 'A'));
+  assert.deepEqual([a1[4], a2[4]], ['1', '2']);
   // A1: the headline was sent back for A1, and the primary was reviewed on its later wording.
   assert.equal(a1[STATUS], 'Changes requested');
   assert.equal(a2[STATUS], 'Cleared', 'the same headline, cleared for A2');

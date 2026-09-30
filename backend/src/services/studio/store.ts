@@ -8,7 +8,7 @@ import path from 'node:path';
 
 export interface SpendEntry { label: string; usd: number; by_stage?: Record<string, number>; calls?: Record<string, number>; at: string; user?: string }
 export interface Asset { contentType: string; data: Buffer; filename?: string }
-export type InputKey = 'personas' | 'voices' | 'rubric';
+export type InputKey = 'personas' | 'voices' | 'rubric' | 'rounds';
 export interface EditRecord { line_id: string; batch_id: string; before: unknown; after: unknown; by: string; at: string }
 /** saveBatch: `lineIds` writes only those lines (a job saving the lines it made or checked); the header always. */
 export interface SaveBatchOptions { lineIds?: string[] }
@@ -61,6 +61,8 @@ export interface StudioStore {
   saveTerritoryEdit(code: string, territory: any): Promise<void>;
   /** Named inputs: 'personas' (seed file), 'voices' (lived voice samples), 'rubric' (the M3 rubric, for Pre-flight). */
   getInput(key: InputKey): Promise<any | null>;
+  /** Write a named input ('rounds': the rounds and which one is active). */
+  putInput(key: InputKey, value: any): Promise<void>;
 
   saveBrief(brief: any): Promise<void>;
   getBrief(name: string): Promise<any | null>;
@@ -139,7 +141,9 @@ export class FileStore implements StudioStore {
     all[code] = territory;
     writeJson(this.P('territories.json'), { _note: 'Territory edits made in Studio (client feedback, creative director preference). They override the pitch versions in studio-rules.json, which stay unchanged.', territories: all });
   }
+  async putInput(key: InputKey, value: any) { writeJson(this.P(`${key}.json`), value); }
   async getInput(key: InputKey) {
+    if (key === 'rounds') { const p = this.P('rounds.json'); return fs.existsSync(p) ? readJson(p) : null; }
     const inputs = this.opts.inputsDir;
     const candidates = key === 'rubric' ? [this.P('rubric.json'), ...(inputs ? [path.join(inputs, 'rubric.json')] : [])]
       : key === 'personas'

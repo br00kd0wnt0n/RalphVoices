@@ -21,6 +21,7 @@ import type pg from 'pg';
 import * as S from './engine.js';
 import { latestSignoffs, setCompliance, type Signoff } from './ready.js';
 import { complianceFor, platformOf, signoffOnImage, signoffVersions, type SignedField } from './versions.js';
+import { roundOf, roundView } from './rounds.js';
 import { DEFAULT_REGION, parseCode, visualKey, type Region } from '../../utils/namingCode.js';
 import { downloadPrivateObject, getPrivateObject, getPrivateObjectStream, isR2Enabled, putPrivateObject } from '../r2.js';
 import { FatalError } from '../audit/api.js';
@@ -74,6 +75,8 @@ export interface StubRow {
   /** Pre-flight passed (the creative lead's mark on the latest upload). Not the same as Ready to traffic: see `traffic`. */
   status: { status: 'open' | 'ready'; ready_by?: string; ready_at?: string; upload_id?: string };
   traffic: Traffic;
+  /** The round of its sign-off; `test`: a test round's code (never handed to Add3 or B3). */
+  round: string; test: boolean;
 }
 /**
  * Ready to traffic = Pre-flight passed AND Trupanion's compliance cleared on the
@@ -268,15 +271,18 @@ export class Preflight {
     });
   }
 
-  async stubs(filter: { persona?: string; territory?: string; region?: string } = {}): Promise<StubRow[]> {
+  /** The codes to upload for: the active round's by default (`round: 'all'` for every round, or a round's id). */
+  async stubs(filter: { persona?: string; territory?: string; region?: string; round?: string } = {}): Promise<StubRow[]> {
     await this.expireStuck();
     const out: StubRow[] = [];
-    for (const s of await latestSignoffs(filter)) {
+    const view = await roundView(filter.round);
+    for (const s of await latestSignoffs({ ...filter, view })) {
       for (const stub of signoffVersions(s).map(v => v.code).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) {
         out.push({
           stub, persona: s.persona, territory: s.territory, region: s.region || DEFAULT_REGION, visual_key: visualKey(stub), signoff_id: s.id, ready_by: s.ready_by, ready_at: s.ready_at,
           copy: this.copyFor(s, stub),
           upload: await this.latestUpload(stub), audit: await this.latestAuditSummary(stub), status: await this.status(stub), traffic: await this.traffic(stub),
+          round: roundOf(s), test: view.isTest(roundOf(s)),
         });
       }
     }
@@ -643,29 +649,32 @@ export class Preflight {
     const r = S.loadRules();
     const keys = Object.keys(r.features?.items || {});
     // B2's own row when the audit came from B2 (same columns either way).
-    const head = ['stub', 'features', 'angle', 'persona', 'kind', 'red', 'amber', 'grey', ...keys.map(k => `p_${k}`)];
+    // Every real round (B3 keys round close and expected-vs-actual on the round column); never a test round.
+    const head = ['stub', 'features', 'angle', 'persona', 'kind', 'red', 'amber', 'grey', ...keys.map(k => `p_${k}`), 'round'];
     const rows = [head];
     const { b2FeaturesRow } = await import('./preflightB2.js');
-    for (const s of await this.stubs()) {
-      if (s.audit?.status !== 'done') continue;
+    for (const s of await this.stubs({ round: 'all' })) {
+      if (s.test || s.audit?.status !== 'done') continue;
       const a = (await this.db.query(`SELECT result FROM studio_audits WHERE id = $1`, [s.audit.id])).rows[0];
       if (a?.result?.report) {
-        const row: Record<string, string | number> = { ...b2FeaturesRow({ ...a.result.report, stub: s.stub }, keys), red: s.audit.red, amber: s.audit.amber, grey: s.audit.grey };
+        const row: Record<string, string | number> = { ...b2FeaturesRow({ ...a.result.report, stub: s.stub }, keys), red: s.audit.red, amber: s.audit.amber, grey: s.audit.grey, round: s.round };
         rows.push(head.map(h => String(row[h] ?? '')));
         continue;
       }
       const feats: Record<string, number> = a?.result?.features || {};
       rows.push([s.stub, keys.filter(k => (feats[k] ?? 0) >= threshold).join('; '), r.territories[s.territory]?.angle || '', s.persona,
         s.upload?.kind || '', String(s.audit.red), String(s.audit.amber), String(s.audit.grey),
-        ...keys.map(k => (feats[k] === undefined ? '' : Number(feats[k]).toFixed(3)))]);
+        ...keys.map(k => (feats[k] === undefined ? '' : Number(feats[k]).toFixed(3))), s.round]);
     }
     return S.toCsv(rows);
   }
 
   /** The asset handoff list: stub, file, status, open flags. */
-  async handoffCsv(): Promise<string> {
-    const rows = [['Naming code', 'Region', 'Persona', 'Territory', 'Kind', 'File', 'Same visual as', 'Status', 'Ready to traffic', 'Pre-flight passed by', 'Pre-flight passed at', 'Open red flags', 'Amber flags', 'Overridden red flags', 'Compliance', 'Compliance note', 'Cleared at Trupanion by', 'Compliance recorded by']];
-    for (const s of await this.stubs()) {
+  /** The asset handoff to Add3: the active round's codes (or `round`), never a test round's. */
+  async handoffCsv(round?: string): Promise<string> {
+    const rows = [['Naming code', 'Region', 'Round', 'Persona', 'Territory', 'Kind', 'File', 'Same visual as', 'Status', 'Ready to traffic', 'Pre-flight passed by', 'Pre-flight passed at', 'Open red flags', 'Amber flags', 'Overridden red flags', 'Compliance', 'Compliance note', 'Cleared at Trupanion by', 'Compliance recorded by']];
+    for (const s of await this.stubs({ round })) {
+      if (s.test) continue;
       let open = '', amber = '', overridden = '';
       if (s.audit) {
         const f = await this.flagsFor(s.audit.id, s.stub);
@@ -676,7 +685,7 @@ export class Preflight {
       // Add3 only ever sees "Ready to traffic" on a code Trupanion has cleared (or one marked ready before the gate, which says so).
       const status = s.traffic.ready || s.status.status === 'ready' ? s.traffic.words : !s.upload ? 'Not uploaded' : s.audit?.status === 'done' ? 'Needs review' : s.audit ? `Audit ${s.audit.status}` : 'Not audited';
       const c = await this.codeCompliance(s.stub, s.upload?.id ?? null);
-      rows.push([s.stub, s.region, s.persona, s.territory, s.upload?.kind || '', s.upload?.files.map(f => f.filename).join(' | ') || '', s.upload?.stubs.filter(x => x !== s.stub).join(' | ') || '', status, s.traffic.ready ? 'yes' : 'no',
+      rows.push([s.stub, s.region, s.round, s.persona, s.territory, s.upload?.kind || '', s.upload?.files.map(f => f.filename).join(' | ') || '', s.upload?.stubs.filter(x => x !== s.stub).join(' | ') || '', status, s.traffic.ready ? 'yes' : 'no',
         s.status.status === 'ready' ? s.status.ready_by || '' : '', s.status.status === 'ready' ? s.status.ready_at || '' : '', open, amber, overridden,
         COMPLIANCE_WORDS[c.status], c.note || '', c.client_by || '', c.by ? `${c.by}, ${c.at?.slice(0, 16).replace('T', ' ')}` : '']);
     }
@@ -781,7 +790,7 @@ export class Preflight {
    * the visual (codes sharing an upload together), with each code's copy and
    * status, the audit's flags, and codes still waiting for their asset.
    */
-  async complianceAssets(filter: { persona?: string; territory?: string; region?: string } = {}) {
+  async complianceAssets(filter: { persona?: string; territory?: string; region?: string; round?: string } = {}) {
     const stubs = await this.stubs(filter);
     const byUpload = new Map<string, StubRow[]>();
     const waiting: StubRow[] = [];
