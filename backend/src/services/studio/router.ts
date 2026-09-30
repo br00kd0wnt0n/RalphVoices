@@ -254,7 +254,8 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     r.get('/compliance', wrap(async (req, res) => res.json(await pf.complianceAssets(pt(req.query)))));
     r.post('/compliance/assets/:upload', wrap(async (req, res) => {
       if (o.canSetCompliance && !o.canSetCompliance(req)) return res.status(403).json({ error: 'Trupanion’s compliance decisions are recorded by the producer (Vivan) or an admin' });
-      res.json(await pf.setAssetCompliance(req.params.upload, req.body || {}, o.who(req)));
+      try { res.json(await pf.setAssetCompliance(req.params.upload, req.body || {}, o.who(req))); }
+      catch (err: any) { if (err.overridden) return res.status(409).json({ error: err.message, overridden: err.overridden }); throw err; }
     }));
   }
 

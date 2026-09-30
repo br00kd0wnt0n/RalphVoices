@@ -37,7 +37,7 @@ Brook: Vivan coordinates compliance with the client but doesn't sign off complia
 - The panel is **Record Trupanion's decision**, with a required **Who at Trupanion** field for Cleared and Changes requested. The buttons read "Cleared by Trupanion" and "Changes requested".
 - It's stored as `compliance.client_by`, next to `by` (who recorded it in Studio).
 - It's shown as "Trupanion: J. Doe, Trupanion legal · recorded by vivan…" on the asset and on Ready, and in the asset handoff's "Cleared at Trupanion by" column.
-- The old rule "a note is needed to clear an asset with an overridden red flag" is replaced by the reviewer's name, which is always required. The page still reminds Vivan to have Trupanion check any overridden red flag specifically.
+- The reviewer's name is always required. **Follow-up (PR after #23, Brook):** the override note is back as well. Clearing any selected code that went through with an overridden red flag (a Pre-flight flag, or the copy at Ready) needs a note saying what Trupanion accepted. The page lists those flags, with their override reasons, next to the note and says why, and keeps "Cleared by Trupanion" disabled until there's a note; the server refuses with a 409 naming the flags (`Preflight.overriddenReds`).
 - Permissions are unchanged: `STUDIO_COMPLIANCE_EMAILS` (plus admins) can record decisions.
 
 ## Tests

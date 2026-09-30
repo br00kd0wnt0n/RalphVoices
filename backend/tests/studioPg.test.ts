@@ -573,3 +573,59 @@ test('Ready to traffic needs Pre-flight passed AND compliance cleared, per code 
   await pf.setAssetCompliance(up3.upload_id, { status: 'changes_requested', send_back: 'copy', note: 'Check the claim', client_by: 'J. Doe' }, 'vivan');
   assert.equal((await t(legacyCode)).ready, false);
 });
+
+test('clearing a code that went through with an overridden red flag needs a note saying what Trupanion accepted (copy or Pre-flight)', { skip }, async () => {
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const R = await import('../src/services/studio/ready.js');
+  const tables = ['studio_asset_status', 'studio_audit_agreements', 'studio_audit_flags', 'studio_audits', 'studio_upload_files', 'studio_asset_uploads', 'studio_expectations', 'studio_line_versions', 'studio_signoffs', 'studio_edits', 'studio_line_embeddings', 'studio_lines', 'studio_batches', 'studio_taste', 'studio_spend'];
+  await (store as any).db.query(`TRUNCATE ${tables.join(', ')} RESTART IDENTITY CASCADE`);
+  const api = new S.Api({ mock: true });
+  const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'accepted', own_lines: [
+    { text: 'Calm at the counter.', field: 'meta_headline' }, { text: 'Home by nine.', field: 'meta_headline' }, { text: 'Honestly, the policy pays for itself.', field: 'meta_headline' },
+  ] }), api, () => {}, { ownOnly: true, user: 'nick' });
+  const risky = run.lines[2];
+  for (const l of run.lines) {
+    await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+    const reds = R.unresolvedRed((await S.loadBatch(run.id)).lines.find(x => x.id === l.id)!);
+    if (l.id !== risky.id) { assert.equal(reds.length, 0, `${l.text} should have no red flag`); continue; }
+    assert.ok(reds.some(f => f.rule === 'COMP_PAYS_FOR_ITSELF'));
+    for (const f of reds) await R.overrideFlag(run.id, l.id, f.rule, 'Legal agreed the framing for this test', 'nick');
+  }
+  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: run.lines.map(l => l.id), expectation: { line_ids: [run.lines[0].id], reason: 'Plain.' } }, 'nick');
+  const code = (id: string) => signoff.lines.find(x => x.line_id === id)!.stub;
+  const [A1, A2, A3] = run.lines.map(l => code(l.id));
+  const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
+  const png = (t: string) => [{ buffer: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from(`fake VOICES_TEXT: ${t}`)]), filename: 'v.png', contentType: 'image/png' }];
+
+  // 1. A copy override at Ready, on A3 only.
+  const up = await pf.upload(A1, png('Calm at the counter.'), 'nick', [A2, A3]);
+  await pf.runAudit(await pf.createAudit(up.upload_id));
+  assert.deepEqual((await pf.overriddenReds(up.upload_id, [A1, A2])), []);
+  // A1 and A2 have nothing overridden: cleared with just the reviewer's name.
+  await pf.setAssetCompliance(up.upload_id, { status: 'cleared', codes: [A1, A2], client_by: 'J. Doe (Trupanion legal)' }, 'vivan');
+  // A3 went through with an overridden red flag: refused without a note, naming it.
+  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'cleared', codes: [A3], client_by: 'J. Doe (Trupanion legal)' }, 'vivan'), (err: any) => {
+    assert.match(err.message, /overridden red flag .*pays for itself.*add a note saying what Trupanion accepted/i);
+    assert.deepEqual(err.overridden.map((x: any) => [x.code, x.where]), [[A3, 'copy']]);
+    return true;
+  });
+  // Clearing every code at once is refused too (A3 is among them).
+  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'cleared', client_by: 'J. Doe' }, 'vivan'), /what Trupanion accepted/);
+  // Changes requested and pending don't need it.
+  await pf.setAssetCompliance(up.upload_id, { status: 'pending', codes: [A3] }, 'vivan');
+  await pf.setAssetCompliance(up.upload_id, { status: 'cleared', codes: [A3], client_by: 'J. Doe (Trupanion legal)', note: 'Trupanion legal accepted the "pays for itself" framing for this ad' }, 'vivan');
+  assert.equal((await pf.codeCompliance(A3, up.upload_id)).status, 'cleared');
+
+  // 2. A Pre-flight override on the visual concerns every code it serves.
+  const up2 = await pf.upload(A1, png('Honestly, it pays for itself.'), 'nick', [A2, A3]);
+  await pf.runAudit(await pf.createAudit(up2.upload_id));
+  const red = (await pf.report(A1)).flags.find((f: any) => f.severity === 'red' && f.rule === 'COMP_PAYS_FOR_ITSELF')!;
+  assert.ok(red, 'the visual carries a red flag');
+  await pf.override(red.id, 'Creative lead: the visual line is the approved campaign line', 'nick');
+  const acc = await pf.overriddenReds(up2.upload_id, [A1]);
+  assert.deepEqual(acc.map(x => [x.code, x.where]), [[A1, 'pre-flight']]);
+  await assert.rejects(() => pf.setAssetCompliance(up2.upload_id, { status: 'cleared', codes: [A1], client_by: 'J. Doe' }, 'vivan'), /what Trupanion accepted/);
+  await pf.setAssetCompliance(up2.upload_id, { status: 'cleared', codes: [A1], client_by: 'J. Doe', note: 'Accepted the visual line as the approved campaign line' }, 'vivan');
+  assert.equal((await pf.codeCompliance(A1, up2.upload_id)).note, 'Accepted the visual line as the approved campaign line');
+});
