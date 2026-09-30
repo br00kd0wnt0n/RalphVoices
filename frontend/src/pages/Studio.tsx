@@ -2190,6 +2190,13 @@ function ComplianceAssetView({ meta, asset, can, onChanged, onError }: { meta: M
   const flags = asset.flags.filter(f => !f.cross_persona);
   const reds = flags.filter(f => f.severity === 'red'), ambers = flags.filter(f => f.severity === 'amber'), greys = flags.filter(f => f.severity === 'grey');
   const overridden = [...reds.filter(f => f.override).map(f => f.label), ...asset.codes.flatMap(c => c.compliance.overrides)];
+  // For the codes the decision applies to: red flags let through with an override (Pre-flight's, and the copy's at Ready).
+  // Clearing them needs a note saying what Trupanion accepted (the server refuses without it).
+  const acceptedReds = [
+    ...reds.filter(f => f.override && (!f.for_stub || apply.has(f.for_stub))).map(f => ({ key: f.id, label: f.label, where: `Pre-flight${f.for_stub ? `, ${f.for_stub}` : ''}`, reason: f.override!.reason })),
+    ...asset.codes.filter(c => apply.has(c.stub)).flatMap(c => c.compliance.overrides.map((o, i) => ({ key: `${c.stub}-${i}`, label: o, where: `copy, ${c.stub}`, reason: '' }))),
+  ];
+  const needsNote = acceptedReds.length > 0 && !note.trim();
   async function set(status: ComplianceStatus) {
     setBusy(true);
     try {
@@ -2267,7 +2274,15 @@ function ComplianceAssetView({ meta, asset, can, onChanged, onError }: { meta: M
             <Label>Who at Trupanion</Label>
             <input aria-label="Who at Trupanion made the decision" className="min-w-[16rem] flex-1 rounded-lg border-2 border-[#343946] px-3 py-1.5 text-base" placeholder="e.g. J. Doe, Trupanion legal" value={clientBy} onChange={e => setClientBy(e.target.value)} />
           </div>
-          <textarea rows={2} className="w-full rounded-lg border-2 border-[#343946] px-3 py-2 text-base" placeholder="Note (required for changes: what needs changing)" value={note} onChange={e => setNote(e.target.value)} />
+          {acceptedReds.length > 0 && (
+            <div className="rounded-lg border border-amber-400/50 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
+              <div className="font-semibold">Went through with {acceptedReds.length === 1 ? 'an overridden red flag' : `${acceptedReds.length} overridden red flags`}. To clear, say in the note what Trupanion accepted.</div>
+              <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                {acceptedReds.map(x => <li key={x.key}>{x.label} <span className="text-amber-200/70">({x.where}{x.reason ? `; overridden because “${x.reason}”` : ''})</span></li>)}
+              </ul>
+            </div>
+          )}
+          <textarea rows={2} className={cn('w-full rounded-lg border-2 px-3 py-2 text-base', needsNote ? 'border-amber-400/60' : 'border-[#343946]')} placeholder={acceptedReds.length ? 'Note (required to clear: what Trupanion accepted; for changes: what needs changing)' : 'Note (required for changes: what needs changing)'} value={note} onChange={e => setNote(e.target.value)} />
           {asset.codes.length > 1 && (
             <fieldset className="text-sm">
               <legend className="mb-1 text-[#858B96]">Applies to {all ? 'every code on this asset' : `${apply.size} of ${asset.codes.length} codes`}</legend>
@@ -2286,11 +2301,11 @@ function ComplianceAssetView({ meta, asset, can, onChanged, onError }: { meta: M
             ))}
           </fieldset>
           <div className="flex flex-wrap gap-2">
-            <PinkButton className="px-4 py-2 text-base" disabled={busy || !apply.size || !clientBy.trim()} title={!clientBy.trim() ? 'Say who at Trupanion cleared it' : undefined} onClick={() => set('cleared')}>Cleared by Trupanion</PinkButton>
+            <PinkButton className="px-4 py-2 text-base" disabled={busy || !apply.size || !clientBy.trim() || needsNote} title={!clientBy.trim() ? 'Say who at Trupanion cleared it' : needsNote ? 'Say in the note what Trupanion accepted (overridden red flags)' : undefined} onClick={() => set('cleared')}>Cleared by Trupanion</PinkButton>
             <GhostButton className="px-4 py-2 text-base" disabled={busy || !apply.size || !note.trim() || !clientBy.trim()} title={!clientBy.trim() ? 'Say who at Trupanion asked for changes' : !note.trim() ? 'Say what needs changing first' : undefined} onClick={() => set('changes_requested')}>Changes requested</GhostButton>
             <GhostButton className="px-4 py-2 text-base" disabled={busy || !apply.size} onClick={() => set('pending')}>Back to pending</GhostButton>
           </div>
-          {overridden.length > 0 && <p className="text-xs text-amber-200">Went through with an overridden red flag ({overridden.join('; ')}): make sure Trupanion has checked it specifically.</p>}
+          {overridden.length > 0 && !acceptedReds.length && <p className="text-xs text-amber-200">Other codes on this asset went through with an overridden red flag ({overridden.join('; ')}).</p>}
         </section>
       )}
     </div>

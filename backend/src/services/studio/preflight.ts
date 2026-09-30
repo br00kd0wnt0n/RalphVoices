@@ -683,6 +683,23 @@ export class Preflight {
     };
   }
 
+  /**
+   * Red flags that were overridden on the way to this asset, for the given codes: Pre-flight flags on the latest audit
+   * of the upload (the visual's, and each code's own copy match), and red flags on the copy overridden at Ready.
+   */
+  async overriddenReds(uploadId: string, codes: string[]): Promise<Array<{ code: string; label: string; where: 'pre-flight' | 'copy'; reason: string }>> {
+    const out: Array<{ code: string; label: string; where: 'pre-flight' | 'copy'; reason: string }> = [];
+    const a = (await this.db.query(`SELECT id FROM studio_audits WHERE upload_id = $1 ORDER BY started_at DESC LIMIT 1`, [uploadId])).rows[0];
+    if (a) {
+      const rows = (await this.db.query(`SELECT for_stub, rule, body, override FROM studio_audit_flags WHERE audit_id = $1 AND severity = 'red' AND override IS NOT NULL AND (for_stub IS NULL OR for_stub = ANY($2))`, [a.id, codes])).rows;
+      for (const r of rows) for (const code of r.for_stub ? [r.for_stub] : codes) out.push({ code, label: r.body?.label || r.rule, where: 'pre-flight', reason: r.override?.reason || '' });
+    }
+    for (const code of codes) {
+      for (const { signed } of await this.codeLines(code)) for (const o of signed.overrides || []) out.push({ code, label: (o.label || o.rule).replace(/\.$/, ''), where: 'copy', reason: o.reason });
+    }
+    return out;
+  }
+
   /** A new upload: reviews given with an earlier asset go back to pending (the history keeps them). */
   private async reopenCompliance(stub: string, uploadId: string, user?: string) {
     for (const { line } of await this.codeLines(stub)) {
@@ -754,6 +771,12 @@ export class Preflight {
     const codes = input.codes?.length ? current.filter(x => input.codes!.includes(x)) : current;
     if (input.codes?.length && codes.length < input.codes.length) throw new Error(`Not on this upload now: ${input.codes.filter(x => !codes.includes(x)).join(', ')}`);
     if (!codes.length) throw new Error('This upload has been replaced: review the newer one');
+    // Clearing something that went through with an overridden red flag (Pre-flight, or the copy at Ready) needs a
+    // note saying what Trupanion accepted, as well as who at Trupanion cleared it.
+    if (status === 'cleared' && !note) {
+      const accepted = await this.overriddenReds(uploadId, codes);
+      if (accepted.length) throw Object.assign(new Error(`Went through with an overridden red flag (${accepted.map(x => `${x.code}: ${x.label}`).join('; ')}): add a note saying what Trupanion accepted`), { overridden: accepted });
+    }
     for (const code of codes) {
       for (const { signed } of await this.codeLines(code)) {
         await setCompliance(signed.batch_id, signed.line_id, status, note || undefined, user, { upload_id: uploadId, code, sha256: signed.sha256, send_back: sendBack, client_by: clientBy || undefined });
