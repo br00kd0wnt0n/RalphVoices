@@ -24,7 +24,7 @@ export const REGION_NAMES: Record<Region, string> = { US: 'US', CA: 'Canada' };
 /** Shown on Write & brief and in "Who this is" when Canada is chosen. */
 export const CANADA_NOTE = 'These personas are built on US research; check that they hold for Canadian audiences.';
 /** superseded_by: a later sign-off of its set left it out (it keeps its code). */
-export interface ReadyMark { signoff_id: string; version: number; sha256: string; ready_by: string; ready_at: string; stub: string; changed_since?: boolean; superseded_by?: string }
+export interface ReadyMark { signoff_id: string; version: number; sha256: string; ready_by: string; ready_at: string; stub: string; codes?: string[]; changed_since?: boolean; superseded_by?: string }
 export interface Line {
   id: string; batch: string; persona: string; territory: string; region?: Region; field: string; text: string; chars: number;
   angle: string; angle_label: string; structure: string; tone: Tone; tone_label: string; features: string[]; flags: Flag[];
@@ -99,14 +99,38 @@ export interface CompareSet { name: string; brief: Brief; n_per_model: number; l
 export interface Reveal { labels: Record<string, string>; tally: Record<string, number>; by_person?: Record<string, Record<string, number>> }
 export interface EditRecord { line_id: string; batch_id: string; before: any; after: any; by: string; at: string }
 export interface LineVersion { line_id: string; batch_id: string; version: number; field: string; text: string; sha256: string; created_by: string; created_at: string; signoff_id?: string }
+export interface SignedField { line_id: string; batch_id: string; version: number; sha256: string; field: string; text: string; chars: number; overrides?: Override[] }
+/** A live version: one code = one ad = a set of fields (Meta primary + headline; TikTok caption). */
+export interface SignedVersion { code: string; visual: string; number: number; platform: string; fields: Record<string, SignedField> }
 export interface Signoff {
   id: string; persona: string; territory: string; region?: Region; version: number; ready_by: string; ready_at: string; sha256: string; expectation_id: string;
-  lines: Array<{ line_id: string; batch_id: string; version: number; sha256: string; stub: string; field: string; text: string; chars: number; overrides?: Override[] }>;
+  lines: Array<SignedField & { stub: string; codes?: string[] }>;
+  /** Missing on sign-offs from before live versions (one code per line). */
+  versions?: SignedVersion[];
+  on_image?: Array<SignedField & { visual: string; visual_key: string }>;
+  checks?: VersionCheck[];
 }
-export interface Expectation { id: string; persona: string; territory: string; signoff_id: string; line_ids: string[]; reason: string; created_by: string; created_at: string; sha256: string }
-/** stub: the code it was signed off under (fixed) or would get now; visual: its letter ('' for an earlier v# code). */
-export interface ReadyLine { line: Line; final_text: string; sha256: string; stub: string; visual: string; fixed: boolean; red: Flag[]; compliance: NonNullable<Line['compliance']>; versions: LineVersion[] }
-export interface ReadyView { persona: string; territory: string; region: Region; lines: ReadyLine[]; signoffs: Signoff[]; expectations: Expectation[]; latest: Signoff | null }
+/** stubs: the codes expected to lead. */
+export interface Expectation { id: string; persona: string; territory: string; signoff_id: string; line_ids: string[]; stubs?: string[]; reason: string; created_by: string; created_at: string; sha256: string }
+/** Version checks at Ready (inform, never block). */
+export interface VersionFlag { rule: string; severity: 'red' | 'amber'; label: string; source: string; fields: string[]; quote: string; why?: string; by: 'rule' | 'model'; other?: string }
+export interface VersionCheck { code: string; key: string; flags: VersionFlag[]; conflicts: 'checked' | 'not_checked' | 'failed'; at?: string }
+export type FieldRole = 'required' | 'optional' | 'per_visual';
+/** A kept line on Ready: role, platform, and the codes it's in (in: "A1", "on-image A"). */
+export interface ReadyLine { line: Line; final_text: string; sha256: string; role: FieldRole; platform: string; in: string[]; red: Flag[]; versions: LineVersion[] }
+export interface DraftVersion { visual: string; fields: Record<string, string>; platform?: string }
+export interface ReadyDraft { versions: DraftVersion[]; on_image: Record<string, string> }
+export interface PlannedVersion extends DraftVersion {
+  code: string; number: number; platform: string; issues: string[]; checks?: VersionCheck;
+  compliance: { status: ComplianceStatus; note?: string; client_by?: string; by?: string; at?: string; send_back?: 'copy' | 'asset' };
+}
+export interface ReadyView {
+  persona: string; territory: string; region: Region; lines: ReadyLine[]; draft: ReadyDraft;
+  plan: { versions: PlannedVersion[]; on_image: Array<{ visual: string; visual_key: string; line_id: string; issues: string[] }>; issues: string[]; check_estimate: { usd: number; calls: number } };
+  /** Per platform (META, TT): the fields a version has, by role. */
+  fields: Record<string, { required: string[]; optional: string[]; per_visual: string[] }>;
+  signoffs: Signoff[]; expectations: Expectation[]; latest: Signoff | null;
+}
 export interface RuleEntry { id: string; rule: string; severity: 'compliance' | 'warn' | 'note'; source: string; applies_to: 'text' | 'visual' | 'both'; status?: string; what_to_do?: string }
 export interface ActiveRules {
   version: string; updated?: string; compliance: RuleEntry[]; brand: RuleEntry[]; clarity: RuleEntry[];
@@ -282,11 +306,16 @@ export const studio = {
   reveal: (name: string) => req<Reveal>(`/compare/${enc(name)}/reveal`, { method: 'POST' }),
 
   // Ready for production
-  /** visuals: line id → letter, to preview codes; include: the lines in the set (they get codes first, as at sign-off). */
-  ready: (persona: string, territory: string, region: Region = 'US', visuals: Record<string, string> = {}, include?: string[]) =>
-    req<ReadyView>(`/ready${qs({ persona, territory, region, visuals: Object.keys(visuals).length ? JSON.stringify(visuals) : undefined, include: include ? JSON.stringify(include) : undefined })}`),
+  /** The set with its default versions (the last sign-off's, or a first pairing of the kept lines). */
+  ready: (persona: string, territory: string, region: Region = 'US') => req<ReadyView>(`/ready${qs({ persona, territory, region })}`),
+  /** The versions as built on screen: codes, what's missing, free checks, compliance per version. */
+  readyPreview: (persona: string, territory: string, region: Region, draft: ReadyDraft) =>
+    req<ReadyView>('/ready/preview', { method: 'POST', body: JSON.stringify({ persona, territory, region, ...draft }) }),
+  /** The conflicts check (a model call per version not yet checked on this wording; see plan.check_estimate). */
+  readyCheck: (persona: string, territory: string, region: Region, draft: ReadyDraft) =>
+    req<ReadyView>('/ready/check', { method: 'POST', body: JSON.stringify({ persona, territory, region, ...draft }) }),
   /** expect_latest: the latest sign-off the screen showed (null for none); a different one now is a 409 ("X just signed this off"). */
-  signOff: (body: { persona: string; territory: string; region: Region; line_ids: string[]; visuals: Record<string, string>; expectation: { line_ids: string[]; reason: string }; expect_latest: string | null }) =>
+  signOff: (body: { persona: string; territory: string; region: Region } & ReadyDraft & { expectation: { codes: string[]; reason: string }; expect_latest: string | null }) =>
     req<{ signoff: Signoff; expectation: Expectation }>('/ready', { method: 'POST', body: JSON.stringify(body) }),
   override: (batch: string, line: string, rule: string, reason: string) =>
     req<Line>(`${lineUrl(batch, line)}/override`, { method: 'POST', body: JSON.stringify({ rule, reason }) }),

@@ -50,8 +50,18 @@ export function monthStart(d = new Date()): string {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString();
 }
 
+/** A reservation older than this was left by a run the server restarted in the middle of (runs take minutes). */
+export const STALE_RESERVATION_MS = 2 * 60 * 60 * 1000;
+/** Clear leftover reservations (on startup), logging each one; they'd otherwise hold money against the cap. */
+export async function clearStaleReservations(log: (m: string) => void = m => console.log(m)): Promise<number> {
+  const gone = await S.getStore().clearStaleReservations(STALE_RESERVATION_MS);
+  for (const x of gone) log(`[studio] cleared a leftover spend reservation: ${x.label} ($${x.usd.toFixed(4)}${x.user ? `, ${x.user}` : ''}, ${x.at})`);
+  return gone.length;
+}
+
 export function createStudioRouter(o: StudioRouterOptions): Router {
   const r = express.Router();
+  if (!o.mock) clearStaleReservations().catch(err => console.warn(`[studio] couldn't clear leftover spend reservations: ${err?.message || err}`));
   const jobs = new Map<string, Job>();
 
   r.use(express.json({ limit: '2mb' }));
@@ -191,21 +201,45 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   // Ready to traffic per code for the handoff pack, when Pre-flight (and so Compliance) is on.
   const trafficOf: R.TrafficOf | undefined = o.preflight ? stub => o.preflight!.service.traffic(stub) : undefined;
   const pt = (q: any) => ({ persona: q.persona ? String(q.persona) : undefined, territory: q.territory ? String(q.territory) : undefined, region: q.region ? String(q.region).toUpperCase() : undefined });
-  const json = (v: unknown) => { try { return v ? JSON.parse(String(v)) : undefined; } catch { throw new Error('visuals and include are JSON'); } };
   r.get('/ready', wrap(async (req, res) => {
     const { persona, territory, region } = pt(req.query);
     if (!persona || !territory) throw new Error('Pass persona and territory');
-    // visuals: {line id: letter} to preview codes; include: the line ids in the set (they get codes first).
-    res.json(await R.readyView(persona, territory, (region || 'US') as any, json(req.query.visuals) || {}, json(req.query.include)));
+    // The versions default to the last sign-off's, or a first pairing of the kept lines (versions.ts defaultDraft).
+    res.json(await R.readyView(persona, territory, (region || 'US') as any));
+  }));
+  // The Ready screen's versions as the lead builds them: codes, what's missing, compliance per version.
+  r.post('/ready/preview', wrap(async (req, res) => {
+    const { persona, territory, region } = pt(req.body || {});
+    if (!persona || !territory) throw new Error('Pass persona and territory');
+    res.json(await R.readyView(persona, territory, (region || 'US') as any, { versions: req.body.versions || [], on_image: req.body.on_image || {} }));
+  }));
+  // The version checks' model part (conflicts between an ad's fields): a call per version whose wording hasn't been
+  // checked, priced first (plan.check_estimate) and reserved against the cap like any run.
+  r.post('/ready/check', wrap(async (req, res) => {
+    const { persona, territory, region } = pt(req.body || {});
+    if (!persona || !territory) throw new Error('Pass persona and territory');
+    const draft = { versions: req.body.versions || [], on_image: req.body.on_image || {} };
+    const est = (await R.readyView(persona, territory, (region || 'US') as any, draft)).plan.check_estimate;
+    const api = o.api(req);
+    const held = await reserve(`version-check ${persona} ${territory}`, est.usd, api, o.who(req));
+    if ('error' in held) return res.status(402).json({ error: held.error });
+    try { res.json(await R.checkDraft(persona, territory, (region || 'US') as any, draft, api)); } finally { await held.release(); }
   }));
   r.post('/ready', wrap(async (req, res) => {
     // Signing off is the creative lead's (or an admin's), like Ready to traffic; anyone on the Studio list can see it.
     if (o.canSignOff && !o.canSignOff(req)) return res.status(403).json({ error: 'Lines are signed off by the creative lead or an admin' });
-    try { res.json(await R.signOff(req.body || {}, o.who(req))); }
+    // Versions not yet checked for conflicts are checked as part of the sign-off (a few cents), so the record has them.
+    const { persona, territory, region } = pt(req.body || {});
+    const est = persona && territory ? (await R.readyView(persona, territory, (region || 'US') as any, { versions: req.body.versions || [], on_image: req.body.on_image || {} })).plan.check_estimate : { usd: 0, calls: 0 };
+    const api = est.calls ? o.api(req) : undefined;
+    const held = api ? await reserve(`version-check ${persona} ${territory}`, est.usd, api, o.who(req)) : { release: async () => {} };
+    if ('error' in held) return res.status(402).json({ error: held.error });
+    try { res.json(await R.signOff(req.body || {}, o.who(req), { api })); }
     catch (err: any) {
       if (err instanceof R.GateError) return res.status(409).json({ error: err.message, blocking: err.blocking });
+      if (err instanceof R.DraftError) return res.status(400).json({ error: err.message, issues: err.issues });
       throw err;
-    }
+    } finally { await held.release(); }
   }));
   r.post('/batches/:id/lines/:line/override', wrap(async (req, res) => (o.canOverride && !o.canOverride(req)) ? res.status(403).json({ error: 'Only the people who mark assets Ready to traffic (the creative lead) or an admin can override a red flag' }) : res.json(await R.overrideFlag(req.params.id, req.params.line, String(req.body?.rule || ''), String(req.body?.reason || ''), o.who(req)))));
   r.patch('/batches/:id/lines/:line/compliance', wrap(async (req, res) => {

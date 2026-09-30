@@ -15,6 +15,21 @@ All notable changes to Ralph Voices are documented here.
   - **Conversions confirmed (config v6, Add3 29 Sep):** Meta's "Checkouts initiated" is read as quotes and "Purchases" as enrollments. TikTok's "Purchases (website)" is mapped to enrollments as an assumption. The attribution window is still open.
   - **Simulation:** `weekly.ts simulate --check` plants effects and checks the read recovers them; a thin week reads "too early to call".
   - Tests: `backend/tests/weekly.test.ts`. Handoff: `docs/build-log/B3-weekly-read.md`.
+- **Studio: live versions (one code = one ad), on-image text per visual, version checks.** Brook and Nick, 30 Sep; no migration (sign-off JSONB).
+  - **Versions.** A naming code is now one ad: a version is a set of fields. On Meta that's primary text + headline (description optional); on TikTok, caption (hook optional). The lead builds versions at Ready for production per visual letter, three per visual by default. A line can be in several versions (one headline in A1 and A2). The `<line>` digit of the code is now the version number; the format is unchanged. A version with the same lines as in the last sign-off keeps its code. An incomplete version is refused, with what it needs ("needs headline"). Field roles come from the rules' `in_version` (`required` / `optional` / `per_visual`), with defaults.
+  - **What the sign-off stores.** Per version: its code, visual, lines, fields and a per-field hash (`signoff.versions`). Per visual: the on-image text (`signoff.on_image`). The expectation names codes.
+  - **Codes downstream.** Pre-flight, compliance (now recorded per code: `line.compliance_by_code`), the handoff CSV/MD (one row per code, a column per field), the compliance sheet and the B3 features all work per code. Sign-offs from before versions (one code per line) are still read.
+  - **On-image text** (`meta_on_image`) belongs to the visual: one per visual letter, no code of its own. It's added to the copy of every code on the visual (Pre-flight copy match: must be on the asset), shown once per asset at Compliance, and repeated on each code's row in the handoff.
+  - **Version checks at Ready** inform and never block. Each flag has a rule id and a source.
+    - Repeats between the fields of one ad (amber, word overlap, quoted).
+    - Two versions on one visual too alike (amber).
+    - Fields that contradict, undercut or clash in tone (amber; one model call per version, stage `version-check`, priced before it runs, about $0.001 per version; kept per wording, so an unchanged version isn't paid for twice).
+    - A compliance claim in one field with its caveat only in another, or nowhere (red; the rules' `require` items).
+    Thresholds are in `services/studio/versionChecks.json`. Checks are stored in the sign-off.
+  - **Shortlist** is grouped by field, with the codes a line was signed off in.
+  - **Leftover spend reservations** older than 2 hours are cleared on startup, each one logged.
+
+  Tests: `studioVersionChecks.test.ts` (checks 1–4, TikTok, incomplete versions), a live-versions end-to-end test in `studioPg.test.ts` (A1–A3 sharing a headline plus on-image A, through sign-off, Pre-flight, per-code compliance and handoff), stale reservations (`studioBudget.test.ts`, `studioPg.test.ts`), and the Ready and concurrency tests reworked to versions. Handoff: `docs/build-log/studio-live-versions.md`.
 - **Studio: two people at once.** From a local two-user test (30 Sep); no migration.
   - **Per-run lock.** Every change to a run (decisions, overrides, compliance, re-checks, added lines, checker saves, sheet imports) happens under a per-run lock (`StudioStore.withLock`: Postgres advisory locks in one transaction; an in-process lock for the file store), on fresh data. Decisions, compliance statuses and edits are no longer lost to last-write-wins, and history entries chain.
   - **Added lines.** New lines get their ids under the lock, so two people adding to one run never collide. A person's added line records who added it (`added_by`, and a history row).

@@ -60,3 +60,20 @@ test('6. only the creative lead (or an admin) signs off; others get a 403 and me
   assert.equal(r.status, 403);
   assert.match(r.body.error, /creative lead or an admin/);
 });
+
+test('leftover reservations older than 2 hours are cleared on startup, each logged; newer ones and real spend stay', async () => {
+  const { clearStaleReservations } = await import('../src/services/studio/router.js');
+  const st = S.getStore();
+  const old = new Date(Date.now() - 3 * 3600_000).toISOString(), recent = new Date(Date.now() - 600_000).toISOString();
+  await st.addSpend({ label: 'reserved: generate OWN_CALM 1-abc', usd: 0.5, at: old, user: 'nick' });
+  await st.addSpend({ label: 'reserved: generate OWN_CALM 2-def', usd: 0.4, at: recent, user: 'brook' });
+  await st.addSpend({ label: 'generate OWN_CALM', usd: 0.3, at: old, user: 'nick' });
+  const logs: string[] = [];
+  assert.equal(await clearStaleReservations(m => logs.push(m)), 1);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /cleared a leftover spend reservation: reserved: generate OWN_CALM 1-abc \(\$0\.5000, nick/);
+  const labels = (await st.listSpend()).map(x => x.label);
+  assert.ok(labels.includes('reserved: generate OWN_CALM 2-def') && labels.includes('generate OWN_CALM'));
+  assert.ok(!labels.includes('reserved: generate OWN_CALM 1-abc'));
+  for (const l of ['reserved: generate OWN_CALM 2-def', 'generate OWN_CALM']) await st.deleteSpend(l);
+});

@@ -20,6 +20,7 @@ import path from 'node:path';
 import type pg from 'pg';
 import * as S from './engine.js';
 import { latestSignoffs, setCompliance, type Signoff } from './ready.js';
+import { complianceFor, platformOf, signoffOnImage, signoffVersions, type SignedField } from './versions.js';
 import { DEFAULT_REGION, parseCode, visualKey, type Region } from '../../utils/namingCode.js';
 import { downloadPrivateObject, getPrivateObject, getPrivateObjectStream, isR2Enabled, putPrivateObject } from '../r2.js';
 import { FatalError } from '../audit/api.js';
@@ -205,17 +206,28 @@ export class Preflight {
 
   private latestSignoffs(): Promise<Signoff[]> { return latestSignoffs(); }
 
-  /** The signed-off copy for a stub, with field labels. */
+  /**
+   * The signed-off lines behind a code (one live version): its fields, and its visual's on-image text, which belongs to
+   * the visual and so is on every code of it (Brook, 30 Sep).
+   */
+  private partsOf(s: Signoff, stub: string): SignedField[] {
+    const v = signoffVersions(s).find(x => x.code === stub);
+    if (!v) return [];
+    const r = S.loadRules();
+    const oi = signoffOnImage(s).find(o => o.visual === v.visual && platformOf(o.field, r) === v.platform);
+    return [...Object.values(v.fields), ...(oi ? [oi] : [])];
+  }
+  /** The signed-off copy for a code, with field labels. */
   private copyFor(s: Signoff, stub: string): SignedCopy[] {
     const r = S.loadRules();
-    return s.lines.filter(l => l.stub === stub).map(l => ({ line_id: l.line_id, field: l.field, label: r.fields[l.field]?.label || l.field, text: l.text, version: l.version }));
+    return this.partsOf(s, stub).map(l => ({ line_id: l.line_id, field: l.field, label: r.fields[l.field]?.label || l.field, text: l.text, version: l.version }));
   }
 
   async stubs(filter: { persona?: string; territory?: string; region?: string } = {}): Promise<StubRow[]> {
     await this.expireStuck();
     const out: StubRow[] = [];
     for (const s of await latestSignoffs(filter)) {
-      for (const stub of [...new Set(s.lines.map(l => l.stub))].sort()) {
+      for (const stub of signoffVersions(s).map(v => v.code).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) {
         out.push({
           stub, persona: s.persona, territory: s.territory, region: s.region || DEFAULT_REGION, visual_key: visualKey(stub), signoff_id: s.id, ready_by: s.ready_by, ready_at: s.ready_at,
           copy: this.copyFor(s, stub),
@@ -227,7 +239,7 @@ export class Preflight {
   }
 
   private async findStub(stub: string): Promise<{ signoff: Signoff; copy: SignedCopy[] }> {
-    for (const s of await this.latestSignoffs()) if (s.lines.some(l => l.stub === stub)) return { signoff: s, copy: this.copyFor(s, stub) };
+    for (const s of await this.latestSignoffs()) if (signoffVersions(s).some(v => v.code === stub)) return { signoff: s, copy: this.copyFor(s, stub) };
     throw new Error(`${stub} isn't in a Ready for production sign-off`);
   }
 
@@ -629,10 +641,10 @@ export class Preflight {
   // ---------- Compliance (step 7, after Pre-flight): copy and visual together ----------
 
   /** The signed-off lines behind a code, as they stand now. */
-  private async codeLines(stub: string): Promise<Array<{ signed: Signoff['lines'][number]; line: S.Line | undefined }>> {
+  private async codeLines(stub: string): Promise<Array<{ signed: SignedField; line: S.Line | undefined }>> {
     const { signoff } = await this.findStub(stub);
     const out = [];
-    for (const x of signoff.lines.filter(l => l.stub === stub)) {
+    for (const x of this.partsOf(signoff, stub)) {
       let line: S.Line | undefined;
       try { line = (await S.loadBatch(x.batch_id)).lines.find(l => l.id === x.line_id); } catch { /* run removed: the signed record stands */ }
       out.push({ signed: x, line });
@@ -666,7 +678,7 @@ export class Preflight {
   async codeCompliance(stub: string, uploadId: string | null): Promise<CodeCompliance> {
     const lines = await this.codeLines(stub);
     const each = lines.map(({ signed, line }) => {
-      const c = line?.compliance;
+      const c = line ? complianceFor(line, stub) : undefined;
       if (!c || c.status === 'pending') return { status: 'pending' as const, note: c?.note, stale: undefined as string | undefined, c };
       if (c.sha256 && c.sha256 !== signed.sha256) return { status: 'pending' as const, note: c.note, stale: 'Reviewed on a different wording', c };
       if (c.upload_id && uploadId && c.upload_id !== uploadId) return { status: 'pending' as const, note: c.note, stale: 'Reviewed on an earlier upload', c };
@@ -708,12 +720,13 @@ export class Preflight {
       // Under the run's lock, on the line as it is now (never over someone's edit or another status).
       await S.runLock(signed.batch_id, async () => {
         const line = (await S.loadBatch(signed.batch_id)).lines.find(l => l.id === signed.line_id);
-        const c = line?.compliance;
+        const c = line ? complianceFor(line, stub) : undefined;
         if (!line || !c?.upload_id || c.upload_id === uploadId || c.status === 'pending') return;
-        const before = { compliance: c };
-        line.compliance = { ...c, status: 'pending', note: `New upload after "${COMPLIANCE_WORDS[c.status]}"${c.note ? `: ${c.note}` : ''}`, upload_id: uploadId, send_back: undefined, at: new Date().toISOString(), by: user };
+        const before = { compliance: c, code: stub };
+        const next = { ...c, status: 'pending' as const, note: `New upload after "${COMPLIANCE_WORDS[c.status]}"${c.note ? `: ${c.note}` : ''}`, upload_id: uploadId, send_back: undefined, at: new Date().toISOString(), by: user };
+        line.compliance_by_code = { ...(line.compliance_by_code || {}), [stub]: next };
         await S.getStore().saveLine(line.batch, line);
-        await S.getStore().recordEdit({ line_id: line.id, batch_id: line.batch, before, after: { compliance: line.compliance, reopened_by_upload: uploadId }, by: user || 'unknown', at: line.compliance.at! });
+        await S.getStore().recordEdit({ line_id: line.id, batch_id: line.batch, before, after: { compliance: next, code: stub, reopened_by_upload: uploadId }, by: user || 'unknown', at: next.at });
       });
     }
   }
