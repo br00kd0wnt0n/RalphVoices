@@ -57,6 +57,15 @@ function checker(user: string) {
   });
 }
 
+// The version check (versionChecks.ts): a contradiction when one field says the vet is paid directly and another says
+// you're reimbursed, so the flow can be tested.
+function versionConflicts(user: string) {
+  const f = user.split('\n').map(l => /^(\w+) \(.*?\): (.*)$/.exec(l)).filter(Boolean) as RegExpExecArray[];
+  const direct = f.find(m => /directly|at checkout/i.test(m[2])), back = f.find(m => /reimburse|pay you back/i.test(m[2]));
+  const hits = direct && back && direct !== back ? [{ kind: 'contradiction', fields: [direct[1], back[1]], quote: /reimburse\w*|pay you back/i.exec(back[2])![0], why: 'Direct pay in one field, reimbursement in the other' }] : [];
+  return JSON.stringify({ hits });
+}
+
 function probe(user: string) {
   const line = /LINE \(.*?\): "(.*)"/.exec(user)?.[1] || '';
   const q = user.split('\n').pop() || '';
@@ -91,6 +100,7 @@ export function mockClient() {
       if (params.logprobs) { const p = probe(user); content = p.top[0].token; logprobs = { content: [{ token: content, logprob: p.top[0].logprob, top_logprobs: p.top }] }; }
       else if (params.response_format && /You classify lines of ad copy/.test(sys)) content = tagger(sys, user);
       else if (params.response_format && /Write exactly one line per cell/.test(sys)) content = writer(user);
+      else if (params.response_format && /You check one ad made of several copy fields/.test(sys)) content = versionConflicts(user);
       else if (params.response_format) content = checker(user);
       else content = 'Sounds nice, but what does it actually cost me when the premium goes up next year?';
       const inTok = Math.ceil((sys.length + user.length) / 4);

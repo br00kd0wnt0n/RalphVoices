@@ -32,6 +32,12 @@ before(async () => {
 });
 after(async () => { if (!skip) await store.close(); });
 
+/** Test ads as live versions: each primary text with one shared headline (Meta needs both), on visual A unless given. */
+const adsOf = (primaryIds: string[], headId: string, visuals: Record<string, string> = {}) => primaryIds.map(id => ({ visual: visuals[id] || 'A', fields: { meta_primary: id, meta_headline: headId } }));
+/** The primary line of a signed-off code. */
+const primaryOf = (so: any, code: string) => so.versions.find((v: any) => v.code === code).fields.meta_primary;
+const HEAD = { text: 'Calm, covered.', field: 'meta_headline' };
+
 test('rules come from the active database version; a second activation retires the first', { skip }, async () => {
   const r = await S.refreshRules();
   assert.equal((r as any).version, 'example-1');
@@ -198,15 +204,21 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
     { text: caveatLine, field: 'tiktok_hook' },
     { text: 'Calm at the counter, every time.', field: 'meta_headline' },
     { text: 'Primary text that only runs in the post.', field: 'meta_primary' },
+    { text: 'A second primary text, also post only.', field: 'meta_primary' },
   ] }), api, () => {}, { ownOnly: true, user: 'nick' });
-  const line = run.lines[0];
+  const [line, head, p1, p2] = run.lines;
   for (const l of run.lines) {
     await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
     for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find(x => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'Test line for Pre-flight', 'nick');
   }
-  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: run.lines.map(l => l.id), expectation: { line_ids: [line.id], reason: 'The hook.' } }, 'nick');
-  const stubOf = (id: string) => signoff.lines.find(x => x.line_id === id)!.stub;
-  const stub = stubOf(line.id), headlineStub = stubOf(run.lines[1].id), postStub = stubOf(run.lines[2].id);
+  // Live versions: the TikTok hook on its own (A1 TT), and two Meta ads sharing the headline (A1, A2 META).
+  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: [
+    { visual: 'A', fields: { tiktok_hook: line.id } },
+    { visual: 'A', fields: { meta_primary: p1.id, meta_headline: head.id } },
+    { visual: 'A', fields: { meta_primary: p2.id, meta_headline: head.id } },
+  ], expectation: { codes: ['OWN_CALM_UGC_A1_US_TT'], reason: 'The hook.' } }, 'nick');
+  assert.deepEqual(signoff.versions!.map(v => v.code), ['OWN_CALM_UGC_A1_US_TT', 'OWN_CALM_UGC_A1_US_META', 'OWN_CALM_UGC_A2_US_META']);
+  const stub = 'OWN_CALM_UGC_A1_US_TT', headlineStub = 'OWN_CALM_UGC_A1_US_META', postStub = 'OWN_CALM_UGC_A2_US_META';
 
   const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
   const png = (text: string) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from(`fake image VOICES_TEXT: ${text}`)]);
@@ -294,8 +306,9 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   assert.equal(hr.audit!.id, pr.audit!.id, 'audited once');
   assert.equal(hr.flags.some((f: any) => f.check === 'copy_match'), false, 'the headline is on the visual');
   assert.equal(pr.flags.some((f: any) => f.check === 'copy_match'), false, 'post copy is never compared with the asset');
-  assert.equal(pr.post_copy[0].text, 'Primary text that only runs in the post.');
-  assert.deepEqual(pr.audit!.result.copy_match.map((r: any) => r.status), []);
+  assert.equal(pr.post_copy[0].text, 'A second primary text, also post only.');
+  assert.equal(hr.post_copy[0].text, 'Primary text that only runs in the post.');
+  assert.ok(pr.audit!.result.copy_match.every((r: any) => r.status === 'match'), 'the shared headline matches for both codes');
   assert.equal((await pf.setReady(postStub, true, 'nick')).status, 'ready');
   assert.equal((await pf.report(headlineStub)).status.status, 'open', 'each code is marked on its own');
   assert.deepEqual(await pf.estimate(shared.upload_id), shared.estimate, 'the estimate is stored at upload and reused');
@@ -375,13 +388,14 @@ test('Pre-flight by region: US and Canadian codes listed apart, same-visual code
   await (store as any).db.query(`TRUNCATE ${tables.join(', ')} RESTART IDENTITY CASCADE`);
   const api = new S.Api({ mock: true });
   const signOffRegion = async (region: 'US' | 'CA', texts: string[]) => {
-    const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: `pf-${region}`, region, own_lines: texts.map(text => ({ text, field: 'meta_headline' })) }), api, () => {}, { ownOnly: true, user: 'nick' });
+    const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: `pf-${region}`, region, own_lines: [...texts.map(text => ({ text, field: 'meta_primary' })), HEAD] }), api, () => {}, { ownOnly: true, user: 'nick' });
     for (const l of run.lines) {
       await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
       for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find(x => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'Test line for regions', 'nick');
     }
-    // Four lines: the fourth goes on visual B.
-    return (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region, line_ids: run.lines.map(l => l.id), visuals: { [run.lines[3]?.id ?? '-']: 'B' }, expectation: { line_ids: [run.lines[0].id], reason: 'The plain one.' } }, 'nick')).signoff;
+    // Four ads: the fourth goes on visual B.
+    const prims = run.lines.slice(0, -1).map(l => l.id), head = run.lines.at(-1)!.id;
+    return (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region, versions: adsOf(prims, head, { [prims[3] ?? '-']: 'B' }), expectation: { codes: [`OWN_CALM_UGC_A1_${region}_META`], reason: 'The plain one.' } }, 'nick')).signoff;
   };
   await signOffRegion('US', ['Calm at the counter.', 'One less worry.', 'Home by nine.', 'Calm on a Sunday.']);
   await signOffRegion('CA', ['Calm at the counter, in colour.', 'Your favourite kind of calm.']);
@@ -420,16 +434,17 @@ test('Compliance after Pre-flight: per asset, copy and visual together; changes 
   await (store as any).db.query(`TRUNCATE ${tables.join(', ')} RESTART IDENTITY CASCADE`);
   const api = new S.Api({ mock: true });
   const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'comp', own_lines: [
-    { text: 'Calm at the counter.', field: 'meta_headline' }, { text: 'One less worry.', field: 'meta_headline' }, { text: 'Home by nine.', field: 'meta_headline' },
+    { text: 'Calm at the counter.', field: 'meta_primary' }, { text: 'One less worry.', field: 'meta_primary' }, { text: 'Home by nine.', field: 'meta_primary' }, HEAD,
   ] }), api, () => {}, { ownOnly: true, user: 'nick' });
   for (const l of run.lines) {
     await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
     for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find(x => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'Test line for compliance', 'nick');
   }
-  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: run.lines.map(l => l.id), expectation: { line_ids: [run.lines[0].id], reason: 'Plain.' } }, 'nick');
-  const [A1, A2, A3] = signoff.lines.map(x => x.stub).sort();
-  // A status set per line on Ready before this step existed is still read (and not lost).
-  await R.setCompliance(run.id, signoff.lines.find(x => x.stub === A3)!.line_id, 'cleared', 'Cleared by legal, 29 Sep (on Ready)', 'vivan');
+  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: adsOf(run.lines.slice(0, 3).map(l => l.id), run.lines[3].id), expectation: { codes: ['OWN_CALM_UGC_A1_US_META'], reason: 'Plain.' } }, 'nick');
+  const [A1, A2, A3] = signoff.versions!.map(v => v.code);
+  // A status set per line on Ready before this step existed is still read (and not lost): here on A3's primary and the shared headline.
+  await R.setCompliance(run.id, primaryOf(signoff, A3).line_id, 'cleared', 'Cleared by legal, 29 Sep (on Ready)', 'vivan');
+  await R.setCompliance(run.id, run.lines[3].id, 'cleared', 'Cleared by legal, 29 Sep (on Ready)', 'vivan');
 
   const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
   const png = (t: string) => [{ buffer: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from(`fake VOICES_TEXT: ${t}`)]), filename: 'v.png', contentType: 'image/png' }];
@@ -461,8 +476,8 @@ test('Compliance after Pre-flight: per asset, copy and visual together; changes 
   assert.equal(rep.compliance!.send_back, 'asset');
   assert.equal(rep.compliance!.note, 'Disclaimer too small on the last card');
   // The line carries it too (Ready shows it read-only).
-  const line = (await S.loadBatch(run.id)).lines.find(l => l.id === signoff.lines.find(x => x.stub === A1)!.line_id)!;
-  assert.equal(line.compliance!.upload_id, up.upload_id);
+  const line = (await S.loadBatch(run.id)).lines.find(l => l.id === primaryOf(signoff, A1).line_id)!;
+  assert.equal(line.compliance_by_code![A1].upload_id, up.upload_id, 'recorded per code');
 
   // A new upload reopens the review: pending, with what happened before.
   const up2 = await pf.upload(A1, png('Calm at the counter.'), 'nick', [A2]);
@@ -494,14 +509,14 @@ test('Ready to traffic needs Pre-flight passed AND compliance cleared, per code 
   await (store as any).db.query(`TRUNCATE ${tables.join(', ')} RESTART IDENTITY CASCADE`);
   const api = new S.Api({ mock: true });
   const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'gate', own_lines: [
-    { text: 'Calm at the counter.', field: 'meta_headline' }, { text: 'One less worry.', field: 'meta_headline' }, { text: 'Home by nine.', field: 'meta_headline' },
+    { text: 'Calm at the counter.', field: 'meta_primary' }, { text: 'One less worry.', field: 'meta_primary' }, { text: 'Home by nine.', field: 'meta_primary' }, HEAD,
   ] }), api, () => {}, { ownOnly: true, user: 'nick' });
   for (const l of run.lines) {
     await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
     for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find(x => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'Test line for the traffic gate', 'nick');
   }
-  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: run.lines.map(l => l.id), expectation: { line_ids: [run.lines[0].id], reason: 'Plain.' } }, 'nick');
-  const [A1, A2, A3] = signoff.lines.map(x => x.stub).sort();
+  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: adsOf(run.lines.slice(0, 3).map(l => l.id), run.lines[3].id), expectation: { codes: ['OWN_CALM_UGC_A1_US_META'], reason: 'Plain.' } }, 'nick');
+  const [A1, A2, A3] = signoff.versions!.map(v => v.code);
   const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
   const png = () => [{ buffer: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from('fake VOICES_TEXT: Calm at the counter. One less worry. Home by nine.')]), filename: 'v.png', contentType: 'image/png' }];
   const up = await pf.upload(A1, png(), 'nick', [A2, A3]);
@@ -544,7 +559,7 @@ test('Ready to traffic needs Pre-flight passed AND compliance cleared, per code 
   assert.deepEqual([A1, A2, A3].map(x => pack.find(r => r[0] === x)![pr]), ['Ready to traffic', 'Ready to traffic', 'Pre-flight passed · Compliance changes requested']);
 
   // Edited wording takes a code out of Ready to traffic until it's signed off (and reviewed) again.
-  const l2 = signoff.lines.find(x => x.stub === A2)!;
+  const l2 = primaryOf(signoff, A2);
   await S.setDecision(l2.batch_id, l2.line_id, { decision: 'edit', edited_text: 'One less worry, every time.' }, 'nick');
   assert.equal((await t(A2)).ready, false);
   assert.match((await t(A2)).words, /Wording edited since sign-off/);
@@ -556,11 +571,13 @@ test('Ready to traffic needs Pre-flight passed AND compliance cleared, per code 
   void up2;
 
   // Marked ready before the gate, with no compliance recorded: stays ready, and says so.
-  const run2 = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'legacy', own_lines: [{ text: 'Calm on a Sunday.', field: 'meta_headline' }] }), api, () => {}, { ownOnly: true, user: 'nick' });
-  const l = run2.lines[0];
-  await S.setDecision(run2.id, l.id, { decision: 'keep' }, 'nick');
-  for (const f of R.unresolvedRed((await S.loadBatch(run2.id)).lines[0])) await R.overrideFlag(run2.id, l.id, f.rule, 'Test line for the traffic gate', 'nick');
-  const legacyCode = (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: [l.id], expectation: { line_ids: [l.id], reason: 'Old.' } }, 'nick')).signoff.lines[0].stub;
+  const run2 = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'legacy', own_lines: [{ text: 'Calm on a Sunday.', field: 'meta_primary' }, { text: 'Sunday, covered.', field: 'meta_headline' }] }), api, () => {}, { ownOnly: true, user: 'nick' });
+  for (const x of run2.lines) {
+    await S.setDecision(run2.id, x.id, { decision: 'keep' }, 'nick');
+    for (const f of R.unresolvedRed((await S.loadBatch(run2.id)).lines.find(y => y.id === x.id)!)) await R.overrideFlag(run2.id, x.id, f.rule, 'Test line for the traffic gate', 'nick');
+  }
+  // The same persona × territory × region: this set replaces A1–A3 (its version is a new ad, so it gets A4).
+  const legacyCode = (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: adsOf([run2.lines[0].id], run2.lines[1].id), expectation: { codes: ['OWN_CALM_UGC_A4_US_META'], reason: 'Old.' } }, 'nick')).signoff.versions![0].code;
   const up3 = await pf.upload(legacyCode, png(), 'nick');
   await pf.runAudit(await pf.createAudit(up3.upload_id));
   await pf.setReady(legacyCode, true, 'nick');
@@ -582,7 +599,7 @@ test('clearing a code that went through with an overridden red flag needs a note
   await (store as any).db.query(`TRUNCATE ${tables.join(', ')} RESTART IDENTITY CASCADE`);
   const api = new S.Api({ mock: true });
   const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'accepted', own_lines: [
-    { text: 'Calm at the counter.', field: 'meta_headline' }, { text: 'Home by nine.', field: 'meta_headline' }, { text: 'Honestly, the policy pays for itself.', field: 'meta_headline' },
+    { text: 'Calm at the counter.', field: 'meta_primary' }, { text: 'Home by nine.', field: 'meta_primary' }, { text: 'Honestly, the policy pays for itself.', field: 'meta_primary' }, HEAD,
   ] }), api, () => {}, { ownOnly: true, user: 'nick' });
   const risky = run.lines[2];
   for (const l of run.lines) {
@@ -592,9 +609,8 @@ test('clearing a code that went through with an overridden red flag needs a note
     assert.ok(reds.some(f => f.rule === 'COMP_PAYS_FOR_ITSELF'));
     for (const f of reds) await R.overrideFlag(run.id, l.id, f.rule, 'Legal agreed the framing for this test', 'nick');
   }
-  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: run.lines.map(l => l.id), expectation: { line_ids: [run.lines[0].id], reason: 'Plain.' } }, 'nick');
-  const code = (id: string) => signoff.lines.find(x => x.line_id === id)!.stub;
-  const [A1, A2, A3] = run.lines.map(l => code(l.id));
+  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: adsOf(run.lines.slice(0, 3).map(l => l.id), run.lines[3].id), expectation: { codes: ['OWN_CALM_UGC_A1_US_META'], reason: 'Plain.' } }, 'nick');
+  const [A1, A2, A3] = signoff.versions!.map(v => v.code);
   const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
   const png = (t: string) => [{ buffer: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from(`fake VOICES_TEXT: ${t}`)]), filename: 'v.png', contentType: 'image/png' }];
 
@@ -640,12 +656,17 @@ async function freshStudio() {
   return { R, api };
 }
 async function keptRun(R: any, api: S.Api, texts: string[], opts: { region?: 'US' | 'CA'; name?: string } = {}) {
-  const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: opts.name || `c-${Date.now()}`, region: opts.region, own_lines: texts.map(text => ({ text, field: 'meta_headline' })) }), api, () => {}, { ownOnly: true, user: 'nick' });
+  const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: opts.name || `c-${Date.now()}`, region: opts.region, own_lines: [...texts.map(text => ({ text, field: 'meta_primary' })), HEAD] }), api, () => {}, { ownOnly: true, user: 'nick' });
   for (const l of run.lines) {
     await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
     for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find((x: any) => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'Test line for concurrency', 'nick');
   }
-  return run;
+  // The last line is the shared headline; the rest are primary texts (one ad each).
+  return Object.assign(run, { prims: run.lines.slice(0, -1).map(l => l.id), head: run.lines.at(-1)!.id });
+}
+/** The code the first version of a set would get, for the expectation. */
+async function leadOf(R: any, versions: any[], region = 'US') {
+  return (await R.readyView('OWN', 'OWN_CALM', region, { versions, on_image: {} })).plan.versions[0].code;
 }
 /** Every history entry's `before` is the previous entry's `after` (for entries that carry the same keys). */
 async function chained(lineId: string, key: string) {
@@ -700,8 +721,8 @@ test('2. two people adding a line to one run at once: both lines kept, each with
     ]);
   }
   const lines = (await S.loadBatch(run.id)).lines;
-  assert.equal(lines.length, 11, 'one own line, then ten added');
-  assert.equal(new Set(lines.map(l => l.id)).size, 11, 'ids are unique');
+  assert.equal(lines.length, 12, 'two own lines, then ten added');
+  assert.equal(new Set(lines.map(l => l.id)).size, 12, 'ids are unique');
   for (let k = 0; k < 5; k++) {
     const n = lines.find(l => l.text === `Nick's idea ${k}.`)!, b = lines.find(l => l.text === `Brook's idea ${k}.`)!;
     assert.ok(n && b, `round ${k}: both lines are there`);
@@ -710,21 +731,23 @@ test('2. two people adding a line to one run at once: both lines kept, each with
     const h = await S.lineHistory(b.id);
     assert.deepEqual([h[0].by, (h[0].after as any).added], ['brook', true]);
   }
-  assert.equal((await S.loadBatch(run.id)).brief.own_lines!.length, 11, 'the run keeps every line written on it');
+  assert.equal((await S.loadBatch(run.id)).brief.own_lines!.length, 12, 'the run keeps every line written on it');
 });
 
 test('3. a Shortlist cut racing a sign-off: a line is never both cut and signed off', { skip }, async () => {
   const { R, api } = await freshStudio();
   for (let k = 0; k < 6; k++) {
     const run = await keptRun(R, api, ['Calm at the counter.', 'Home by nine.', 'One less worry.'], { name: `race-${k}` });
-    const ids = run.lines.map(l => l.id);
+    const ids = run.prims;
     const victim = ids[1 + (k % 2)];
+    const ads = adsOf(ids, run.head);
+    const lead = await leadOf(R, ads);
     const [so, cut] = await Promise.allSettled([
-      R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: ids, expectation: { line_ids: [ids[0]], reason: 'race' } }, 'nick'),
+      R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: ads, expectation: { codes: [lead], reason: 'race' } }, 'nick'),
       new Promise(r => setTimeout(r, k)).then(() => S.setDecision(run.id, victim, { decision: 'cut', source: 'shortlist' }, 'brook')),
     ]);
     const line = (await S.loadBatch(run.id)).lines.find(l => l.id === victim)!;
-    const signed = so.status === 'fulfilled' && so.value.signoff.lines.some((x: any) => x.line_id === victim);
+    const signed = so.status === 'fulfilled' && so.value.signoff.versions.some((v: any) => v.fields.meta_primary.line_id === victim);
     assert.ok(!(line.decision === 'cut' && signed), `round ${k}: cut ${cut.status}, sign-off ${so.status}`);
     assert.ok(so.status === 'fulfilled' || cut.status === 'fulfilled', 'one of them goes through');
     if (cut.status === 'rejected') assert.match(String((cut as any).reason?.message), /Signed off at Ready/);
@@ -737,8 +760,9 @@ test('3. a Shortlist cut racing a sign-off: a line is never both cut and signed 
 test('4. racing sign-offs: one wins, the other gets a clear 409; one version count, no orphans, codes unique; US and CA both go through', { skip }, async () => {
   const { R, api } = await freshStudio();
   const run = await keptRun(R, api, ['Calm at the counter.', 'Home by nine.', 'One less worry.', 'Sunday calm.']);
-  const ids = run.lines.map(l => l.id);
-  const so = (who: string, set: string[]) => R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: set, expectation: { line_ids: [set[0]], reason: who }, expect_latest: null }, who);
+  const ids = run.prims;
+  const lead = await leadOf(R, adsOf(ids.slice(0, 1), run.head));
+  const so = (who: string, set: string[]) => R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: adsOf(set, run.head), expectation: { codes: [lead], reason: who }, expect_latest: null }, who);
   const [a, b] = await Promise.allSettled([so('nick', ids.slice(0, 3)), so('brook', ids.slice(1, 4))]);
   const ok = [a, b].filter(x => x.status === 'fulfilled'), no = [a, b].filter(x => x.status === 'rejected') as PromiseRejectedResult[];
   assert.equal(ok.length, 1, 'one wins');
@@ -746,24 +770,34 @@ test('4. racing sign-offs: one wins, the other gets a clear 409; one version cou
   assert.match(no[0].reason.message, /(nick|brook) just signed this set off \(v1/);
   const db = (store as any).db;
   assert.equal(Number((await db.query(`SELECT count(*) FROM studio_line_versions v WHERE v.signoff_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM studio_signoffs s WHERE s.id = v.signoff_id)`)).rows[0].count), 0, 'no orphan line versions');
-  assert.equal(Number((await db.query(`SELECT count(*) FROM (SELECT stub FROM studio_line_versions GROUP BY stub HAVING count(DISTINCT line_id) > 1) q`)).rows[0].count), 0, 'codes unique');
+  const fieldsOfCode = new Map<string, Set<string>>();
+  for (const s of await S.getStore().listSignoffs() as any[]) for (const v of s.versions || []) {
+    const m = fieldsOfCode.get(v.code) || new Set<string>();
+    m.add(JSON.stringify(Object.fromEntries(Object.entries(v.fields).map(([f, x]: any) => [f, x.line_id]))));
+    fieldsOfCode.set(v.code, m);
+  }
+  assert.ok([...fieldsOfCode.values()].every(m => m.size === 1), 'codes unique: one ad per code');
 
   // US and CA of the same persona × territory at once: both go through, each with its own version number.
   const ca = await keptRun(R, api, ['Calm, eh.', 'Colour me calm.'], { region: 'CA', name: 'ca' });
-  const us2 = ids.filter(x => !(ok[0] as any).value.signoff.lines.some((l: any) => l.line_id === x));
+  const won = (ok[0] as any).value.signoff.versions.map((v: any) => v.fields.meta_primary.line_id);
+  const usAds = adsOf([...won, ...ids.filter(x => !won.includes(x))], run.head), caAds = adsOf(ca.prims, ca.head);
+  const [usLead, caLead] = [await leadOf(R, usAds), await leadOf(R, caAds, 'CA')];
   const [u, c] = await Promise.all([
-    R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region: 'US', line_ids: [...(ok[0] as any).value.signoff.lines.map((l: any) => l.line_id), ...us2], expectation: { line_ids: [ids[0]], reason: 'us' } }, 'nick'),
-    R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region: 'CA', line_ids: ca.lines.map(l => l.id), expectation: { line_ids: [ca.lines[0].id], reason: 'ca' } }, 'brook'),
+    R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region: 'US', versions: usAds, expectation: { codes: [usLead], reason: 'us' } }, 'nick'),
+    R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region: 'CA', versions: caAds, expectation: { codes: [caLead], reason: 'ca' } }, 'brook'),
   ]);
   assert.deepEqual([u.signoff.version, c.signoff.version].sort(), [2, 3]);
 
   // A later set that leaves a line out: the line no longer shows as signed off, keeps its code, and can be cut again.
-  const shrink = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region: 'US', line_ids: [ids[0]], expectation: { line_ids: [ids[0]], reason: 'just one' } }, 'nick');
+  const one = adsOf([ids[0]], run.head);
+  const shrink = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region: 'US', versions: one, expectation: { codes: [await leadOf(R, one)], reason: 'just one' } }, 'nick');
+  const code = u.signoff.versions.find((v: any) => v.fields.meta_primary.line_id === ids[1])!.code;
+  assert.equal(shrink.signoff.versions[0].code, u.signoff.versions.find((v: any) => v.fields.meta_primary.line_id === ids[0])!.code, 'the ad that stays keeps its code');
   const left = (await S.loadBatch(run.id)).lines.find(l => l.id === ids[1])!;
   assert.equal(left.ready!.superseded_by, shrink.signoff.id);
   assert.equal((await S.shortlist()).find(r => r.id === ids[1])!.signed_off, '');
-  const code = left.ready!.stub;
-  assert.equal((await R.readyView('OWN', 'OWN_CALM', 'US')).lines.find((x: any) => x.line.id === ids[1])!.stub, code, 'it keeps its code');
+  assert.equal(left.ready!.stub, code, 'the line left out keeps the code it went out under');
   await S.setDecision(run.id, ids[1], { decision: 'cut', source: 'shortlist' }, 'brook');
 });
 
@@ -785,10 +819,13 @@ test('8. an edit after sign-off: Ready and Compliance show it as needing review,
   const { R, api } = await freshStudio();
   const run = await keptRun(R, api, ['Calm at the counter.']);
   const l = run.lines[0];
-  await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: [l.id], expectation: { line_ids: [l.id], reason: 'x' } }, 'nick');
-  await R.setCompliance(run.id, l.id, 'cleared', 'fine', 'vivan');
+  const ads = adsOf([l.id], run.head);
+  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: ads, expectation: { codes: [await leadOf(R, ads)], reason: 'x' } }, 'nick');
+  const code = signoff.versions[0].code;
+  for (const id of [l.id, run.head]) await R.setCompliance(run.id, id, 'cleared', 'fine', 'vivan');
+  assert.equal((await R.readyView('OWN', 'OWN_CALM')).plan.versions[0].compliance.status, 'cleared');
   await S.setDecision(run.id, l.id, { decision: 'edit', edited_text: 'Calm at the counter, every time.' }, 'nick');
-  const v = (await R.readyView('OWN', 'OWN_CALM')).lines[0];
+  const v = { stub: code, compliance: (await R.readyView('OWN', 'OWN_CALM')).plan.versions[0].compliance };
   assert.equal(v.compliance.status, 'pending');
   assert.match(v.compliance.note!, /Edited since/);
   const { Preflight } = await import('../src/services/studio/preflight.js');
@@ -797,4 +834,105 @@ test('8. an edit after sign-off: Ready and Compliance show it as needing review,
   const c = await pf.codeCompliance(v.stub, null);
   assert.equal(c.status, 'pending');
   assert.equal(c.stale, 'Wording edited since sign-off');
+});
+
+// ---------- live versions end to end (Brook, 1 Oct): one code = one ad ----------
+
+test('live versions: A1–A3 share a headline and visual A has on-image text → one shared upload, on-image matched on all three, compliance per code, handoff one row per code', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const rules = JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8'));
+  rules.fields.meta_on_image = { platform: 'META', label: 'On-image text', visible: 40, max: 60, source: 'HOUSE: test' };
+  await store.putRules('example-onimage', rules, { activate: true, by: 'test' });
+  await S.refreshRules();
+  const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'live', own_lines: [
+    { text: 'Calm at the counter.', field: 'meta_primary' }, { text: 'One less worry on a Sunday.', field: 'meta_primary' }, { text: 'Home by nine, bill sorted.', field: 'meta_primary' },
+    HEAD, { text: 'Vet visits, calmer', field: 'meta_on_image' },
+  ] }), api, () => {}, { ownOnly: true, user: 'nick' });
+  for (const l of run.lines) {
+    await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+    for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find(x => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'Test line', 'nick');
+  }
+  const [p1, p2, p3, head, img] = run.lines.map(l => l.id);
+
+  // Ready's default: three primaries paired with the one headline on visual A, the on-image line on A.
+  const dv = await R.readyView('OWN', 'OWN_CALM');
+  assert.deepEqual(dv.draft.versions.map((v: any) => [v.visual, v.fields.meta_primary, v.fields.meta_headline]), [['A', p1, head], ['A', p2, head], ['A', p3, head]]);
+  assert.deepEqual(dv.draft.on_image, { A: img });
+  assert.deepEqual(dv.plan.versions.map((v: any) => v.code), ['OWN_CALM_UGC_A1_US_META', 'OWN_CALM_UGC_A2_US_META', 'OWN_CALM_UGC_A3_US_META']);
+  assert.equal(dv.lines.find((x: any) => x.line.id === head)!.in.length, 3, 'the headline is in all three');
+
+  // An incomplete version is refused, and says what it needs.
+  await assert.rejects(() => R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: [{ visual: 'A', fields: { meta_primary: p1 } }], expectation: { codes: ['OWN_CALM_UGC_A1_US_META'], reason: 'x' } }, 'nick'),
+    (e: any) => e instanceof R.DraftError && /needs headline/.test(e.message));
+
+  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: dv.draft.versions, on_image: dv.draft.on_image, expectation: { codes: ['OWN_CALM_UGC_A2_US_META'], reason: 'The Sunday one.' } }, 'nick');
+  const [A1, A2, A3] = signoff.versions!.map(v => v.code);
+  assert.equal(signoff.on_image![0].visual_key, 'OWN_CALM_UGC_A_US_META');
+  // Each version stores its lines, fields and per-field hash.
+  assert.ok(signoff.versions!.every(v => v.fields.meta_headline.line_id === head && /^[0-9a-f]{64}$/.test(v.fields.meta_primary.sha256)));
+
+  // Pre-flight: one upload for the visual serves all three codes; the on-image text is on every one of them (must be on the asset).
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
+  const rows = await pf.stubs({ persona: 'OWN' });
+  assert.deepEqual(rows.map(r => r.stub), [A1, A2, A3]);
+  assert.ok(rows.every(r => r.copy.some(c => c.field === 'meta_on_image' && c.text === 'Vet visits, calmer')), 'on-image copy on every code of the visual');
+  assert.equal(new Set(rows.map(r => r.visual_key)).size, 1, 'same visual: one upload suggested');
+  const png = (t: string) => [{ buffer: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from(`fake VOICES_TEXT: ${t}`)]), filename: 'a.png', contentType: 'image/png' }];
+  const up = await pf.upload(A1, png('Vet visits, calmer. Calm, covered.'), 'nick', [A2, A3]);
+  assert.deepEqual(up.stubs.sort(), [A1, A2, A3]);
+  await pf.runAudit(await pf.createAudit(up.upload_id));
+  for (const code of [A1, A2, A3]) {
+    const rep = await pf.report(code);
+    const oi = rep.audit!.result.copy_match.find((r: any) => r.field === 'on_image');
+    assert.ok(oi, `${code}: on-image text is matched`);
+    assert.deepEqual([oi.status, oi.signed_off], ['match', 'Vet visits, calmer']);
+    assert.equal(rep.flags.some((f: any) => f.check === 'copy_match'), false);
+    assert.ok(rep.post_copy.some((c: any) => c.field === 'meta_primary'), 'primary text is post copy, never compared with the asset');
+  }
+  // Without the on-image text on the visual: every code on it gets the copy-match flag.
+  const up2 = await pf.upload(A1, png('Calm, covered.'), 'nick', [A2, A3]);
+  await pf.runAudit(await pf.createAudit(up2.upload_id));
+  for (const code of [A1, A2, A3]) assert.ok((await pf.report(code)).flags.some((f: any) => f.check === 'copy_match'), `${code}: missing on-image text flagged`);
+  const up3 = await pf.upload(A1, png('Vet visits, calmer. Calm, covered.'), 'nick', [A2, A3]);
+  await pf.runAudit(await pf.createAudit(up3.upload_id));
+
+  // Compliance: one asset, the on-image text shown once; decided per code.
+  const cv = await pf.complianceAssets();
+  assert.equal(cv.assets.length, 1);
+  assert.deepEqual(cv.assets[0].codes.map((c: any) => c.stub), [A1, A2, A3]);
+  await pf.setAssetCompliance(up3.upload_id, { status: 'cleared', codes: [A1, A2], client_by: 'J. Doe (Trupanion legal)', note: 'Fine' }, 'vivan');
+  await pf.setAssetCompliance(up3.upload_id, { status: 'changes_requested', codes: [A3], send_back: 'copy', note: 'Primary text too strong', client_by: 'J. Doe (Trupanion legal)' }, 'vivan');
+  assert.deepEqual(await Promise.all([A1, A2, A3].map(async c => (await pf.codeCompliance(c, up3.upload_id)).status)), ['cleared', 'cleared', 'changes_requested']);
+  const headLine = (await S.loadBatch(run.id)).lines.find(l => l.id === head)!;
+  assert.deepEqual(Object.keys(headLine.compliance_by_code || {}).sort(), [A1, A2, A3], 'the shared headline has a status per code');
+
+  // Handoff: one row per code, a column per field, the visual's on-image text repeated on each row.
+  const pack = await R.handoffPack();
+  const csv = S.parseCsv(pack.csv);
+  const h = csv[0];
+  for (const c of ['Meta primary text', 'Meta headline', 'On-image text (the visual)']) assert.ok(h.includes(c), c);
+  const body = csv.slice(1).filter(r => r[0].startsWith('OWN_CALM_UGC_A'));
+  assert.deepEqual(body.map(r => r[0]), [A1, A2, A3]);
+  assert.ok(body.every(r => r[h.indexOf('Meta headline')] === 'Calm, covered.' && r[h.indexOf('On-image text (the visual)')] === 'Vet visits, calmer'));
+  assert.deepEqual(body.map(r => r[h.indexOf('Compliance status')]), ['Cleared', 'Cleared', 'Changes requested']);
+  assert.match(pack.md, /### Visual A \(Meta\)[\s\S]*Vet visits, calmer/);
+  const comp = S.parseCsv(pack.complianceCsv);
+  assert.deepEqual(comp.filter(r => r[0]?.startsWith('OWN_CALM_UGC_A')).map(r => r[0]), [A1, A2, A3], 'compliance sheet: one row per code');
+  assert.ok(comp[0].includes('On-image text (the visual)'));
+  await store.putRules('example-1', { ...rules, fields: { ...rules.fields, meta_on_image: undefined } }, { activate: true, by: 'test' }).catch(() => {});
+});
+
+test('Postgres: leftover reservations older than 2 hours are cleared, newer ones and real spend stay', { skip }, async () => {
+  await freshStudio();
+  const { clearStaleReservations } = await import('../src/services/studio/router.js');
+  const old = new Date(Date.now() - 3 * 3600_000).toISOString(), recent = new Date(Date.now() - 600_000).toISOString();
+  await store.addSpend({ label: 'reserved: preflight x 1-a', usd: 0.5, at: old, user: 'nick' });
+  await store.addSpend({ label: 'reserved: preflight x 2-b', usd: 0.4, at: recent, user: 'nick' });
+  await store.addSpend({ label: 'preflight x', usd: 0.3, at: old, user: 'nick' });
+  const logs: string[] = [];
+  assert.equal(await clearStaleReservations(m => logs.push(m)), 1);
+  assert.match(logs[0], /reserved: preflight x 1-a/);
+  assert.deepEqual((await store.listSpend()).map(x => x.label).sort(), ['preflight x', 'reserved: preflight x 2-b']);
 });

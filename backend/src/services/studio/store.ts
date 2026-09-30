@@ -97,6 +97,8 @@ export interface StudioStore {
   addSpend(entry: SpendEntry): Promise<void>;
   /** Removes spend rows by label (a run's reservation, settled when it ends). */
   deleteSpend(label: string): Promise<void>;
+  /** Removes reservations ("reserved: …" rows) older than `ms`: left by a run the server restarted in the middle of. Returns them. */
+  clearStaleReservations(ms: number): Promise<SpendEntry[]>;
 
   /** Ready for production: sign-offs, line versions and expectations records. Append-only. */
   saveSignoff(s: any): Promise<void>;
@@ -209,6 +211,17 @@ export class FileStore implements StudioStore {
     return (this.spendFile().runs as SpendEntry[]).filter(r => (r.at || '') >= since).reduce((t, r) => t + (r.usd || 0), 0);
   }
   async listSpend() { return this.spendFile().runs as SpendEntry[]; }
+  async clearStaleReservations(ms: number) {
+    const s = this.spendFile();
+    const cutoff = new Date(Date.now() - ms).toISOString();
+    const stale = (s.runs as SpendEntry[]).filter(r => r.label.startsWith('reserved:') && r.at < cutoff);
+    if (stale.length) {
+      s.runs = s.runs.filter((r: SpendEntry) => !stale.includes(r));
+      s.total_usd = Math.round(s.runs.reduce((t: number, r: any) => t + (r.usd || 0), 0) * 10000) / 10000;
+      writeJson(this.P('spend.json'), s);
+    }
+    return stale;
+  }
   async deleteSpend(label: string) {
     const s = this.spendFile();
     s.runs = s.runs.filter((r: any) => r.label !== label);

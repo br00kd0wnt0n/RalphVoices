@@ -20,6 +20,7 @@ import { claudeWrite, isClaude } from './claude.js';
 import { FileStore, mergeBatchHeader, type StudioStore } from './store.js';
 import { CURRENT_PATTERN, DEFAULT_REGION, REGIONS, type Region } from '../../utils/namingCode.js';
 import { CodeBook, regionOf } from './codes.js';
+import { signoffVersions } from './versions.js';
 
 // ---------- paths ----------
 
@@ -122,7 +123,11 @@ export interface Line {
     /** Who at Trupanion made the decision. The producer (Vivan) coordinates and records it; she doesn't sign off compliance herself. */
     client_by?: string };
   /** The line's place in the latest Ready for production sign-off. `superseded_by`: a later sign-off of its set left it out (it keeps its code). */
-  ready?: { signoff_id: string; version: number; sha256: string; ready_by: string; ready_at: string; stub: string; changed_since?: boolean; superseded_by?: string };
+  ready?: { signoff_id: string; version: number; sha256: string; ready_by: string; ready_at: string; stub: string; changed_since?: boolean; superseded_by?: string;
+    /** Every code (live version) the line is in; a shared headline serves several. stub is the first (or the visual key, for on-image text). */
+    codes?: string[] };
+  /** Trupanion's compliance decision per code (Compliance step): one line can be in several ads. */
+  compliance_by_code?: Record<string, NonNullable<Line['compliance']>>;
   /** Who added the line (a line written by a person: Write & brief, or Add a line in Review). */
   added_by?: string;
   /** When the final wording was last fully re-checked (after an edit). */
@@ -1669,7 +1674,7 @@ export async function setDecision(batchId: string, lineId: string, patch: { deci
       const versions = await st.listLineVersions(l.id);
       const h = lineHash(l);
       if (!versions.some(v => v.sha256 === h)) {
-        await st.saveLineVersion({ line_id: l.id, batch_id: batchId, version: Math.max(0, ...versions.map(v => v.version)) + 1, field: l.field, text: finalText(l), sha256: h, created_by: user || 'unknown', created_at: l.decided_at!, stub: l.ready.stub });
+        await st.saveLineVersion({ line_id: l.id, batch_id: batchId, version: Math.max(0, ...versions.map(v => v.version)) + 1, field: l.field, text: finalText(l), sha256: h, created_by: user || 'unknown', created_at: l.decided_at!, stub: (l.ready.codes || [l.ready.stub]).join(',') });
       }
       l.ready.changed_since = true;
     } else if (l.ready) l.ready.changed_since = false;
@@ -1708,19 +1713,19 @@ export function codeInput(l: Pick<Line, 'persona' | 'territory' | 'field' | 'reg
 
 /** Every naming code signed off so far (they're never handed out again). */
 export async function signedCodes(): Promise<string[]> {
-  return ((await getStore().listSignoffs()) as Array<{ lines: Array<{ stub: string }> }>).flatMap(s => s.lines.map(x => x.stub));
+  return ((await getStore().listSignoffs()) as any[]).flatMap(s => signoffVersions(s).map(v => v.code));
 }
 
 export async function shortlist(): Promise<ShortRow[]> {
   const r = loadRules();
   const lines = await keptLines();
-  // A signed-off line shows its own code; the others, the code they'd get if signed off now.
-  const book = new CodeBook(await signedCodes());
+  // Codes belong to live versions, built at Ready: a signed-off line shows the code(s) it's in; the others have none yet.
   return lines.map(l => {
     const t = r.territories[l.territory];
     const platform = r.fields[l.field]?.platform || 'META';
+    const signed = l.ready && !l.ready.superseded_by;
     return {
-      stub: l.ready?.stub || book.assign(codeInput(l)), id: l.id, batch: l.batch, decision: l.decision || '',
+      stub: signed ? (l.ready!.codes || [l.ready!.stub]).join(' ') : '', id: l.id, batch: l.batch, decision: l.decision || '',
       // Signed off at Ready: the set it's in (it can't be cut from the Shortlist; change the set at Ready instead).
       signed_off: l.ready && !l.ready.superseded_by ? l.ready.signoff_id : '', persona: l.persona, territory: l.territory, region: regionOf(l), field: l.field,
       platform, format: t?.format || '', text: finalText(l),
@@ -1736,13 +1741,13 @@ export async function writeShortlist(): Promise<{ count: number; path: string; m
   const rows = await shortlist();
   const cols: Array<keyof ShortRow> = ['stub', 'id', 'persona', 'territory', 'region', 'field', 'platform', 'format', 'text', 'angle', 'structure', 'tone', 'features', 'flags', 'note'];
   const csv = toCsv([cols as string[], ...rows.map(x => cols.map(c => String(x[c])))]);
-  const md = ['# Shortlist', '', `Naming codes follow ${CURRENT_PATTERN} (add _YYMMDD at trafficking). Codes signed off before 30 Sep keep the earlier PERSONA_TERRITORY_FORMAT_v#_PLATFORM. The visual letter is settled at Ready for production.`, ''];
+  const md = ['# Shortlist', '', `Kept lines by field. At Ready for production they're combined into live versions (one ad each, e.g. primary text + headline), and each version gets a code, ${CURRENT_PATTERN} (add _YYMMDD at trafficking). A line already signed off shows its code(s).`, ''];
   let last = '';
   for (const x of rows) {
     const g = `${x.persona} · ${x.territory}${x.region === 'CA' ? ' · Canada' : ''}`;
     if (g !== last) { md.push(`## ${g}`, ''); last = g; }
     const oneLine = (t: string) => t.replace(/\s*\n\s*/g, ' ');
-    md.push(`- \`${x.stub}\` (${x.field}): ${oneLine(x.text)}${x.note ? ` *(${oneLine(x.note)})*` : ''}`);
+    md.push(`- ${x.stub ? `\`${x.stub}\` ` : ''}(${x.field}): ${oneLine(x.text)}${x.note ? ` *(${oneLine(x.note)})*` : ''}`);
   }
   const mdText = md.join('\n') + '\n';
   const st = getStore();

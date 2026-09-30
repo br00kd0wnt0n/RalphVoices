@@ -52,8 +52,10 @@ test('meta_on_image: listed, briefed, written for the visual, checked, coded and
   const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'oi', own_lines: [{ text: 'Vet bill? Sorted.', field: 'meta_on_image' }] }), api, () => {}, { ownOnly: true, user: 'nick' });
   await S.setDecision(run.id, run.lines[0].id, { decision: 'keep' }, 'nick');
   const row = (await S.shortlist()).find(x => x.id === run.lines[0].id)!;
-  assert.match(row.stub, /^OWN_CALM_UGC_A\d_US_META$/);
-  assert.equal((await R.readyView('OWN', 'OWN_CALM')).lines[0].line.field, 'meta_on_image');
+  assert.equal(row.stub, '', 'on-image text gets no code of its own: it goes with a visual (at Ready)');
+  const rv = await R.readyView('OWN', 'OWN_CALM');
+  assert.equal(rv.lines[0].line.field, 'meta_on_image');
+  assert.equal(rv.lines[0].role, 'per_visual');
 
   // Pre-flight: signed-off on-image copy must be on the asset, and the audit's rule checks see it as meta_on_image.
   const copy = signedOffCopy([{ line_id: 'x', field: 'meta_on_image', label: ON_IMAGE.label, text: 'Vet bill? Sorted.', version: 1 }]);
