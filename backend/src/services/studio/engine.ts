@@ -72,6 +72,8 @@ export interface Brief {
   carousel?: { sequences: number; cards: number };
   /** The round the run belongs to (rounds.ts), stamped when the run is created; none reads as R1. */
   round?: string;
+  /** Lines Studio writes per field (Write's per-field counts). When set, n is their sum and each field gets exactly its count. */
+  field_counts?: Record<string, number>;
   model: string;
   checker_model?: string;
   probe_model?: string;
@@ -201,7 +203,7 @@ type Emit = (e: StudioEvent) => void;
 export interface Rules {
   version?: string;
   sources: Record<string, any>;
-  fields: Record<string, { platform: string; label: string; visible: number; max: number; source: string; note?: string; writer_note?: string }>;
+  fields: Record<string, { platform: string; label: string; visible: number; max: number; source: string; note?: string; writer_note?: string; default_count?: number }>;
   tone_controls: Record<string, Record<string, string>>;
   structures: Record<Structure, string>;
   facts: Fact[];
@@ -655,6 +657,15 @@ export function makeBrief(input: Partial<Brief>): Brief {
   const tone = { dry_warm: 3, playful_plain: 3, short_long: 1, ...(input.tone || {}) };
   const region = String(input.region || DEFAULT_REGION).toUpperCase() as Region;
   if (!REGIONS.includes(region)) throw new Error(`Region must be ${REGIONS.join(' or ')}`);
+  // Per-field counts (optional): only the brief's fields, whole numbers 0-60, at most 60 in all.
+  let counts: Record<string, number> | null = null;
+  if (input.field_counts && typeof input.field_counts === 'object') {
+    counts = {};
+    for (const f of fields) counts[f] = Math.max(0, Math.min(60, Math.floor(Number((input.field_counts as any)[f]) || 0)));
+    const total = Object.values(counts).reduce((a, x) => a + x, 0);
+    if (total > 60) throw new Error(`At most 60 lines a run (asked for ${total})`);
+    if (!total) counts = null;
+  }
   return {
     name: input.name || `${territory}-${region === DEFAULT_REGION ? '' : `${region}-`}${stamp()}`,
     persona, territory, region, fields,
@@ -665,7 +676,8 @@ export function makeBrief(input: Partial<Brief>): Brief {
     own_lines: (input.own_lines || [])
       .map(o => ({ text: String(o?.text || '').trim(), field: r.fields[o?.field] ? o.field : fields[0] }))
       .filter(o => o.text).slice(0, 40),
-    n: Math.max(1, Math.min(60, Number(input.n) || 20)),
+    n: counts ? Math.max(1, Math.min(60, Object.values(counts).reduce((a, x) => a + x, 0))) : Math.max(1, Math.min(60, Number(input.n) || 20)),
+    ...(counts ? { field_counts: counts } : {}),
     ...(isCarouselTerritory(t) && fields.some(f => isOnImageField(f, r)) ? { carousel: {
       sequences: Math.max(1, Math.min(6, Math.round(Number(input.carousel?.sequences) || 3))),
       cards: Math.max(2, Math.min(10, Math.round(Number(input.carousel?.cards) || 4))),
@@ -697,7 +709,28 @@ export interface Cell { cell: string; angle: string; structure: Structure; tone:
  * step warmer/drier and a step more playful/plainer. Fields are dealt from a
  * seeded shuffle so no angle is stuck with one field.
  */
-export function planCells(b: Brief, count: number, offset = 0, seedExtra = '', skip: Set<string> = new Set()): Cell[] {
+/**
+ * How many lines each field still needs: the brief's per-field counts less what's been kept (null when the brief has no
+ * counts, and fields are dealt evenly).
+ */
+export function fieldShortfall(b: Brief, have: Record<string, number> = {}): Record<string, number> | null {
+  if (!b.field_counts) return null;
+  return Object.fromEntries(Object.entries(b.field_counts).map(([f, n]) => [f, Math.max(0, n - (have[f] || 0))]).filter(([, n]) => (n as number) > 0));
+}
+/** A deck of `length` fields in proportion to the weights (largest remainder), or the brief's fields in turn. */
+function dealFields(fields: string[], length: number, weights: Record<string, number> | null): string[] {
+  const w = weights && Object.values(weights).some(x => x > 0) ? weights : null;
+  if (!w) return Array.from({ length }, (_, i) => fields[i % fields.length]);
+  const total = Object.values(w).reduce((a, x) => a + x, 0);
+  const keys = Object.keys(w).filter(k => w[k] > 0);
+  const exact = keys.map(k => ({ k, x: (length * w[k]) / total }));
+  const out: Record<string, number> = Object.fromEntries(exact.map(e => [e.k, Math.floor(e.x)]));
+  let left = length - Object.values(out).reduce((a, x) => a + x, 0);
+  for (const e of [...exact].sort((a, b) => (b.x % 1) - (a.x % 1))) { if (left-- <= 0) break; out[e.k]++; }
+  return keys.flatMap(k => Array.from({ length: out[k] }, () => k));
+}
+
+export function planCells(b: Brief, count: number, offset = 0, seedExtra = '', skip: Set<string> = new Set(), weights: Record<string, number> | null = fieldShortfall(b)): Cell[] {
   const r = loadRules();
   const pr = r.personas[b.persona];
   const home = r.territories[b.territory]?.angle;
@@ -714,7 +747,8 @@ export function planCells(b: Brief, count: number, offset = 0, seedExtra = '', s
   // skipped (once each), so Studio's lines spread out from theirs.
   const pending = new Set(skip);
   const limit = offset + count * 4;
-  const fieldDeck = shuffle(Array.from({ length: limit }, (_, i) => b.fields[i % b.fields.length]), rnd);
+  // With per-field counts, each field is dealt in proportion to what it still needs, so every field gets the spread.
+  const fieldDeck = shuffle(dealFields(b.fields, limit, weights), rnd);
   const cells: Cell[] = [];
   for (let i = offset; i < limit && cells.length < count; i++) {
     const angle = angles[i % A];
@@ -807,6 +841,12 @@ export const isOnImageField = (f: string, r: Pick<Rules, 'fields'>) => ((r.field
 export const isCarouselTerritory = (t?: Pick<Territory, 'format'>) => /^CAR/i.test(t?.format || '');
 /** The on-image field written as card sequences for this brief, if any (a carousel territory with on-image ticked). */
 export const sequenceField = (b: Brief, r: Rules) => (b.carousel ? b.fields.find(f => isOnImageField(f, r)) || null : null);
+/** Per-field counts without the field written as card sequences (its count is the sequences × cards, not a line count). */
+export function looseCounts(b: Brief, seqField: string): Partial<Brief> {
+  if (!b.field_counts) return {};
+  const field_counts = Object.fromEntries(Object.entries(b.field_counts).filter(([f]) => f !== seqField));
+  return { field_counts, n: Object.values(field_counts).reduce((a, x) => a + x, 0) };
+}
 
 // ---------- which fields a brief writes (Nick, 30 Sep: asked for on-image copy, got hooks and primary text) ----------
 
@@ -831,6 +871,8 @@ export function fieldQuota(b: Brief, r: Rules = loadRules()): Record<string, num
   const seqF = sequenceField(b, r);
   const cards = seqF ? b.carousel!.sequences * b.carousel!.cards : 0;
   const loose = b.fields.filter(f => f !== seqF);
+  // Write's per-field counts, when the brief has them (the card sequences replace the on-image count).
+  if (b.field_counts) return Object.fromEntries(loose.map(f => [f, b.field_counts![f] ?? 0]));
   const n = Math.max(0, b.n - cards);
   return Object.fromEntries(loose.map((f, i) => [f, loose.length ? Math.floor(n / loose.length) + (i < n % loose.length ? 1 : 0) : 0]));
 }
@@ -1188,7 +1230,9 @@ export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: 
       const want = round_ === 0 ? Math.ceil(looseN * 1.25) : Math.max(3, Math.ceil((looseN - kept.length) * 1.5));
       // Later rounds only write the fields still short of their count.
       const short = b.fields.filter(f => keptBy[f] < (quota[f] || 0));
-      const cells = planCells(round_ === 0 ? b : { ...b, fields: short.length ? short : b.fields }, want, offset, '', round_ === 0 ? covered : new Set());
+      // Fields are dealt in proportion to what each still needs (per-field counts), so every field gets the spread.
+      const need = Object.fromEntries(Object.entries(quota).map(([f, q]) => [f, Math.max(0, q - (keptBy[f] || 0))]));
+      const cells = planCells(round_ === 0 ? b : { ...b, fields: short.length ? short : b.fields }, want, offset, '', round_ === 0 ? covered : new Set(), need);
       offset = nextOffset(cells, offset + want);
       const written = await writeCells(api, r, b, cells, b.model, 'generate', { own: humans.map(l => l.text) });
       batch.stats.generated += written.length;

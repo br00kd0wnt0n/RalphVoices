@@ -50,6 +50,8 @@ export interface Brief {
   carousel?: { sequences: number; cards: number };
   /** Client only: the person has changed the fields in this brief, so a new territory keeps them (studioFields.ts). */
   fields_touched?: boolean;
+  /** Lines Studio writes per field (Write's counts); n is their sum. */
+  field_counts?: Record<string, number>;
 }
 export interface RunStats {
   generated: number; near_duplicates_removed: number; similar_flagged: number;
@@ -64,7 +66,7 @@ export interface RunSummary {
   /** The run's round (none before rounds: R1). */
   round?: string;
 }
-export interface FieldSpec { platform: string; label: string; visible: number; max: number; source: string }
+export interface FieldSpec { platform: string; label: string; visible: number; max: number; source: string; /** Options Write asks for by default (rules v2.11+). */ default_count?: number }
 export interface Territory {
   persona: string; name: string; angle: string; format: string; premise: string; source: string;
   /** The pitched headline ("headline as sold"), from the concept cards (rules v2.4+). */
@@ -220,7 +222,7 @@ const USER_KEY = 'voices-studio-user';
 
 // ---------- rounds ----------
 /** A round (R1, R2…; R0 a test run-through): stamped on new runs and sign-offs; views show the active one by default. */
-export interface Round { id: string; name: string; from?: string; test?: boolean; created_by?: string; created_at?: string }
+export interface Round { id: string; name: string; from?: string; test?: boolean; created_by?: string; created_at?: string; /** When the round's assets are due (YYYY-MM-DD). */ assets_due?: string }
 export interface RoundsState { active: string; rounds: Round[] }
 const ROUND_VIEW_KEY = 'voices-studio-round-view';
 /** 'active': this round only (the default); 'all': every round, test rounds marked. Sent as ?round=all on every request. */
@@ -276,6 +278,32 @@ async function download(path: string, fallbackName: string) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/** Parse CSV (quotes, commas and newlines inside quotes). */
+export function parseCsv(text: string): string[][] {
+  const rows: string[][] = []; let row: string[] = []; let cell = ''; let q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += c; continue; }
+    if (c === '"') q = true;
+    else if (c === ',') { row.push(cell); cell = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(cell); rows.push(row); row = []; cell = ''; }
+    else cell += c;
+  }
+  if (cell || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+const csvCell = (v: string) => (/[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+/** Download a CSV the server sends, keeping only the rows that pass `keep` (by header name). Returns the rows kept. */
+async function downloadCsvRows(path: string, name: string, keep: (row: Record<string, string>) => boolean): Promise<number> {
+  const [head, ...rows] = parseCsv(await (await raw(path)).text());
+  const kept = rows.filter(r => r.length > 1 && keep(Object.fromEntries(head.map((h, i) => [h, r[i] ?? '']))));
+  const url = URL.createObjectURL(new Blob([[head, ...kept].map(r => r.map(csvCell).join(',')).join('\n')], { type: 'text/csv;charset=utf-8' }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: name });
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  return kept.length;
 }
 
 /** A job's progress as server-sent events, read with fetch so the sign-in header goes with it. */
@@ -382,11 +410,12 @@ export const studio = {
   rules: () => req<RulesVersion[]>('/rules'),
   activateRules: (version: string) => req<RulesVersion[]>(`/rules/${enc(version)}/activate`, { method: 'POST' }),
   /** Rounds (admin): create or rename one (optionally making it active), or set the active round. */
-  saveRound: (round: { id: string; name: string; from?: string; test?: boolean; activate?: boolean }) => req<RoundsState>('/rounds', { method: 'POST', body: JSON.stringify(round) }),
+  saveRound: (round: { id: string; name: string; from?: string; test?: boolean; activate?: boolean; assets_due?: string }) => req<RoundsState>('/rounds', { method: 'POST', body: JSON.stringify(round) }),
   activateRound: (id: string) => req<RoundsState>(`/rounds/${enc(id)}/activate`, { method: 'POST' }),
   uploadRules: (version: string, rules: unknown, notes: string, activate = false) => req<RulesVersion[]>('/rules', { method: 'POST', body: JSON.stringify({ version, rules, notes, activate }) }),
 
   download,
+  downloadCsvRows,
   events,
 };
 

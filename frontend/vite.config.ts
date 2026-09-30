@@ -13,11 +13,12 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:3001',
+        // VITE_PROXY_TARGET: a backend on another port (e.g. the Studio preview on 3041).
+        target: process.env.VITE_PROXY_TARGET || 'http://localhost:3001',
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://localhost:3001',
+        target: (process.env.VITE_PROXY_TARGET || 'http://localhost:3001').replace(/^http/, 'ws'),
         ws: true,
       },
     },
