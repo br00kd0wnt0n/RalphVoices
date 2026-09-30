@@ -42,7 +42,8 @@ export function versionFields(platform: string, rules: Pick<Rules, 'fields'>) {
 /** One line in a signed-off version (or on-image entry): which wording, exactly. */
 export interface SignedField { line_id: string; batch_id: string; version: number; sha256: string; field: string; text: string; chars: number; overrides: Line['overrides'] }
 export interface SignedVersion { code: string; visual: string; number: number; platform: string; fields: Record<string, SignedField> }
-export interface SignedOnImage extends SignedField { visual: string; visual_key: string }
+/** Text on the image of a visual; on a carousel, one per card (card 1…N, in order). */
+export interface SignedOnImage extends SignedField { visual: string; visual_key: string; card?: number }
 
 /** A sign-off's versions: stored ones, or (sign-offs from before versions) one per line, under that line's own code. */
 export function signoffVersions(s: { versions?: SignedVersion[]; lines?: Array<SignedField & { stub: string }> }): SignedVersion[] {
@@ -55,13 +56,24 @@ export function signoffVersions(s: { versions?: SignedVersion[]; lines?: Array<S
 }
 export function signoffOnImage(s: { on_image?: SignedOnImage[] }): SignedOnImage[] { return s.on_image || []; }
 
+// ---------- carousels (item E, 30 Sep): on-image text per card ----------
+
+/** A carousel's cards: 4 by default, up to 10. */
+export const DEFAULT_CARDS = 4;
+export const MAX_CARDS = 10;
+export const isCarousel = (format: string) => /^CAR/i.test(format || '');
+
 // ---------- planning (Ready's preview, and the sign-off itself) ----------
 
-/** What the screen sends: versions in order (visual letter, field → line id), and the on-image line per visual letter. */
+/**
+ * What the screen sends: versions in order (visual letter, field → line id), and the on-image text per visual letter:
+ * a line id, or on a carousel the cards in order (card 1 first; '' for a card with no text).
+ */
 export interface DraftVersion { visual: string; fields: Record<string, string>; platform?: string }
-export interface Draft { versions: DraftVersion[]; on_image: Record<string, string> }
+export interface Draft { versions: DraftVersion[]; on_image: Record<string, string | string[]> }
 export interface PlannedVersion extends DraftVersion { code: string; number: number; platform: string; issues: string[] }
-export interface Plan { versions: PlannedVersion[]; on_image: Array<{ visual: string; visual_key: string; line_id: string; issues: string[] }>; issues: string[] }
+export interface PlannedOnImage { visual: string; visual_key: string; line_id: string; card?: number; issues: string[] }
+export interface Plan { versions: PlannedVersion[]; on_image: PlannedOnImage[]; issues: string[] }
 
 interface Ctx { persona: string; territory: string; region: Region; format: string; rules: Pick<Rules, 'fields'> }
 
@@ -70,21 +82,21 @@ interface Ctx { persona: string; territory: string; region: Region; format: stri
  * otherwise, per platform, the required fields' lines paired in the order they were written (a field with fewer
  * lines reuses them), three versions to a visual, and one on-image line per visual.
  */
-export function defaultDraft(lines: Line[], rules: Pick<Rules, 'fields'>, latest?: { versions?: SignedVersion[]; on_image?: SignedOnImage[]; lines?: any[] } | null): Draft {
+export function defaultDraft(lines: Line[], rules: Pick<Rules, 'fields'>, latest?: { versions?: SignedVersion[]; on_image?: SignedOnImage[]; lines?: any[] } | null, format = ''): Draft {
   const kept = new Set(lines.map(l => l.id));
   if (latest) {
     const vs = signoffVersions(latest as any).filter(v => Object.values(v.fields).every(f => kept.has(f.line_id)));
     if (vs.length) {
       return {
         versions: vs.map(v => ({ visual: v.visual || 'A', platform: v.platform, fields: Object.fromEntries(Object.entries(v.fields).map(([k, f]) => [k, f.line_id])) })),
-        on_image: Object.fromEntries(signoffOnImage(latest as any).filter(o => kept.has(o.line_id)).map(o => [o.visual, o.line_id])),
+        on_image: onImageDraft(signoffOnImage(latest as any).filter(o => kept.has(o.line_id))),
       };
     }
   }
   const byField = new Map<string, Line[]>();
   for (const l of lines) byField.set(l.field, [...(byField.get(l.field) || []), l]);
   const versions: DraftVersion[] = [];
-  const on_image: Record<string, string> = {};
+  const on_image: Draft['on_image'] = {};
   for (const platform of [...new Set(lines.map(l => platformOf(l.field, rules)))].sort()) {
     const vf = versionFields(platform, rules);
     const lead = vf.required.length ? vf.required : [...vf.optional];
@@ -99,12 +111,40 @@ export function defaultDraft(lines: Line[], rules: Pick<Rules, 'fields'>, latest
       }
       versions.push({ visual: VISUAL_LETTERS[Math.floor(i / LINES_PER_VISUAL)], platform, fields });
     }
-    vf.per_visual.forEach(f => (byField.get(f) || []).forEach((l, i) => {
-      const v = VISUAL_LETTERS[i];
-      if (!on_image[v] && versions.some(x => x.visual === v && (x.platform || platform) === platformOf(f, rules))) on_image[v] = l.id;
-    }));
+    const hasVisual = (v: string, f: string) => versions.some(x => x.visual === v && (x.platform || platform) === platformOf(f, rules));
+    if (isCarousel(format)) {
+      // A carousel visual takes a whole card sequence (as written), then any loose on-image lines as cards.
+      for (const f of vf.per_visual) {
+        const ls = byField.get(f) || [];
+        const seqs: string[][] = [];
+        const bySeq = new Map<string, Line[]>();
+        for (const l of ls) if (l.sequence_id) bySeq.set(l.sequence_id, [...(bySeq.get(l.sequence_id) || []), l]);
+        for (const g of bySeq.values()) seqs.push(g.sort((a, b) => (a.card || 0) - (b.card || 0)).map(l => l.id));
+        const loose = ls.filter(l => !l.sequence_id).map(l => l.id);
+        for (let i = 0; i < loose.length; i += DEFAULT_CARDS) seqs.push(loose.slice(i, i + DEFAULT_CARDS));
+        seqs.forEach((cards, i) => { const v = VISUAL_LETTERS[i]; if (!on_image[v] && hasVisual(v, f)) on_image[v] = cards.slice(0, MAX_CARDS); });
+      }
+    } else {
+      vf.per_visual.forEach(f => (byField.get(f) || []).forEach((l, i) => {
+        const v = VISUAL_LETTERS[i];
+        if (!on_image[v] && hasVisual(v, f)) on_image[v] = l.id;
+      }));
+    }
   }
   return { versions, on_image };
+}
+
+/** Signed-off on-image text back into the draft's shape: a line per visual, or a carousel's cards in order. */
+function onImageDraft(list: SignedOnImage[]): Draft['on_image'] {
+  const out: Draft['on_image'] = {};
+  for (const o of list) {
+    if (!o.card) { out[o.visual] = o.line_id; continue; }
+    const cards = Array.isArray(out[o.visual]) ? out[o.visual] as string[] : [];
+    while (cards.length < o.card) cards.push('');
+    cards[o.card - 1] = o.line_id;
+    out[o.visual] = cards;
+  }
+  return out;
 }
 
 /**
@@ -155,18 +195,25 @@ export function planDraft(draft: Draft, lines: Line[], ctx: Ctx, signedCodes: st
     for (const x of vIssues) issues.push(`${code || `Version ${i + 1}`}: ${x}`);
   }
   const on_image: Plan['on_image'] = [];
-  for (const [v0, id] of Object.entries(draft.on_image || {})) {
-    if (!id) continue;
+  for (const [v0, val] of Object.entries(draft.on_image || {})) {
     const visual = v0.toUpperCase();
-    const oIssues: string[] = [];
-    const l = byId.get(id);
-    if (!l) oIssues.push(`${id} isn't a kept line of this set`);
-    else if (fieldRole(l.field, r) !== 'per_visual') oIssues.push(`${r.fields[l.field]?.label || l.field} isn't on-image text`);
-    const platform = l ? platformOf(l.field, r) : 'META';
-    if (!planned.some(x => x.visual === visual && x.platform === platform)) oIssues.push(`there's no ${platform === 'TT' ? 'TikTok' : 'Meta'} version on visual ${visual}`);
-    const key = /^[A-Z]$/.test(visual) ? visualKey(formatCode({ persona: ctx.persona, territory: ctx.territory, format: ctx.format, platform, region: ctx.region, visual, line: 1 }))! : '';
-    on_image.push({ visual, visual_key: key, line_id: id, issues: oIssues });
-    for (const x of oIssues) issues.push(`On-image, visual ${visual}: ${x}`);
+    const cards = Array.isArray(val);
+    const ids = cards ? val as string[] : [val as string];
+    if (cards && !isCarousel(ctx.format)) { issues.push(`On-image, visual ${visual}: only a carousel has cards`); continue; }
+    if (cards && ids.length > MAX_CARDS) issues.push(`On-image, visual ${visual}: at most ${MAX_CARDS} cards`);
+    ids.slice(0, MAX_CARDS).forEach((id, i) => {
+      if (!id) return;
+      const where = cards ? `visual ${visual}, card ${i + 1}` : `visual ${visual}`;
+      const oIssues: string[] = [];
+      const l = byId.get(id);
+      if (!l) oIssues.push(`${id} isn't a kept line of this set`);
+      else if (fieldRole(l.field, r) !== 'per_visual') oIssues.push(`${r.fields[l.field]?.label || l.field} isn't on-image text`);
+      const platform = l ? platformOf(l.field, r) : 'META';
+      if (!planned.some(x => x.visual === visual && x.platform === platform)) oIssues.push(`there's no ${platform === 'TT' ? 'TikTok' : 'Meta'} version on visual ${visual}`);
+      const key = /^[A-Z]$/.test(visual) ? visualKey(formatCode({ persona: ctx.persona, territory: ctx.territory, format: ctx.format, platform, region: ctx.region, visual, line: 1 }))! : '';
+      on_image.push({ visual, visual_key: key, line_id: id, ...(cards ? { card: i + 1 } : {}), issues: oIssues });
+      for (const x of oIssues) issues.push(`On-image, ${where}: ${x}`);
+    });
   }
   if (!planned.length) issues.push('Build at least one version');
   return { versions: planned, on_image, issues };

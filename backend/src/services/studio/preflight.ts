@@ -25,7 +25,7 @@ import { DEFAULT_REGION, parseCode, visualKey, type Region } from '../../utils/n
 import { downloadPrivateObject, getPrivateObject, getPrivateObjectStream, isR2Enabled, putPrivateObject } from '../r2.js';
 import { FatalError } from '../audit/api.js';
 import type { AssetKind, AuditEngine, AuditFlag, AuditResult, SignedCopy } from './preflightEngine.js';
-import { copyMatch } from '../audit/copyMatch.js';
+import { COPY_MATCH_SOURCE, REWORD_MIN, bestMatch, copyMatch, normalise } from '../audit/copyMatch.js';
 import { signedOffCopy } from './preflightB2.js';
 
 type Queryable = Pick<pg.Pool, 'query'>;
@@ -119,30 +119,71 @@ export function formatNote(stub: string, kind: AssetKind): string | null {
   return `This code is for ${name}, but a ${kind} was uploaded. Check it’s the right asset, or that the code’s format is right.`;
 }
 
-/** Fields that run in the post (never on the asset): listed on the report, not compared. */
-export const POST_COPY_FIELDS = new Set(['meta_primary', 'meta_description', 'tiktok_caption']);
+/**
+ * Fields that run in the post (never on the asset): listed on the report, not compared. The Meta headline joined them
+ * on 30 Sep (Brook): text on the image is its own field now, and a caveat that belongs with a claim is checked inside
+ * the ad at Ready (version check "split claims"), not against the image.
+ */
+export const POST_COPY_FIELDS = new Set(['meta_primary', 'meta_headline', 'meta_description', 'tiktok_caption']);
 
 /**
  * Copy match for one stub, on what was read off the visual: B2's own rules
  * (services/audit/copyMatch.ts). Only on-asset fields are compared (the TikTok
- * hook and on-image text; the headline if it's designed in). Red only for a
- * required caveat missing from on-asset text; a hook that differs is amber; a
- * headline not on the image is grey.
+ * hook and on-image text; a carousel's text card by card, see cardMatch). Red for
+ * a required caveat missing from on-asset text or a card's text missing from the
+ * asset; a hook that differs is amber. The headline is post copy (30 Sep).
  */
 export function copyMatchForStub(copy: SignedCopy[], assetText: Array<{ where: string; text: string }>, rules: any, kind: AssetKind) {
-  const { rows, flags } = copyMatch(signedOffCopy(copy.filter(c => !POST_COPY_FIELDS.has(c.field))), assetText, rules);
+  const onAsset = copy.filter(c => !POST_COPY_FIELDS.has(c.field));
+  const cards = onAsset.filter(c => c.card);
+  const res = copyMatch(signedOffCopy(onAsset), assetText, rules);
+  // A carousel's cards are matched card by card below; B2's whole-asset row for the joined text would only repeat them.
+  // Its caveat check (COPY_CAVEAT) still runs on all the on-asset text.
+  const rows: any[] = cards.length ? res.rows.filter(x => x.field !== 'on_image') : res.rows;
+  const flags = cards.length ? res.flags.filter(f => !(f.rule === 'COPY_MATCH' && /On-image text/.test(f.label))) : res.flags;
   const cardOf = (where?: string) => {
     if (kind === 'video' || !where) return undefined;
     const m = /card (\d+)/i.exec(where);
     return m ? Number(m[1]) - 1 : /^image/i.test(where) ? 0 : undefined;
   };
-  return {
-    rows,
-    flags: flags.map((f): AuditFlag => ({
-      rule: f.rule, severity: f.severity, label: f.label, source: f.source, quote: f.quote, why: f.why, where: f.where, check: 'copy_match',
-      frame: cardOf(f.where) !== undefined ? { asset_position: cardOf(f.where), label: f.where } : undefined,
-    })),
-  };
+  const out = flags.map((f): AuditFlag => ({
+    rule: f.rule, severity: f.severity, label: f.label, source: f.source, quote: f.quote, why: f.why, where: f.where, check: 'copy_match',
+    frame: cardOf(f.where) !== undefined ? { asset_position: cardOf(f.where), label: f.where } : undefined,
+  }));
+  const cm = cardMatch(cards, assetText);
+  return { rows: [...rows, ...cm.rows], flags: [...out, ...cm.flags] };
+}
+
+/**
+ * Carousel cards (item E): card k's signed-off text must be on card k. Found on another card: amber ("on card 3,
+ * expected card 2"). Reworded on its card: amber, both quoted. Not on the asset at all: red.
+ */
+export function cardMatch(cards: SignedCopy[], assetText: Array<{ where: string; text: string }>) {
+  const rows: Array<{ field: 'on_image'; card: number; signed_off: string; found: string; similarity: number; status: string; found_on?: number }> = [];
+  const flags: AuditFlag[] = [];
+  const onCard = (k: number) => assetText.filter(t => new RegExp(`^card ${k}\\b`, 'i').test(t.where)).map(t => t.text).join('\n');
+  const cardNos = [...new Set(assetText.map(t => Number(/^card (\d+)/i.exec(t.where)?.[1])).filter(Boolean))];
+  const frame = (k: number) => ({ asset_position: k - 1, label: `card ${k}` });
+  for (const c of [...cards].sort((a, b) => a.card! - b.card!)) {
+    const k = c.card!;
+    const mine = onCard(k);
+    if (mine && normalise(mine).includes(normalise(c.text))) { rows.push({ field: 'on_image', card: k, signed_off: c.text, found: normalise(c.text), similarity: 1, status: 'match' }); continue; }
+    const other = cardNos.filter(j => j !== k).find(j => normalise(onCard(j)).includes(normalise(c.text)));
+    if (other) {
+      rows.push({ field: 'on_image', card: k, signed_off: c.text, found: normalise(c.text), similarity: 1, status: 'wrong card', found_on: other });
+      flags.push({ rule: 'COPY_CARD_ORDER', severity: 'amber', label: `Card ${k}'s text is on card ${other}`, source: COPY_MATCH_SOURCE, quote: `signed off for card ${k}: "${c.text.trim()}"`, why: `On card ${other}, expected card ${k}`, where: `card ${other}`, check: 'copy_match', frame: frame(other) });
+      continue;
+    }
+    const m = mine ? bestMatch(c.text, mine) : { similarity: 0, excerpt: '' };
+    if (m.similarity >= REWORD_MIN) {
+      rows.push({ field: 'on_image', card: k, signed_off: c.text, found: m.excerpt, similarity: m.similarity, status: 'reworded' });
+      flags.push({ rule: 'COPY_MATCH', severity: 'amber', label: `Card ${k}'s text differs from the signed-off wording`, source: COPY_MATCH_SOURCE, quote: `signed off: "${c.text.trim()}" · on card ${k}: "${m.excerpt}"`, why: `${Math.round(m.similarity * 100)}% of the words match, in order`, where: `card ${k}`, check: 'copy_match', frame: frame(k) });
+      continue;
+    }
+    rows.push({ field: 'on_image', card: k, signed_off: c.text, found: m.excerpt, similarity: m.similarity, status: 'not on asset' });
+    flags.push({ rule: 'COPY_CARD_MISSING', severity: 'red', label: `Card ${k}'s signed-off text isn't on the asset`, source: COPY_MATCH_SOURCE, quote: `signed off for card ${k}: "${c.text.trim()}"`, why: mine ? `Card ${k} reads: "${mine.slice(0, 80)}"` : `Nothing was read on card ${k}`, where: `card ${k}`, check: 'copy_match', ...(k <= cardNos.length ? { frame: frame(k) } : {}) });
+  }
+  return { rows, flags };
 }
 
 /** Case, punctuation, spacing and line breaks don't count: small print split over lines still matches. */
@@ -214,13 +255,17 @@ export class Preflight {
     const v = signoffVersions(s).find(x => x.code === stub);
     if (!v) return [];
     const r = S.loadRules();
-    const oi = signoffOnImage(s).find(o => o.visual === v.visual && platformOf(o.field, r) === v.platform);
-    return [...Object.values(v.fields), ...(oi ? [oi] : [])];
+    // A static's one on-image line, or a carousel's cards in order.
+    const oi = signoffOnImage(s).filter(o => o.visual === v.visual && platformOf(o.field, r) === v.platform).sort((a, b) => (a.card || 0) - (b.card || 0));
+    return [...Object.values(v.fields), ...oi];
   }
   /** The signed-off copy for a code, with field labels. */
   private copyFor(s: Signoff, stub: string): SignedCopy[] {
     const r = S.loadRules();
-    return this.partsOf(s, stub).map(l => ({ line_id: l.line_id, field: l.field, label: r.fields[l.field]?.label || l.field, text: l.text, version: l.version }));
+    return this.partsOf(s, stub).map(l => {
+      const card = (l as { card?: number }).card;
+      return { line_id: l.line_id, field: l.field, label: `${r.fields[l.field]?.label || l.field}${card ? `, card ${card}` : ''}`, text: l.text, version: l.version, ...(card ? { card } : {}) };
+    });
   }
 
   async stubs(filter: { persona?: string; territory?: string; region?: string } = {}): Promise<StubRow[]> {

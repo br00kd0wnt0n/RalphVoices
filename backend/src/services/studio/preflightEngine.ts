@@ -9,7 +9,8 @@ import fs from 'node:fs';
 export type AssetKind = 'static' | 'carousel' | 'video';
 export type FlagSeverity = 'red' | 'amber' | 'grey';
 
-export interface SignedCopy { line_id: string; field: string; label: string; text: string; version: number }
+/** card: a carousel's on-image text, card 1…N (item E); its text must be on that card. */
+export interface SignedCopy { line_id: string; field: string; label: string; text: string; version: number; card?: number }
 
 export interface AuditInput {
   stub: string; persona: string; territory: string; kind: AssetKind;
