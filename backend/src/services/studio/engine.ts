@@ -21,7 +21,7 @@ import { FileStore, mergeBatchHeader, type StudioStore } from './store.js';
 import { CURRENT_PATTERN, DEFAULT_REGION, REGIONS, type Region } from '../../utils/namingCode.js';
 import { CodeBook, regionOf } from './codes.js';
 import { signoffVersions } from './versions.js';
-import { activeRound, inView, roundOf, roundView, type RoundView } from './rounds.js';
+import { activeRound, getRounds, inView, labelOf as monthOf, roundOf, roundView, type RoundView } from './rounds.js';
 
 // ---------- paths ----------
 
@@ -1669,7 +1669,7 @@ export async function checkTexts(persona: string, territory: string, items: Arra
 
 // ---------- export ----------
 
-export const CSV_COLUMNS = ['id', 'persona', 'territory', 'field', 'text', 'chars', 'angle', 'structure', 'tone', 'features', 'flags', 'objection', 'decision', 'edited_text', 'note', 'round'];
+export const CSV_COLUMNS = ['id', 'persona', 'territory', 'field', 'text', 'chars', 'angle', 'structure', 'tone', 'features', 'flags', 'objection', 'decision', 'edited_text', 'note', 'month'];
 
 function csvCell(v: unknown): string {
   let s = v === undefined || v === null ? '' : String(v);
@@ -1686,9 +1686,10 @@ export function flagText(f: Flag): string {
 export async function exportBatch(batchId: string): Promise<{ csv: string; md: string; csvPath: string; mdPath: string }> {
   const batch = await loadBatch(batchId);
   const r = loadRules();
+  const rounds = await getRounds();
   const rows = [CSV_COLUMNS, ...batch.lines.map(l => [
     l.id, l.persona, l.territory, l.field, l.text, String(l.chars), `${l.angle} ${l.angle_label}`, l.structure, l.tone_label,
-    l.features.join('; '), l.flags.map(flagText).join(' | '), l.objection || '', l.decision || '', l.edited_text || '', l.note || '', roundOf(l, batch.brief),
+    l.features.join('; '), l.flags.map(flagText).join(' | '), l.objection || '', l.decision || '', l.edited_text || '', l.note || '', monthOf(rounds, roundOf(l, batch.brief)),
   ])];
   const csv = toCsv(rows);
   const md = markdownView(batch, r);
@@ -1925,8 +1926,9 @@ export async function shortlist(view?: RoundView): Promise<ShortRow[]> {
 }
 
 export async function writeShortlist(view?: RoundView): Promise<{ count: number; path: string; mdPath: string; csv: string; md: string }> {
-  const rows = await shortlist(view ?? await roundView());
-  const cols: Array<keyof ShortRow> = ['stub', 'id', 'round', 'persona', 'territory', 'region', 'field', 'platform', 'format', 'text', 'angle', 'structure', 'tone', 'features', 'flags', 'note'];
+  const rv = view ?? await roundView();
+  const rows = (await shortlist(rv)).map(x => ({ ...x, month: monthOf(rv.state, x.round) }));
+  const cols: Array<keyof ShortRow | 'month'> = ['stub', 'id', 'month', 'persona', 'territory', 'region', 'field', 'platform', 'format', 'text', 'angle', 'structure', 'tone', 'features', 'flags', 'note'];
   const csv = toCsv([cols as string[], ...rows.map(x => cols.map(c => String(x[c])))]);
   const md = ['# Shortlist', '', `Kept lines by field. At Ready for production they're combined into live versions (one ad each, e.g. primary text + headline), and each version gets a code, ${CURRENT_PATTERN} (add _YYMMDD at trafficking). A line already signed off shows its code(s).`, ''];
   let last = '';

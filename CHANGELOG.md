@@ -4,6 +4,17 @@ All notable changes to Ralph Voices are documented here.
 
 ## Unreleased
 
+- **Studio: multi-size Pre-flight, and rounds shown as months.** Brook, 30 Sep (the client's workback schedule); no migration.
+  - **Sizes.** A code's asset is a set of sizes (the WBS: statics and hero videos in 1:1, 4:5 and 9:16; carousels in 1:1 and 4:5; TikTok in 9:16), uploaded together.
+    - **Detection:** each file's size is read from its pixels (PNG, JPEG, GIF or WebP headers, snapped to 1:1 / 4:5 / 9:16 within 5%) or its name ("_4x5"). On the Assets screen the browser reads it (videos too) and the person can correct it. A carousel is its cards in each size, in order within each size.
+    - **Checks per size:** the engine runs once per size, so the on-image copy match, per-card carousel text, the last-screen disclaimer, visual rules and text load are all checked for each size. Flags say which size ("9:16: On-image text … not found"). A finding shared by every size stays one flag.
+    - **Missing sizes:** an expected size not uploaded is amber (`SIZE_MISSING`). Pre-flight can still be marked passed, and the asset handoff notes it in a "Sizes missing" column, with files listed per size.
+    - **Estimate:** one audit per size, and the estimate counts them.
+    - **Expected sizes** per format can be changed in the rules (`preflight.sizes`).
+    - **Stored** in `studio_upload_files.role` (`asset:4x5`), with position = size slot × 100 + card. Uploads from before sizes read as their detected size, or the code's first expected size.
+  - **Months.** The client's schedule uses "R1/R2" for review rounds, so Studio's rounds show as **Month 1, Month 2…** and **Test** (R0), or an admin's label (Rules → Months, a "Label" field). This applies to the header badge ("This month / All months"), the board, chips, the handoff and asset handoff ("Month" column), and the Shortlist and run exports (`month`). Stored ids (R0, R1…), the `_TEST` suffix and B3's features `round` column are unchanged.
+
+  Tests: `studioSizes.test.ts` (detection, snapping, expected sizes). A Postgres sizes test (3 sizes with one lacking the on-image text → a flag on that size only; a missing size → amber, still passable, noted in the handoff; a carousel in 2 sizes × 4 cards; the estimate counts sizes; a shared finding is one flag). A months test in `studioRounds.test.ts`. Handoff: `docs/build-log/studio-sizes-months.md`.
 - **Studio Write: the fields you tick are what gets written** (Nick, 30 Sep: asked for Meta on-image copy, got TikTok hooks and primary text). No migration.
   - **Defaults follow the territory's format:** static or carousel → primary, headline, on-image; video or UGC → primary, headline; TikTok → hook, caption; the persona's defaults for any other format (`defaultFields`, sent on `/meta`). They're applied on first load, and on a new territory only while the fields haven't been changed in this brief.
   - **Changing persona or territory keeps the ticked fields.** They were silently reset to the persona's defaults before. When defaults are applied, a one-line note says so ("Fields set for a carousel: primary, headline, on-image").

@@ -31,7 +31,7 @@ export function ExportMenu({ meta, ctx, view, batch, onImported }: { meta: Meta 
   const dlReady = (path: string, name: string) => {
     setOpen(false);
     studio.downloadCsvRows(path, name, row => ready(row['Ready to traffic']) && inScope(row))
-      .then(n => onImported(`${n} code${n === 1 ? '' : 's'} ready to traffic${narrow ? ` (${persona} · ${set})` : ' in the round'}.`))
+      .then(n => onImported(`${n} code${n === 1 ? '' : 's'} ready to traffic${narrow ? ` (${persona} · ${set})` : ' this month'}.`))
       .catch(e => onImported(`Download failed: ${e.message}`));
   };
   async function importSheet(file: File) {
@@ -54,10 +54,10 @@ export function ExportMenu({ meta, ctx, view, batch, onImported }: { meta: Meta 
       {open && (
         <div role="menu" className="absolute right-0 top-10 z-30 max-h-[80vh] w-[22rem] max-w-[calc(100vw-2rem)] overflow-y-auto rounded-xl border border-[#343946] bg-[#16181D] p-1.5 shadow-2xl">
           <div className="flex gap-1 rounded-lg bg-[#101216] p-1 text-xs">
-            <button className={cn('flex-1 rounded-md px-2 py-1', !narrow ? 'bg-[#ECEDEF] font-semibold text-[#0E0F12]' : 'text-[#C9CCD2]')} onClick={() => setNarrow(false)}>Everything in the round</button>
+            <button className={cn('flex-1 rounded-md px-2 py-1', !narrow ? 'bg-[#ECEDEF] font-semibold text-[#0E0F12]' : 'text-[#C9CCD2]')} onClick={() => setNarrow(false)}>Everything this month</button>
             <button className={cn('flex-1 truncate rounded-md px-2 py-1', narrow ? 'bg-[#ECEDEF] font-semibold text-[#0E0F12]' : 'text-[#C9CCD2]')} onClick={() => setNarrow(true)} title={`${persona} · ${set}`}>Just {persona}</button>
           </div>
-          <p className="px-3 pt-1 text-xs text-[#646A75]">{narrow ? <>Only {scopeName}</> : 'Every persona and territory in the round.'}</p>
+          <p className="px-3 pt-1 text-xs text-[#646A75]">{narrow ? <>Only {scopeName}</> : 'Every persona and territory this month.'}</p>
           {meta?.preflight?.enabled && (
             <>
               <Head>Ready to traffic</Head>
@@ -83,7 +83,7 @@ export function ExportMenu({ meta, ctx, view, batch, onImported }: { meta: Meta 
           {meta?.preflight?.enabled && (
             <>
               <Head>Weekly read</Head>
-              <Item onClick={() => dl('/preflight/features.csv', 'preflight-features.csv')} title="The tags on each ad, for the weekly read of live results (never a test round)">Features for the weekly read</Item>
+              <Item onClick={() => dl('/preflight/features.csv', 'preflight-features.csv')} title="The tags on each ad, for the weekly read of live results (never the test run)">Features for the weekly read</Item>
             </>
           )}
         </div>

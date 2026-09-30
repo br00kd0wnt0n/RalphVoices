@@ -233,7 +233,8 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   const bad = png('Your vet gets paid directly.');
   const up1 = await pf.upload(stub, [{ buffer: bad, filename: 'static-v1.png', contentType: 'image/png' }], 'nick');
   assert.equal(up1.kind, 'static');
-  assert.ok(Buffer.compare((await pf.file(up1.upload_id, 0)).data, bad) === 0, 'the file comes back byte for byte');
+  const pos1 = (await pf.report(stub)).upload!.files[0].position;   // size slot × 100 + card
+  assert.ok(Buffer.compare((await pf.file(up1.upload_id, pos1)).data, bad) === 0, 'the file comes back byte for byte');
   const a1 = await pf.createAudit(up1.upload_id, 'nick');
   const events: any[] = [];
   await pf.runAudit(a1, e => events.push(e), 'nick');
@@ -283,12 +284,13 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   assert.equal(feats[1][1], 'direct_vet_pay');
   const hand = S.parseCsv(await pf.handoffCsv());
   assert.deepEqual(hand[0].slice(0, 2), ['Naming code', 'Region']);
-  assert.equal(hand[0][8], 'Status');
-  assert.equal(hand[0][2], 'Round');
+  const ST = hand[0].indexOf('Status');
+  assert.ok(ST > 0 && hand[0].includes('Sizes missing'));
+  assert.equal(hand[0][2], 'Month');
   // Pre-flight passed isn't Ready to traffic until Trupanion's compliance is cleared (Brook, 30 Sep).
-  assert.equal(hand.find(r => r[0] === stub)![8], 'Pre-flight passed · Compliance pending');
+  assert.equal(hand.find(r => r[0] === stub)![ST], 'Pre-flight passed · Compliance pending');
   assert.equal(hand.find(r => r[0] === stub)![hand[0].indexOf('Ready to traffic')], 'no');
-  assert.equal(hand.find(r => r[0] === postStub)![8], 'Not uploaded');
+  assert.equal(hand.find(r => r[0] === postStub)![ST], 'Not uploaded');
   assert.equal(/approved/i.test(await pf.handoffCsv()), false);
 
   // 6. Carousel and video kinds.
@@ -319,7 +321,7 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   (other as any).findStub = async (x: string) => x === postStub ? { ...(await realFind(x)), signoff: { ...(await realFind(x)).signoff, persona: 'DINK', territory: 'DINK_NEVER' } } : realFind(x);
   await assert.rejects(() => other.upload(headlineStub, [{ buffer: png('x'), filename: 'x.png', contentType: 'image/png' }], 'nick', [postStub]), /same persona and territory only/);
   const hand2 = S.parseCsv(await pf.handoffCsv());
-  assert.equal(hand2.find(r => r[0] === postStub)![7], headlineStub, 'the handoff says which codes share the visual');
+  assert.equal(hand2.find(r => r[0] === postStub)![hand2[0].indexOf('Same visual as')], headlineStub, 'the handoff says which codes share the visual');
 
   // An OpenAI outage fails the audit as retryable; running it again on the same upload works.
   const { FatalError } = await import('../src/services/audit/api.js');
@@ -372,7 +374,8 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
     assert.equal(up.status, 200, JSON.stringify(body));
     assert.equal(body.kind, 'static');
     assert.ok(body.estimate.seconds > 0);
-    const file = await fetch(`${base}/preflight/files/${body.upload_id}/0`);
+    const pos = (await pf.report(stub)).upload!.files[0].position;   // size slot × 100 + card
+    const file = await fetch(`${base}/preflight/files/${body.upload_id}/${pos}`);
     assert.ok(Buffer.compare(Buffer.from(await file.clone().arrayBuffer()), png(caveatLine)) === 0, 'uploaded through disk, stored and served byte for byte');
     assert.equal(file.headers.get('content-type'), 'image/png');
     const ready = await fetch(`${base}/preflight/stubs/${stub}/ready`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
@@ -1044,9 +1047,82 @@ test('rounds on Postgres: Pre-flight lists the active round; a test round\'s cod
   assert.deepEqual((await pf.stubs({ round: 'all' })).map(s => [s.stub, s.test]).sort(), [[c1, false], [c0, true]].sort());
   assert.deepEqual((await pf.complianceAssets()).assets.flatMap((a: any) => a.codes.map((c: any) => c.stub)), [c1]);
   const hand = S.parseCsv(await pf.handoffCsv('all'));
-  assert.deepEqual(hand.slice(1).map(r => [r[0], r[2]]), [[c1, 'R1']], 'asset handoff: never a test code');
+  assert.deepEqual(hand.slice(1).map(r => [r[0], r[2]]), [[c1, 'Month 1']], 'asset handoff: never a test code');
   const feats = S.parseCsv(await pf.featuresCsv());
   assert.equal(feats[0].at(-1), 'round');
   assert.deepEqual(feats.slice(1).map(r => [r[0], r.at(-1)]), [[c1, 'R1']], 'features for B3: every real round, never a test round');
   await (store as any).db.query(`DELETE FROM studio_inputs WHERE key = 'rounds'`);
+});
+
+// ---------- multi-size Pre-flight (Brook, 30 Sep; the client's WBS) ----------
+
+test('sizes: a static in 3 sizes, one missing its on-image text → a flag on that size only; a missing size is amber; a carousel in 2 sizes × 4 cards; the estimate counts sizes', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const rules = JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8'));
+  rules.fields.meta_on_image = { platform: 'META', label: 'On-image text', visible: 40, max: 60, source: 'HOUSE: test', in_version: 'per_visual' };
+  rules.territories.OWN_STILL = { ...rules.territories.OWN_CALM, name: 'Still', format: 'STATIC' };
+  rules.territories.OWN_CARDS = { ...rules.territories.OWN_CALM, name: 'Cards', format: 'CAROUSEL' };
+  await store.putRules('example-sizes', rules, { activate: true, by: 'test' });
+  await S.refreshRules();
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
+  const img = (t: string, name = 'a.png') => ({ buffer: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from(`fake VOICES_TEXT: ${t}`)]), filename: name, contentType: 'image/png' });
+  const signOff = async (territory: string, onImage: string[]) => {
+    const run = await S.generate(S.makeBrief({ territory, name: territory, own_lines: [{ text: 'Calm at the counter.', field: 'meta_primary' }, HEAD, ...onImage.map(text => ({ text, field: 'meta_on_image' }))] }), api, () => {}, { ownOnly: true, user: 'nick' });
+    for (const l of run.lines) {
+      await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+      for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find((x: any) => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'Test line', 'nick');
+    }
+    const [p, h, ...oi] = run.lines.map(l => l.id);
+    const versions = [{ visual: 'A', fields: { meta_primary: p, meta_headline: h } }];
+    const on_image = { A: oi.length > 1 ? oi : oi[0] };
+    const v = await R.readyView('OWN', territory, 'US', { versions, on_image } as any);
+    return (await R.signOff({ persona: 'OWN', territory, versions, on_image, expectation: { codes: [v.plan.versions[0].code], reason: 'x' } } as any, 'nick')).signoff.versions[0].code;
+  };
+  const report = (c: string) => pf.report(c);
+  const copyFlags = (rep: any) => rep.flags.filter((f: any) => f.check === 'copy_match').map((f: any) => [f.rule, f.severity, f.size, f.label]);
+
+  // A static: 3 sizes in one upload; 9:16 doesn't carry the on-image text.
+  const still = await signOff('OWN_STILL', ['Vet visits, calmer']);
+  assert.equal(still, 'OWN_STILL_ST_A1_US_META');
+  const up = await pf.upload(still, [img('Vet visits, calmer', 's-1x1.png'), img('Vet visits, calmer', 's-4x5.png'), img('Summer, sorted', 's-9x16.png')], 'nick', [], ['1:1', '4:5', '9:16']);
+  assert.deepEqual(up.sizes.map(x => x.size), ['1:1', '4:5', '9:16']);
+  assert.equal(up.estimate.sizes, 3, 'one audit per size');
+  assert.equal(up.estimate.seconds, 3 * (2 + 1), 'the estimate is the sum over sizes');
+  await pf.runAudit(await pf.createAudit(up.upload_id));
+  let rep = await report(still);
+  assert.deepEqual(copyFlags(rep), [['COPY_MATCH', 'amber', '9:16', '9:16: On-image text (signed off) not found on the asset']], 'a flag on 9:16 only');
+  assert.deepEqual(rep.flags.filter((f: any) => f.rule === 'CROSS_PERSONA').map((f: any) => [f.label, f.size]), [['How another persona might read it', undefined]], 'the same finding in every size is one flag');
+  assert.deepEqual(rep.sizes, { expected: ['1:1', '4:5', '9:16'], uploaded: ['1:1', '4:5', '9:16'], missing: [] });
+  assert.deepEqual(rep.audit!.result.copy_match.filter((r: any) => r.field === 'on_image').map((r: any) => [r.size, r.status]), [['1:1', 'match'], ['4:5', 'match'], ['9:16', 'not on asset']]);
+  assert.deepEqual(rep.upload!.files.map((f: any) => [f.aspect, f.position]), [['1:1', 0], ['4:5', 100], ['9:16', 200]]);
+
+  // Sizes read from the file names when not given; a missing size is amber, and Pre-flight can still be passed.
+  const up2 = await pf.upload(still, [img('Vet visits, calmer', 'still_1x1.png'), img('Vet visits, calmer', 'still_4x5.png')], 'nick');
+  assert.deepEqual(up2.sizes.map(x => x.size), ['1:1', '4:5']);
+  assert.match(up2.format_notes.join(' '), /9:16 not uploaded/);
+  await pf.runAudit(await pf.createAudit(up2.upload_id));
+  rep = await report(still);
+  assert.deepEqual(rep.flags.filter((f: any) => f.check === 'sizes').map((f: any) => [f.rule, f.severity, f.label]), [['SIZE_MISSING', 'amber', '9:16 not uploaded']]);
+  assert.deepEqual(rep.sizes.missing, ['9:16']);
+  assert.equal((await pf.setReady(still, true, 'nick')).status, 'ready', 'a missing size is noted, not a block');
+  const hand = S.parseCsv(await pf.handoffCsv());
+  const row = hand.find(r => r[0] === still)!;
+  assert.equal(row[hand[0].indexOf('Sizes missing')], '9:16');
+  assert.equal(row[hand[0].indexOf('File')], '1:1: still_1x1.png | 4:5: still_4x5.png', 'files per size');
+
+  // A carousel: 2 sizes × 4 cards (card order within each size); 4:5 has cards 2 and 3 swapped.
+  const CARDS = ['Vet bill at 2am?', 'You pay the vet as normal', 'We sort the rest', 'Calm, covered.'];
+  const car = await signOff('OWN_CARDS', CARDS);
+  const swapped = [CARDS[0], CARDS[2], CARDS[1], CARDS[3]];
+  const up3 = await pf.upload(car, [...CARDS.map((t, i) => img(t, `c${i + 1}.png`)), ...swapped.map((t, i) => img(t, `d${i + 1}.png`))], 'nick', [], [...Array(4).fill('1:1'), ...Array(4).fill('4:5')]);
+  assert.equal(up3.kind, 'carousel');
+  assert.deepEqual(up3.sizes.map(x => [x.size, x.files.length]), [['1:1', 4], ['4:5', 4]]);
+  await pf.runAudit(await pf.createAudit(up3.upload_id));
+  rep = await report(car);
+  assert.deepEqual(copyFlags(rep).map((x: any) => [x[0], x[2]]), [['COPY_CARD_ORDER', '4:5'], ['COPY_CARD_ORDER', '4:5']], '1:1 in order passes; 4:5 swapped');
+  assert.equal(rep.flags.some((f: any) => f.check === 'sizes'), false, 'a carousel expects 1:1 and 4:5 only');
+  assert.ok(rep.flags.filter((f: any) => f.rule === 'COPY_CARD_ORDER').every((f: any) => f.frame?.position >= 100 && f.frame?.position < 200), 'the flags point at the 4:5 cards');
+  await store.putRules('example-1', JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8')), { activate: true, by: 'test' }).catch(() => {});
 });

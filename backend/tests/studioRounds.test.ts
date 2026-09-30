@@ -117,13 +117,13 @@ test('R0 (test) then R1: views default to the active round, R0 is hidden from R1
   assert.deepEqual([...new Set((await S.shortlist(all)).map(x => x.round))].sort(), ['R0', 'R1']);
   const hand = S.parseCsv((await R.handoffPack({ round: 'all' })).csv);
   assert.deepEqual(hand.slice(1).map(r => r[0]), ['OWN_CALM_UGC_A1_US_META', 'OWN_CALM_UGC_A2_US_META']);
-  assert.ok(hand.slice(1).every(r => r[hand[0].indexOf('Round')] === 'R1'));
+  assert.ok(hand.slice(1).every(r => r[hand[0].indexOf('Month')] === 'Month 1'));
   assert.ok(!(await R.handoffPack({ round: 'all' })).md.includes('_TEST'));
   // R0's Ready view is still reachable by name (and read as a test round).
   assert.deepEqual((await R.readyView('OWN', 'OWN_CALM', 'US', undefined, { round: 'R0' })).round, { id: 'R0', test: true });
   // Exports carry the round.
-  assert.ok(S.parseCsv((await S.writeShortlist()).csv)[0].includes('round'));
-  assert.equal(S.parseCsv((await S.exportBatch(r1.run.id)).csv).at(-1)!.at(-1), 'R1');
+  assert.ok(S.parseCsv((await S.writeShortlist()).csv)[0].includes('month'));
+  assert.equal(S.parseCsv((await S.exportBatch(r1.run.id)).csv).at(-1)!.at(-1), 'Month 1');
 });
 
 test('taste from a test round never feeds a real round; a test round learns from everything', async () => {
@@ -159,4 +159,17 @@ test('a test round\'s spend is real money: counted toward the cap, labelled with
   const rows = await S.getStore().listSpend();
   assert.equal(rows.at(-1)!.label, 'generate OWN_CALM-test · R0');
   assert.equal(await S.getStore().spendTotal(), 0.42);
+});
+
+test('rounds are shown as months (the client\'s "R1/R2" are review rounds): R1 = "Month 1", a test round "Test", or the admin\'s label; ids and _TEST unchanged', async () => {
+  await fresh();
+  assert.equal(Rounds.monthLabel({ id: 'R1' }), 'Month 1');
+  assert.equal(Rounds.monthLabel({ id: 'R12' }), 'Month 12');
+  assert.equal(Rounds.monthLabel({ id: 'R0', test: true }), 'Test');
+  let s = await Rounds.saveRound({ id: 'R2', name: 'October', label: 'Month 2 (Oct)' });
+  assert.equal(Rounds.labelOf(s, 'R2'), 'Month 2 (Oct)');
+  s = await Rounds.saveRound({ id: 'R2', name: 'October', label: '' });
+  assert.equal(Rounds.labelOf(s, 'R2'), 'Month 2', 'cleared: the default label');
+  assert.equal(Rounds.labelOf(s, 'R1'), 'Month 1');
+  assert.equal((await Rounds.getRounds()).rounds.find(r => r.id === 'R1')!.name, 'Month 1');
 });

@@ -97,8 +97,8 @@ export async function scenario() {
   const rows = S.parseCsv(pack.csv);
   assert.equal(rows.length, 3, 'header plus two codes');
   assert.ok(rows.every(r => r.length === rows[0].length), 'every row has the same columns');
-  assert.deepEqual(rows[0].slice(0, 6), ['Naming code', 'Region', 'Round', 'Visual', 'Version', 'Persona']);
-  assert.ok(rows.slice(1).every(r => r[2] === 'R1'), 'the round column (the active round, R1 by default)');
+  assert.deepEqual(rows[0].slice(0, 6), ['Naming code', 'Region', 'Month', 'Visual', 'Version', 'Persona']);
+  assert.ok(rows.slice(1).every(r => r[2] === 'Month 1'), 'the month column (the active round, R1 = Month 1 by default)');
   const col = (name: string) => { const i = rows[0].indexOf(name); assert.ok(i >= 0, `handoff has a ${name} column`); return i; };
   const [PRIMARY, HEAD, STATUS, NOTE, OVERRIDE, CHANGED] = ['Meta primary text', 'Meta headline', 'Compliance status', 'Compliance note', 'Red flag overridden', 'Changed since sign-off'].map(col);
   const a1 = rows.find(r => r[0] === 'OWN_CALM_UGC_A1_US_META')!, a2 = rows.find(r => r[0] === 'OWN_CALM_UGC_A2_US_META')!;

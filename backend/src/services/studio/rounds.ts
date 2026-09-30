@@ -14,12 +14,21 @@
 
 import { getStore } from './engine.js';
 
-export interface Round { id: string; name: string; from?: string; test?: boolean; created_by?: string; created_at?: string; /** When the round's assets are due (YYYY-MM-DD), shown on the round board. */ assets_due?: string }
+/**
+ * `label`: what people see ("Month 1", or "Test" for a test round). The client's schedule uses "R1/R2" for review
+ * rounds, so Studio's rounds are shown as months; the stored ids (R0, R1, R2…) and the _TEST suffix don't change.
+ */
+export interface Round { id: string; name: string; label?: string; from?: string; test?: boolean; created_by?: string; created_at?: string; /** When the round's assets are due (YYYY-MM-DD), shown on the round board. */ assets_due?: string }
 export interface RoundsState { active: string; rounds: Round[] }
 
 /** Content with no round stamp is round one. */
 export const DEFAULT_ROUND = 'R1';
-const DEFAULT_STATE: RoundsState = { active: DEFAULT_ROUND, rounds: [{ id: DEFAULT_ROUND, name: 'Round one', from: '2026-09-30' }] };
+const DEFAULT_STATE: RoundsState = { active: DEFAULT_ROUND, rounds: [{ id: DEFAULT_ROUND, name: 'Month 1', from: '2026-09-30' }] };
+/** A round as people see it: its label, else "Test" for a test round, else "Month N" from its id (R1 → Month 1). */
+export const monthLabel = (r: Pick<Round, 'id' | 'label' | 'test'> | undefined | null): string =>
+  (r?.label?.trim() || (r?.test ? 'Test' : r ? `Month ${Number(r.id.replace(/^R/i, '')) || r.id}` : ''));
+/** The label for a round id, from the rounds state (an id with no round: "Month N"). */
+export const labelOf = (state: RoundsState, id: string) => monthLabel(state.rounds.find(r => r.id === id) || { id });
 /** Test-round codes: never trafficked, never sharing a code with a real round. */
 export const TEST_SUFFIX = '_TEST';
 
@@ -61,8 +70,10 @@ export async function saveRound(input: Partial<Round> & { activate?: boolean }, 
   // The asset deadline: a date, or '' to clear it; left out, it stays as it was.
   const due = input.assets_due === undefined ? existing?.assets_due : String(input.assets_due || '').trim();
   if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due)) throw new Error('The asset deadline is a date (YYYY-MM-DD)');
+  const label = input.label === undefined ? existing?.label : String(input.label || '').trim().slice(0, 40);
   const round: Round = { ...(existing || {}), id, name, from: input.from ? String(input.from).slice(0, 10) : existing?.from || new Date().toISOString().slice(0, 10), test: !!input.test, created_by: existing?.created_by || user, created_at: existing?.created_at || new Date().toISOString() };
   if (due) round.assets_due = due; else delete round.assets_due;
+  if (label) round.label = label; else delete round.label;
   const next: RoundsState = { active: input.activate ? id : state.active, rounds: [...state.rounds.filter(r => r.id !== id), round].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true })) };
   await getStore().putInput('rounds', next);
   return next;
