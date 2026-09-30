@@ -37,6 +37,8 @@ export interface StudioRouterOptions {
   canSetCompliance?(req: Request): boolean;
   /** Who may override a red flag on copy at Ready for production (hosted: STUDIO_READY_EMAILS + admins, as in Pre-flight). Unset = anyone (local). */
   canOverride?(req: Request): boolean;
+  /** Who may sign lines off at Ready for production (hosted: STUDIO_READY_EMAILS + admins). Unset = anyone (local). */
+  canSignOff?(req: Request): boolean;
 }
 
 // Top-level keys every rules version needs (scripts/studio/rules.schema.json `required`).
@@ -56,8 +58,25 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   r.use(express.text({ type: ['text/csv', 'text/plain'], limit: '5mb' }));
 
   const wrap = (fn: (req: Request, res: Response) => any) => async (req: Request, res: Response) => {
-    try { await fn(req, res); } catch (err: any) { if (!res.headersSent) res.status(400).json({ error: String(err?.message || err) }); }
+    // An error that says what it is (402 budget, 403 not allowed, 409 someone else changed it) keeps its status.
+    try { await fn(req, res); } catch (err: any) { if (!res.headersSent) res.status([402, 403, 409, 503].includes(err?.status) ? err.status : 400).json({ error: String(err?.message || err), ...(err?.status === 409 ? { conflict: true } : {}) }); }
   };
+  /**
+   * Reserve a job's estimated cost against the cap before it starts, under a lock: two runs started together can't
+   * pass the cap between them (each used to check the total before either had spent). The reservation is a spend row
+   * that's removed when the job ends, by which time the job has recorded what it actually spent.
+   */
+  async function reserve(label: string, usd: number, api?: S.Api, user?: string): Promise<{ release: () => Promise<void> } | { error: string }> {
+    if (o.mock) return { release: async () => {} };
+    return S.getStore().withLock(['spend'], async () => {
+      const so = await spent();
+      if (so + usd > o.cap) return { error: `This would take spend past ${capText()} ($${so.toFixed(2)} spent or reserved by runs in progress).` };
+      const tag = `reserved: ${label} ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      await S.getStore().addSpend({ label: tag, usd: Math.round(usd * 10000) / 10000, at: new Date().toISOString(), user });
+      if (api) api.reserved = usd;   // its own reservation doesn't count against its mid-run check
+      return { release: () => S.getStore().deleteSpend(tag) };
+    });
+  }
   const spent = async () => (o.mock ? 0 : await S.getStore().spendTotal(o.capWindow === 'month' ? monthStart() : undefined));
   const capText = () => (o.capWindow === 'month' ? `this month's $${o.cap} Studio budget` : `the $${o.cap} cap`);
 
@@ -100,7 +119,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   r.get('/meta', wrap(async (req, res) => {
     const { studio_dir, ...m } = await S.meta();
     const pf = o.preflight ? { enabled: true, storage: o.preflight.service.storageStatus, engine: o.preflight.service.engineName, can_set_ready: o.preflight.canSetReady(req) } : { enabled: false };
-    res.json({ ...m, ...(o.rules ? {} : { studio_dir }), preflight: pf, can_set_compliance: o.canSetCompliance ? o.canSetCompliance(req) : true, can_override: o.canOverride ? o.canOverride(req) : true, spend: await spent(), mock: o.mock, cap: o.cap, cap_window: o.capWindow, ask_over: o.askOver, ...(o.metaExtra?.(req) || {}) });
+    res.json({ ...m, ...(o.rules ? {} : { studio_dir }), preflight: pf, can_set_compliance: o.canSetCompliance ? o.canSetCompliance(req) : true, can_override: o.canOverride ? o.canOverride(req) : true, can_sign_off: o.canSignOff ? o.canSignOff(req) : true, spend: await spent(), mock: o.mock, cap: o.cap, cap_window: o.capWindow, ask_over: o.askOver, ...(o.metaExtra?.(req) || {}) });
   }));
   r.post('/estimate', wrap(async (req, res) => {
     const b = S.makeBrief(req.body.brief || {});
@@ -118,14 +137,14 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     const b = S.makeBrief(raw);
     const ownOnly = !!req.body.own_only;
     const e = S.estimate(b, { ownOnly });
-    const so = await spent();
     if (!o.mock && e.usd > o.askOver && !req.body.confirm) return res.status(409).json({ needs_confirm: true, estimate: e.usd });
-    if (!o.mock && so + e.usd > o.cap) return res.status(402).json({ error: `This would take spend past ${capText()} ($${so.toFixed(2)} spent).` });
+    const api = o.api(req);
+    const held = await reserve(`generate ${b.territory}`, e.usd, api, o.who(req));
+    if ('error' in held) return res.status(402).json({ error: held.error });
     await S.saveBrief(b);
     // Continue an existing run, or start a new one.
     const id = req.body.batch ? String(req.body.batch) : await S.newBatchId(b.territory);
-    const api = o.api(req);
-    const job = startJob(`${id}~${Date.now()}`, emit => S.generate(b, api, emit, { batchId: id, ownOnly, user: o.who(req) }));
+    const job = startJob(`${id}~${Date.now()}`, emit => S.generate(b, api, emit, { batchId: id, ownOnly, user: o.who(req) }).finally(held.release));
     res.json({ batch: id, job, estimate: e.usd });
   }));
   r.post('/batches/:id/resume', wrap(async (req, res) => {
@@ -149,7 +168,11 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   r.get('/lines/:line/history', wrap(async (req, res) => res.json(await S.lineHistory(req.params.line))));
   r.post('/batches/:id/lines/:line/more', wrap(async (req, res) => {
     const api = o.api(req);
-    res.json({ job: startJob(`${req.params.id}~more~${Date.now()}`, emit => S.moreLikeThis(req.params.id, req.params.line, String(req.body?.note || ''), Number(req.body?.k || 3), api, emit)) });
+    const k = Number(req.body?.k || 3);
+    const run = await S.loadBatch(req.params.id);
+    const held = await reserve(`more ${req.params.line}`, S.estimate({ ...run.brief, n: k, own_lines: [] }).usd, api, o.who(req));
+    if ('error' in held) return res.status(402).json({ error: held.error });
+    res.json({ job: startJob(`${req.params.id}~more~${Date.now()}`, emit => S.moreLikeThis(req.params.id, req.params.line, String(req.body?.note || ''), k, api, emit).finally(held.release)) });
   }));
   r.get('/batches/:id/export.csv', wrap(async (req, res) => download(res, 'text/csv; charset=utf-8', `${req.params.id}.csv`, (await S.exportBatch(req.params.id)).csv)));
   r.get('/batches/:id/export.md', wrap(async (req, res) => download(res, 'text/markdown; charset=utf-8', `${req.params.id}.md`, (await S.exportBatch(req.params.id)).md)));
@@ -176,6 +199,8 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     res.json(await R.readyView(persona, territory, (region || 'US') as any, json(req.query.visuals) || {}, json(req.query.include)));
   }));
   r.post('/ready', wrap(async (req, res) => {
+    // Signing off is the creative lead's (or an admin's), like Ready to traffic; anyone on the Studio list can see it.
+    if (o.canSignOff && !o.canSignOff(req)) return res.status(403).json({ error: 'Lines are signed off by the creative lead or an admin' });
     try { res.json(await R.signOff(req.body || {}, o.who(req))); }
     catch (err: any) {
       if (err instanceof R.GateError) return res.status(409).json({ error: err.message, blocking: err.blocking });
@@ -219,12 +244,12 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     r.get('/preflight/uploads/:id/estimate', wrap(async (req, res) => res.json(await pf.estimate(req.params.id))));
     r.post('/preflight/uploads/:id/audit', wrap(async (req, res) => {
       const e = await pf.estimate(req.params.id);
-      const so = await spent();
       if (!o.mock && e.usd > o.askOver && !req.body?.confirm) return res.status(409).json({ needs_confirm: true, estimate: e.usd });
-      if (!o.mock && so + e.usd > o.cap) return res.status(402).json({ error: `This would take spend past ${capText()} ($${so.toFixed(2)} spent).` });
+      const held = await reserve(`preflight ${req.params.id}`, e.usd, undefined, o.who(req));
+      if ('error' in held) return res.status(402).json({ error: held.error });
       const auditId = await pf.createAudit(req.params.id, o.who(req));
       const who = o.who(req);
-      res.json({ audit: auditId, job: startJob(`preflight~${auditId}`, emit => pf.runAudit(auditId, emit, who)), estimate: e });
+      res.json({ audit: auditId, job: startJob(`preflight~${auditId}`, emit => pf.runAudit(auditId, emit, who).finally(held.release)), estimate: e });
     }));
     r.get('/preflight/stubs/:stub/report', wrap(async (req, res) => res.json(await pf.report(req.params.stub, o.who(req)))));
     r.get('/preflight/files/:upload/:position', wrap(async (req, res) => {

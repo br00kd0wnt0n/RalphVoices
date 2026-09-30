@@ -629,3 +629,172 @@ test('clearing a code that went through with an overridden red flag needs a note
   await pf.setAssetCompliance(up2.upload_id, { status: 'cleared', codes: [A1], client_by: 'J. Doe', note: 'Accepted the visual line as the approved campaign line' }, 'vivan');
   assert.equal((await pf.codeCompliance(A1, up2.upload_id)).note, 'Accepted the visual line as the approved campaign line');
 });
+
+// ---------- two people at once (two-user test, 30 Sep): items 1–5 ----------
+
+async function freshStudio() {
+  const tables = ['studio_asset_status', 'studio_audit_agreements', 'studio_audit_flags', 'studio_audits', 'studio_upload_files', 'studio_asset_uploads', 'studio_expectations', 'studio_line_versions', 'studio_signoffs', 'studio_edits', 'studio_line_embeddings', 'studio_lines', 'studio_batches', 'studio_taste', 'studio_spend'];
+  await (store as any).db.query(`TRUNCATE ${tables.join(', ')} RESTART IDENTITY CASCADE`);
+  const R = await import('../src/services/studio/ready.js');
+  const api = new S.Api({ mock: true });
+  return { R, api };
+}
+async function keptRun(R: any, api: S.Api, texts: string[], opts: { region?: 'US' | 'CA'; name?: string } = {}) {
+  const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: opts.name || `c-${Date.now()}`, region: opts.region, own_lines: texts.map(text => ({ text, field: 'meta_headline' })) }), api, () => {}, { ownOnly: true, user: 'nick' });
+  for (const l of run.lines) {
+    await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+    for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find((x: any) => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'Test line for concurrency', 'nick');
+  }
+  return run;
+}
+/** Every history entry's `before` is the previous entry's `after` (for entries that carry the same keys). */
+async function chained(lineId: string, key: string) {
+  const h = ((await (store as any).db.query(`SELECT before, after FROM studio_edits WHERE line_id = $1 ORDER BY id`, [lineId])).rows as any[]).filter(x => x.after && key in x.after && x.before && key in x.before);
+  let broken = 0;
+  for (let i = 1; i < h.length; i++) if (JSON.stringify(h[i].before) !== JSON.stringify(h[i - 1].after)) broken++;
+  return { entries: h.length, broken };
+}
+
+test('1. two people deciding on the same line: applied one after the other, history chains, nothing lost', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const run = await keptRun(R, api, ['Calm at the counter.', 'Home by nine.']);
+  const id = run.lines[0].id;
+  for (let k = 0; k < 20; k++) {
+    await Promise.all([
+      S.setDecision(run.id, id, { decision: 'edit', edited_text: `N${k}` }, 'nick'),
+      S.setDecision(run.id, id, { decision: 'cut', note: `B${k}` }, 'brook'),
+    ]);
+    const row = (await (store as any).db.query(`SELECT decision, decided_by, body FROM studio_lines WHERE id = $1`, [id])).rows[0];
+    const last = (await (store as any).db.query(`SELECT after, by_user FROM studio_edits WHERE line_id = $1 ORDER BY id DESC LIMIT 1`, [id])).rows[0];
+    assert.equal(row.decision, last.after.decision, `round ${k}: stored decision is the last one recorded`);
+    assert.equal(row.decided_by, last.by_user);
+    assert.equal(row.body.decided_by, row.decided_by, 'column and body agree');
+  }
+  const c = await chained(id, 'decision');
+  assert.equal(c.broken, 0, `history chains (${c.entries} entries)`);
+});
+
+test('1b. a compliance status and an edit on the same line at once: both kept', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const run = await keptRun(R, api, ['Calm at the counter.']);
+  const id = run.lines[0].id;
+  for (let k = 0; k < 20; k++) {
+    await Promise.all([
+      R.setCompliance(run.id, id, k % 2 ? 'cleared' : 'pending', `vivan ${k}`, 'vivan'),
+      S.setDecision(run.id, id, { decision: 'edit', edited_text: `Nick edit ${k}.` }, 'nick'),
+    ]);
+    const b = (await (store as any).db.query(`SELECT body FROM studio_lines WHERE id = $1`, [id])).rows[0].body;
+    assert.equal(b.edited_text, `Nick edit ${k}.`, `round ${k}: the edit is kept`);
+    assert.equal(b.compliance.note, `vivan ${k}`, `round ${k}: the status is kept`);
+  }
+});
+
+test('2. two people adding a line to one run at once: both lines kept, each with its own id and author', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const run = await keptRun(R, api, ['Calm at the counter.']);
+  const brief = (text: string) => S.makeBrief({ ...run.brief, own_lines: [{ text, field: 'meta_headline' }] });
+  for (let k = 0; k < 5; k++) {
+    await Promise.all([
+      S.generate(brief(`Nick's idea ${k}.`), api, () => {}, { batchId: run.id, ownOnly: true, user: 'nick' }),
+      S.generate(brief(`Brook's idea ${k}.`), api, () => {}, { batchId: run.id, ownOnly: true, user: 'brook' }),
+    ]);
+  }
+  const lines = (await S.loadBatch(run.id)).lines;
+  assert.equal(lines.length, 11, 'one own line, then ten added');
+  assert.equal(new Set(lines.map(l => l.id)).size, 11, 'ids are unique');
+  for (let k = 0; k < 5; k++) {
+    const n = lines.find(l => l.text === `Nick's idea ${k}.`)!, b = lines.find(l => l.text === `Brook's idea ${k}.`)!;
+    assert.ok(n && b, `round ${k}: both lines are there`);
+    assert.equal(n.added_by, 'nick'); assert.equal(b.added_by, 'brook');
+    assert.equal(n.status, 'checked'); assert.equal(b.status, 'checked');
+    const h = await S.lineHistory(b.id);
+    assert.deepEqual([h[0].by, (h[0].after as any).added], ['brook', true]);
+  }
+  assert.equal((await S.loadBatch(run.id)).brief.own_lines!.length, 11, 'the run keeps every line written on it');
+});
+
+test('3. a Shortlist cut racing a sign-off: a line is never both cut and signed off', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  for (let k = 0; k < 6; k++) {
+    const run = await keptRun(R, api, ['Calm at the counter.', 'Home by nine.', 'One less worry.'], { name: `race-${k}` });
+    const ids = run.lines.map(l => l.id);
+    const victim = ids[1 + (k % 2)];
+    const [so, cut] = await Promise.allSettled([
+      R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: ids, expectation: { line_ids: [ids[0]], reason: 'race' } }, 'nick'),
+      new Promise(r => setTimeout(r, k)).then(() => S.setDecision(run.id, victim, { decision: 'cut', source: 'shortlist' }, 'brook')),
+    ]);
+    const line = (await S.loadBatch(run.id)).lines.find(l => l.id === victim)!;
+    const signed = so.status === 'fulfilled' && so.value.signoff.lines.some((x: any) => x.line_id === victim);
+    assert.ok(!(line.decision === 'cut' && signed), `round ${k}: cut ${cut.status}, sign-off ${so.status}`);
+    assert.ok(so.status === 'fulfilled' || cut.status === 'fulfilled', 'one of them goes through');
+    if (cut.status === 'rejected') assert.match(String((cut as any).reason?.message), /Signed off at Ready/);
+    if (so.status === 'rejected') assert.match(String((so as any).reason?.message), /Not kept lines/);
+    // The next round's sign-off would supersede this one's lines; clear signoffs between rounds.
+    await (store as any).db.query(`TRUNCATE studio_expectations, studio_line_versions, studio_signoffs`);
+  }
+});
+
+test('4. racing sign-offs: one wins, the other gets a clear 409; one version count, no orphans, codes unique; US and CA both go through', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const run = await keptRun(R, api, ['Calm at the counter.', 'Home by nine.', 'One less worry.', 'Sunday calm.']);
+  const ids = run.lines.map(l => l.id);
+  const so = (who: string, set: string[]) => R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: set, expectation: { line_ids: [set[0]], reason: who }, expect_latest: null }, who);
+  const [a, b] = await Promise.allSettled([so('nick', ids.slice(0, 3)), so('brook', ids.slice(1, 4))]);
+  const ok = [a, b].filter(x => x.status === 'fulfilled'), no = [a, b].filter(x => x.status === 'rejected') as PromiseRejectedResult[];
+  assert.equal(ok.length, 1, 'one wins');
+  assert.equal(no[0].reason.status, 409);
+  assert.match(no[0].reason.message, /(nick|brook) just signed this set off \(v1/);
+  const db = (store as any).db;
+  assert.equal(Number((await db.query(`SELECT count(*) FROM studio_line_versions v WHERE v.signoff_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM studio_signoffs s WHERE s.id = v.signoff_id)`)).rows[0].count), 0, 'no orphan line versions');
+  assert.equal(Number((await db.query(`SELECT count(*) FROM (SELECT stub FROM studio_line_versions GROUP BY stub HAVING count(DISTINCT line_id) > 1) q`)).rows[0].count), 0, 'codes unique');
+
+  // US and CA of the same persona × territory at once: both go through, each with its own version number.
+  const ca = await keptRun(R, api, ['Calm, eh.', 'Colour me calm.'], { region: 'CA', name: 'ca' });
+  const us2 = ids.filter(x => !(ok[0] as any).value.signoff.lines.some((l: any) => l.line_id === x));
+  const [u, c] = await Promise.all([
+    R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region: 'US', line_ids: [...(ok[0] as any).value.signoff.lines.map((l: any) => l.line_id), ...us2], expectation: { line_ids: [ids[0]], reason: 'us' } }, 'nick'),
+    R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region: 'CA', line_ids: ca.lines.map(l => l.id), expectation: { line_ids: [ca.lines[0].id], reason: 'ca' } }, 'brook'),
+  ]);
+  assert.deepEqual([u.signoff.version, c.signoff.version].sort(), [2, 3]);
+
+  // A later set that leaves a line out: the line no longer shows as signed off, keeps its code, and can be cut again.
+  const shrink = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region: 'US', line_ids: [ids[0]], expectation: { line_ids: [ids[0]], reason: 'just one' } }, 'nick');
+  const left = (await S.loadBatch(run.id)).lines.find(l => l.id === ids[1])!;
+  assert.equal(left.ready!.superseded_by, shrink.signoff.id);
+  assert.equal((await S.shortlist()).find(r => r.id === ids[1])!.signed_off, '');
+  const code = left.ready!.stub;
+  assert.equal((await R.readyView('OWN', 'OWN_CALM', 'US')).lines.find((x: any) => x.line.id === ids[1])!.stub, code, 'it keeps its code');
+  await S.setDecision(run.id, ids[1], { decision: 'cut', source: 'shortlist' }, 'brook');
+});
+
+test('5. taste: people deciding on different lines at once never lose each other’s examples; each records who', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const run = await keptRun(R, api, ['One.', 'Two.', 'Three.', 'Four.', 'Five.', 'Six.']);
+  for (let k = 0; k < 10; k++) {
+    const dec = k % 2 ? 'keep' : 'cut';
+    await Promise.all(run.lines.map((l, j) => S.setDecision(run.id, l.id, { decision: dec as any, note: '' }, j % 2 ? 'brook' : 'nick')));
+    const t = new Map((await S.loadTaste()).map(x => [x.id, x]));
+    for (const [j, l] of run.lines.entries()) {
+      assert.equal(t.has(l.id), dec === 'keep', `round ${k}: ${l.id}`);
+      if (dec === 'keep') assert.equal(t.get(l.id)!.by, j % 2 ? 'brook' : 'nick');
+    }
+  }
+});
+
+test('8. an edit after sign-off: Ready and Compliance show it as needing review, not "cleared"', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const run = await keptRun(R, api, ['Calm at the counter.']);
+  const l = run.lines[0];
+  await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: [l.id], expectation: { line_ids: [l.id], reason: 'x' } }, 'nick');
+  await R.setCompliance(run.id, l.id, 'cleared', 'fine', 'vivan');
+  await S.setDecision(run.id, l.id, { decision: 'edit', edited_text: 'Calm at the counter, every time.' }, 'nick');
+  const v = (await R.readyView('OWN', 'OWN_CALM')).lines[0];
+  assert.equal(v.compliance.status, 'pending');
+  assert.match(v.compliance.note!, /Edited since/);
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
+  const c = await pf.codeCompliance(v.stub, null);
+  assert.equal(c.status, 'pending');
+  assert.equal(c.stale, 'Wording edited since sign-off');
+});

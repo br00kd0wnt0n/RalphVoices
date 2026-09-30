@@ -672,14 +672,16 @@ export class Preflight {
       if (c.upload_id && uploadId && c.upload_id !== uploadId) return { status: 'pending' as const, note: c.note, stale: 'Reviewed on an earlier upload', c };
       return { status: c.status, note: c.note, stale: undefined, c };
     });
-    const status: S.ComplianceStatus = each.some(e => e.status === 'changes_requested') ? 'changes_requested' : each.length && each.every(e => e.status === 'cleared') ? 'cleared' : 'pending';
     const latest = each.map(e => e.c).filter(Boolean).sort((a, b) => String(b!.at || '').localeCompare(String(a!.at || '')))[0];
-    // Edited since sign-off: the wording on the asset is no longer the wording that will run.
+    // Edited since sign-off: the wording on the asset is no longer the wording that will run, so an earlier "cleared"
+    // doesn't carry over (it shows as needing review until the new wording is signed off and reviewed).
     const edited = lines.some(({ signed, line }) => line && S.lineHash(line) !== signed.sha256);
+    const status: S.ComplianceStatus = edited ? 'pending' : each.some(e => e.status === 'changes_requested') ? 'changes_requested' : each.length && each.every(e => e.status === 'cleared') ? 'cleared' : 'pending';
+    const overrideDetails = lines.flatMap(({ signed }) => (signed.overrides || []).map(o => ({ label: (o.label || o.rule).replace(/\.$/, ''), reason: o.reason, by: o.by })));
     return {
       status, note: latest?.note, by: latest?.by, at: latest?.at, client_by: status === 'pending' ? undefined : latest?.client_by, send_back: status === 'changes_requested' ? latest?.send_back : undefined,
-      stale: each.find(e => e.stale)?.stale, on_asset: !!latest?.upload_id, recorded: each.some(e => !!e.c), wording_edited: edited,
-      overrides: lines.flatMap(({ signed }) => (signed.overrides || []).map(o => o.label || o.rule)),
+      stale: edited ? 'Wording edited since sign-off' : each.find(e => e.stale)?.stale, on_asset: !!latest?.upload_id, recorded: each.some(e => !!e.c), wording_edited: edited,
+      overrides: overrideDetails.map(o => o.label), override_details: overrideDetails,
     };
   }
 
@@ -702,13 +704,17 @@ export class Preflight {
 
   /** A new upload: reviews given with an earlier asset go back to pending (the history keeps them). */
   private async reopenCompliance(stub: string, uploadId: string, user?: string) {
-    for (const { line } of await this.codeLines(stub)) {
-      const c = line?.compliance;
-      if (!line || !c?.upload_id || c.upload_id === uploadId || c.status === 'pending') continue;
-      const before = { compliance: c };
-      line.compliance = { ...c, status: 'pending', note: `New upload after "${COMPLIANCE_WORDS[c.status]}"${c.note ? `: ${c.note}` : ''}`, upload_id: uploadId, send_back: undefined, at: new Date().toISOString(), by: user };
-      await S.getStore().saveLine(line.batch, line);
-      await S.getStore().recordEdit({ line_id: line.id, batch_id: line.batch, before, after: { compliance: line.compliance, reopened_by_upload: uploadId }, by: user || 'unknown', at: line.compliance.at! });
+    for (const { signed } of await this.codeLines(stub)) {
+      // Under the run's lock, on the line as it is now (never over someone's edit or another status).
+      await S.runLock(signed.batch_id, async () => {
+        const line = (await S.loadBatch(signed.batch_id)).lines.find(l => l.id === signed.line_id);
+        const c = line?.compliance;
+        if (!line || !c?.upload_id || c.upload_id === uploadId || c.status === 'pending') return;
+        const before = { compliance: c };
+        line.compliance = { ...c, status: 'pending', note: `New upload after "${COMPLIANCE_WORDS[c.status]}"${c.note ? `: ${c.note}` : ''}`, upload_id: uploadId, send_back: undefined, at: new Date().toISOString(), by: user };
+        await S.getStore().saveLine(line.batch, line);
+        await S.getStore().recordEdit({ line_id: line.id, batch_id: line.batch, before, after: { compliance: line.compliance, reopened_by_upload: uploadId }, by: user || 'unknown', at: line.compliance.at! });
+      });
     }
   }
 
@@ -803,5 +809,7 @@ export interface CodeCompliance {
   on_asset: boolean;
   /** Red flags on the copy that were overridden at Ready: Trupanion is asked to check these specifically. */
   overrides: string[];
+  /** The same, with the reason each was overridden and who by (for the Compliance step's "what Trupanion accepted"). */
+  override_details: Array<{ label: string; reason: string; by: string }>;
 }
 const COMPLIANCE_WORDS: Record<string, string> = { pending: 'Pending', cleared: 'Cleared', changes_requested: 'Changes requested' };

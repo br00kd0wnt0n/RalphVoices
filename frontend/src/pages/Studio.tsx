@@ -972,7 +972,8 @@ function LineCard({ meta, line, onChange, onMore }: { meta: Meta; line: Line; on
         <span>· Tone: {toneWords(line.tone, meta) || line.tone_label}</span>
         {line.parent && <Chip tone="outline">more like {line.parent.split('-').pop()}</Chip>}
         {checking && <span className="animate-pulse" style={{ color: PINK }}>flags still arriving…</span>}
-        {line.ready && <Chip tone="outline" className="border-emerald-500/60 text-emerald-300" title={`Signed off by ${line.ready.ready_by}, ${when(line.ready.ready_at)}`}>ready v{line.ready.version}{line.ready.changed_since ? ' · edited since' : ''}</Chip>}
+        {line.ready && !line.ready.superseded_by && <Chip tone="outline" className="border-emerald-500/60 text-emerald-300" title={`Signed off by ${line.ready.ready_by}, ${when(line.ready.ready_at)}`}>ready v{line.ready.version}{line.ready.changed_since ? ' · edited since' : ''}</Chip>}
+        {line.ready?.superseded_by && <Chip tone="grey" title="A later sign-off of its set left it out; it keeps its code if it goes back in">not in the latest set</Chip>}
       </div>
       {/* Who decided, on a line of its own with a fixed height: a decision never changes the card's size, so nothing below it moves. */}
       <div className="-mt-1 mb-1 flex h-5 items-center justify-end text-xs">
@@ -1362,17 +1363,20 @@ function Ready({ meta, batch, user, onNext }: { meta: Meta; batch: Batch | null;
   // Nothing to sign off if the set and every wording match the latest sign-off.
   const latest = view?.latest;
   const unchanged = !!latest && latest.lines.length === selected.length && selected.every(x => latest.lines.some(l => l.line_id === x.line.id && l.sha256 === x.sha256));
-  const blockedBy = unchanged ? `This set is signed off (v${latest!.version}). Edit a line or change the set to sign off again.` : !selected.length ? 'Choose at least one line.' : reds ? `${reds} red flag${reds === 1 ? '' : 's'} to fix or override first.` : !leads.length ? 'Pick the line(s) you expect to lead.' : !reason.trim() ? 'Say why you expect them to lead.' : '';
+  const canSignOff = meta.can_sign_off !== false;
+  const blockedBy = !canSignOff ? 'Lines are signed off by the creative lead or an admin.' : unchanged ? `This set is signed off (v${latest!.version}). Edit a line or change the set to sign off again.` : !selected.length ? 'Choose at least one line.' : reds ? `${reds} red flag${reds === 1 ? '' : 's'} to fix or override first.` : !leads.length ? 'Pick the line(s) you expect to lead.' : !reason.trim() ? 'Say why you expect them to lead.' : '';
 
   async function signOff() {
     if (!pt) return;
     setBusy(true); setError(''); setDone('');
     try {
-      const r = await studio.signOff({ persona: pt.persona, territory: pt.territory, region: pt.region, line_ids: selected.map(x => x.line.id), visuals, expectation: { line_ids: leads, reason } });
+      const r = await studio.signOff({ persona: pt.persona, territory: pt.territory, region: pt.region, line_ids: selected.map(x => x.line.id), visuals, expectation: { line_ids: leads, reason }, expect_latest: view?.latest?.id ?? null });
       setDone(`${r.signoff.lines.length} line${r.signoff.lines.length === 1 ? '' : 's'} marked Ready for production (set v${r.signoff.version}), with your expectations locked alongside.`);
       await load(true);
     } catch (e: any) {
       setError(e.body?.blocking ? `${e.message}: ${e.body.blocking.map((b: any) => b.line_id.split('-').pop()).join(', ')}` : e.message);
+      // Someone else signed this set off meanwhile: show what's there now (their set, and codes), keeping this selection.
+      if (e.status === 409 && e.body?.conflict) await load(true).catch(() => {});
     } finally { setBusy(false); }
   }
   const t = pt ? meta.territories[pt.territory] : null;
@@ -1504,8 +1508,9 @@ function ReadyCard({ meta, item, included, lead, onVisual, onInclude, onLead, on
         )}
         <span>{f?.label || line.field}</span>
         <span className={cn('font-mono', f && chars > f.visible ? 'font-bold text-amber-300' : '')}>{chars}/{f?.visible}</span>
-        {line.model === 'human' && <Chip tone="outline" className="border-[#D94D8F] text-[#D94D8F]">yours</Chip>}
-        {line.ready && <Chip tone="outline" className="border-emerald-500/60 text-emerald-300">ready v{line.ready.version} · {line.ready.ready_by}, {when(line.ready.ready_at)}</Chip>}
+        {line.model === 'human' && <Chip tone="outline" className="border-[#D94D8F] text-[#D94D8F]" title={line.added_by ? `Added by ${line.added_by}` : undefined}>{line.added_by ? `yours · ${line.added_by.split('@')[0]}` : 'yours'}</Chip>}
+        {line.ready && !line.ready.superseded_by && <Chip tone="outline" className="border-emerald-500/60 text-emerald-300">ready v{line.ready.version} · {line.ready.ready_by}, {when(line.ready.ready_at)}</Chip>}
+        {line.ready?.superseded_by && <Chip tone="grey" title={`Signed off in ${line.ready.signoff_id}; a later set (${line.ready.superseded_by}) left it out. It keeps its code if it goes back in.`}>not in the latest set</Chip>}
         {line.ready?.changed_since && <Chip tone="amber">edited since sign-off: v{Math.max(...versions.map(v => v.version), line.ready.version)} not yet signed off</Chip>}
         <button onClick={() => onLead(!lead)} disabled={!included} className={cn('ml-auto rounded-full border px-3 py-0.5 text-sm font-medium transition disabled:opacity-40', lead ? 'border-[#D94D8F] bg-[#D94D8F] text-white' : 'border-[#4A505D] text-[#C9CCD2] hover:border-[#D94D8F]')}>
           {lead ? '★ Expected to lead' : '☆ Expect to lead'}
@@ -2194,7 +2199,8 @@ function ComplianceAssetView({ meta, asset, can, onChanged, onError }: { meta: M
   // Clearing them needs a note saying what Trupanion accepted (the server refuses without it).
   const acceptedReds = [
     ...reds.filter(f => f.override && (!f.for_stub || apply.has(f.for_stub))).map(f => ({ key: f.id, label: f.label, where: `Pre-flight${f.for_stub ? `, ${f.for_stub}` : ''}`, reason: f.override!.reason })),
-    ...asset.codes.filter(c => apply.has(c.stub)).flatMap(c => c.compliance.overrides.map((o, i) => ({ key: `${c.stub}-${i}`, label: o, where: `copy, ${c.stub}`, reason: '' }))),
+    ...asset.codes.filter(c => apply.has(c.stub)).flatMap(c => (c.compliance.override_details || c.compliance.overrides.map(label => ({ label, reason: '', by: '' })))
+      .map((o, i) => ({ key: `${c.stub}-${i}`, label: o.label, where: `copy at Ready, ${c.stub}${o.by ? `, by ${o.by}` : ''}`, reason: o.reason }))),
   ];
   const needsNote = acceptedReds.length > 0 && !note.trim();
   async function set(status: ComplianceStatus) {
