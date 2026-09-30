@@ -34,6 +34,9 @@ export interface Line {
   ready?: ReadyMark;
   rechecked_at?: string;
 }
+/** Mirrors the backend's isEdited/finalText (engine.ts): a saved edit counts unless the line is cut, whatever button was pressed last. */
+export const isEdited = (l: Pick<Line, 'decision' | 'edited_text' | 'text'>) => !!l.edited_text && l.edited_text !== l.text && l.decision !== 'cut';
+export const finalText = (l: Pick<Line, 'decision' | 'edited_text' | 'text'>) => (isEdited(l) ? l.edited_text! : l.text);
 export interface OwnLine { text: string; field: string }
 export interface Brief {
   name?: string; persona: string; territory: string; region?: Region; fields: string[]; tone: Tone;

@@ -5,7 +5,7 @@
 // Ready for production, is creative sign-off, never "approval".
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { HOSTED, getUser, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type CompareSet, type Flag, type Line, type Meta, type OwnLine, type RunSummary, type ShortRow, type StudioEvent, type Territory, type Tone, type EditRecord, type LineVersion, type Reveal, type ComplianceStatus, type ReadyView, type RulesVersion, type ActiveRules, type RuleEntry, type PfStub, type PfReport, type PfFlag, type Region, REGION_NAMES, CANADA_NOTE } from '@/lib/studioApi';
+import { HOSTED, getUser, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type CompareSet, type Flag, type Line, type Meta, type OwnLine, type RunSummary, type ShortRow, type StudioEvent, type Territory, type Tone, type EditRecord, type LineVersion, type Reveal, type ComplianceStatus, type ReadyView, type RulesVersion, type ActiveRules, type RuleEntry, type PfStub, type PfReport, type PfFlag, type Region, REGION_NAMES, CANADA_NOTE, isEdited, finalText } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { ArrowLeft, HelpCircle, ScrollText, Shuffle } from 'lucide-react';
 
@@ -905,7 +905,9 @@ function LineCard({ meta, line, onChange, onMore }: { meta: Meta; line: Line; on
   const f = meta.fields[line.field];
   // Decisions wait for the checks: keeping a line before its flags arrive is how a red line got kept by accident.
   const checking = line.status !== 'checked';
-  const text = line.decision === 'edit' && line.edited_text ? line.edited_text : line.text;
+  const text = finalText(line);
+  const edited = isEdited(line);
+  const kept = line.decision === 'keep' || line.decision === 'edit';
   const chars = [...text].length;
   const over = f && chars > f.visible;
   const openFlag = line.flags.find(x => x.rule === open);
@@ -943,7 +945,13 @@ function LineCard({ meta, line, onChange, onMore }: { meta: Meta; line: Line; on
       ) : (
         <p className="text-[22px] leading-snug text-[#F2F3F5]">{text}</p>
       )}
-      {line.decision === 'edit' && line.edited_text && !editing && <p className="mt-1 text-base text-[#858B96] line-through">{line.text}</p>}
+      {edited && !editing && (
+        <div className="mt-1 flex flex-wrap items-baseline gap-3">
+          <p className="text-base text-[#858B96] line-through">{line.text}</p>
+          <button className="text-sm text-[#A3A8B1] underline-offset-2 hover:text-[#ECEDEF] hover:underline" disabled={checking} title="Go back to the original wording (the edit is kept in the history)"
+            onClick={() => decide({ edited_text: '', decision: kept ? 'keep' : line.decision })}>Revert to original</button>
+        </div>
+      )}
 
       {line.flags.length > 0 && (
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
@@ -978,9 +986,9 @@ function LineCard({ meta, line, onChange, onMore }: { meta: Meta; line: Line; on
       {history && <LineHistory line={line} />}
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <GhostButton active={line.decision === 'keep'} disabled={checking} title={checking ? 'Flags still arriving' : undefined} onClick={() => decide({ decision: line.decision === 'keep' ? '' : 'keep' })}>Keep</GhostButton>
+        <GhostButton active={kept} disabled={checking} title={checking ? 'Flags still arriving' : edited ? 'Keeps your edited wording (Cut or Revert to original to change that)' : undefined} onClick={() => decide({ decision: kept && !edited ? '' : 'keep' })}>{kept && edited ? 'Kept (edited)' : 'Keep'}</GhostButton>
         <GhostButton active={line.decision === 'cut'} disabled={checking} title={checking ? 'Flags still arriving' : undefined} onClick={() => decide({ decision: line.decision === 'cut' ? '' : 'cut' })}>Cut</GhostButton>
-        <GhostButton active={line.decision === 'edit'} disabled={checking} title={checking ? 'Flags still arriving' : undefined} onClick={() => { setDraft(line.edited_text || line.text); setEditing(true); }}>Edit</GhostButton>
+        <GhostButton active={edited} disabled={checking} title={checking ? 'Flags still arriving' : undefined} onClick={() => { setDraft(line.edited_text || line.text); setEditing(true); }}>Edit</GhostButton>
         <GhostButton onClick={() => onMore(line, note)} title="Writes three siblings, using the note as guidance">More like this</GhostButton>
         <input className="min-w-[12rem] flex-1 rounded-lg border-2 border-[#272B34] px-3 py-1.5 text-base bg-[#101216] text-[#ECEDEF] placeholder:text-[#646A75]" placeholder="Note (why; guides 'more like this')" value={note}
           onChange={e => setNote(e.target.value)} onBlur={() => note !== (line.note || '') && decide({ note })} />

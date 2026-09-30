@@ -130,8 +130,20 @@ export interface LineVersion { line_id: string; batch_id: string; version: numbe
   /** The naming code the line was signed off under (B3b joins live results on it). */
   stub?: string }
 export const sha256 = (s: string) => crypto.createHash('sha256').update(s, 'utf8').digest('hex');
+/**
+ * Has the line a saved edit that counts? Any saved wording that differs from
+ * the original, unless the line is cut. "Save edit" then "Keep" keeps the edit
+ * (Nick, 29 Sep: the shortlist showed the original); "Revert to original"
+ * clears edited_text. The one definition: everything else goes through finalText.
+ */
+export const isEdited = (l: Pick<Line, 'decision' | 'edited_text' | 'text'>) => !!l.edited_text && l.edited_text !== l.text && l.decision !== 'cut';
 /** The words that go to production: the edit when there is one. */
-export const finalText = (l: Pick<Line, 'decision' | 'edited_text' | 'text'>) => (l.decision === 'edit' && l.edited_text ? l.edited_text : l.text);
+export const finalText = (l: Pick<Line, 'decision' | 'edited_text' | 'text'>) => (isEdited(l) ? l.edited_text! : l.text);
+/** Keep on an edited line is recorded as edit, and edit with nothing changed as keep, so counts and history say what happened. */
+function settleDecision(l: Line) {
+  if (l.decision === 'keep' && isEdited(l)) l.decision = 'edit';
+  else if (l.decision === 'edit' && !isEdited(l)) l.decision = 'keep';
+}
 export const lineHash = (l: Pick<Line, 'field' | 'decision' | 'edited_text' | 'text'>) => sha256(`${l.field}\n${finalText(l)}`);
 export interface Batch {
   id: string;
@@ -1298,8 +1310,7 @@ export async function checkBatch(batch: Batch, api: Api, emit: Emit = () => {}, 
   // Deterministic first, for every line, so the grid fills with the hard flags at once.
   const embs: Record<string, number[]> = await getStore().getEmbeddings(batch.id);
   for (const l of lines) {
-    const text = l.decision === 'edit' && l.edited_text ? l.edited_text : l.text;
-    const det = deterministicFlags({ ...l, text }, r, b);
+    const det = deterministicFlags({ ...l, text: finalText(l) }, r, b);
     l.flags = det.flags;
     l.features = det.features;
     l.chars = [...l.text].length;
@@ -1439,7 +1450,7 @@ function markdownView(batch: Batch, r: Rules): string {
       const f = r.fields[l.field];
       const dec = l.decision ? ` · **${l.decision.toUpperCase()}**` : '';
       out.push('', `**${l.id.split('-').pop()}** · ${f?.label || l.field} · ${l.structure} · ${l.tone_label} · ${l.chars}/${f?.visible ?? '?'} chars${dec}`, '', `> ${l.text.replace(/\n/g, '\n> ')}`);
-      if (l.decision === 'edit' && l.edited_text) out.push('', `> *Edited:* ${l.edited_text}`);
+      if (isEdited(l)) out.push('', `> *Edited:* ${l.edited_text}`);
       if (l.features.length) out.push('', `Features: ${l.features.join(', ')}`);
       for (const fl of l.flags) out.push(`- ${fl.severity === 'compliance' ? '🟥' : fl.severity === 'warn' ? '🟧' : '⬜'} ${fl.rule}${fl.quote ? `: "${fl.quote}"` : ''}${fl.why ? ` (${fl.why})` : ''} *[${fl.source}]*`);
       if (l.objection) out.push('', `*Skeptic:* ${l.objection}`);
@@ -1500,7 +1511,7 @@ export async function ingest(csvText: string, user?: string): Promise<IngestResu
     line.decision = decision;
     line.edited_text = get(r, 'edited_text');
     line.note = get(r, 'note');
-    if (decision === 'edit' && !line.edited_text) line.decision = 'keep';
+    settleDecision(line);
     const after = { decision: line.decision || '', edited_text: line.edited_text || '', note: line.note || '' };
     if (JSON.stringify(before) !== JSON.stringify(after)) {
       line.decided_by = user || line.decided_by || 'sheet';
@@ -1523,7 +1534,7 @@ function applyTaste(store: Map<string, TasteExample>, l: Line) {
   if (d === 'keep' || d === 'edit' || (d === 'cut' && l.note)) {
     store.set(l.id, {
       id: l.id, persona: l.persona, territory: l.territory, field: l.field, angle: l.angle, structure: l.structure, tone_label: l.tone_label,
-      text: d === 'edit' ? l.edited_text! : l.text, original: d === 'edit' ? l.text : undefined, decision: d, note: l.note || '', batch: l.batch, at: new Date().toISOString(),
+      text: finalText(l), original: isEdited(l) ? l.text : undefined, decision: d, note: l.note || '', batch: l.batch, at: new Date().toISOString(),
     });
   } else store.delete(l.id);
 }
@@ -1538,15 +1549,21 @@ export async function setDecision(batchId: string, lineId: string, patch: { deci
   if (patch.decision !== undefined) l.decision = patch.decision;
   if (patch.edited_text !== undefined) l.edited_text = patch.edited_text;
   if (patch.note !== undefined) l.note = patch.note;
+  settleDecision(l);
   if (user) l.decided_by = user;
   l.decided_at = new Date().toISOString();
-  if (l.decision === 'edit' && l.edited_text) {
-    // Re-run the instant checks on the edited words.
+  const ORIGINAL = ' (on the original wording)';
+  if (patch.edited_text !== undefined) {
+    // Re-run the instant checks on the words that now count: the edit, or the original after "Revert to original".
     const r = loadRules();
-    const det = deterministicFlags({ ...l, text: l.edited_text }, r, batch.brief);
+    const det = deterministicFlags({ ...l, text: finalText(l) }, r, batch.brief);
     const modelFlags = l.flags.filter(f => !f.by.includes('rule') || f.rule === 'NEAR_DUP');
     l.flags = [...det.flags];
-    for (const f of modelFlags) addFlag(l.flags, { ...f, why: `${f.why || ''} (on the original wording)`.trim() });
+    const edited = isEdited(l);
+    for (const f of modelFlags) {
+      const why = (f.why || '').replace(ORIGINAL, '');
+      addFlag(l.flags, { ...f, why: edited ? `${why}${ORIGINAL}`.trim() : why || undefined });
+    }
     sortFlags(l);
   }
   const st = getStore();
@@ -1608,7 +1625,7 @@ export async function shortlist(): Promise<ShortRow[]> {
     const platform = r.fields[l.field]?.platform || 'META';
     return {
       stub: l.ready?.stub || book.assign(codeInput(l)), id: l.id, persona: l.persona, territory: l.territory, region: regionOf(l), field: l.field,
-      platform, format: t?.format || '', text: l.decision === 'edit' && l.edited_text ? l.edited_text : l.text,
+      platform, format: t?.format || '', text: finalText(l),
       angle: `${l.angle} ${l.angle_label}`, structure: l.structure, tone: l.tone_label, features: l.features.join('; '),
       flags: l.flags.map(flagText).join(' | '), note: l.note || '',
       compliance_flags: l.flags.filter(f => f.severity === 'compliance').map(f => f.rule),
