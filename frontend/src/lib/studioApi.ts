@@ -23,15 +23,18 @@ export type Region = 'US' | 'CA';
 export const REGION_NAMES: Record<Region, string> = { US: 'US', CA: 'Canada' };
 /** Shown on Write & brief and in "Who this is" when Canada is chosen. */
 export const CANADA_NOTE = 'These personas are built on US research; check that they hold for Canadian audiences.';
-export interface ReadyMark { signoff_id: string; version: number; sha256: string; ready_by: string; ready_at: string; stub: string; changed_since?: boolean }
+/** superseded_by: a later sign-off of its set left it out (it keeps its code). */
+export interface ReadyMark { signoff_id: string; version: number; sha256: string; ready_by: string; ready_at: string; stub: string; changed_since?: boolean; superseded_by?: string }
 export interface Line {
   id: string; batch: string; persona: string; territory: string; region?: Region; field: string; text: string; chars: number;
   angle: string; angle_label: string; structure: string; tone: Tone; tone_label: string; features: string[]; flags: Flag[];
   objection?: string; status: 'generated' | 'checking' | 'checked'; model: string; parent?: string;
   decision?: '' | 'keep' | 'cut' | 'edit'; edited_text?: string; note?: string; decided_by?: string; decided_at?: string;
   overrides?: Override[];
-  compliance?: { status: ComplianceStatus; note?: string; by?: string; at?: string; sha256?: string; upload_id?: string; code?: string; send_back?: 'copy' | 'asset' };
+  compliance?: { status: ComplianceStatus; note?: string; by?: string; at?: string; sha256?: string; upload_id?: string; code?: string; send_back?: 'copy' | 'asset'; client_by?: string };
   ready?: ReadyMark;
+  /** Who added a person's line (Write & brief, or Add a line in Review). */
+  added_by?: string;
   rechecked_at?: string;
 }
 /** Mirrors the backend's isEdited/finalText (engine.ts): a saved edit counts unless the line is cut, whatever button was pressed last. */
@@ -73,6 +76,8 @@ export interface Meta {
   what_to_do?: Record<string, string>;
   can_set_compliance?: boolean;
   can_override?: boolean;
+  /** May this person sign lines off at Ready for production (the creative lead or an admin). */
+  can_sign_off?: boolean;
   territories: Record<string, Territory>;
   formats: string[];
   /** Where ads can run, and the naming code's pattern (from the backend's one definition). */
@@ -119,6 +124,8 @@ export interface PfStub {
   /** Codes on the same visual share it (null for an earlier v# code): suggested as one upload. */
   visual_key: string | null;
   upload: PfUpload | null;
+  /** Ready to traffic = Pre-flight passed AND compliance cleared (status is only the Pre-flight part). */
+  traffic: Traffic;
   audit: { id: string; status: string; usd: number; red: number; amber: number; grey: number; open_red: number; finished_at: string | null; error: string | null; stale?: string | null } | null;
   status: PfStatus;
 }
@@ -141,17 +148,22 @@ export interface PfReport {
       report?: { copy_match?: Array<{ field: string; signed_off: string; found: string; similarity: number; status: string }>; tagged_features?: string[]; set_aside?: Array<{ rule: string; quote?: string; why: string }> } } };
   flags: PfFlag[]; status: PfStatus;
   compliance?: CodeCompliance;
+  traffic?: Traffic;
 }
+export interface Traffic { ready: boolean; preflight: 'passed' | 'open'; compliance: ComplianceStatus; words: string; blocker?: string; legacy?: boolean }
 /** A code's compliance status on its current asset (Compliance step, after Pre-flight). */
 export interface CodeCompliance {
-  status: ComplianceStatus; note?: string; by?: string; at?: string; send_back?: 'copy' | 'asset';
+  status: ComplianceStatus; note?: string; at?: string; send_back?: 'copy' | 'asset';
+  /** by: who recorded it in Studio (the producer); client_by: who at Trupanion made the decision. */
+  by?: string; client_by?: string; recorded?: boolean; wording_edited?: boolean;
   stale?: string; on_asset: boolean; overrides: string[];
+  override_details?: Array<{ label: string; reason: string; by: string }>;
 }
 export interface ComplianceAsset {
   upload_id: string; persona: string; territory: string; region: Region; upload: PfUpload;
   audit: { id: string; status: string; finished_at: string | null; stale?: string | null } | null;
   flags: Array<{ id: string; rule: string; severity: 'red' | 'amber' | 'grey'; for_stub: string | null; label: string; quote?: string; why?: string; where?: string; source?: string; cross_persona: boolean; override: { reason: string; by: string; at: string } | null }>;
-  codes: Array<{ stub: string; copy: SignedCopy[]; ready: PfStatus; compliance: CodeCompliance }>;
+  codes: Array<{ stub: string; copy: SignedCopy[]; ready: PfStatus; traffic: Traffic; compliance: CodeCompliance }>;
   status: ComplianceStatus;
 }
 export interface ComplianceView { assets: ComplianceAsset[]; waiting: Array<{ stub: string; persona: string; territory: string; region: Region; copy: SignedCopy[] }> }
@@ -273,7 +285,8 @@ export const studio = {
   /** visuals: line id → letter, to preview codes; include: the lines in the set (they get codes first, as at sign-off). */
   ready: (persona: string, territory: string, region: Region = 'US', visuals: Record<string, string> = {}, include?: string[]) =>
     req<ReadyView>(`/ready${qs({ persona, territory, region, visuals: Object.keys(visuals).length ? JSON.stringify(visuals) : undefined, include: include ? JSON.stringify(include) : undefined })}`),
-  signOff: (body: { persona: string; territory: string; region: Region; line_ids: string[]; visuals: Record<string, string>; expectation: { line_ids: string[]; reason: string } }) =>
+  /** expect_latest: the latest sign-off the screen showed (null for none); a different one now is a 409 ("X just signed this off"). */
+  signOff: (body: { persona: string; territory: string; region: Region; line_ids: string[]; visuals: Record<string, string>; expectation: { line_ids: string[]; reason: string }; expect_latest: string | null }) =>
     req<{ signoff: Signoff; expectation: Expectation }>('/ready', { method: 'POST', body: JSON.stringify(body) }),
   override: (batch: string, line: string, rule: string, reason: string) =>
     req<Line>(`${lineUrl(batch, line)}/override`, { method: 'POST', body: JSON.stringify({ rule, reason }) }),
@@ -293,7 +306,7 @@ export const studio = {
   },
   pfAudit: (uploadId: string, confirm = false) => req<{ audit: string; job: string; estimate: { usd: number; seconds: number } }>(`/preflight/uploads/${enc(uploadId)}/audit`, { method: 'POST', body: JSON.stringify({ confirm }) }),
   complianceView: () => req<ComplianceView>('/compliance'),
-  setAssetCompliance: (upload: string, body: { status: ComplianceStatus; note?: string; send_back?: 'copy' | 'asset' }) =>
+  setAssetCompliance: (upload: string, body: { status: ComplianceStatus; note?: string; send_back?: 'copy' | 'asset'; codes?: string[]; client_by?: string }) =>
     req<{ upload_id: string; codes: string[]; status: ComplianceStatus }>(`/compliance/assets/${enc(upload)}`, { method: 'POST', body: JSON.stringify(body) }),
   pfReport: (stub: string) => req<PfReport>(`/preflight/stubs/${enc(stub)}/report`),
   pfFile: (uploadId: string, position: number) => `/preflight/files/${enc(uploadId)}/${position}`,

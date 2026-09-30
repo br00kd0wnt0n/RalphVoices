@@ -2,6 +2,7 @@
 // FileStore is the B1-lite folder layout (local, CLI, tests); PgStore
 // (pgStore.ts) is the database used by the hosted Studio.
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -9,9 +10,50 @@ export interface SpendEntry { label: string; usd: number; by_stage?: Record<stri
 export interface Asset { contentType: string; data: Buffer; filename?: string }
 export type InputKey = 'personas' | 'voices' | 'rubric';
 export interface EditRecord { line_id: string; batch_id: string; before: unknown; after: unknown; by: string; at: string }
+/** saveBatch: `lineIds` writes only those lines (a job saving the lines it made or checked); the header always. */
+export interface SaveBatchOptions { lineIds?: string[] }
+
+/**
+ * A run header saved from an older copy keeps what others added meanwhile: the creative director's lines on the
+ * brief (by text) and the dropped near-duplicates are merged, not replaced.
+ */
+export function mergeBatchHeader(cur: { brief: any; dropped: any[] }, next: { brief: any; dropped?: any[] }) {
+  const own = [...(cur.brief?.own_lines || [])];
+  for (const o of next.brief?.own_lines || []) if (!own.some(x => x.text === o.text)) own.push(o);
+  const dropped = [...(cur.dropped || [])];
+  for (const d of next.dropped || []) if (!dropped.some(x => x.text === d.text && x.cell === d.cell)) dropped.push(d);
+  return { brief: { ...next.brief, own_lines: own }, dropped };
+}
+
+/** In-process keyed lock (FileStore: one process, local). Re-entrant within one async call chain. */
+class KeyedLock {
+  private tails = new Map<string, Promise<void>>();
+  private held = new AsyncLocalStorage<Set<string>>();
+  async run<T>(keys: string[], fn: () => Promise<T>): Promise<T> {
+    const have = this.held.getStore() || new Set<string>();
+    const need = [...new Set(keys)].sort().filter(k => !have.has(k));
+    if (!need.length) return fn();
+    const releases: Array<() => void> = [];
+    for (const k of need) {
+      const prev = this.tails.get(k) || Promise.resolve();
+      let release!: () => void;
+      const mine = new Promise<void>(r => { release = r; });
+      const tail = prev.then(() => mine);
+      this.tails.set(k, tail);
+      await prev;
+      releases.push(() => { release(); if (this.tails.get(k) === tail) this.tails.delete(k); });
+    }
+    try { return await this.held.run(new Set([...have, ...need]), fn); } finally { releases.reverse().forEach(r => r()); }
+  }
+}
 
 export interface StudioStore {
   readonly kind: 'file' | 'pg';
+  /**
+   * Run fn holding locks on the keys (run:<id>, signoff:<persona>|<territory>, spend): changes to the same run are
+   * made one at a time, each on fresh data. PgStore: advisory locks, and one transaction for fn's store calls.
+   */
+  withLock<T>(keys: string[], fn: () => Promise<T>): Promise<T>;
   /** The active rules body (the studio-rules.json shape). */
   getRules(): Promise<any>;
   /** Territory edits layered over the rules' pitch territories. */
@@ -25,8 +67,8 @@ export interface StudioStore {
 
   batchExists(id: string): Promise<boolean>;
   getBatch(id: string): Promise<any>;
-  /** Writes the batch and all its lines. */
-  saveBatch(batch: any): Promise<void>;
+  /** Writes the run header (merged, see mergeBatchHeader) and its lines, or only `lineIds`. Never removes a line. */
+  saveBatch(batch: any, opts?: SaveBatchOptions): Promise<void>;
   /** Writes one line only (a decision), so two people deciding on different lines don't overwrite each other. */
   saveLine(batchId: string, line: any): Promise<void>;
   listBatchIds(): Promise<string[]>;
@@ -37,7 +79,11 @@ export interface StudioStore {
   listEdits(lineId: string): Promise<EditRecord[]>;
 
   getTaste(): Promise<any[]>;
+  /** Replaces the whole set (the import tool only). */
   saveTaste(examples: any[]): Promise<void>;
+  /** One line's taste example: added or replaced, or removed. What decisions use. */
+  putTaste(example: any): Promise<void>;
+  deleteTaste(lineId: string): Promise<void>;
 
   getCompare(name: string): Promise<any>;
   saveCompare(set: any): Promise<void>;
@@ -49,6 +95,8 @@ export interface StudioStore {
   spendTotal(since?: string): Promise<number>;
   listSpend(): Promise<SpendEntry[]>;
   addSpend(entry: SpendEntry): Promise<void>;
+  /** Removes spend rows by label (a run's reservation, settled when it ends). */
+  deleteSpend(label: string): Promise<void>;
 
   /** Ready for production: sign-offs, line versions and expectations records. Append-only. */
   saveSignoff(s: any): Promise<void>;
@@ -75,6 +123,8 @@ export class FileStore implements StudioStore {
   readonly kind = 'file' as const;
   constructor(public dir: string, private opts: { rulesPath?: string; inputsDir?: string; assets?: Record<string, { path: string; contentType: string }> } = {}) {}
   private P(...parts: string[]) { return path.join(this.dir, ...parts); }
+  private lock = new KeyedLock();
+  withLock<T>(keys: string[], fn: () => Promise<T>): Promise<T> { return this.lock.run(keys, fn); }
 
   async getRules() {
     const p = this.opts.rulesPath || this.P('studio-rules.json');
@@ -109,12 +159,21 @@ export class FileStore implements StudioStore {
     if (!fs.existsSync(this.batchPath(id))) throw new Error(`No run ${id}`);
     return readJson(this.batchPath(id));
   }
-  async saveBatch(b: any) { writeJson(this.batchPath(b.id), b); }
+  async saveBatch(b: any, opts: SaveBatchOptions = {}) {
+    if (!fs.existsSync(this.batchPath(b.id))) { writeJson(this.batchPath(b.id), b); return; }
+    // Merge into what's on disk: never drop a line someone else added, and write only the lines asked for.
+    const cur = readJson(this.batchPath(b.id));
+    const only = opts.lineIds ? new Set(opts.lineIds) : null;
+    const mine = new Map<string, any>(b.lines.filter((l: any) => !only || only.has(l.id)).map((l: any) => [l.id, l]));
+    const lines = cur.lines.map((l: any) => mine.get(l.id) ?? l);
+    for (const [id, l] of mine) if (!cur.lines.some((x: any) => x.id === id)) lines.push(l);
+    writeJson(this.batchPath(b.id), { ...b, ...mergeBatchHeader(cur, b), lines });
+  }
   async saveLine(batchId: string, line: any) {
     const b = await this.getBatch(batchId);
     b.lines = b.lines.map((l: any) => (l.id === line.id ? line : l));
     b.updated = new Date().toISOString();
-    await this.saveBatch(b);
+    writeJson(this.batchPath(batchId), b);
   }
   async listBatchIds() {
     const d = this.P('batches');
@@ -132,6 +191,8 @@ export class FileStore implements StudioStore {
 
   async getTaste() { const p = this.P('taste.json'); return fs.existsSync(p) ? readJson(p).examples || [] : []; }
   async saveTaste(ex: any[]) { writeJson(this.P('taste.json'), { _note: 'Kept, edited and cut-with-note lines from the creative director; used as few-shot taste examples by generate.', examples: ex }); }
+  async putTaste(x: any) { await this.lock.run(['taste'], async () => { const all = await this.getTaste(); await this.saveTaste([...all.filter((e: any) => e.id !== x.id), x]); }); }
+  async deleteTaste(id: string) { await this.lock.run(['taste'], async () => { const all = await this.getTaste(); await this.saveTaste(all.filter((e: any) => e.id !== id)); }); }
 
   async getCompare(name: string) { return readJson(this.P('compare', name, 'set.json')); }
   async saveCompare(s: any) { writeJson(this.P('compare', s.name, 'set.json'), s); }
@@ -148,6 +209,12 @@ export class FileStore implements StudioStore {
     return (this.spendFile().runs as SpendEntry[]).filter(r => (r.at || '') >= since).reduce((t, r) => t + (r.usd || 0), 0);
   }
   async listSpend() { return this.spendFile().runs as SpendEntry[]; }
+  async deleteSpend(label: string) {
+    const s = this.spendFile();
+    s.runs = s.runs.filter((r: any) => r.label !== label);
+    s.total_usd = Math.round(s.runs.reduce((t: number, r: any) => t + (r.usd || 0), 0) * 10000) / 10000;
+    writeJson(this.P('spend.json'), s);
+  }
   async addSpend(e: SpendEntry) {
     const s = this.spendFile();
     s.runs.push(e);

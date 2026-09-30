@@ -16,10 +16,14 @@
 
 import {
   type Api, type Batch, type ComplianceStatus, type Flag, type Line, type LineVersion,
-  checkBatch, codeInput, finalText, getStore, keptLines, lineHash, loadBatch, loadRules, sha256, signedCodes, toCsv,
+  checkBatch, codeInput, finalText, getStore, keptLines, lineHash, loadBatch, loadRules, runLock, sha256, signedCodes, toCsv,
 } from './engine.js';
 import { CodeBook, regionOf, visualLetter } from './codes.js';
 import { DEFAULT_REGION, REGION_NAMES, parseCode, type Region } from '../../utils/namingCode.js';
+
+/** Someone else changed what this request was based on (e.g. signed the same set off first): reload and try again. */
+export class ConflictError extends Error { status = 409; }
+const runOf = (lineId: string) => lineId.replace(/-L\d+$/, '');
 
 export class GateError extends Error {
   constructor(message: string, public blocking: Array<{ line_id: string; text: string; flags: Flag[] }>) { super(message); }
@@ -81,27 +85,32 @@ async function write(batchId: string, l: Line, before: unknown, after: unknown, 
 export async function overrideFlag(batchId: string, lineId: string, rule: string, reason: string, user?: string): Promise<Line> {
   const why = String(reason || '').trim();
   if (why.length < 5) throw new Error('An override needs a written reason');
-  const { line } = await lineAt(batchId, lineId);
-  const flag = line.flags.find(f => f.rule === rule && f.severity === 'compliance');
-  if (!flag) throw new Error(`${rule} isn't a red flag on this line`);
-  const before = { overrides: line.overrides || [] };
-  line.overrides = [...(line.overrides || []).filter(o => o.rule !== rule), { rule, label: flag.label, reason: why, by: user || 'unknown', at: new Date().toISOString() }];
-  return write(batchId, line, before, { overrides: line.overrides }, user);
+  return runLock(batchId, async () => {
+    const { line } = await lineAt(batchId, lineId);
+    const flag = line.flags.find(f => f.rule === rule && f.severity === 'compliance');
+    if (!flag) throw new Error(`${rule} isn't a red flag on this line`);
+    const before = { overrides: line.overrides || [] };
+    line.overrides = [...(line.overrides || []).filter(o => o.rule !== rule), { rule, label: flag.label, reason: why, by: user || 'unknown', at: new Date().toISOString() }];
+    return write(batchId, line, before, { overrides: line.overrides }, user);
+  });
 }
 
 /** Compliance review status for a line. Anyone on the Studio list can set it; it never blocks sign-off. */
-export async function setCompliance(batchId: string, lineId: string, status: string, note: string | undefined, user?: string, asset?: { upload_id: string; code: string; sha256: string; send_back?: 'copy' | 'asset' }): Promise<Line> {
+export async function setCompliance(batchId: string, lineId: string, status: string, note: string | undefined, user?: string, asset?: { upload_id: string; code: string; sha256: string; send_back?: 'copy' | 'asset'; client_by?: string }): Promise<Line> {
   if (!COMPLIANCE.includes(status as ComplianceStatus)) throw new Error(`Compliance status must be one of ${COMPLIANCE.join(', ')}`);
-  const { line } = await lineAt(batchId, lineId);
-  // A line that went through with an overridden red flag can only be cleared with a note saying who cleared it.
-  if (status === 'cleared' && line.overrides?.length && !String(note || '').trim()) {
-    throw new Error('This line has an overridden red flag: add a note to clear it (e.g. who at Trupanion cleared it)');
-  }
-  const before = { compliance: line.compliance || { status: 'pending' } };
-  // At the Compliance step the review is of the signed-off wording on a given asset; from Ready (older), of the current wording.
-  line.compliance = { status: status as ComplianceStatus, note: note ? String(note) : undefined, by: user, at: new Date().toISOString(), sha256: asset?.sha256 || lineHash(line),
-    ...(asset ? { upload_id: asset.upload_id, code: asset.code, send_back: status === 'changes_requested' ? asset.send_back : undefined } : {}) };
-  return write(batchId, line, before, { compliance: line.compliance }, user);
+  // Under the run's lock, on the line as it is now: a status never overwrites someone's edit, or the other way round.
+  return runLock(batchId, async () => {
+    const { line } = await lineAt(batchId, lineId);
+    // A line that went through with an overridden red flag can only be cleared with a note saying who cleared it.
+    if (status === 'cleared' && line.overrides?.length && !String(note || '').trim()) {
+      throw new Error('This line has an overridden red flag: add a note to clear it (e.g. who at Trupanion cleared it)');
+    }
+    const before = { compliance: line.compliance || { status: 'pending' } };
+    // At the Compliance step the review is of the signed-off wording on a given asset; from Ready (older), of the current wording.
+    line.compliance = { status: status as ComplianceStatus, note: note ? String(note) : undefined, by: user, at: new Date().toISOString(), sha256: asset?.sha256 || lineHash(line),
+      ...(asset ? { upload_id: asset.upload_id, code: asset.code, send_back: status === 'changes_requested' ? asset.send_back : undefined, client_by: asset.client_by } : {}) };
+    return write(batchId, line, before, { compliance: line.compliance }, user);
+  });
 }
 
 /**
@@ -119,12 +128,17 @@ export async function recheckLine(batchId: string, lineId: string, api: Api, use
   await checkBatch(scratch, api);
   await api.commit(`recheck ${lineId}`, user);
   const checked = scratch.lines[0];
-  const before = { flags: line.flags.map(f => f.rule) };
-  line.flags = checked.flags;
-  line.objection = checked.objection;
-  line.probes = checked.probes;
-  line.rechecked_at = new Date().toISOString();
-  return write(batchId, line, before, { flags: line.flags.map(f => f.rule), rechecked: true }, user);
+  // The checks ran without the lock (they take a while); they're applied under it, only if the wording is still what was checked.
+  return runLock(batchId, async () => {
+    const { line: now } = await lineAt(batchId, lineId);
+    if (finalText(now) !== finalText(line)) throw new ConflictError('The wording changed while it was being re-checked: re-check it again');
+    const before = { flags: now.flags.map(f => f.rule) };
+    now.flags = checked.flags;
+    now.objection = checked.objection;
+    now.probes = checked.probes;
+    now.rechecked_at = new Date().toISOString();
+    return write(batchId, now, before, { flags: now.flags.map(f => f.rule), rechecked: true }, user);
+  });
 }
 
 /**
@@ -151,7 +165,10 @@ export async function readyView(persona: string, territory: string, region: Regi
       // The naming code it was signed off under, or the one it would get if signed off now.
       stub, visual: visualOf(stub), fixed: !!l.ready?.stub,
       red: unresolvedRed(l),
-      compliance: l.compliance || { status: 'pending' as const },
+      // A status given on another wording (edited since it was reviewed) doesn't carry over: it shows as needing review.
+      compliance: l.compliance && l.compliance.status !== 'pending' && l.compliance.sha256 && l.compliance.sha256 !== lineHash(l)
+        ? { ...l.compliance, status: 'pending' as const, note: `Edited since Trupanion’s “${l.compliance.status === 'cleared' ? 'cleared' : 'changes requested'}”: the new wording needs their review` }
+        : l.compliance || { status: 'pending' as const },
       versions: (await st.listLineVersions(l.id)) as LineVersion[],
     });
   }
@@ -182,8 +199,7 @@ async function assignCodes(lines: Line[], visuals: Record<string, string>, inclu
  * Sign off a set of kept lines as Ready for production, with the expectations
  * record. Throws GateError (listing the lines) while any red flag is unresolved.
  */
-export async function signOff(input: { persona: string; territory: string; region?: string; line_ids: string[]; visuals?: Record<string, string>; expectation: { line_ids: string[]; reason: string } }, user?: string): Promise<{ signoff: Signoff; expectation: Expectation }> {
-  const by = user || 'unknown';
+export async function signOff(input: { persona: string; territory: string; region?: string; line_ids: string[]; visuals?: Record<string, string>; expectation: { line_ids: string[]; reason: string }; expect_latest?: string | null }, user?: string): Promise<{ signoff: Signoff; expectation: Expectation }> {
   const { persona, territory } = input;
   const region = String(input.region || DEFAULT_REGION).toUpperCase() as Region;
   if (!REGION_NAMES[region]) throw new Error(`Region must be ${Object.keys(REGION_NAMES).join(' or ')}`);
@@ -191,7 +207,25 @@ export async function signOff(input: { persona: string; territory: string; regio
   if (!ids.length) throw new Error('Choose at least one line to sign off');
   const visuals = input.visuals || {};
   for (const v of Object.values(visuals)) visualLetter(v);
-  const view = await readyView(persona, territory, region, visuals, ids);
+  // One sign-off at a time per persona × territory (both regions share its version count), holding the runs of the
+  // lines being signed off, so a line can't be cut or edited half way through. It all commits together, or not at all.
+  const locks = [`signoff:${persona}|${territory}`, ...new Set(ids.map(x => `run:${runOf(x)}`))];
+  return getStore().withLock(locks, async () => {
+    const view = await readyView(persona, territory, region, visuals, ids);
+    // Someone else signed this set off since the screen was loaded: say so, rather than quietly making another version.
+    if ('expect_latest' in input && (input.expect_latest || null) !== (view.latest?.id || null)) {
+      const l = view.latest;
+      throw new ConflictError(l ? `${l.ready_by} just signed this set off (v${l.version}, ${l.ready_at.slice(11, 16)} UTC): reload to see it, then sign off again if you still need to` : 'The sign-offs for this set changed: reload and try again');
+    }
+    // Lines in the previous set that this one leaves out are marked (their runs are locked too).
+    const dropped = (view.latest?.lines || []).filter(x => !ids.includes(x.line_id));
+    return getStore().withLock(dropped.map(x => `run:${x.batch_id}`), () => signOffLocked(input, user, region, ids, view, dropped));
+  });
+}
+
+async function signOffLocked(input: { persona: string; territory: string; expectation: { line_ids: string[]; reason: string } }, user: string | undefined, region: Region, ids: string[], view: Awaited<ReturnType<typeof readyView>>, dropped: Signoff['lines']): Promise<{ signoff: Signoff; expectation: Expectation }> {
+  const by = user || 'unknown';
+  const { persona, territory } = input;
   const byId = new Map(view.lines.map(x => [x.line.id, x]));
   const missing = ids.filter(id => !byId.has(id));
   if (missing.length) throw new Error(`Not kept lines for ${persona} × ${territory}${region === DEFAULT_REGION ? '' : ` (${REGION_NAMES[region]})`}: ${missing.join(', ')}`);
@@ -240,6 +274,14 @@ export async function signOff(input: { persona: string; territory: string; regio
     line.ready = { signoff_id: id, version: x.version, sha256: x.sha256, ready_by: by, ready_at: now, stub: x.stub, changed_since: false };
     await write(x.batch_id, line, before, { ready: line.ready }, by);
   }
+  // Left out of this set: no longer shown as signed off (it keeps its code, and its record in the earlier set).
+  for (const x of dropped) {
+    const { line } = await lineAt(x.batch_id, x.line_id);
+    if (!line.ready || line.ready.superseded_by) continue;
+    const before = { ready: line.ready };
+    line.ready = { ...line.ready, superseded_by: id };
+    await write(x.batch_id, line, before, { ready: line.ready }, by);
+  }
   return { signoff, expectation };
 }
 
@@ -253,10 +295,14 @@ export interface HandoffRow {
   /** For Trupanion's reviewers: the rules to look at on this line, in plain words (no reasons or names). */
   check_specifically: string;
   ready_by: string; ready_at: string; changed_since: string;
+  /** From Pre-flight and Compliance when the Studio has the database ("Ready to traffic", or what's outstanding); '' otherwise. */
+  traffic: string;
 }
+/** Ready to traffic per code, from Pre-flight (preflight.ts traffic()); the file store has none. */
+export type TrafficOf = (stub: string) => Promise<{ ready: boolean; words: string }>;
 
 /** The latest sign-off per persona × territory × region, one row per line, with the signed-off wording. */
-export async function handoffRows(filter: { persona?: string; territory?: string; region?: string } = {}): Promise<HandoffRow[]> {
+export async function handoffRows(filter: { persona?: string; territory?: string; region?: string } = {}, trafficOf?: TrafficOf): Promise<HandoffRow[]> {
   const r = loadRules();
   const rows: HandoffRow[] = [];
   for (const s of await latestSignoffs(filter)) {
@@ -277,6 +323,7 @@ export async function handoffRows(filter: { persona?: string; territory?: string
         check_specifically: ovs.length ? `Please check specifically: ${ovs.map(o => labelOf(o).replace(/\.$/, '')).join('; ')}` : '',
         ready_by: s.ready_by, ready_at: s.ready_at,
         changed_since: current?.ready?.signoff_id === s.id && current.ready.changed_since ? 'yes: a newer version exists' : '',
+        traffic: trafficOf ? (await trafficOf(x.stub)).words : '',
       });
     }
   }
@@ -285,11 +332,11 @@ export async function handoffRows(filter: { persona?: string; territory?: string
 
 const STATUS_WORDS: Record<string, string> = { pending: 'Pending', cleared: 'Cleared', changes_requested: 'Changes requested' };
 
-export async function handoffPack(filter: { persona?: string; territory?: string; region?: string } = {}) {
-  const rows = await handoffRows(filter);
+export async function handoffPack(filter: { persona?: string; territory?: string; region?: string } = {}, trafficOf?: TrafficOf) {
+  const rows = await handoffRows(filter, trafficOf);
   const cols: Array<[keyof HandoffRow, string]> = [
     ['stub', 'Naming code'], ['region', 'Region'], ['visual', 'Visual'], ['persona', 'Persona'], ['territory', 'Territory'], ['placement', 'Field'], ['platform', 'Platform'], ['format', 'Format'],
-    ['text', 'Final text'], ['chars', 'Characters'], ['version', 'Version'], ['compliance', 'Compliance status'], ['compliance_note', 'Compliance note'], ['overrides', 'Red flag overridden'],
+    ['text', 'Final text'], ['chars', 'Characters'], ['version', 'Version'], ['compliance', 'Compliance status'], ['compliance_note', 'Compliance note'], ['traffic', 'Ready to traffic'], ['overrides', 'Red flag overridden'],
     ['ready_by', 'Ready for production by'], ['ready_at', 'Ready for production at'], ['changed_since', 'Changed since sign-off'],
   ];
   const csv = toCsv([cols.map(c => c[1]), ...rows.map(x => cols.map(([k]) => k === 'compliance' ? STATUS_WORDS[x.compliance] || x.compliance : String(x[k])))]);
@@ -308,7 +355,7 @@ export async function handoffPack(filter: { persona?: string; territory?: string
       const e = expectations.filter(y => y.signoff_id === so).pop();
       if (e) md.push(`**Expected to lead:** ${e.line_ids.map(id => `\`${rows.find(r => r.line_id === id)?.stub || id}\``).join(', ')}. ${e.reason.replace(/\s*\n\s*/g, ' ')}`, '');
     }
-    md.push(`- \`${x.stub}\` (${x.placement}, ${x.chars} chars, v${x.version}): ${x.text.replace(/\s*\n\s*/g, ' ')}  \n  Compliance: ${STATUS_WORDS[x.compliance] || x.compliance}${x.compliance_note ? ` (${x.compliance_note})` : ''}${x.overrides ? ` · Red flag overridden: ${x.overrides}` : ''}${x.changed_since ? ` · ${x.changed_since}` : ''}`);
+    md.push(`- \`${x.stub}\` (${x.placement}, ${x.chars} chars, v${x.version}): ${x.text.replace(/\s*\n\s*/g, ' ')}  \n  Compliance: ${STATUS_WORDS[x.compliance] || x.compliance}${x.compliance_note ? ` (${x.compliance_note})` : ''}${x.traffic ? ` · ${x.traffic}` : ''}${x.overrides ? ` · Red flag overridden: ${x.overrides}` : ''}${x.changed_since ? ` · ${x.changed_since}` : ''}`);
   }
 
   // For Trupanion's compliance team: the words only, nothing internal.

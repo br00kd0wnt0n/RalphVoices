@@ -17,7 +17,7 @@ import { withRetry } from '../../utils/retry.js';
 import { probabilityYes } from '../../utils/probes.js';
 import { mockClient } from './mock.js';
 import { claudeWrite, isClaude } from './claude.js';
-import { FileStore, type StudioStore } from './store.js';
+import { FileStore, mergeBatchHeader, type StudioStore } from './store.js';
 import { CURRENT_PATTERN, DEFAULT_REGION, REGIONS, type Region } from '../../utils/namingCode.js';
 import { CodeBook, regionOf } from './codes.js';
 
@@ -118,9 +118,13 @@ export interface Line {
   /** Trupanion compliance review: pending (default), cleared or changes_requested. Doesn't block sign-off. */
   compliance?: { status: ComplianceStatus; note?: string; by?: string; at?: string; sha256?: string;  // sha256: the wording it was reviewed on
     /** Set when reviewed at the Compliance step (after Pre-flight): the asset it was reviewed with, and where changes go back to. */
-    upload_id?: string; code?: string; send_back?: 'copy' | 'asset' };
-  /** The line's place in the latest Ready for production sign-off. */
-  ready?: { signoff_id: string; version: number; sha256: string; ready_by: string; ready_at: string; stub: string; changed_since?: boolean };
+    upload_id?: string; code?: string; send_back?: 'copy' | 'asset';
+    /** Who at Trupanion made the decision. The producer (Vivan) coordinates and records it; she doesn't sign off compliance herself. */
+    client_by?: string };
+  /** The line's place in the latest Ready for production sign-off. `superseded_by`: a later sign-off of its set left it out (it keeps its code). */
+  ready?: { signoff_id: string; version: number; sha256: string; ready_by: string; ready_at: string; stub: string; changed_since?: boolean; superseded_by?: string };
+  /** Who added the line (a line written by a person: Write & brief, or Add a line in Review). */
+  added_by?: string;
   /** When the final wording was last fully re-checked (after an edit). */
   rechecked_at?: string;
 }
@@ -182,7 +186,7 @@ type Emit = (e: StudioEvent) => void;
 export interface Rules {
   version?: string;
   sources: Record<string, any>;
-  fields: Record<string, { platform: string; label: string; visible: number; max: number; source: string }>;
+  fields: Record<string, { platform: string; label: string; visible: number; max: number; source: string; note?: string; writer_note?: string }>;
   tone_controls: Record<string, Record<string, string>>;
   structures: Record<Structure, string>;
   facts: Fact[];
@@ -468,7 +472,9 @@ export class Api {
     this.spentBase = this.mock ? 0 : await getStore().spendTotal(since);
     return this.spentBase;
   }
-  spent(): number { return this.spentBase; }
+  /** This job's own cost reservation (router.ts reserve()): already in the stored total, so it isn't counted twice here. */
+  reserved = 0;
+  spent(): number { return Math.max(0, this.spentBase - this.reserved); }
   runTotal(): number { return Object.values(this.runUsd).reduce((a, b) => a + b, 0); }
   async resetRun() { this.runUsd = {}; this.runCalls = {}; this.runTokens = {}; await this.loadSpent(); }
   private add(stage: string, usd: number, tokens: number) {
@@ -704,6 +710,8 @@ const nextOffset = (cells: Cell[], fallback: number) => (cells.length ? Number(c
 export interface TasteExample {
   id: string; persona: string; territory: string; field: string; angle: string; structure: string; tone_label: string;
   text: string; original?: string; decision: 'keep' | 'edit' | 'cut'; note: string; batch: string; at: string;
+  /** Who made the decision. */
+  by?: string;
 }
 export async function loadTaste(): Promise<TasteExample[]> { return getStore().getTaste(); }
 
@@ -744,12 +752,23 @@ STRUCTURES:
 ${Object.entries(r.structures).map(([k, v]) => `- ${k}: ${v}`).join('\n')}
 
 FIELDS: aim for the target, well inside what shows on screen. A line that runs past the visible length is cut off in the feed.
-${b.fields.map(f => `- ${f}: ${r.fields[f].label}, aim for ${targetChars(r.fields[f].visible)} characters or fewer (${r.fields[f].visible} visible)`).join('\n')}
+${b.fields.map(f => `- ${f}: ${r.fields[f].label}, aim for ${targetChars(r.fields[f].visible)} characters or fewer (${r.fields[f].visible} visible)${fieldGuidance(f, r) ? `. ${fieldGuidance(f, r)}` : ''}`).join('\n')}
 
 LENGTH AND RHYTHM: short and punchy. One idea per line. Fragments are welcome ("Vet bill? Covered." beats a full sentence). Cut throat-clearing openers ("Honestly,", "Picture this:", "Here's the thing:", "Real talk:") and any word that isn't doing work. When in doubt, cut.
 ${b.banned_words.length ? `\nBANNED WORDS (the creative director's): ${b.banned_words.join(', ')}` : ''}${b.banned_ideas.length ? `\nIDEAS THAT ARE OFF LIMITS: ${b.banned_ideas.join('; ')}` : ''}${own.length ? `\nTHE CREATIVE DIRECTOR'S OWN LINES for this brief. This is the voice to match most closely. Build around them: never repeat or paraphrase them, and take the angles and structures they haven't used:\n${own.map(x => `- ${x}`).join('\n')}` : ''}${b.reference_lines.length ? `\nREFERENCE LINES in the voice the creative director wants (match the voice, don't copy):\n${b.reference_lines.map(x => `- ${x}`).join('\n')}` : ''}${keeps.length ? `\nTHE CREATIVE DIRECTOR'S TASTE: lines they kept or rewrote, with their notes. Learn from the edits and notes:\n${keeps.map(x => `- [${x.field}, ${x.structure}] ${x.original && x.original !== x.text ? `"${x.original}" → rewritten as "${x.text}"` : `"${x.text}"`}${x.note ? ` (note: ${x.note})` : ''}`).join('\n')}` : ''}${cuts.length ? `\nLINES THEY CUT, and why (avoid these moves):\n${cuts.map(x => `- "${x.text}" (note: ${x.note})`).join('\n')}` : ''}
 
 Write exactly one line per cell you are given, fitting its angle, structure, tone and field. Make lines in the same request differ from each other in wording, rhythm and idea. Plain text only: no hashtags, no emoji, no quotation marks around the line, no labels. Return JSON: {"lines":[{"cell":"<cell id>","text":"<the line>"}]}`;
+}
+
+/**
+ * How to write for a field, beyond its length: the rules' `writer_note`, or, for text that sits on the image (a field
+ * like meta_on_image, rules v2.10), a default. On-image text goes with the visual; it isn't a second headline.
+ */
+export function fieldGuidance(field: string, r: Rules): string {
+  const f = r.fields[field];
+  if (f?.writer_note) return f.writer_note;
+  if (/on_image/.test(field)) return 'This is the text that sits on the image itself: a few words written to go with the visual and read at a glance, not a second headline or a sentence of body copy. Sentence case (capitals are a design treatment, not the wording)';
+  return '';
 }
 
 /** The length the writer aims for: well inside the visible limit (three quarters of a short field, 60% of a long one). */
@@ -793,7 +812,49 @@ function parseLines(text: string): Array<{ cell: string; text: string }> {
 
 export async function batchExists(id: string): Promise<boolean> { return getStore().batchExists(id); }
 export async function loadBatch(id: string): Promise<Batch> { return getStore().getBatch(id); }
-export async function saveBatch(b: Batch): Promise<void> { b.updated = new Date().toISOString(); await getStore().saveBatch(b); }
+/**
+ * Changes to one run are made one at a time, each on fresh data (two people on the same run: the two-user test,
+ * 30 Sep, lost decisions, compliance statuses and added lines to last-write-wins).
+ */
+export function runLock<T>(batchId: string, fn: () => Promise<T>): Promise<T> { return getStore().withLock([`run:${batchId}`], fn); }
+/** Save a run: its header, and its lines (or only `lineIds`: the lines a job made or checked). Never removes a line. */
+export async function saveBatch(b: Batch, lineIds?: string[]): Promise<void> {
+  b.updated = new Date().toISOString();
+  await runLock(b.id, () => getStore().saveBatch(b, { lineIds }));
+}
+const lineIndex = (id: string) => Number(/-L(\d+)$/.exec(id)?.[1] || 0);
+let tmpIds = 0;
+/** A line's id until claimLines gives it its number. */
+const tmpId = (batchId: string) => `${batchId}-new${++tmpIds}`;
+/**
+ * Number new lines and save them, under the run's lock: the next numbers after every line already in the run,
+ * someone else's included, so two people adding to one run never get the same id. The run in memory is refreshed
+ * from what's stored at the same time. A person's line is recorded in its history with who added it.
+ */
+async function claimLines(batch: Batch, added: Line[], embStore: Record<string, number[]>, user?: string): Promise<void> {
+  if (!added.length) return;
+  await runLock(batch.id, async () => {
+    const st = getStore();
+    const stored: Batch | null = (await st.batchExists(batch.id)) ? await st.getBatch(batch.id) : null;
+    const isNew = new Set(added);
+    let next = Math.max(0, ...batch.lines.filter(l => !isNew.has(l)).map(l => lineIndex(l.id)), ...(stored?.lines || []).map(l => lineIndex(l.id))) + 1;
+    for (const l of added) {
+      const old = l.id;
+      l.id = `${batch.id}-L${String(next++).padStart(2, '0')}`;
+      if (embStore[old]) { embStore[l.id] = embStore[old]; delete embStore[old]; }
+    }
+    if (stored) {
+      batch.lines = [...stored.lines, ...added];
+      Object.assign(batch, mergeBatchHeader(stored, batch));
+    }
+    const now = new Date().toISOString();
+    batch.updated = now;
+    await st.saveBatch(batch, { lineIds: added.map(l => l.id) });
+    for (const l of added.filter(x => x.model === 'human')) {
+      await st.recordEdit({ line_id: l.id, batch_id: batch.id, before: null, after: { added: true, field: l.field, text: l.text }, by: l.added_by || user || 'unknown', at: now });
+    }
+  });
+}
 export interface RunSummary {
   id: string; name: string; persona: string; territory: string; region: Region; created: string; updated: string; created_by: string;
   lines: number; yours: number; kept: number; undecided: number; usd: number;
@@ -974,7 +1035,7 @@ export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: 
   if (existing) batch.brief = { ...b, own_lines: [...(existing.brief.own_lines || []), ...(b.own_lines || []).filter(o => !(existing.brief.own_lines || []).some(x => x.text === o.text))] };
   if (!batch.created_by && opts.user) batch.created_by = opts.user;
   const embStore: Record<string, number[]> = existing ? await getStore().getEmbeddings(id) : {};
-  const firstNew = batch.lines.length;
+  const mine: Line[] = [];   // the lines this job adds (numbered by claimLines)
   await api.resetRun();
 
   // 1. The creative director's lines.
@@ -983,12 +1044,15 @@ export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: 
   if (own.length) {
     emit({ type: 'status', message: `Reading your ${own.length} line${own.length === 1 ? '' : 's'}` });
     const [tags, embs] = await Promise.all([tagOwn(api, r, b, own), api.embed(own.map(o => o.text))]);
-    own.forEach((o, i) => {
-      const l = newLine(b, r, id, batch.lines.length + 1, { cell: `y${String(i + 1).padStart(2, '0')}`, angle: tags[i].angle, structure: tags[i].structure, tone: b.tone, field: o.field }, o.text, 'human');
+    const ownLines = own.map((o, i) => {
+      const l: Line = { ...newLine(b, r, id, 0, { cell: `y${String(i + 1).padStart(2, '0')}`, angle: tags[i].angle, structure: tags[i].structure, tone: b.tone, field: o.field }, o.text, 'human'), id: tmpId(id), added_by: opts.user };
       batch.lines.push(l);
       embStore[l.id] = embs[i];
-      emit({ type: 'line', line: l });
+      return l;
     });
+    await claimLines(batch, ownLines, embStore, opts.user);
+    mine.push(...ownLines);
+    for (const l of ownLines) emit({ type: 'line', line: l });
   }
   const humans = batch.lines.filter(l => l.model === 'human');
 
@@ -1015,25 +1079,28 @@ export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: 
         else if (kept.length < b.n) kept.push({ ...w, emb: embs[i] });
       });
     }
-    for (const k of kept) {
-      const l = newLine(b, r, id, batch.lines.length + 1, k.cell, k.text, b.model);
+    const genLines = kept.map(k => {
+      const l: Line = { ...newLine(b, r, id, 0, k.cell, k.text, b.model), id: tmpId(id) };
       batch.lines.push(l);
       embStore[l.id] = k.emb;
-    }
+      return l;
+    });
+    await claimLines(batch, genLines, embStore, opts.user);
+    mine.push(...genLines);
     batch.stats.near_duplicates_removed = batch.dropped.length;
   }
   batch.stats.timings_ms.generate = (batch.stats.timings_ms.generate || 0) + (Date.now() - started);
-  await saveBatch(batch);
+  await saveBatch(batch, mine.map(l => l.id));
   await getStore().saveEmbeddings(id, embStore); // after the lines exist (the database links embeddings to lines)
-  const fresh = batch.lines.slice(firstNew);
-  for (const l of fresh) emit({ type: 'line', line: l });
+  const fresh = mine;
+  for (const l of fresh.filter(x => x.model !== 'human')) emit({ type: 'line', line: l });
   emit({ type: 'status', message: `${fresh.length} lines ready${batch.dropped.length ? ` (${batch.dropped.length} near-duplicates removed)` : ''}. Checking…` });
 
   if (opts.check !== false) await checkBatch(batch, api, emit, fresh.map(l => l.id));
   const prevTotal = existing ? (batch.stats.timings_ms.total || 0) : 0;
   finishStats(batch, api, started);
   batch.stats.timings_ms.total += prevTotal;
-  await saveBatch(batch);
+  await saveBatch(batch, fresh.map(l => l.id));
   await api.commit(`${opts.ownOnly ? 'check-own' : 'generate'} ${id}`);
   emit({ type: 'stats', stats: batch.stats });
   emit({ type: 'done', batch: id });
@@ -1070,17 +1137,17 @@ export async function moreLikeThis(batchId: string, lineId: string, guidance: st
   written.forEach((w, i) => {
     const best = Math.max(0, ...Object.values(embStore).map(e => cosine(e, embs[i])));
     if (best >= DUP) { batch.dropped.push({ text: w.text, cell: w.cell.cell, dup_of: lineId, similarity: round(best) }); return; }
-    const l = { ...newLine(batch.brief, r, batchId, batch.lines.length + 1, w.cell, w.text, batch.brief.model), parent: lineId, guidance };
+    const l: Line = { ...newLine(batch.brief, r, batchId, 0, w.cell, w.text, batch.brief.model), id: tmpId(batchId), parent: lineId, guidance };
     batch.lines.push(l); added.push(l); embStore[l.id] = embs[i];
   });
-  await saveBatch(batch);
+  await claimLines(batch, added, embStore);
   await getStore().saveEmbeddings(batchId, embStore); // after the lines exist
   for (const l of added) emit({ type: 'line', line: l });
   await checkBatch(batch, api, emit, added.map(l => l.id));
   batch.stats.timings_ms.more = (batch.stats.timings_ms.more || 0) + (Date.now() - started);
   for (const [k2, v] of Object.entries(api.runUsd)) batch.stats.usd[k2] = round((batch.stats.usd[k2] || 0) + v, 4);
   batch.stats.usd_total = round(Object.values(batch.stats.usd).reduce((a, b) => a + b, 0), 4);
-  await saveBatch(batch);
+  await saveBatch(batch, added.map(l => l.id));
   await api.commit(`more ${lineId}`);
   emit({ type: 'stats', stats: batch.stats });
   emit({ type: 'done', batch: batchId });
@@ -1336,7 +1403,8 @@ export async function checkBatch(batch: Batch, api: Api, emit: Emit = () => {}, 
   }
   batch.stats.similar_flagged = batch.lines.filter(l => l.flags.some(f => f.rule === 'NEAR_DUP')).length;
   batch.stats.timings_ms.check_deterministic = Date.now() - started;
-  await saveBatch(batch);
+  const ids = lines.map(l => l.id);
+  await saveBatch(batch, ids);
 
   let saving = false;
   await pool(lines, 6, async l => {
@@ -1355,10 +1423,10 @@ export async function checkBatch(batch: Batch, api: Api, emit: Emit = () => {}, 
     }
     sortFlags(l);
     emit({ type: 'line', line: l });
-    if (!saving) { saving = true; await saveBatch(batch); saving = false; }
+    if (!saving) { saving = true; await saveBatch(batch, ids); saving = false; }
   });
   batch.stats.timings_ms.check = Date.now() - started;
-  await saveBatch(batch);
+  await saveBatch(batch, ids);
 }
 
 /**
@@ -1503,100 +1571,114 @@ export async function ingest(csvText: string, user?: string): Promise<IngestResu
   for (const need of ['id', 'decision']) if (col(need) < 0) throw new Error(`CSV has no "${need}" column`);
   const get = (r: string[], name: string) => { const i = col(name); return i >= 0 ? (r[i] ?? '').replace(/^'(?=[=+@])/, '').trim() : ''; };
 
-  const batches = new Map<string, Batch>();
-  const tasteById = new Map((await loadTaste()).map(t => [t.id, t]));
   const res: IngestResult = { rows: rows.length - 1, matched: 0, kept: 0, edited: 0, cut: 0, unknown: [], taste_total: 0, shortlist: 0, shortlistPath: '' };
   const at = new Date().toISOString();
+  // Grouped by run, and applied to each run under its lock, on fresh data, one line at a time (like a decision in Review).
+  const byRun = new Map<string, string[][]>();
   for (const r of rows.slice(1)) {
     const id = get(r, 'id');
-    const raw = get(r, 'decision').toLowerCase();
-    const decision = (['keep', 'cut', 'edit'].includes(raw) ? raw : raw.startsWith('k') ? 'keep' : raw.startsWith('c') ? 'cut' : raw.startsWith('e') ? 'edit' : '') as Line['decision'];
     const batchId = id.replace(/-L\d+$/, '');
-    let batch = batches.get(batchId);
-    if (!batch && (await batchExists(batchId))) { batch = await loadBatch(batchId); batches.set(batchId, batch); }
-    const line = batch?.lines.find(l => l.id === id);
-    if (!line || !batch) { res.unknown.push(id || '(blank id)'); continue; }
-    res.matched++;
-    const before = { decision: line.decision || '', edited_text: line.edited_text || '', note: line.note || '' };
-    line.decision = decision;
-    line.edited_text = get(r, 'edited_text');
-    line.note = get(r, 'note');
-    settleDecision(line);
-    const after = { decision: line.decision || '', edited_text: line.edited_text || '', note: line.note || '' };
-    if (JSON.stringify(before) !== JSON.stringify(after)) {
-      line.decided_by = user || line.decided_by || 'sheet';
-      line.decided_at = at;
-      await getStore().recordEdit({ line_id: line.id, batch_id: batch.id, before, after, by: line.decided_by, at });
-    }
-    applyTaste(tasteById, line);
-    if (line.decision === 'keep') res.kept++; else if (line.decision === 'edit') res.edited++; else if (line.decision === 'cut') res.cut++;
+    if (!id || !(await batchExists(batchId))) { res.unknown.push(id || '(blank id)'); continue; }
+    byRun.set(batchId, [...(byRun.get(batchId) || []), r]);
   }
-  for (const b of batches.values()) await saveBatch(b);
-  await saveTaste([...tasteById.values()]);
-  res.taste_total = tasteById.size;
+  for (const [batchId, runRows] of byRun) {
+    await runLock(batchId, async () => {
+      const batch = await loadBatch(batchId);
+      for (const r of runRows) {
+        const id = get(r, 'id');
+        const line = batch.lines.find(l => l.id === id);
+        if (!line) { res.unknown.push(id); continue; }
+        res.matched++;
+        const raw = get(r, 'decision').toLowerCase();
+        const decision = (['keep', 'cut', 'edit'].includes(raw) ? raw : raw.startsWith('k') ? 'keep' : raw.startsWith('c') ? 'cut' : raw.startsWith('e') ? 'edit' : '') as Line['decision'];
+        const before = { decision: line.decision || '', edited_text: line.edited_text || '', note: line.note || '' };
+        line.decision = decision;
+        line.edited_text = get(r, 'edited_text');
+        line.note = get(r, 'note');
+        settleDecision(line);
+        const after = { decision: line.decision || '', edited_text: line.edited_text || '', note: line.note || '' };
+        if (JSON.stringify(before) !== JSON.stringify(after)) {
+          line.decided_by = user || line.decided_by || 'sheet';
+          line.decided_at = at;
+          await getStore().saveLine(batchId, line);
+          await getStore().recordEdit({ line_id: line.id, batch_id: batchId, before, after, by: line.decided_by, at });
+        }
+        await putTaste(line);
+        if (line.decision === 'keep') res.kept++; else if (line.decision === 'edit') res.edited++; else if (line.decision === 'cut') res.cut++;
+      }
+    });
+  }
+  res.taste_total = (await loadTaste()).length;
   const sl = await writeShortlist();
   res.shortlist = sl.count; res.shortlistPath = sl.path;
   return res;
 }
 
-function applyTaste(store: Map<string, TasteExample>, l: Line) {
+/**
+ * One line's taste example, written on its own (a kept or edited line, or a cut with a note; otherwise removed).
+ * Never a whole-set rewrite from a snapshot, which lost other people's decisions (two-user test, 30 Sep).
+ */
+async function putTaste(l: Line) {
   const d = l.decision;
   if (d === 'keep' || d === 'edit' || (d === 'cut' && l.note)) {
-    store.set(l.id, {
+    await getStore().putTaste({
       id: l.id, persona: l.persona, territory: l.territory, field: l.field, angle: l.angle, structure: l.structure, tone_label: l.tone_label,
-      text: finalText(l), original: isEdited(l) ? l.text : undefined, decision: d, note: l.note || '', batch: l.batch, at: new Date().toISOString(),
-    });
-  } else store.delete(l.id);
+      text: finalText(l), original: isEdited(l) ? l.text : undefined, decision: d, note: l.note || '', batch: l.batch, at: new Date().toISOString(), by: l.decided_by,
+    } satisfies TasteExample);
+  } else await getStore().deleteTaste(l.id);
 }
-async function saveTaste(ex: TasteExample[]): Promise<void> { await getStore().saveTaste(ex); }
 
-/** Decision from the UI (keep / cut / edit, note). Updates the batch and the taste store. */
+/**
+ * Decision from the UI (keep / cut / edit, note). Made under the run's lock on the line as it is now, so two people
+ * deciding on the same line are applied one after the other and the history chains (each `before` is the previous
+ * `after`). Updates the line's taste example.
+ */
 export async function setDecision(batchId: string, lineId: string, patch: { decision?: Line['decision']; edited_text?: string; note?: string; source?: string }, user?: string): Promise<Line> {
-  const batch = await loadBatch(batchId);
-  const l = batch.lines.find(x => x.id === lineId);
-  if (!l) throw new Error(`No line ${lineId}`);
-  // A cut from the Shortlist is the same decision as in Review, except for a signed-off line: that set changes at Ready.
-  if (patch.source === 'shortlist' && patch.decision === 'cut' && l.ready) {
-    throw Object.assign(new Error(`Signed off at Ready for production (set ${l.ready.signoff_id}): take it out of the set there, then cut it`), { status: 409 });
-  }
-  const before = { decision: l.decision || '', edited_text: l.edited_text || '', note: l.note || '' };
-  if (patch.decision !== undefined) l.decision = patch.decision;
-  if (patch.edited_text !== undefined) l.edited_text = patch.edited_text;
-  if (patch.note !== undefined) l.note = patch.note;
-  settleDecision(l);
-  if (user) l.decided_by = user;
-  l.decided_at = new Date().toISOString();
-  const ORIGINAL = ' (on the original wording)';
-  if (patch.edited_text !== undefined) {
-    // Re-run the instant checks on the words that now count: the edit, or the original after "Revert to original".
-    const r = loadRules();
-    const det = deterministicFlags({ ...l, text: finalText(l) }, r, batch.brief);
-    const modelFlags = l.flags.filter(f => !f.by.includes('rule') || f.rule === 'NEAR_DUP');
-    l.flags = [...det.flags];
-    const edited = isEdited(l);
-    for (const f of modelFlags) {
-      const why = (f.why || '').replace(ORIGINAL, '');
-      addFlag(l.flags, { ...f, why: edited ? `${why}${ORIGINAL}`.trim() : why || undefined });
+  return runLock(batchId, async () => {
+    const batch = await loadBatch(batchId);
+    const l = batch.lines.find(x => x.id === lineId);
+    if (!l) throw new Error(`No line ${lineId}`);
+    // A cut from the Shortlist is the same decision as in Review, except for a line in the current sign-off: that set changes at Ready.
+    if (patch.source === 'shortlist' && patch.decision === 'cut' && l.ready && !l.ready.superseded_by) {
+      throw Object.assign(new Error(`Signed off at Ready for production (set ${l.ready.signoff_id}): take it out of the set there, then cut it`), { status: 409 });
     }
-    sortFlags(l);
-  }
-  const st = getStore();
-  // A signed-off line is never rewritten: a change of wording becomes a new version, and the sign-off keeps its own.
-  if (l.ready && lineHash(l) !== l.ready.sha256) {
-    const versions = await st.listLineVersions(l.id);
-    const h = lineHash(l);
-    if (!versions.some(v => v.sha256 === h)) {
-      await st.saveLineVersion({ line_id: l.id, batch_id: batchId, version: Math.max(0, ...versions.map(v => v.version)) + 1, field: l.field, text: finalText(l), sha256: h, created_by: user || 'unknown', created_at: l.decided_at!, stub: l.ready.stub });
+    const before = { decision: l.decision || '', edited_text: l.edited_text || '', note: l.note || '' };
+    if (patch.decision !== undefined) l.decision = patch.decision;
+    if (patch.edited_text !== undefined) l.edited_text = patch.edited_text;
+    if (patch.note !== undefined) l.note = patch.note;
+    settleDecision(l);
+    if (user) l.decided_by = user;
+    l.decided_at = new Date().toISOString();
+    const ORIGINAL = ' (on the original wording)';
+    if (patch.edited_text !== undefined) {
+      // Re-run the instant checks on the words that now count: the edit, or the original after "Revert to original".
+      const r = loadRules();
+      const det = deterministicFlags({ ...l, text: finalText(l) }, r, batch.brief);
+      const modelFlags = l.flags.filter(f => !f.by.includes('rule') || f.rule === 'NEAR_DUP');
+      l.flags = [...det.flags];
+      const edited = isEdited(l);
+      for (const f of modelFlags) {
+        const why = (f.why || '').replace(ORIGINAL, '');
+        addFlag(l.flags, { ...f, why: edited ? `${why}${ORIGINAL}`.trim() : why || undefined });
+      }
+      sortFlags(l);
     }
-    l.ready.changed_since = true;
-  } else if (l.ready) l.ready.changed_since = false;
-  // Only this line is written, so decisions on other lines by other people stand.
-  await st.saveLine(batchId, l);
-  await st.recordEdit({ line_id: l.id, batch_id: batchId, before, after: { decision: l.decision || '', edited_text: l.edited_text || '', note: l.note || '' }, by: user || 'unknown', at: l.decided_at });
-  const taste = new Map((await loadTaste()).map(t => [t.id, t]));
-  applyTaste(taste, l);
-  await saveTaste([...taste.values()]);
-  return l;
+    const st = getStore();
+    // A signed-off line is never rewritten: a change of wording becomes a new version, and the sign-off keeps its own.
+    if (l.ready && lineHash(l) !== l.ready.sha256) {
+      const versions = await st.listLineVersions(l.id);
+      const h = lineHash(l);
+      if (!versions.some(v => v.sha256 === h)) {
+        await st.saveLineVersion({ line_id: l.id, batch_id: batchId, version: Math.max(0, ...versions.map(v => v.version)) + 1, field: l.field, text: finalText(l), sha256: h, created_by: user || 'unknown', created_at: l.decided_at!, stub: l.ready.stub });
+      }
+      l.ready.changed_since = true;
+    } else if (l.ready) l.ready.changed_since = false;
+    // Only this line is written, so decisions on other lines by other people stand.
+    await st.saveLine(batchId, l);
+    await st.recordEdit({ line_id: l.id, batch_id: batchId, before, after: { decision: l.decision || '', edited_text: l.edited_text || '', note: l.note || '' }, by: user || 'unknown', at: l.decided_at });
+    await putTaste(l);
+    return l;
+  });
 }
 
 /** Every decision ever made on a line, oldest first (the audit trail). */
@@ -1640,7 +1722,7 @@ export async function shortlist(): Promise<ShortRow[]> {
     return {
       stub: l.ready?.stub || book.assign(codeInput(l)), id: l.id, batch: l.batch, decision: l.decision || '',
       // Signed off at Ready: the set it's in (it can't be cut from the Shortlist; change the set at Ready instead).
-      signed_off: l.ready?.signoff_id || '', persona: l.persona, territory: l.territory, region: regionOf(l), field: l.field,
+      signed_off: l.ready && !l.ready.superseded_by ? l.ready.signoff_id : '', persona: l.persona, territory: l.territory, region: regionOf(l), field: l.field,
       platform, format: t?.format || '', text: finalText(l),
       angle: `${l.angle} ${l.angle_label}`, structure: l.structure, tone: l.tone_label, features: l.features.join('; '),
       flags: l.flags.map(flagText).join(' | '), note: l.note || '',
@@ -1826,7 +1908,7 @@ export async function resumeChecks(batchId: string, api: Api, emit: Emit = () =>
   batch.stats.timings_ms.resume = (batch.stats.timings_ms.resume || 0) + (Date.now() - started);
   for (const [k, v] of Object.entries(api.runUsd)) batch.stats.usd[k] = round((batch.stats.usd[k] || 0) + v, 4);
   batch.stats.usd_total = round(Object.values(batch.stats.usd).reduce((a, b) => a + b, 0), 4);
-  await saveBatch(batch);
+  await saveBatch(batch, todo);
   await api.commit(`resume ${batchId}`);
   emit({ type: 'stats', stats: batch.stats });
   emit({ type: 'done', batch: batchId });

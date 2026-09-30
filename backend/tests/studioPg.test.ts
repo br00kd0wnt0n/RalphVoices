@@ -272,7 +272,9 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   const hand = S.parseCsv(await pf.handoffCsv());
   assert.deepEqual(hand[0].slice(0, 2), ['Naming code', 'Region']);
   assert.equal(hand[0][7], 'Status');
-  assert.equal(hand.find(r => r[0] === stub)![7], 'Ready to traffic');
+  // Pre-flight passed isn't Ready to traffic until Trupanion's compliance is cleared (Brook, 30 Sep).
+  assert.equal(hand.find(r => r[0] === stub)![7], 'Pre-flight passed · Compliance pending');
+  assert.equal(hand.find(r => r[0] === stub)![hand[0].indexOf('Ready to traffic')], 'no');
   assert.equal(hand.find(r => r[0] === postStub)![7], 'Not uploaded');
   assert.equal(/approved/i.test(await pf.handoffCsv()), false);
 
@@ -443,15 +445,14 @@ test('Compliance after Pre-flight: per asset, copy and visual together; changes 
   assert.equal((await pf.codeCompliance(A3, null)).on_asset, false);
 
   // Changes requested needs a note and says what goes back.
-  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', note: 'x' }, 'vivan'), /what goes back/);
-  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', send_back: 'asset' }, 'vivan'), /what needs changing/);
-  // Clearing an asset that went through with an overridden red flag needs a note (if the example lines had any).
-  const anyOverride = signoff.lines.some(x => x.overrides?.length);
-  if (anyOverride) await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'cleared' }, 'vivan'), /add a note/);
+  // The decision is Trupanion's: who made it is required; the producer only records it.
+  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'cleared', note: 'fine' }, 'vivan'), /who at Trupanion/);
+  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', note: 'x', client_by: 'J. Doe' }, 'vivan'), /what goes back/);
+  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', send_back: 'asset', client_by: 'J. Doe' }, 'vivan'), /what needs changing/);
 
   // Back to the visual: the codes stop being Ready to traffic, and Pre-flight shows the note.
   await pf.setReady(A1, true, 'nick').catch(() => {});
-  await pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', note: 'Disclaimer too small on the last card', send_back: 'asset' }, 'vivan');
+  await pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', note: 'Disclaimer too small on the last card', send_back: 'asset', client_by: 'J. Doe (Trupanion legal)' }, 'vivan');
   view = await pf.complianceAssets();
   assert.equal(view.assets[0].status, 'changes_requested');
   assert.equal((await pf.report(A1)).status.status, 'open');
@@ -469,10 +470,10 @@ test('Compliance after Pre-flight: per asset, copy and visual together; changes 
   assert.equal(c.status, 'pending');
   assert.match(c.note!, /New upload after "Changes requested": Disclaimer too small/);
   // Cleared (with a note, since the lines went through with overrides in this example).
-  await pf.setAssetCompliance(up2.upload_id, { status: 'cleared', note: 'Cleared by J. Doe, Trupanion legal' }, 'vivan');
+  await pf.setAssetCompliance(up2.upload_id, { status: 'cleared', client_by: 'J. Doe (Trupanion legal)' }, 'vivan');
   assert.equal((await pf.complianceAssets()).assets[0].status, 'cleared');
   // The old upload can't be reviewed any more.
-  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'cleared', note: 'x' }, 'vivan'), /replaced/);
+  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'cleared', client_by: 'J. Doe' }, 'vivan'), /replaced/);
 
   // Handoffs: per code (copy) and per asset.
   const hand = S.parseCsv(await pf.handoffCsv());
@@ -483,4 +484,317 @@ test('Compliance after Pre-flight: per asset, copy and visual together; changes 
   const copy = S.parseCsv((await R.handoffPack()).csv);
   const cc = copy[0].indexOf('Compliance status');
   assert.equal(copy.find(r => r[0] === A2)![cc], 'Cleared');
+});
+
+test('Ready to traffic needs Pre-flight passed AND compliance cleared, per code on a shared visual (Brook, 30 Sep)', { skip }, async () => {
+  const { Preflight, COMPLIANCE_GATE_FROM } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const R = await import('../src/services/studio/ready.js');
+  const tables = ['studio_asset_status', 'studio_audit_agreements', 'studio_audit_flags', 'studio_audits', 'studio_upload_files', 'studio_asset_uploads', 'studio_expectations', 'studio_line_versions', 'studio_signoffs', 'studio_edits', 'studio_line_embeddings', 'studio_lines', 'studio_batches', 'studio_taste', 'studio_spend'];
+  await (store as any).db.query(`TRUNCATE ${tables.join(', ')} RESTART IDENTITY CASCADE`);
+  const api = new S.Api({ mock: true });
+  const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'gate', own_lines: [
+    { text: 'Calm at the counter.', field: 'meta_headline' }, { text: 'One less worry.', field: 'meta_headline' }, { text: 'Home by nine.', field: 'meta_headline' },
+  ] }), api, () => {}, { ownOnly: true, user: 'nick' });
+  for (const l of run.lines) {
+    await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+    for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find(x => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'Test line for the traffic gate', 'nick');
+  }
+  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: run.lines.map(l => l.id), expectation: { line_ids: [run.lines[0].id], reason: 'Plain.' } }, 'nick');
+  const [A1, A2, A3] = signoff.lines.map(x => x.stub).sort();
+  const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
+  const png = () => [{ buffer: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from('fake VOICES_TEXT: Calm at the counter. One less worry. Home by nine.')]), filename: 'v.png', contentType: 'image/png' }];
+  const up = await pf.upload(A1, png(), 'nick', [A2, A3]);
+  await pf.runAudit(await pf.createAudit(up.upload_id));
+  for (const x of [A1, A2, A3]) await pf.setReady(x, true, 'nick');
+  const t = async (x: string) => pf.traffic(x);
+
+  // Pre-flight passed alone isn't Ready to traffic; the two parts are shown apart.
+  assert.equal((await t(A1)).ready, false);
+  assert.equal((await t(A1)).words, 'Pre-flight passed · Compliance pending');
+
+  // Per code on one shared upload: A1 and A2 cleared, A3's copy sent back.
+  await pf.setAssetCompliance(up.upload_id, { status: 'cleared', codes: [A1, A2], client_by: 'J. Doe (Trupanion legal)' }, 'vivan');
+  await pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', codes: [A3], send_back: 'copy', note: 'Say "at participating hospitals"', client_by: 'J. Doe (Trupanion legal)' }, 'vivan');
+  assert.equal((await t(A1)).ready, true);
+  assert.equal((await t(A1)).words, 'Ready to traffic');
+  assert.equal((await t(A2)).ready, true);
+  const a3 = await t(A3);
+  assert.equal(a3.ready, false);
+  assert.equal(a3.words, 'Pre-flight passed · Compliance changes requested');
+  assert.match(a3.blocker!, /changes to the copy/);
+  // Who at Trupanion decided is on the record; the producer only recorded it.
+  const c1 = await pf.codeCompliance(A1, up.upload_id);
+  assert.equal(c1.client_by, 'J. Doe (Trupanion legal)');
+  assert.equal(c1.by, 'vivan');
+  // The page groups the asset under "changes requested" while showing each code's own status.
+  const asset = (await pf.complianceAssets()).assets[0];
+  assert.equal(asset.status, 'changes_requested');
+  assert.deepEqual(asset.codes.map(c => [c.stub, c.compliance.status, c.traffic.ready]), [[A1, 'cleared', true], [A2, 'cleared', true], [A3, 'changes_requested', false]]);
+  // A code not on this upload any more is refused by name.
+  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'cleared', codes: ['OWN_CALM_UGC_Z9_US_META'], client_by: 'x' }, 'vivan'), /Not on this upload now/);
+
+  // Add3 only sees cleared codes marked ready: both handoffs.
+  const hand = S.parseCsv(await pf.handoffCsv());
+  const rt = hand[0].indexOf('Ready to traffic');
+  assert.deepEqual([A1, A2, A3].map(x => hand.find(r => r[0] === x)![rt]), ['yes', 'yes', 'no']);
+  assert.equal(hand.find(r => r[0] === A1)![hand[0].indexOf('Cleared at Trupanion by')], 'J. Doe (Trupanion legal)');
+  const pack = S.parseCsv((await R.handoffPack({}, x => pf.traffic(x))).csv);
+  const pr = pack[0].indexOf('Ready to traffic');
+  assert.deepEqual([A1, A2, A3].map(x => pack.find(r => r[0] === x)![pr]), ['Ready to traffic', 'Ready to traffic', 'Pre-flight passed · Compliance changes requested']);
+
+  // Edited wording takes a code out of Ready to traffic until it's signed off (and reviewed) again.
+  const l2 = signoff.lines.find(x => x.stub === A2)!;
+  await S.setDecision(l2.batch_id, l2.line_id, { decision: 'edit', edited_text: 'One less worry, every time.' }, 'nick');
+  assert.equal((await t(A2)).ready, false);
+  assert.match((await t(A2)).words, /Wording edited since sign-off/);
+
+  // A new upload takes everything out: Pre-flight is open again and compliance is pending on the new asset.
+  const up2 = await pf.upload(A1, png(), 'nick', [A2, A3]);
+  assert.equal((await t(A1)).ready, false);
+  assert.equal((await t(A1)).words, 'Pre-flight open · Compliance pending');
+  void up2;
+
+  // Marked ready before the gate, with no compliance recorded: stays ready, and says so.
+  const run2 = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'legacy', own_lines: [{ text: 'Calm on a Sunday.', field: 'meta_headline' }] }), api, () => {}, { ownOnly: true, user: 'nick' });
+  const l = run2.lines[0];
+  await S.setDecision(run2.id, l.id, { decision: 'keep' }, 'nick');
+  for (const f of R.unresolvedRed((await S.loadBatch(run2.id)).lines[0])) await R.overrideFlag(run2.id, l.id, f.rule, 'Test line for the traffic gate', 'nick');
+  const legacyCode = (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: [l.id], expectation: { line_ids: [l.id], reason: 'Old.' } }, 'nick')).signoff.lines[0].stub;
+  const up3 = await pf.upload(legacyCode, png(), 'nick');
+  await pf.runAudit(await pf.createAudit(up3.upload_id));
+  await pf.setReady(legacyCode, true, 'nick');
+  await (store as any).db.query(`UPDATE studio_asset_status SET ready_at = $2 WHERE stub = $1`, [legacyCode, new Date(Date.parse(COMPLIANCE_GATE_FROM) - 86400000)]);
+  const legacy = await t(legacyCode);
+  assert.equal(legacy.ready, true);
+  assert.equal(legacy.legacy, true);
+  assert.equal(legacy.words, 'Ready to traffic · compliance not recorded');
+  // Once a decision is recorded, the gate applies.
+  await pf.setAssetCompliance(up3.upload_id, { status: 'changes_requested', send_back: 'copy', note: 'Check the claim', client_by: 'J. Doe' }, 'vivan');
+  assert.equal((await t(legacyCode)).ready, false);
+});
+
+test('clearing a code that went through with an overridden red flag needs a note saying what Trupanion accepted (copy or Pre-flight)', { skip }, async () => {
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const R = await import('../src/services/studio/ready.js');
+  const tables = ['studio_asset_status', 'studio_audit_agreements', 'studio_audit_flags', 'studio_audits', 'studio_upload_files', 'studio_asset_uploads', 'studio_expectations', 'studio_line_versions', 'studio_signoffs', 'studio_edits', 'studio_line_embeddings', 'studio_lines', 'studio_batches', 'studio_taste', 'studio_spend'];
+  await (store as any).db.query(`TRUNCATE ${tables.join(', ')} RESTART IDENTITY CASCADE`);
+  const api = new S.Api({ mock: true });
+  const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'accepted', own_lines: [
+    { text: 'Calm at the counter.', field: 'meta_headline' }, { text: 'Home by nine.', field: 'meta_headline' }, { text: 'Honestly, the policy pays for itself.', field: 'meta_headline' },
+  ] }), api, () => {}, { ownOnly: true, user: 'nick' });
+  const risky = run.lines[2];
+  for (const l of run.lines) {
+    await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+    const reds = R.unresolvedRed((await S.loadBatch(run.id)).lines.find(x => x.id === l.id)!);
+    if (l.id !== risky.id) { assert.equal(reds.length, 0, `${l.text} should have no red flag`); continue; }
+    assert.ok(reds.some(f => f.rule === 'COMP_PAYS_FOR_ITSELF'));
+    for (const f of reds) await R.overrideFlag(run.id, l.id, f.rule, 'Legal agreed the framing for this test', 'nick');
+  }
+  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: run.lines.map(l => l.id), expectation: { line_ids: [run.lines[0].id], reason: 'Plain.' } }, 'nick');
+  const code = (id: string) => signoff.lines.find(x => x.line_id === id)!.stub;
+  const [A1, A2, A3] = run.lines.map(l => code(l.id));
+  const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
+  const png = (t: string) => [{ buffer: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from(`fake VOICES_TEXT: ${t}`)]), filename: 'v.png', contentType: 'image/png' }];
+
+  // 1. A copy override at Ready, on A3 only.
+  const up = await pf.upload(A1, png('Calm at the counter.'), 'nick', [A2, A3]);
+  await pf.runAudit(await pf.createAudit(up.upload_id));
+  assert.deepEqual((await pf.overriddenReds(up.upload_id, [A1, A2])), []);
+  // A1 and A2 have nothing overridden: cleared with just the reviewer's name.
+  await pf.setAssetCompliance(up.upload_id, { status: 'cleared', codes: [A1, A2], client_by: 'J. Doe (Trupanion legal)' }, 'vivan');
+  // A3 went through with an overridden red flag: refused without a note, naming it.
+  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'cleared', codes: [A3], client_by: 'J. Doe (Trupanion legal)' }, 'vivan'), (err: any) => {
+    assert.match(err.message, /overridden red flag .*pays for itself.*add a note saying what Trupanion accepted/i);
+    assert.deepEqual(err.overridden.map((x: any) => [x.code, x.where]), [[A3, 'copy']]);
+    return true;
+  });
+  // Clearing every code at once is refused too (A3 is among them).
+  await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'cleared', client_by: 'J. Doe' }, 'vivan'), /what Trupanion accepted/);
+  // Changes requested and pending don't need it.
+  await pf.setAssetCompliance(up.upload_id, { status: 'pending', codes: [A3] }, 'vivan');
+  await pf.setAssetCompliance(up.upload_id, { status: 'cleared', codes: [A3], client_by: 'J. Doe (Trupanion legal)', note: 'Trupanion legal accepted the "pays for itself" framing for this ad' }, 'vivan');
+  assert.equal((await pf.codeCompliance(A3, up.upload_id)).status, 'cleared');
+
+  // 2. A Pre-flight override on the visual concerns every code it serves.
+  const up2 = await pf.upload(A1, png('Honestly, it pays for itself.'), 'nick', [A2, A3]);
+  await pf.runAudit(await pf.createAudit(up2.upload_id));
+  const red = (await pf.report(A1)).flags.find((f: any) => f.severity === 'red' && f.rule === 'COMP_PAYS_FOR_ITSELF')!;
+  assert.ok(red, 'the visual carries a red flag');
+  await pf.override(red.id, 'Creative lead: the visual line is the approved campaign line', 'nick');
+  const acc = await pf.overriddenReds(up2.upload_id, [A1]);
+  assert.deepEqual(acc.map(x => [x.code, x.where]), [[A1, 'pre-flight']]);
+  await assert.rejects(() => pf.setAssetCompliance(up2.upload_id, { status: 'cleared', codes: [A1], client_by: 'J. Doe' }, 'vivan'), /what Trupanion accepted/);
+  await pf.setAssetCompliance(up2.upload_id, { status: 'cleared', codes: [A1], client_by: 'J. Doe', note: 'Accepted the visual line as the approved campaign line' }, 'vivan');
+  assert.equal((await pf.codeCompliance(A1, up2.upload_id)).note, 'Accepted the visual line as the approved campaign line');
+});
+
+// ---------- two people at once (two-user test, 30 Sep): items 1–5 ----------
+
+async function freshStudio() {
+  const tables = ['studio_asset_status', 'studio_audit_agreements', 'studio_audit_flags', 'studio_audits', 'studio_upload_files', 'studio_asset_uploads', 'studio_expectations', 'studio_line_versions', 'studio_signoffs', 'studio_edits', 'studio_line_embeddings', 'studio_lines', 'studio_batches', 'studio_taste', 'studio_spend'];
+  await (store as any).db.query(`TRUNCATE ${tables.join(', ')} RESTART IDENTITY CASCADE`);
+  const R = await import('../src/services/studio/ready.js');
+  const api = new S.Api({ mock: true });
+  return { R, api };
+}
+async function keptRun(R: any, api: S.Api, texts: string[], opts: { region?: 'US' | 'CA'; name?: string } = {}) {
+  const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: opts.name || `c-${Date.now()}`, region: opts.region, own_lines: texts.map(text => ({ text, field: 'meta_headline' })) }), api, () => {}, { ownOnly: true, user: 'nick' });
+  for (const l of run.lines) {
+    await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+    for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find((x: any) => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'Test line for concurrency', 'nick');
+  }
+  return run;
+}
+/** Every history entry's `before` is the previous entry's `after` (for entries that carry the same keys). */
+async function chained(lineId: string, key: string) {
+  const h = ((await (store as any).db.query(`SELECT before, after FROM studio_edits WHERE line_id = $1 ORDER BY id`, [lineId])).rows as any[]).filter(x => x.after && key in x.after && x.before && key in x.before);
+  let broken = 0;
+  for (let i = 1; i < h.length; i++) if (JSON.stringify(h[i].before) !== JSON.stringify(h[i - 1].after)) broken++;
+  return { entries: h.length, broken };
+}
+
+test('1. two people deciding on the same line: applied one after the other, history chains, nothing lost', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const run = await keptRun(R, api, ['Calm at the counter.', 'Home by nine.']);
+  const id = run.lines[0].id;
+  for (let k = 0; k < 20; k++) {
+    await Promise.all([
+      S.setDecision(run.id, id, { decision: 'edit', edited_text: `N${k}` }, 'nick'),
+      S.setDecision(run.id, id, { decision: 'cut', note: `B${k}` }, 'brook'),
+    ]);
+    const row = (await (store as any).db.query(`SELECT decision, decided_by, body FROM studio_lines WHERE id = $1`, [id])).rows[0];
+    const last = (await (store as any).db.query(`SELECT after, by_user FROM studio_edits WHERE line_id = $1 ORDER BY id DESC LIMIT 1`, [id])).rows[0];
+    assert.equal(row.decision, last.after.decision, `round ${k}: stored decision is the last one recorded`);
+    assert.equal(row.decided_by, last.by_user);
+    assert.equal(row.body.decided_by, row.decided_by, 'column and body agree');
+  }
+  const c = await chained(id, 'decision');
+  assert.equal(c.broken, 0, `history chains (${c.entries} entries)`);
+});
+
+test('1b. a compliance status and an edit on the same line at once: both kept', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const run = await keptRun(R, api, ['Calm at the counter.']);
+  const id = run.lines[0].id;
+  for (let k = 0; k < 20; k++) {
+    await Promise.all([
+      R.setCompliance(run.id, id, k % 2 ? 'cleared' : 'pending', `vivan ${k}`, 'vivan'),
+      S.setDecision(run.id, id, { decision: 'edit', edited_text: `Nick edit ${k}.` }, 'nick'),
+    ]);
+    const b = (await (store as any).db.query(`SELECT body FROM studio_lines WHERE id = $1`, [id])).rows[0].body;
+    assert.equal(b.edited_text, `Nick edit ${k}.`, `round ${k}: the edit is kept`);
+    assert.equal(b.compliance.note, `vivan ${k}`, `round ${k}: the status is kept`);
+  }
+});
+
+test('2. two people adding a line to one run at once: both lines kept, each with its own id and author', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const run = await keptRun(R, api, ['Calm at the counter.']);
+  const brief = (text: string) => S.makeBrief({ ...run.brief, own_lines: [{ text, field: 'meta_headline' }] });
+  for (let k = 0; k < 5; k++) {
+    await Promise.all([
+      S.generate(brief(`Nick's idea ${k}.`), api, () => {}, { batchId: run.id, ownOnly: true, user: 'nick' }),
+      S.generate(brief(`Brook's idea ${k}.`), api, () => {}, { batchId: run.id, ownOnly: true, user: 'brook' }),
+    ]);
+  }
+  const lines = (await S.loadBatch(run.id)).lines;
+  assert.equal(lines.length, 11, 'one own line, then ten added');
+  assert.equal(new Set(lines.map(l => l.id)).size, 11, 'ids are unique');
+  for (let k = 0; k < 5; k++) {
+    const n = lines.find(l => l.text === `Nick's idea ${k}.`)!, b = lines.find(l => l.text === `Brook's idea ${k}.`)!;
+    assert.ok(n && b, `round ${k}: both lines are there`);
+    assert.equal(n.added_by, 'nick'); assert.equal(b.added_by, 'brook');
+    assert.equal(n.status, 'checked'); assert.equal(b.status, 'checked');
+    const h = await S.lineHistory(b.id);
+    assert.deepEqual([h[0].by, (h[0].after as any).added], ['brook', true]);
+  }
+  assert.equal((await S.loadBatch(run.id)).brief.own_lines!.length, 11, 'the run keeps every line written on it');
+});
+
+test('3. a Shortlist cut racing a sign-off: a line is never both cut and signed off', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  for (let k = 0; k < 6; k++) {
+    const run = await keptRun(R, api, ['Calm at the counter.', 'Home by nine.', 'One less worry.'], { name: `race-${k}` });
+    const ids = run.lines.map(l => l.id);
+    const victim = ids[1 + (k % 2)];
+    const [so, cut] = await Promise.allSettled([
+      R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: ids, expectation: { line_ids: [ids[0]], reason: 'race' } }, 'nick'),
+      new Promise(r => setTimeout(r, k)).then(() => S.setDecision(run.id, victim, { decision: 'cut', source: 'shortlist' }, 'brook')),
+    ]);
+    const line = (await S.loadBatch(run.id)).lines.find(l => l.id === victim)!;
+    const signed = so.status === 'fulfilled' && so.value.signoff.lines.some((x: any) => x.line_id === victim);
+    assert.ok(!(line.decision === 'cut' && signed), `round ${k}: cut ${cut.status}, sign-off ${so.status}`);
+    assert.ok(so.status === 'fulfilled' || cut.status === 'fulfilled', 'one of them goes through');
+    if (cut.status === 'rejected') assert.match(String((cut as any).reason?.message), /Signed off at Ready/);
+    if (so.status === 'rejected') assert.match(String((so as any).reason?.message), /Not kept lines/);
+    // The next round's sign-off would supersede this one's lines; clear signoffs between rounds.
+    await (store as any).db.query(`TRUNCATE studio_expectations, studio_line_versions, studio_signoffs`);
+  }
+});
+
+test('4. racing sign-offs: one wins, the other gets a clear 409; one version count, no orphans, codes unique; US and CA both go through', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const run = await keptRun(R, api, ['Calm at the counter.', 'Home by nine.', 'One less worry.', 'Sunday calm.']);
+  const ids = run.lines.map(l => l.id);
+  const so = (who: string, set: string[]) => R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: set, expectation: { line_ids: [set[0]], reason: who }, expect_latest: null }, who);
+  const [a, b] = await Promise.allSettled([so('nick', ids.slice(0, 3)), so('brook', ids.slice(1, 4))]);
+  const ok = [a, b].filter(x => x.status === 'fulfilled'), no = [a, b].filter(x => x.status === 'rejected') as PromiseRejectedResult[];
+  assert.equal(ok.length, 1, 'one wins');
+  assert.equal(no[0].reason.status, 409);
+  assert.match(no[0].reason.message, /(nick|brook) just signed this set off \(v1/);
+  const db = (store as any).db;
+  assert.equal(Number((await db.query(`SELECT count(*) FROM studio_line_versions v WHERE v.signoff_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM studio_signoffs s WHERE s.id = v.signoff_id)`)).rows[0].count), 0, 'no orphan line versions');
+  assert.equal(Number((await db.query(`SELECT count(*) FROM (SELECT stub FROM studio_line_versions GROUP BY stub HAVING count(DISTINCT line_id) > 1) q`)).rows[0].count), 0, 'codes unique');
+
+  // US and CA of the same persona × territory at once: both go through, each with its own version number.
+  const ca = await keptRun(R, api, ['Calm, eh.', 'Colour me calm.'], { region: 'CA', name: 'ca' });
+  const us2 = ids.filter(x => !(ok[0] as any).value.signoff.lines.some((l: any) => l.line_id === x));
+  const [u, c] = await Promise.all([
+    R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region: 'US', line_ids: [...(ok[0] as any).value.signoff.lines.map((l: any) => l.line_id), ...us2], expectation: { line_ids: [ids[0]], reason: 'us' } }, 'nick'),
+    R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region: 'CA', line_ids: ca.lines.map(l => l.id), expectation: { line_ids: [ca.lines[0].id], reason: 'ca' } }, 'brook'),
+  ]);
+  assert.deepEqual([u.signoff.version, c.signoff.version].sort(), [2, 3]);
+
+  // A later set that leaves a line out: the line no longer shows as signed off, keeps its code, and can be cut again.
+  const shrink = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', region: 'US', line_ids: [ids[0]], expectation: { line_ids: [ids[0]], reason: 'just one' } }, 'nick');
+  const left = (await S.loadBatch(run.id)).lines.find(l => l.id === ids[1])!;
+  assert.equal(left.ready!.superseded_by, shrink.signoff.id);
+  assert.equal((await S.shortlist()).find(r => r.id === ids[1])!.signed_off, '');
+  const code = left.ready!.stub;
+  assert.equal((await R.readyView('OWN', 'OWN_CALM', 'US')).lines.find((x: any) => x.line.id === ids[1])!.stub, code, 'it keeps its code');
+  await S.setDecision(run.id, ids[1], { decision: 'cut', source: 'shortlist' }, 'brook');
+});
+
+test('5. taste: people deciding on different lines at once never lose each other’s examples; each records who', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const run = await keptRun(R, api, ['One.', 'Two.', 'Three.', 'Four.', 'Five.', 'Six.']);
+  for (let k = 0; k < 10; k++) {
+    const dec = k % 2 ? 'keep' : 'cut';
+    await Promise.all(run.lines.map((l, j) => S.setDecision(run.id, l.id, { decision: dec as any, note: '' }, j % 2 ? 'brook' : 'nick')));
+    const t = new Map((await S.loadTaste()).map(x => [x.id, x]));
+    for (const [j, l] of run.lines.entries()) {
+      assert.equal(t.has(l.id), dec === 'keep', `round ${k}: ${l.id}`);
+      if (dec === 'keep') assert.equal(t.get(l.id)!.by, j % 2 ? 'brook' : 'nick');
+    }
+  }
+});
+
+test('8. an edit after sign-off: Ready and Compliance show it as needing review, not "cleared"', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const run = await keptRun(R, api, ['Calm at the counter.']);
+  const l = run.lines[0];
+  await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', line_ids: [l.id], expectation: { line_ids: [l.id], reason: 'x' } }, 'nick');
+  await R.setCompliance(run.id, l.id, 'cleared', 'fine', 'vivan');
+  await S.setDecision(run.id, l.id, { decision: 'edit', edited_text: 'Calm at the counter, every time.' }, 'nick');
+  const v = (await R.readyView('OWN', 'OWN_CALM')).lines[0];
+  assert.equal(v.compliance.status, 'pending');
+  assert.match(v.compliance.note!, /Edited since/);
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
+  const c = await pf.codeCompliance(v.stub, null);
+  assert.equal(c.status, 'pending');
+  assert.equal(c.stale, 'Wording edited since sign-off');
 });

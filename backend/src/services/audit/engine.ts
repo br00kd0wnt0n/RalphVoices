@@ -119,7 +119,7 @@ async function readFrames(a: Asset, ctx: AuditContext, errors: string[]): Promis
 
 function textBlocks(a: Asset, frames: FrameText[]): { blocks: TextBlock[]; ocrBlocks: TextBlock[] } {
   const blocks: TextBlock[] = [];
-  for (const [k, v] of Object.entries(a.copy)) blocks.push({ where: a.copy_labels[k] || k, field: k, text: v, lead: ['meta_headline', 'tiktok_hook', 'meta_description'].includes(k) });
+  for (const [k, v] of Object.entries(a.copy)) blocks.push({ where: a.copy_labels[k] || k, field: k, text: v, lead: ['meta_headline', 'tiktok_hook', 'meta_description', 'meta_on_image'].includes(k) });
   // A concept card mixes description and copy: only its quoted words are copy.
   if (a.text_only) {
     const quoted = [...a.text_only.matchAll(/"([^"]+)"|“([^”]+)”/g)].map(m => m[1] || m[2]);

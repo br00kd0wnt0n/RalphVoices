@@ -131,7 +131,7 @@ function place(f: AuditFile, i: number, dir: string): string {
   return p;
 }
 
-/** Signed-off copy → the copy fields the rule checks see (limits, price lead). On-image text isn't a field. */
+/** Signed-off copy → the copy fields the rule checks see (limits, price lead). On-image text is meta_on_image (rules v2.10+). */
 function copyFields(copy: SignedOffCopy = {}): { copy: Record<string, string>; labels: Record<string, string> } {
   const out: Record<string, string> = {}, labels: Record<string, string> = {};
   for (const [k, v] of Object.entries(copy) as Array<[keyof SignedOffCopy, string | undefined]>) {

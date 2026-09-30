@@ -456,8 +456,8 @@ const STEPS: Array<{ title: string; what: string; you: string }> = [
   { title: 'Review', what: 'Length, flags with their sources, and a skeptic’s objection.', you: 'Keep, cut, edit, or ask for more like this.' },
   { title: 'Shortlist', what: 'Kept lines get naming codes. Runs are saved to continue later.', you: 'Curate in Sheets and import it back.' },
   { title: 'Ready for production', what: 'Red flags fixed or overridden with a reason, then the set is locked with your expectations.', you: 'Sign off the copy.' },
-  { title: 'Pre-flight', what: 'The finished asset checked automatically against the signed-off copy and the rules.', you: 'Upload, agree or disagree, mark Ready to traffic.' },
-  { title: 'Compliance', what: 'Trupanion sees each asset with its copy and flags, together. Changes go back to the copy or the visual.', you: 'Clear it, or request changes with a note; then hand over to Add3.' },
+  { title: 'Pre-flight', what: 'The finished asset checked automatically against the signed-off copy and the rules.', you: 'Upload, agree or disagree, mark Pre-flight passed.' },
+  { title: 'Compliance', what: 'Trupanion reviews each asset with its copy and flags. Ready to traffic once they’ve cleared it.', you: 'Vivan records Trupanion’s decision per code; changes go back to the copy or the visual.' },
 ];
 
 function Home({ onStart }: { onStart: () => void }) {
@@ -972,7 +972,8 @@ function LineCard({ meta, line, onChange, onMore }: { meta: Meta; line: Line; on
         <span>· Tone: {toneWords(line.tone, meta) || line.tone_label}</span>
         {line.parent && <Chip tone="outline">more like {line.parent.split('-').pop()}</Chip>}
         {checking && <span className="animate-pulse" style={{ color: PINK }}>flags still arriving…</span>}
-        {line.ready && <Chip tone="outline" className="border-emerald-500/60 text-emerald-300" title={`Signed off by ${line.ready.ready_by}, ${when(line.ready.ready_at)}`}>ready v{line.ready.version}{line.ready.changed_since ? ' · edited since' : ''}</Chip>}
+        {line.ready && !line.ready.superseded_by && <Chip tone="outline" className="border-emerald-500/60 text-emerald-300" title={`Signed off by ${line.ready.ready_by}, ${when(line.ready.ready_at)}`}>ready v{line.ready.version}{line.ready.changed_since ? ' · edited since' : ''}</Chip>}
+        {line.ready?.superseded_by && <Chip tone="grey" title="A later sign-off of its set left it out; it keeps its code if it goes back in">not in the latest set</Chip>}
       </div>
       {/* Who decided, on a line of its own with a fixed height: a decision never changes the card's size, so nothing below it moves. */}
       <div className="-mt-1 mb-1 flex h-5 items-center justify-end text-xs">
@@ -1362,17 +1363,20 @@ function Ready({ meta, batch, user, onNext }: { meta: Meta; batch: Batch | null;
   // Nothing to sign off if the set and every wording match the latest sign-off.
   const latest = view?.latest;
   const unchanged = !!latest && latest.lines.length === selected.length && selected.every(x => latest.lines.some(l => l.line_id === x.line.id && l.sha256 === x.sha256));
-  const blockedBy = unchanged ? `This set is signed off (v${latest!.version}). Edit a line or change the set to sign off again.` : !selected.length ? 'Choose at least one line.' : reds ? `${reds} red flag${reds === 1 ? '' : 's'} to fix or override first.` : !leads.length ? 'Pick the line(s) you expect to lead.' : !reason.trim() ? 'Say why you expect them to lead.' : '';
+  const canSignOff = meta.can_sign_off !== false;
+  const blockedBy = !canSignOff ? 'Lines are signed off by the creative lead or an admin.' : unchanged ? `This set is signed off (v${latest!.version}). Edit a line or change the set to sign off again.` : !selected.length ? 'Choose at least one line.' : reds ? `${reds} red flag${reds === 1 ? '' : 's'} to fix or override first.` : !leads.length ? 'Pick the line(s) you expect to lead.' : !reason.trim() ? 'Say why you expect them to lead.' : '';
 
   async function signOff() {
     if (!pt) return;
     setBusy(true); setError(''); setDone('');
     try {
-      const r = await studio.signOff({ persona: pt.persona, territory: pt.territory, region: pt.region, line_ids: selected.map(x => x.line.id), visuals, expectation: { line_ids: leads, reason } });
+      const r = await studio.signOff({ persona: pt.persona, territory: pt.territory, region: pt.region, line_ids: selected.map(x => x.line.id), visuals, expectation: { line_ids: leads, reason }, expect_latest: view?.latest?.id ?? null });
       setDone(`${r.signoff.lines.length} line${r.signoff.lines.length === 1 ? '' : 's'} marked Ready for production (set v${r.signoff.version}), with your expectations locked alongside.`);
       await load(true);
     } catch (e: any) {
       setError(e.body?.blocking ? `${e.message}: ${e.body.blocking.map((b: any) => b.line_id.split('-').pop()).join(', ')}` : e.message);
+      // Someone else signed this set off meanwhile: show what's there now (their set, and codes), keeping this selection.
+      if (e.status === 409 && e.body?.conflict) await load(true).catch(() => {});
     } finally { setBusy(false); }
   }
   const t = pt ? meta.territories[pt.territory] : null;
@@ -1504,8 +1508,9 @@ function ReadyCard({ meta, item, included, lead, onVisual, onInclude, onLead, on
         )}
         <span>{f?.label || line.field}</span>
         <span className={cn('font-mono', f && chars > f.visible ? 'font-bold text-amber-300' : '')}>{chars}/{f?.visible}</span>
-        {line.model === 'human' && <Chip tone="outline" className="border-[#D94D8F] text-[#D94D8F]">yours</Chip>}
-        {line.ready && <Chip tone="outline" className="border-emerald-500/60 text-emerald-300">ready v{line.ready.version} · {line.ready.ready_by}, {when(line.ready.ready_at)}</Chip>}
+        {line.model === 'human' && <Chip tone="outline" className="border-[#D94D8F] text-[#D94D8F]" title={line.added_by ? `Added by ${line.added_by}` : undefined}>{line.added_by ? `yours · ${line.added_by.split('@')[0]}` : 'yours'}</Chip>}
+        {line.ready && !line.ready.superseded_by && <Chip tone="outline" className="border-emerald-500/60 text-emerald-300">ready v{line.ready.version} · {line.ready.ready_by}, {when(line.ready.ready_at)}</Chip>}
+        {line.ready?.superseded_by && <Chip tone="grey" title={`Signed off in ${line.ready.signoff_id}; a later set (${line.ready.superseded_by}) left it out. It keeps its code if it goes back in.`}>not in the latest set</Chip>}
         {line.ready?.changed_since && <Chip tone="amber">edited since sign-off: v{Math.max(...versions.map(v => v.version), line.ready.version)} not yet signed off</Chip>}
         <button onClick={() => onLead(!lead)} disabled={!included} className={cn('ml-auto rounded-full border px-3 py-0.5 text-sm font-medium transition disabled:opacity-40', lead ? 'border-[#D94D8F] bg-[#D94D8F] text-white' : 'border-[#4A505D] text-[#C9CCD2] hover:border-[#D94D8F]')}>
           {lead ? '★ Expected to lead' : '☆ Expect to lead'}
@@ -1569,7 +1574,7 @@ function ReadyCard({ meta, item, included, lead, onVisual, onInclude, onLead, on
 
       {compliance.status === 'changes_requested' && compliance.send_back !== 'asset' && (
         <div className="mt-3 rounded-lg border border-amber-400/50 bg-amber-400/10 p-3 text-base text-amber-100">
-          <span className="font-semibold">Compliance asked for changes to the copy</span>{compliance.note ? `: “${compliance.note}”` : ''}
+          <span className="font-semibold">Trupanion asked for changes to the copy{compliance.client_by ? ` (${compliance.client_by})` : ''}</span>{compliance.note ? `: “${compliance.note}”` : ''}
           <div className="mt-0.5 text-sm text-amber-200/80">Edit the wording, then sign off again. {compliance.by ? `${compliance.by}, ${when(compliance.at)}` : ''}</div>
         </div>
       )}
@@ -1578,7 +1583,7 @@ function ReadyCard({ meta, item, included, lead, onVisual, onInclude, onLead, on
         <span className="text-sm font-semibold uppercase tracking-wider text-[#858B96]">Compliance</span>
         <span className={cn('rounded-full border px-3 py-0.5 text-sm font-medium', COMPLIANCE_TONE[compliance.status])} title="Set at the Compliance step, after Pre-flight, with the visual">{COMPLIANCE_WORDS[compliance.status]}</span>
         {compliance.note && compliance.status !== 'changes_requested' ? <span className="text-sm text-[#C9CCD2]">{compliance.note}</span> : null}
-        <span className="flex-1 text-xs text-[#646A75]">{compliance.by ? `${compliance.by}, ${when(compliance.at)}${compliance.sha256 && compliance.sha256 !== item.sha256 ? ' · on an earlier wording' : ''}` : 'Reviewed at the Compliance step, with the visual'}</span>
+        <span className="flex-1 text-xs text-[#646A75]">{compliance.by ? `${compliance.client_by ? `Trupanion: ${compliance.client_by} · ` : ''}recorded by ${compliance.by}, ${when(compliance.at)}${compliance.sha256 && compliance.sha256 !== item.sha256 ? ' · on an earlier wording' : ''}` : 'Trupanion reviews it at the Compliance step, with the visual'}</span>
         <button className="text-xs text-[#858B96] hover:text-[#ECEDEF]" onClick={() => { setDraft(final_text); setEditing(true); }} title={line.ready ? 'Editing makes a new version; the signed-off wording is kept' : undefined}>edit wording</button>
         <button className="text-xs text-[#646A75] hover:text-[#ECEDEF]" onClick={() => setShowHistory(!showHistory)}>{showHistory ? 'hide history' : `history${versions.length ? ` · ${versions.length} version${versions.length === 1 ? '' : 's'}` : ''}`}</button>
       </div>
@@ -1702,7 +1707,9 @@ function byVisual(ss: PfStub[]): Array<[string, PfStub[]]> {
 }
 
 function stubState(s: PfStub): { words: string; tone: 'grey' | 'amber' | 'red' | 'outline'; className?: string } {
-  if (s.status.status === 'ready') return { words: 'Ready to traffic', tone: 'outline', className: 'border-emerald-500 text-emerald-300' };
+  // Ready to traffic needs both: Pre-flight passed and Trupanion's compliance cleared (Brook, 30 Sep).
+  if (s.traffic?.ready) return { words: s.traffic.legacy ? 'Ready · compliance not recorded' : 'Ready to traffic', tone: 'outline', className: 'border-emerald-500 text-emerald-300' };
+  if (s.status.status === 'ready') return { words: s.traffic?.compliance === 'changes_requested' ? 'passed · changes requested' : 'passed · compliance pending', tone: s.traffic?.compliance === 'changes_requested' ? 'red' : 'amber' };
   if (!s.upload) return { words: 'not uploaded', tone: 'grey' };
   if (!s.audit || s.audit.id && s.audit.status === 'queued') return { words: 'not audited', tone: 'grey' };
   if (s.audit.status === 'running') return { words: 'auditing…', tone: 'amber' };
@@ -1782,7 +1789,7 @@ function Preflight({ meta }: { meta: Meta }) {
       <div className="flex flex-wrap items-start gap-4 rounded-xl border border-[#272B34] bg-[#16181D] p-5">
         <div className="mr-auto max-w-3xl">
           <h1 className="text-2xl font-bold tracking-tight" style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>Pre-flight</h1>
-          <p className="mt-1 text-base text-[#A3A8B1]">The finished asset for each signed-off naming code, checked against the signed-off copy and the rules before it goes to Add3. Agree or disagree with each flag; red flags are fixed with a new upload or overridden with a reason, then the asset is marked Ready to traffic.</p>
+          <p className="mt-1 text-base text-[#A3A8B1]">The finished asset for each signed-off naming code, checked against the signed-off copy and the rules before it goes to Add3. Agree or disagree with each flag; red flags are fixed with a new upload or overridden with a reason, then the asset is marked Pre-flight passed. It’s Ready to traffic once Trupanion’s compliance is cleared too.</p>
         </div>
         <div className="min-w-[15rem] rounded-lg border border-[#272B34] bg-[#101216] px-4 py-3">
           <Label>Your verdicts on the flags</Label>
@@ -1856,7 +1863,9 @@ function PreflightReport({ meta, report, stubs, canReady, progress, pending, fil
   // The latest audit may be of an earlier upload: only findings for the current upload count.
   const auditForLatest = !!(a && up && a.upload_id === up.id);
   const auditedLatest = auditForLatest && a!.status === 'done';
+  // The creative lead marks Pre-flight passed; Ready to traffic also needs Trupanion's compliance cleared.
   const ready = report.status.status === 'ready';
+  const traffic = report.traffic;
   const readyBlock = !up ? 'Upload the asset first.' : !auditForLatest ? 'Run the audit on this upload first.' : !a ? 'Run the audit first.' : a.status === 'running' || a.status === 'queued' ? 'The audit is still running.' : a.status === 'failed' ? 'The audit failed; run it again.' : openRed ? `${openRed} red flag${openRed === 1 ? '' : 's'} to fix (a new upload) or override.` : '';
   const act = async (fn: () => Promise<unknown>) => { try { await fn(); await onChanged(); } catch (e: any) { onError(e.body?.blocking ? `${e.message}: ${e.body.blocking.map((b: any) => b.label || b.rule).join('; ')}` : e.message); } };
   const copyRows = res?.copy_match ?? res?.report?.copy_match;
@@ -1872,17 +1881,20 @@ function PreflightReport({ meta, report, stubs, canReady, progress, pending, fil
 
   return (
     <>
-      <div className={cn('flex flex-wrap items-center gap-3 rounded-xl border-2 px-5 py-4', ready ? 'border-emerald-500/60 bg-emerald-500/10' : 'border-[#272B34] bg-[#16181D]')}>
+      <div className={cn('flex flex-wrap items-center gap-3 rounded-xl border-2 px-5 py-4', traffic?.ready ? 'border-emerald-500/60 bg-emerald-500/10' : ready ? 'border-amber-400/50 bg-amber-400/5' : 'border-[#272B34] bg-[#16181D]')}>
         <div className="mr-auto">
           <div className="font-mono text-lg font-semibold" title={NAMING_TIP}>{report.stub}</div>
           <div className="text-sm text-[#858B96]">{personaName(meta, report.persona)} · {territoryName(meta.territories[report.territory]) || report.territory}{inRegion(report.region)} · signed off in {report.signoff_id}</div>
         </div>
         {ready
-          ? <span className="text-base text-emerald-100"><span className="font-semibold">Ready to traffic</span> · {report.status.ready_by}, {when(report.status.ready_at)}</span>
-          : <span className="text-sm text-[#A3A8B1]">{readyBlock || (canReady ? 'Reviewed and nothing red left open.' : '')}</span>}
+          ? <span className="text-base">
+              <span className={cn('font-semibold', traffic?.ready ? 'text-emerald-100' : 'text-amber-100')}>{traffic?.words || 'Pre-flight passed'}</span>
+              <span className="block text-sm text-[#A3A8B1]">Pre-flight passed by {report.status.ready_by}, {when(report.status.ready_at)}{traffic && !traffic.ready && traffic.blocker ? ` · ${traffic.blocker}` : ''}{traffic?.legacy ? ' · marked before compliance was needed' : ''}</span>
+            </span>
+          : <span className="text-sm text-[#A3A8B1]">{readyBlock || (canReady ? 'Reviewed and nothing red left open.' : '')}{traffic ? <span className="block text-xs text-[#646A75]">{traffic.words}</span> : null}</span>}
         {canReady && (ready
           ? <GhostButton className="text-base" onClick={() => act(() => studio.pfReady(report.stub, false))}>Take back</GhostButton>
-          : <PinkButton className="px-4 py-2 text-base" disabled={!!readyBlock} onClick={() => act(() => studio.pfReady(report.stub, true))}>Mark Ready to traffic</PinkButton>)}
+          : <PinkButton className="px-4 py-2 text-base" disabled={!!readyBlock} onClick={() => act(() => studio.pfReady(report.stub, true))} title="Ready to traffic once Trupanion’s compliance is cleared too">Mark Pre-flight passed</PinkButton>)}
         {!canReady && !ready && <span className="text-xs text-[#646A75]">Set by the creative lead or an admin</span>}
       </div>
 
@@ -1897,7 +1909,7 @@ function PreflightReport({ meta, report, stubs, canReady, progress, pending, fil
             )}
             {report.compliance?.status === 'changes_requested' && (
               <div className="rounded-lg border border-amber-400/50 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
-                <span className="font-semibold">Compliance asked for changes{report.compliance.send_back === 'asset' ? ' to the visual' : ' to the copy'}</span>{report.compliance.note ? `: “${report.compliance.note}”` : ''}
+                <span className="font-semibold">Trupanion asked for changes{report.compliance.send_back === 'asset' ? ' to the visual' : ' to the copy'}{report.compliance.client_by ? ` (${report.compliance.client_by})` : ''}</span>{report.compliance.note ? `: “${report.compliance.note}”` : ''}
                 <div className="text-amber-200/80">{report.compliance.send_back === 'asset' ? 'Upload a new version; it goes back to Compliance for review.' : 'The copy is edited and signed off again at Ready for production.'} {report.compliance.by ? `${report.compliance.by}, ${when(report.compliance.at)}` : ''}</div>
               </div>
             )}
@@ -2117,8 +2129,8 @@ function Compliance({ meta }: { meta: Meta }) {
       <div className="flex flex-wrap items-start gap-4 rounded-xl border border-[#272B34] bg-[#16181D] p-5">
         <div className="mr-auto max-w-3xl">
           <h1 className="text-2xl font-bold tracking-tight" style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif' }}>Compliance</h1>
-          <p className="mt-1 text-base text-[#A3A8B1]">Each finished asset with its signed-off copy and Pre-flight’s flags, reviewed together. Clear it, or request changes with a note: the copy goes back to Ready for production, the visual to Pre-flight. A new upload comes back here for review. When everything is cleared, hand over to Add3.</p>
-          {!can && <p className="mt-2 text-sm text-[#858B96]">Vivan (or an admin) sets the status; you can see it here.</p>}
+          <p className="mt-1 text-base text-[#A3A8B1]">Trupanion reviews each finished asset with its signed-off copy and Pre-flight’s flags. Vivan coordinates with them and records their decision here, per code: cleared, or changes requested with a note (the copy goes back to Ready for production, the visual to Pre-flight). A code is Ready to traffic only once Pre-flight has passed and Trupanion has cleared it.</p>
+          {!can && <p className="mt-2 text-sm text-[#858B96]">Vivan (or an admin) records Trupanion’s decisions; you can see them here.</p>}
         </div>
         <div className="min-w-[14rem] rounded-lg border border-[#272B34] bg-[#101216] px-4 py-3 text-sm">
           <div className="text-2xl font-bold">{count('cleared')} <span className="text-base font-medium text-[#858B96]">of {assets.length} assets cleared</span></div>
@@ -2171,23 +2183,33 @@ function Compliance({ meta }: { meta: Meta }) {
 }
 
 function ComplianceAssetView({ meta, asset, can, onChanged, onError }: { meta: Meta; asset: ComplianceAsset; can: boolean; onChanged: () => Promise<void>; onError: (m: string) => void }) {
-  const c0 = asset.codes[0]?.compliance;
+  const c0 = [...asset.codes].map(c => c.compliance).sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')))[0];
   const [note, setNote] = useState('');
+  const [clientBy, setClientBy] = useState('');
   const [sendBack, setSendBack] = useState<'copy' | 'asset'>('asset');
+  // Which codes the decision applies to: every code on the asset by default (Brook, 30 Sep: e.g. A3's copy sent back, A1 and A2 cleared).
+  const [apply, setApply] = useState<Set<string>>(new Set(asset.codes.map(c => c.stub)));
   const [busy, setBusy] = useState(false);
-  useEffect(() => { setNote(''); setSendBack(c0?.send_back || 'asset'); }, [asset.upload_id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setNote(''); setSendBack(c0?.send_back || 'asset'); setApply(new Set(asset.codes.map(c => c.stub))); }, [asset.upload_id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const all = apply.size === asset.codes.length;
   const flags = asset.flags.filter(f => !f.cross_persona);
   const reds = flags.filter(f => f.severity === 'red'), ambers = flags.filter(f => f.severity === 'amber'), greys = flags.filter(f => f.severity === 'grey');
   const overridden = [...reds.filter(f => f.override).map(f => f.label), ...asset.codes.flatMap(c => c.compliance.overrides)];
+  // For the codes the decision applies to: red flags let through with an override (Pre-flight's, and the copy's at Ready).
+  // Clearing them needs a note saying what Trupanion accepted (the server refuses without it).
+  const acceptedReds = [
+    ...reds.filter(f => f.override && (!f.for_stub || apply.has(f.for_stub))).map(f => ({ key: f.id, label: f.label, where: `Pre-flight${f.for_stub ? `, ${f.for_stub}` : ''}`, reason: f.override!.reason })),
+    ...asset.codes.filter(c => apply.has(c.stub)).flatMap(c => (c.compliance.override_details || c.compliance.overrides.map(label => ({ label, reason: '', by: '' })))
+      .map((o, i) => ({ key: `${c.stub}-${i}`, label: o.label, where: `copy at Ready, ${c.stub}${o.by ? `, by ${o.by}` : ''}`, reason: o.reason }))),
+  ];
+  const needsNote = acceptedReds.length > 0 && !note.trim();
   async function set(status: ComplianceStatus) {
-    let n = note.trim();
-    if (status === 'cleared' && overridden.length && !n) {
-      n = window.prompt('This asset went through with an overridden red flag. Who at Trupanion cleared it?')?.trim() || '';
-      if (!n) return;
-    }
     setBusy(true);
-    try { await studio.setAssetCompliance(asset.upload_id, { status, note: n || undefined, send_back: status === 'changes_requested' ? sendBack : undefined }); setNote(''); await onChanged(); }
-    catch (e: any) { onError(e.message); } finally { setBusy(false); }
+    try {
+      await studio.setAssetCompliance(asset.upload_id, { status, note: note.trim() || undefined, client_by: clientBy.trim() || undefined, send_back: status === 'changes_requested' ? sendBack : undefined, codes: all ? undefined : [...apply] });
+      setNote('');
+      await onChanged();
+    } catch (e: any) { onError(e.message); } finally { setBusy(false); }
   }
   const FlagLine = ({ f }: { f: ComplianceAsset['flags'][number] }) => (
     <li className="text-sm">
@@ -2205,7 +2227,7 @@ function ComplianceAssetView({ meta, asset, can, onChanged, onError }: { meta: M
           <div className="font-mono text-sm text-[#858B96]">{asset.codes.map(c => c.stub).join(' · ')}</div>
         </div>
         <span className={cn('rounded-full border px-3 py-1 text-sm font-semibold', COMPLIANCE_TONE[asset.status])}>{COMPLIANCE_WORDS[asset.status]}</span>
-        {c0?.by && <span className="text-sm text-[#A3A8B1]">{c0.by}, {when(c0.at)}</span>}
+        {c0?.by && c0.status !== 'pending' && <span className="text-sm text-[#A3A8B1]">{c0.client_by ? `Trupanion: ${c0.client_by} · ` : ''}recorded by {c0.by}, {when(c0.at)}</span>}
       </div>
       {c0?.note && <p className="rounded-lg border border-[#343946] bg-[#101216] px-3 py-2 text-base text-[#C9CCD2]"><span className="text-[#858B96]">Note:</span> {c0.note}{c0.send_back ? <span className="text-[#858B96]"> · sent back: {c0.send_back === 'asset' ? 'the visual' : 'the copy'}</span> : null}</p>}
       {c0?.stale && <p className="rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">{c0.stale}: review it again.</p>}
@@ -2229,9 +2251,10 @@ function ComplianceAssetView({ meta, asset, can, onChanged, onError }: { meta: M
             {asset.codes.map(c => (
               <div key={c.stub} className="border-l-2 border-[#343946] pl-3">
                 <div className="flex flex-wrap items-center gap-2"><span className="font-mono text-sm">{c.stub}</span>
-                  {c.ready.status === 'ready' && <Chip tone="outline" className="border-emerald-500/60 text-xs text-emerald-300">Ready to traffic</Chip>}
-                  {asset.codes.length > 1 && <span className={cn('rounded-full border px-2 py-px text-xs', COMPLIANCE_TONE[c.compliance.status])}>{COMPLIANCE_WORDS[c.compliance.status]}</span>}
+                  <span className={cn('rounded-full border px-2 py-px text-xs', COMPLIANCE_TONE[c.compliance.status])}>{COMPLIANCE_WORDS[c.compliance.status]}</span>
+                  <Chip tone={c.traffic.ready ? 'outline' : 'grey'} className={cn('text-xs', c.traffic.ready && 'border-emerald-500/60 text-emerald-300')} title={c.traffic.blocker}>{c.traffic.words}</Chip>
                 </div>
+                {c.compliance.status !== 'pending' && c.compliance.client_by && <div className="text-xs text-[#858B96]">{COMPLIANCE_WORDS[c.compliance.status]} by Trupanion ({c.compliance.client_by}){c.compliance.note && asset.codes.length > 1 ? `: “${c.compliance.note}”` : ''}</div>}
                 {c.copy.map(x => <div key={x.line_id} className="mt-1"><div className="text-xs text-[#858B96]">{x.label} · v{x.version}</div><div className="text-base leading-snug text-[#F2F3F5]">{x.text}</div></div>)}
                 {c.compliance.overrides.length > 0 && <div className="mt-1 text-xs text-amber-200">Please check specifically: {c.compliance.overrides.join('; ')}</div>}
               </div>
@@ -2251,8 +2274,32 @@ function ComplianceAssetView({ meta, asset, can, onChanged, onError }: { meta: M
 
       {can && (
         <section className="space-y-3 rounded-xl border-2 bg-[#16181D] p-5" style={{ borderColor: PINK }}>
-          <h2 className="text-lg font-semibold">Your review</h2>
-          <textarea rows={2} className="w-full rounded-lg border-2 border-[#343946] px-3 py-2 text-base" placeholder="Note (required for changes; e.g. who at Trupanion cleared it)" value={note} onChange={e => setNote(e.target.value)} />
+          <h2 className="text-lg font-semibold">Record Trupanion’s decision</h2>
+          <p className="-mt-2 text-sm text-[#858B96]">The decision is Trupanion’s; this records it, with who made it.</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Label>Who at Trupanion</Label>
+            <input aria-label="Who at Trupanion made the decision" className="min-w-[16rem] flex-1 rounded-lg border-2 border-[#343946] px-3 py-1.5 text-base" placeholder="e.g. J. Doe, Trupanion legal" value={clientBy} onChange={e => setClientBy(e.target.value)} />
+          </div>
+          {acceptedReds.length > 0 && (
+            <div className="rounded-lg border border-amber-400/50 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
+              <div className="font-semibold">Went through with {acceptedReds.length === 1 ? 'an overridden red flag' : `${acceptedReds.length} overridden red flags`}. To clear, say in the note what Trupanion accepted.</div>
+              <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                {acceptedReds.map(x => <li key={x.key}>{x.label} <span className="text-amber-200/70">({x.where}{x.reason ? `; overridden because “${x.reason}”` : ''})</span></li>)}
+              </ul>
+            </div>
+          )}
+          <textarea rows={2} className={cn('w-full rounded-lg border-2 px-3 py-2 text-base', needsNote ? 'border-amber-400/60' : 'border-[#343946]')} placeholder={acceptedReds.length ? 'Note (required to clear: what Trupanion accepted; for changes: what needs changing)' : 'Note (required for changes: what needs changing)'} value={note} onChange={e => setNote(e.target.value)} />
+          {asset.codes.length > 1 && (
+            <fieldset className="text-sm">
+              <legend className="mb-1 text-[#858B96]">Applies to {all ? 'every code on this asset' : `${apply.size} of ${asset.codes.length} codes`}</legend>
+              {asset.codes.map(c => (
+                <label key={c.stub} className="mr-4 inline-flex cursor-pointer items-center gap-1.5">
+                  <input type="checkbox" className="accent-[#D94D8F]" checked={apply.has(c.stub)} onChange={e => setApply(cur => { const n = new Set(cur); if (e.target.checked) n.add(c.stub); else n.delete(c.stub); return n; })} />
+                  <span className="font-mono">{c.stub}</span>
+                </label>
+              ))}
+            </fieldset>
+          )}
           <fieldset className="text-sm">
             <legend className="mb-1 text-[#858B96]">If you request changes, what goes back?</legend>
             {(['asset', 'copy'] as const).map(k => (
@@ -2260,11 +2307,11 @@ function ComplianceAssetView({ meta, asset, can, onChanged, onError }: { meta: M
             ))}
           </fieldset>
           <div className="flex flex-wrap gap-2">
-            <PinkButton className="px-4 py-2 text-base" disabled={busy} onClick={() => set('cleared')}>Cleared</PinkButton>
-            <GhostButton className="px-4 py-2 text-base" disabled={busy || !note.trim()} title={!note.trim() ? 'Say what needs changing first' : undefined} onClick={() => set('changes_requested')}>Request changes</GhostButton>
-            <GhostButton className="px-4 py-2 text-base" disabled={busy || asset.status === 'pending'} onClick={() => set('pending')}>Back to pending</GhostButton>
+            <PinkButton className="px-4 py-2 text-base" disabled={busy || !apply.size || !clientBy.trim() || needsNote} title={!clientBy.trim() ? 'Say who at Trupanion cleared it' : needsNote ? 'Say in the note what Trupanion accepted (overridden red flags)' : undefined} onClick={() => set('cleared')}>Cleared by Trupanion</PinkButton>
+            <GhostButton className="px-4 py-2 text-base" disabled={busy || !apply.size || !note.trim() || !clientBy.trim()} title={!clientBy.trim() ? 'Say who at Trupanion asked for changes' : !note.trim() ? 'Say what needs changing first' : undefined} onClick={() => set('changes_requested')}>Changes requested</GhostButton>
+            <GhostButton className="px-4 py-2 text-base" disabled={busy || !apply.size} onClick={() => set('pending')}>Back to pending</GhostButton>
           </div>
-          {overridden.length > 0 && <p className="text-xs text-amber-200">Went through with an overridden red flag ({overridden.join('; ')}): clearing needs a note.</p>}
+          {overridden.length > 0 && !acceptedReds.length && <p className="text-xs text-amber-200">Other codes on this asset went through with an overridden red flag ({overridden.join('; ')}).</p>}
         </section>
       )}
     </div>
