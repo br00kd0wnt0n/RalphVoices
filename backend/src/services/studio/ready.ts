@@ -19,7 +19,7 @@
 
 import {
   type Api, type Batch, type ComplianceStatus, type Flag, type Line, type LineVersion, type Rules,
-  checkBatch, finalText, getStore, keptLines, lineHash, loadBatch, loadRules, runLock, sha256, signedCodes, toCsv,
+  SHARED_PERSONA, checkBatch, finalText, getStore, keptLines, lineHash, loadBatch, loadRules, runLock, sha256, signedCodes, toCsv,
 } from './engine.js';
 import { DEFAULT_REGION, REGION_NAMES, parseCode, territoryToken, type Region } from '../../utils/namingCode.js';
 import { cleanFor, decidedBy, whoWords } from '../../utils/actor.js';
@@ -209,14 +209,23 @@ export async function readyView(persona: string, territory: string, region: Regi
   const rv = await roundView(opts.round, opts.user);
   const round = { id: rv.ids ? [...rv.ids][0] : rv.active.id, test: false };
   round.test = rv.isTest(round.id);
-  const lines = (await keptLines()).filter(l => l.persona === persona && l.territory === territory && l.region === region && l.round === round.id);
+  const allKept = await keptLines();
+  const own = allKept.filter(l => l.persona === persona && l.territory === territory && l.region === region && l.round === round.id);
+  // Shared captions (Brook, 1 Oct): post copy that is generic across personas is written once (the shared pool, per
+  // region) and can be used in any territory's ads. Artwork copy (per-visual fields) is never shared.
+  const shared = persona === SHARED_PERSONA ? [] : allKept.filter(l => l.persona === SHARED_PERSONA && l.region === region && l.round === round.id && fieldRole(l.field, r) !== 'per_visual');
+  const lines = [...own, ...shared];
   const all = ((await st.listSignoffs()) as Signoff[]).filter(s => s.persona === persona && s.territory === territory);
   const signoffs = all.filter(s => regionOfSignoff(s) === region && roundOf(s) === round.id).sort((a, b) => a.version - b.version);
   const latest = signoffs[signoffs.length - 1] || null;
   const ids = new Set(signoffs.map(s => s.id));
   const expectations = ((await st.listExpectations()) as Expectation[]).filter(e => ids.has(e.signoff_id));
   const format = r.territories[territory]?.format || 'STATIC';
-  const d = draft || defaultDraft(lines, r, latest, format);
+  // Untouched, the ads are built from the territory's own lines; with no post copy of its own, from the first few
+  // shared captions (three ads to a visual), never one ad per shared caption.
+  const hasOwnPost = own.some(l => fieldRole(l.field, r) === 'required');
+  const starter = hasOwnPost ? own : [...own, ...sharedStarter(shared, r)];
+  const d = draft || defaultDraft(latest ? lines : starter, r, latest, format);
   // A real round allocates as if a test round never happened (R1 starts at A); a test round's codes carry _TEST.
   const plan = planDraft(d, lines, { persona, territory, region, format, rules: r, suffix: round.test ? TEST_SUFFIX : '' }, await signedCodes(x => rv.isTest(x) === round.test), latest);
   const byId = new Map(lines.map(l => [l.id, l]));
@@ -245,13 +254,26 @@ export async function readyView(persona: string, territory: string, region: Regi
   for (const l of lines) {
     out.push({
       line: l, final_text: finalText(l), sha256: lineHash(l), role: fieldRole(l.field, r), platform: platformOf(l.field, r),
-      in: inCodes(l.id), red: unresolvedRed(l),
+      in: inCodes(l.id), red: unresolvedRed(l), ...(l.persona === SHARED_PERSONA && persona !== SHARED_PERSONA ? { shared: true } : {}),
       versions: (await st.listLineVersions(l.id)) as LineVersion[],
     });
   }
   const platforms = [...new Set([...lines.map(l => platformOf(l.field, r)), ...versions.map(v => v.platform)])].sort();
   const fields = Object.fromEntries(platforms.map(p => [p, versionFields(p, r)]));
   return { persona, territory, region, round, lines: out, draft: d, plan: { ...plan, versions, check_estimate }, fields, signoffs, expectations, latest };
+}
+
+/** The shared captions a territory with no post copy of its own starts from: the first three per required field, the first of each optional one. */
+function sharedStarter(shared: Line[], r: Rules): Line[] {
+  const out: Line[] = [];
+  const n = new Map<string, number>();
+  for (const l of shared) {
+    const k = n.get(l.field) || 0;
+    if (k >= (fieldRole(l.field, r) === 'required' ? 3 : 1)) continue;
+    n.set(l.field, k + 1);
+    out.push(l);
+  }
+  return out;
 }
 
 /** Run the conflicts check (a model call per version whose wording hasn't been checked) on a draft, then show it. */
@@ -371,7 +393,8 @@ async function signOffLocked(input: { persona: string; territory: string; expect
   // Left out of this set: no longer shown as signed off (its record stays in the earlier set).
   for (const x of dropped) {
     const { line } = await lineAt(x.batch_id, x.line_id);
-    if (!line.ready || line.ready.superseded_by) continue;
+    // A shared caption signed off since in another territory's set carries that set's mark: leaving it out here doesn't touch it.
+    if (!line.ready || line.ready.superseded_by || (view.latest && line.ready.signoff_id !== view.latest.id)) continue;
     const before = { ready: line.ready };
     line.ready = { ...line.ready, superseded_by: id };
     await write(x.batch_id, line, before, { ready: line.ready }, by);

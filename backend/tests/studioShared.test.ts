@@ -1,0 +1,90 @@
+// Shared captions (Brook, 1 Oct): post copy (primary text, Meta headline, caption) is generic across personas and
+// reused; artwork copy (on-image headline + subhead) is the persona's. A shared run (persona ALL, territory SHARED) is
+// written at brand level against the approved on-image headlines, and its kept lines can be used in any territory's
+// ads. Example rules, mock client, file store.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import * as S from '../src/services/studio/engine.js';
+import * as R from '../src/services/studio/ready.js';
+import { FileStore } from '../src/services/studio/store.js';
+
+async function fresh() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-shared-'));
+  const rules = JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8'));
+  rules.fields.meta_on_image = { platform: 'META', label: 'On-image text', visible: 40, max: 60, source: 'HOUSE: test', in_version: 'per_visual' };
+  rules.personas.FAM = { ...rules.personas.OWN, name: 'Busy Families' };
+  rules.territories.OWN_STILL = { ...rules.territories.OWN_CALM, name: 'Still', format: 'STATIC' };
+  rules.territories.FAM_SUMMER = { ...rules.territories.OWN_CALM, persona: 'FAM', name: 'Summer', format: 'STATIC' };
+  const rulesPath = path.join(dir, 'rules.json');
+  fs.writeFileSync(rulesPath, JSON.stringify(rules));
+  S.setStudioDir(dir);
+  S.setStore(new FileStore(dir, { rulesPath }));
+  return S.refreshRules();
+}
+const api = () => new S.Api({ mock: true });
+async function own(territory: string, lines: Array<[string, string]>, region: 'US' | 'CA' = 'US') {
+  const run = await S.generate(S.makeBrief({ territory, region, name: `${territory}-${region}`, own_lines: lines.map(([field, text]) => ({ field, text })) }), api(), () => {}, { ownOnly: true, user: 'nick' });
+  for (const l of run.lines) {
+    await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+    for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find(x => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'Test line', 'nick');
+  }
+  return run.lines.map(l => l.id);
+}
+
+test('a shared run is written at brand level, against the approved on-image headlines of every persona in its region', async () => {
+  await fresh();
+  await own('OWN_STILL', [['meta_on_image', 'Vet visits, calmer']]);
+  await own('FAM_SUMMER', [['meta_on_image', 'Summer plans, covered']]);
+  await own('FAM_SUMMER', [['meta_on_image', 'Des plans pour l’été']], 'CA');
+  assert.deepEqual((await S.approvedHeadlines('US')).sort(), ['Summer plans, covered', 'Vet visits, calmer']);
+  const a = api();
+  let system = '';
+  const chat = a.chat.bind(a);
+  a.chat = (async (o: any) => { if (o.stage === 'generate' && !system) system = o.system; return chat(o); }) as any;
+  const run = await S.generate(S.makeBrief({ territory: 'SHARED', fields: ['meta_primary', 'meta_headline'], n: 4, field_counts: { meta_primary: 2, meta_headline: 2 } }), a, () => {}, { check: false, user: 'brook' });
+  assert.deepEqual([run.brief.persona, run.brief.territory], ['ALL', 'SHARED']);
+  assert.deepEqual(run.brief.approved_headlines!.sort(), ['Summer plans, covered', 'Vet visits, calmer'], 'the US headlines only');
+  assert.match(system, /SHARED post copy/);
+  assert.match(system, /No persona-specific references/);
+  assert.match(system, /APPROVED ON-IMAGE HEADLINES[\s\S]*- Vet visits, calmer/);
+  assert.doesNotMatch(system, /What moves them/, 'no persona block');
+  assert.match(system, /MUST \(a line that breaks one of these is thrown away/, 'the same compliance MUSTs');
+  assert.ok(run.lines.filter(l => l.field === 'meta_primary').every(l => S.NAMES_PRODUCT.test(l.text)), 'primary texts name Trupanion or the category');
+});
+
+test('kept shared captions are in every territory\'s Build set for their region, flagged shared; artwork copy never is', async () => {
+  await fresh();
+  const [sp1, sh1] = await own('SHARED', [['meta_primary', 'Trupanion is medical insurance for pets. Get a quote.'], ['meta_headline', 'Get a quote today.']]);
+  await own('SHARED', [['meta_primary', 'Trupanion, assurance médicale pour animaux.']], 'CA');
+  const [oi] = await own('OWN_STILL', [['meta_on_image', 'Vet visits, calmer']]);
+  const [foi] = await own('FAM_SUMMER', [['meta_on_image', 'Summer plans, covered']]);
+  const view = await R.readyView('OWN', 'OWN_STILL');
+  assert.deepEqual(view.lines.map(x => [x.line.id, !!(x as any).shared]), [[oi, false], [sp1, true], [sh1, true]], 'own lines first, then the US shared captions');
+  // With no post copy of its own, the territory starts from the shared captions.
+  assert.deepEqual(view.draft.versions, [{ visual: 'A', platform: 'META', fields: { meta_primary: sp1, meta_headline: sh1 } }]);
+  assert.deepEqual(view.plan.issues, []);
+  // The same caption signed off in two personas' ads: one line, two codes.
+  const sign = async (persona: string, territory: string, image: string) => {
+    const v = await R.readyView(persona, territory, 'US', { versions: [{ visual: 'A', fields: { meta_primary: sp1, meta_headline: sh1 } }], on_image: { A: image } });
+    return (await R.signOff({ persona, territory, versions: v.draft.versions, on_image: v.draft.on_image, expectation: { codes: [v.plan.versions[0].code], reason: 'x' } }, 'nick')).signoff;
+  };
+  const a = await sign('OWN', 'OWN_STILL', oi), b = await sign('FAM', 'FAM_SUMMER', foi);
+  assert.equal(a.versions![0].fields.meta_primary.line_id, b.versions![0].fields.meta_primary.line_id);
+  assert.notEqual(a.versions![0].code, b.versions![0].code);
+  // An edit to the shared caption shows as edited since sign-off in both territories (it's one line).
+  await S.setDecision(S.loadRules() && sp1.replace(/-L\d+$/, ''), sp1, { decision: 'edit', edited_text: 'Trupanion is medical insurance for pets. See how it works.' }, 'nick');
+  for (const [p, t] of [['OWN', 'OWN_STILL'], ['FAM', 'FAM_SUMMER']] as const) {
+    const now = await R.readyView(p, t);
+    assert.notEqual(now.lines.find(x => x.line.id === sp1)!.sha256, now.latest!.versions![0].fields.meta_primary.sha256, `${t}: the signed wording is no longer the line's`);
+  }
+  // Re-signing one territory without the caption doesn't un-mark it: the other territory's set still carries it.
+  const [op] = await own('OWN_STILL', [['meta_primary', 'Calm at the counter, with Trupanion.']]);
+  const v2 = await R.readyView('OWN', 'OWN_STILL', 'US', { versions: [{ visual: 'A', fields: { meta_primary: op, meta_headline: sh1 } }], on_image: { A: oi } });
+  await R.signOff({ persona: 'OWN', territory: 'OWN_STILL', versions: v2.draft.versions, on_image: v2.draft.on_image, expectation: { codes: [v2.plan.versions[0].code], reason: 'x' } }, 'nick');
+  const line = (await S.loadBatch(sp1.replace(/-L\d+$/, ''))).lines.find(l => l.id === sp1)!;
+  assert.equal(line.ready!.signoff_id, b.id);
+  assert.equal(line.ready!.superseded_by, undefined, 'still signed off, in Busy Families’ set');
+});

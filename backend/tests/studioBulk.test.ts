@@ -74,11 +74,13 @@ test('check: a run per persona × territory, lines kept and attributed, and a re
   const fam = await S.loadBatch(rec.runs[0]);
   assert.deepEqual(fam.lines.map(l => [l.model, l.status, l.decision, l.added_by, l.added_for]), [['human', 'checked', 'keep', 'brook', 'Nick Larson'], ['human', 'checked', 'keep', 'brook', 'Nick Larson']]);
   assert.deepEqual([fam.created_by, fam.created_for, fam.bulk], ['brook', 'Nick Larson', 'bulk-test']);
-  // Persona-less post copy is in the shared captions run; the shared pair isn't a persona in the pickers.
+  // Persona-less post copy is in the shared captions run; the shared pair is flagged, and left out of the persona pickers.
   const shared = await S.loadBatch(rec.runs[2]);
   assert.deepEqual([shared.brief.persona, shared.brief.territory], ['ALL', 'SHARED']);
   const meta = await S.meta();
-  assert.equal('ALL' in meta.personas || 'SHARED' in meta.territories, false);
+  // The shared pair is in /meta, flagged, so a shared run opens like any other; the page's persona lists leave it out.
+  assert.equal((meta.personas as any).ALL.shared, true);
+  assert.equal((meta.territories as any).SHARED.shared, true);
   assert.deepEqual(meta.shared, { persona: 'ALL', territory: 'SHARED', name: 'Shared captions' });
 
   const rep = await B.bulkReport('bulk-test');
