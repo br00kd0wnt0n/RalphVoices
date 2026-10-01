@@ -4,7 +4,7 @@
 // marked as entered for the person whose copy it is.
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
-import { studio, type BulkDefaults, type BulkPreview, type BulkRecord, type BulkReport, type Meta, type StudioEvent } from '@/lib/studioApi';
+import { getActingFor, setActingFor, studio, type BulkDefaults, type BulkPreview, type BulkRecord, type BulkReport, type Meta, type StudioEvent } from '@/lib/studioApi';
 import { Chip, GhostButton, Intro, Label, PinkButton, personaKeys, when } from './ui';
 
 const FOR_KEY = 'voices-studio-check-for';
@@ -15,7 +15,13 @@ const secs = (n: number) => (n >= 90 ? `${Math.round(n / 60)} min` : `${Math.rou
 
 export function CopyCheck({ meta, onOpenRun }: { meta: Meta; onOpenRun: (run: string) => void }) {
   const [text, setText] = useState('');
-  const [forWhom, setForWhom] = useState(() => { try { return localStorage.getItem(FOR_KEY) || ''; } catch { return ''; } });
+  // Whose copy it is. Tied to the "for" picker: a name from the Studio list also sets who you're acting for (so keeping,
+  // overriding and signing off these lines are recorded as theirs); anyone else (they may not use Studio) stays a name here.
+  const [forWhom, setForWhom] = useState(() => { try { return getActingFor() || localStorage.getItem(FOR_KEY) || ''; } catch { return ''; } });
+  const me = (meta.user?.email || '').toLowerCase();
+  const people = (meta.people || []).filter(p => p.toLowerCase() !== me);
+  const listed = people.find(p => p.toLowerCase() === forWhom.trim().toLowerCase());
+  useEffect(() => { if (listed && getActingFor() !== listed) setActingFor(listed); }, [listed]);
   const [defaults, setDefaults] = useState<BulkDefaults>({ region: 'US' });
   const [preview, setPreview] = useState<BulkPreview | null>(null);
   const [error, setError] = useState('');
@@ -61,7 +67,7 @@ export function CopyCheck({ meta, onOpenRun }: { meta: Meta; onOpenRun: (run: st
     if (!report) return;
     try { await navigator.clipboard.writeText(await studio.bulkReportMd(report.id)); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch (e: any) { setError(`Couldn't copy: ${e.message}`); }
   };
-  const territories = Object.entries(meta.territories).filter(([, t]) => t.persona === defaults.persona && t.status !== 'retired');
+  const territories = Object.entries(meta.territories).filter(([, t]) => t.persona === defaults.persona && t.status !== 'retired' && !t.shared);
   const sel = 'rounded-lg border-2 border-[#343946] px-2 py-1.5 text-sm';
 
   return (
@@ -74,7 +80,9 @@ export function CopyCheck({ meta, onOpenRun }: { meta: Meta; onOpenRun: (run: st
       <section className="space-y-3 rounded-xl border border-[#272B34] bg-[#16181D] p-5">
         <div className="flex flex-wrap items-end gap-3">
           <label className="text-sm text-[#A3A8B1]">Whose copy is this?<br />
-            <input className={cn(sel, 'w-56')} placeholder="e.g. Nick Larson" value={forWhom} onChange={e => setForWhom(e.target.value)} aria-label="Whose copy this is" />
+            <input className={cn(sel, 'w-56')} placeholder="e.g. Nick Larson" value={forWhom} onChange={e => setForWhom(e.target.value)} aria-label="Whose copy this is" list="check-copy-people" />
+            <datalist id="check-copy-people">{people.map(p => <option key={p} value={p} />)}</datalist>
+            {listed && <span className="block text-xs text-amber-100">You’re now working for {listed} (shown in the header).</span>}
           </label>
           <label className="text-sm text-[#A3A8B1]">Region<br />
             <select className={sel} value={defaults.region} onChange={e => setDefaults({ ...defaults, region: e.target.value })} aria-label="Region for rows that don't say">
@@ -157,9 +165,7 @@ export function CopyCheck({ meta, onOpenRun }: { meta: Meta; onOpenRun: (run: st
                   <Chip tone={TONE[x.status]} className={cn('text-xs', x.status === 'clear' && 'border-emerald-500 text-emerald-300')}>{WORD[x.status]}</Chip>
                   <span>{x.persona} · {x.territory}{x.region !== 'US' ? ' · Canada' : ''} · {x.field}</span>
                   <span className={cn('font-mono', x.over && 'font-bold text-amber-300')}>{x.chars}{x.visible ? `/${x.visible}` : ''}</span>
-                  {x.shared
-                    ? <span className="ml-auto text-xs text-[#646A75]" title="Shared captions get their own place in Build with the next update; the line is kept">shared caption (kept)</span>
-                    : <button className="ml-auto text-xs underline-offset-2 hover:text-[#ECEDEF] hover:underline" onClick={() => onOpenRun(x.run)}>open in Review</button>}
+                  <button className="ml-auto text-xs underline-offset-2 hover:text-[#ECEDEF] hover:underline" onClick={() => onOpenRun(x.run)}>{x.shared ? 'open in Review (shared captions)' : 'open in Review'}</button>
                 </div>
                 <p className="text-lg leading-snug text-[#F2F3F5]">{x.text}</p>
                 {x.flags.length > 0 && (

@@ -230,7 +230,7 @@ function LineCard({ meta, line, sequence, onChange, onMore }: { meta: Meta; line
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           {line.flags.map(fl => (
             <Chip key={fl.rule} tone={sevTone(fl.severity)} className="cursor-pointer" title={`${fl.label}${fl.quote ? `\n"${fl.quote}"` : ''}\nSource: ${plainSource(fl.source)}`} onClick={() => setOpen(open === fl.rule ? null : fl.rule)}>
-              {fl.rule === 'LIMIT_VISIBLE' && f ? `cut off after ${f.visible} characters` : fl.rule === 'LIMIT_MAX' && f ? `too long (max ${f.max})` : flagName(fl)}
+              {fl.rule === 'LIMIT_VISIBLE' && f ? `cut off after ${f.visible} characters` : fl.rule === 'LIMIT_MAX' && f ? `too long (max ${f.max})` : fl.rule === 'LIMIT_ON_ASSET' && f ? `long for the image (aim for ${f.visible})` : flagName(fl)}
             </Chip>
           ))}
         </div>

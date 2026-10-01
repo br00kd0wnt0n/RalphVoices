@@ -94,6 +94,8 @@ export interface Territory {
   /** The pitched headline's wording is retired (e.g. the client dropped a word): kept on record, never shown as the territory's line (rules v2.13). */
   headline_retired?: boolean;
   status?: string; origin?: 'pitch' | 'edited' | 'new'; note?: string; updated_by?: string; updated_at?: string;
+  /** The shared captions pool's territory. */
+  shared?: boolean;
   /** The fields a brief for it starts with, by its format (server's defaultFields). */
   default_fields?: string[];
   history?: Array<{ at: string; by: string; note: string; before: Partial<Territory> | null }>;
@@ -106,7 +108,11 @@ export interface PersonaContext {
 export interface Meta {
   /** "On behalf of": the Studio users a call can be recorded for (hosted); null locally (any name). */
   people?: string[] | null;
-  personas: Record<string, { name: string; default_fields: string[]; triggers: Array<{ id: string; label: string; detail?: string; source?: string }>; context?: PersonaContext }>;
+  /** The shared captions pool: its built-in persona and territory (flagged `shared` in personas and territories). */
+  shared?: { persona: string; territory: string; name: string };
+  /** Retired territories that still have runs or sign-offs in the round in view: still shown, marked retired. */
+  retired_with_work?: string[];
+  personas: Record<string, { name: string; shared?: boolean; default_fields: string[]; triggers: Array<{ id: string; label: string; detail?: string; source?: string }>; context?: PersonaContext }>;
   /** Source codes (TM, EP, CLB…) → titles, for plain-words sources. */
   sources?: Record<string, string>;
   what_to_do?: Record<string, string>;
@@ -159,7 +165,8 @@ export interface VersionFlag { rule: string; severity: 'red' | 'amber'; label: s
 export interface VersionCheck { code: string; key: string; flags: VersionFlag[]; conflicts: 'checked' | 'not_checked' | 'failed'; at?: string }
 export type FieldRole = 'required' | 'optional' | 'per_visual';
 /** A kept line on Ready: role, platform, and the codes it's in (in: "A1", "on-image A"). */
-export interface ReadyLine { line: Line; final_text: string; sha256: string; role: FieldRole; platform: string; in: string[]; red: Flag[]; versions: LineVersion[] }
+/** shared: from the shared captions pool (post copy reused across personas), offered in every territory's Build. */
+export interface ReadyLine { line: Line; final_text: string; sha256: string; role: FieldRole; platform: string; in: string[]; red: Flag[]; versions: LineVersion[]; shared?: boolean }
 export interface DraftVersion { visual: string; fields: Record<string, string>; platform?: string }
 /** on_image: per visual letter, a line id, or on a carousel the cards in order ('' for a card with no text). */
 export interface ReadyDraft { versions: DraftVersion[]; on_image: Record<string, string | string[]>; /** The subhead under each on-image headline (rules v2.14): a line per visual, or per card. */ on_image_sub?: Record<string, string | string[]> }
@@ -242,6 +249,8 @@ export interface CodeCompliance {
   stale?: string; on_asset: boolean; overrides: string[];
   /** For Trupanion, one sentence per override (no internal rule text). */
   check_specifically?: string[];
+  /** Other codes (any persona) using this code's shared caption on the same wording. */
+  shared_also?: string[];
   override_details?: Array<{ label: string; reason: string; by: string }>;
 }
 export interface ComplianceAsset {
@@ -472,7 +481,7 @@ export const studio = {
   },
   pfAudit: (uploadId: string, confirm = false) => req<{ audit: string; job: string; estimate: { usd: number; seconds: number } }>(`/preflight/uploads/${enc(uploadId)}/audit`, { method: 'POST', body: JSON.stringify({ confirm }) }),
   complianceView: () => req<ComplianceView>('/compliance'),
-  setAssetCompliance: (upload: string, body: { status: ComplianceStatus; note?: string; send_back?: 'copy' | 'asset'; codes?: string[]; client_by?: string }) =>
+  setAssetCompliance: (upload: string, body: { status: ComplianceStatus; note?: string; send_back?: 'copy' | 'asset'; codes?: string[]; client_by?: string; apply_shared?: boolean }) =>
     req<{ upload_id: string; codes: string[]; status: ComplianceStatus }>(`/compliance/assets/${enc(upload)}`, { method: 'POST', body: JSON.stringify(body) }),
   pfReport: (stub: string) => req<PfReport>(`/preflight/stubs/${enc(stub)}/report`),
   pfFile: (uploadId: string, position: number) => `/preflight/files/${enc(uploadId)}/${position}`,
@@ -486,6 +495,8 @@ export const studio = {
   bulkCheck: (text: string, defaults: BulkDefaults, forWhom: string, confirm = false) =>
     req<{ bulk: string; job: string; estimate: BulkPreview['estimate'] }>('/bulk/check', { method: 'POST', body: JSON.stringify({ text, defaults, for: forWhom, confirm }) }),
   bulkList: () => req<BulkRecord[]>('/bulk'),
+  /** Every persona's kept on-image headlines in a region (the round in view): shared captions are written to sit under them. */
+  approvedHeadlines: (region: Region) => req<{ region: Region; headlines: string[] }>(`/approved-headlines?region=${enc(region)}`),
   bulkReport: (id = 'latest') => req<BulkReport>(`/bulk/${enc(id)}`),
   bulkReportMd: async (id = 'latest') => (await raw(`/bulk/${enc(id)}/report.md`)).text(),
   pfOrphans: () => req<{ orphans: OrphanUpload[]; storage_check: StorageCheck | null }>('/preflight/orphans'),

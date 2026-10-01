@@ -382,7 +382,7 @@ function SlotBox({ meta, x, field, placeholder, active, onOpen, flags = [], name
         </div>
       )}
       {rechecking && <div className="animate-pulse px-1.5 text-xs" style={{ color: '#D94D8F' }}>Re-checking the new wording…</div>}
-      {x && f && chars > f.visible && <div className="px-1.5 text-xs text-amber-300">{chars}/{f.visible}: cut off on screen</div>}
+      {x && f && chars > f.visible && <div className="px-1.5 text-xs text-amber-300">{chars}/{f.visible}: {/on_image/.test(field) ? 'long for the image' : 'cut off on screen'}</div>}
       {(flags.length > 0 || (x && x.line.flags.some(fl => fl.severity !== 'compliance'))) && (
         <div className="px-1">
           {flags.map((fl, k) => <FlagNote key={k} meta={meta} f={fl} nameOfCode={nameOfCode} />)}
@@ -645,6 +645,7 @@ function Tray({ meta, title, lines, draft, platformOf, current, optional, onPlac
   const [hist, setHist] = useState<string | null>(null);
   const withUses = lines.map(x => ({ x, uses: usesOf(draft, x.line.id, platformOf) }));
   const inUse = withUses.filter(y => y.uses.length), free = withUses.filter(y => !y.uses.length);
+  const pool = withUses.filter(y => y.x.shared), mine = withUses.filter(y => !y.x.shared), anyShared = pool.length > 0;
   const Item = ({ x, uses }: { x: RL; uses: string[] }) => {
     const f = meta.fields[x.line.field];
     const chars = [...x.final_text].length;
@@ -655,6 +656,7 @@ function Tray({ meta, title, lines, draft, platformOf, current, optional, onPlac
           <span className={cn('font-mono', f && chars > f.visible ? 'text-amber-300' : 'text-[#858B96]')}>{chars}/{f?.visible}</span>
           {x.red.map(fl => <Chip key={fl.rule} tone="red" className="text-xs" title={fl.label}>{flagName(fl)}</Chip>)}
           {x.line.flags.filter(fl => fl.severity !== 'compliance').map(fl => <Chip key={fl.rule} tone={sevTone(fl.severity)} className="text-xs" title={fl.label}>{flagName(fl)}</Chip>)}
+          {x.shared && <Chip tone="outline" className="text-xs" title="From the shared captions pool">shared</Chip>}
           {x.line.card && <span className="text-[#858B96]">sequence card {x.line.card}</span>}
           {uses.length > 0 && <span className="text-[#A3A8B1]">In: {uses.join(', ')}</span>}
         </div>
@@ -676,8 +678,14 @@ function Tray({ meta, title, lines, draft, platformOf, current, optional, onPlac
       </div>
       <div className="flex-1 space-y-4 overflow-y-auto p-4">
         {!lines.length && <p className="text-sm text-[#858B96]">No kept lines for this field yet: keep some in Review.</p>}
-        {inUse.length > 0 && <div><Label>In use</Label><ul className="space-y-2">{inUse.map(y => <Item key={y.x.line.id} {...y} />)}</ul></div>}
-        {free.length > 0 && <div><Label>Not used yet</Label><ul className="space-y-2">{free.map(y => <Item key={y.x.line.id} {...y} />)}</ul></div>}
+        {/* Post copy: the shared captions pool first, then this territory's own lines. */}
+        {anyShared ? <>
+          <div><Label>Shared captions ({pool.length})</Label><p className="mb-2 text-xs text-[#858B96]">Reused across personas: Trupanion’s decision on the wording can be recorded once for every code using it.</p><ul className="space-y-2">{pool.map(y => <Item key={y.x.line.id} {...y} />)}</ul></div>
+          <div><Label>This territory ({mine.length})</Label>{mine.length ? <ul className="space-y-2">{mine.map(y => <Item key={y.x.line.id} {...y} />)}</ul> : <p className="text-sm text-[#858B96]">No kept lines of its own for this field.</p>}</div>
+        </> : <>
+          {inUse.length > 0 && <div><Label>In use</Label><ul className="space-y-2">{inUse.map(y => <Item key={y.x.line.id} {...y} />)}</ul></div>}
+          {free.length > 0 && <div><Label>Not used yet</Label><ul className="space-y-2">{free.map(y => <Item key={y.x.line.id} {...y} />)}</ul></div>}
+        </>}
       </div>
     </aside>
   );

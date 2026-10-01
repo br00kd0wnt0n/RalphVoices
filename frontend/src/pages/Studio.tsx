@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils';
 import { ArrowLeft, ClipboardCheck, HelpCircle, Map as MapIcon, ScrollText, Shuffle } from 'lucide-react';
 import { LivePage, RoundBadge, RoundsPanel, TestBar } from './StudioRounds';
 import { Board, type Step } from '@/components/studio/Board';
-import { ALL_VIEW, Chip, GhostButton, Lockup, PINK, PersonaDot, initials, params, personaKeys, regionOf, sameCtx, setTerritoryNames, setWhatToDo, territoryName, useActingFor, type Ctx, type ViewFilter } from '@/components/studio/ui';
+import { ALL_VIEW, Chip, GhostButton, Lockup, PINK, PersonaDot, initials, params, personaKeys, regionOf, sameCtx, setTerritoryNames, setWhatToDo, territoryName, useActingFor, isOpenTerritory, isSharedCtx, type Ctx, type ViewFilter } from '@/components/studio/ui';
 import { Home } from '@/components/studio/Home';
 import { Write, countsFor } from '@/components/studio/Write';
 import { applyPlace } from '@/lib/studioFields';
@@ -139,7 +139,8 @@ export function Studio() {
     refreshMeta().then(m => {
       // A remembered context that no longer exists (a retired or renamed territory) falls back to the persona's first.
       const t = m.territories[ctx.territory];
-      if (!t || t.persona !== ctx.persona || t.status === 'retired') {
+      // (A retired territory that still has work in this round stays reachable: Review, Build and Assets, no new briefs.)
+      if (!t || t.persona !== ctx.persona || !isOpenTerritory(m, ctx.territory, t)) {
         const persona = m.personas[ctx.persona] ? ctx.persona : personaKeys(m.personas)[0];
         const first = Object.entries(m.territories).find(([, x]) => x.persona === persona && x.status !== 'retired')?.[0] || '';
         setCtx({ persona, territory: first, region: ctx.region });
@@ -351,7 +352,13 @@ export function Studio() {
           attachedRun={attached && batch?.id === attached ? batch : null} onNewRun={() => setAttached(null)} onTerritories={() => setTab('territories')} onEditTerritory={code => setDrawer({ code })} fieldNote={fieldNote} />}
         {meta && tab === 'review' && <Review meta={meta} ctx={ctx} batch={batch} setBatch={setBatch} status={status} running={running} onMore={more} onMoreRun={() => run({ into: batch })} onAddLine={addLine}
           onDecided={() => setRunsTick(t => t + 1)} onBuild={() => setTab('build')} initialFilter={openKept ? 'kept' : undefined} />}
-        {meta && tab === 'build' && <Build meta={meta} ctx={ctx} user={user} onNext={() => setTab('assets')} onReview={() => setTab('review')} />}
+        {meta && tab === 'build' && isSharedCtx(meta, ctx) && (
+          <div className="max-w-3xl rounded-xl border border-[#272B34] bg-[#16181D] p-5 text-base text-[#C9CCD2]">
+            <h2 className="mb-1 text-lg font-semibold text-[#ECEDEF]">Shared captions aren’t built on their own</h2>
+            <p>Kept shared captions are offered in every territory’s Build, under “Shared captions” when you pick post copy for an ad. Choose a persona and territory in the bar above to build with them.</p>
+          </div>
+        )}
+        {meta && tab === 'build' && !isSharedCtx(meta, ctx) && <Build meta={meta} ctx={ctx} user={user} onNext={() => setTab('assets')} onReview={() => setTab('review')} />}
         {meta && tab === 'assets' && <Assets meta={meta} view={view} setView={setView} onBuild={() => setTab('build')} onFixCopy={st => { setCtx({ persona: st.persona, territory: st.territory, region: regionOf(st) }); setTab('build'); }} />}
         {meta && tab === 'territories' && <Territories meta={meta} onSaved={() => refreshMeta()} onBrief={code => { const t = meta.territories[code]; setCtx({ persona: t.persona, territory: code, region: ctx.region }); setTab('write'); }} />}
         {tab === 'rules' && meta?.rounds && <RoundsPanel meta={meta} onSaved={() => refreshMeta().catch(() => {})} />}
@@ -372,7 +379,7 @@ function Start({ meta, onOpen, onHowItWorks, onStart, onRoundSaved }: { meta: Me
 
 /** On Assets and Live: the bar shows "All" and narrows this view only (the writing context is untouched). */
 function ViewBar({ meta, view, setView, what }: { meta: Meta; view: ViewFilter; setView: (v: ViewFilter) => void; what: string }) {
-  const territories = Object.entries(meta.territories).filter(([, x]) => (view.persona === 'all' || x.persona === view.persona) && x.status !== 'retired');
+  const territories = Object.entries(meta.territories).filter(([k, x]) => (view.persona === 'all' || x.persona === view.persona) && isOpenTerritory(meta, k, x) && !x.shared);
   const sel = 'min-w-0 rounded-lg border border-[#343946] bg-[#101216] px-2.5 py-1.5 text-sm font-medium text-[#ECEDEF]';
   const pc = view.persona === 'all' ? null : personaColor(view.persona);
   return (
@@ -405,7 +412,9 @@ function ViewBar({ meta, view, setView, what }: { meta: Meta; view: ViewFilter; 
 /** The persistent context bar: persona × territory × region, chosen once for Write, Review, Build & sign off and Assets. */
 function ContextBar({ meta, ctx, setCtx, step, onNewTerritory }: { meta: Meta; ctx: Ctx; setCtx: (c: Ctx) => void; step: number; onNewTerritory: () => void }) {
   const pc = personaColor(ctx.persona);
-  const territories = Object.entries(meta.territories).filter(([, x]) => x.persona === ctx.persona && x.status !== 'retired');
+  const territories = Object.entries(meta.territories).filter(([k, x]) => x.persona === ctx.persona && isOpenTerritory(meta, k, x));
+  const shared = meta.shared;
+  const onShared = isSharedCtx(meta, ctx);
   const sel = 'min-w-0 rounded-lg border border-[#343946] bg-[#101216] px-2.5 py-1.5 text-sm font-medium text-[#ECEDEF]';
   return (
     <div className="z-10 md:sticky md:top-16 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-[#272B34] bg-[#121419]/95 px-4 py-2 backdrop-blur sm:px-6">
@@ -414,14 +423,16 @@ function ContextBar({ meta, ctx, setCtx, step, onNewTerritory }: { meta: Meta; c
       <span className="flex min-w-0 items-center gap-1.5 rounded-lg border pl-2.5" style={{ borderColor: tint(pc.base, 0.6), background: tint(pc.base, 0.12) }}>
         <PersonaDot persona={ctx.persona} />
         <select aria-label="Persona" className="min-w-0 rounded-lg py-1.5 pl-0.5 pr-2 text-sm font-semibold" style={{ background: 'transparent', color: pc.light }} value={ctx.persona}
-          onChange={e => { const p = e.target.value; const first = Object.entries(meta.territories).find(([, x]) => x.persona === p && x.status !== 'retired')?.[0] || ''; setCtx({ persona: p, territory: first, region: ctx.region }); }}>
+          onChange={e => { const p = e.target.value; const first = Object.entries(meta.territories).find(([, x]) => x.persona === p && x.status !== 'retired')?.[0] || Object.entries(meta.territories).find(([, x]) => x.persona === p)?.[0] || ''; setCtx({ persona: p, territory: first, region: ctx.region }); }}>
           {personaKeys(meta.personas).map(k => <option key={k} value={k} style={{ background: '#101216', color: '#ECEDEF' }}>{meta.personas[k].name}</option>)}
+          {/* The shared captions pool: post copy reused across personas (not a persona). */}
+          {shared && <option value={shared.persona} style={{ background: '#101216', color: '#ECEDEF' }}>Shared captions (all personas)</option>}
         </select>
       </span>
       <span className="text-[#4A505D]" aria-hidden>×</span>
       <select aria-label="Territory" className={cn(sel, 'max-w-[22rem]')} value={ctx.territory} onChange={e => { if (e.target.value === '__new') onNewTerritory(); else setCtx({ ...ctx, territory: e.target.value }); }}>
-        {territories.map(([k, x]) => <option key={k} value={k}>{territoryName(x)}</option>)}
-        <option value="__new">+ New territory…</option>
+        {territories.map(([k, x]) => <option key={k} value={k}>{territoryName(x)}{x.status === 'retired' ? ' (retired)' : ''}</option>)}
+        {!onShared && <option value="__new">+ New territory…</option>}
       </select>
       <span className="text-[#4A505D]" aria-hidden>×</span>
       <select aria-label="Region" className={sel} value={ctx.region} onChange={e => setCtx({ ...ctx, region: e.target.value as Region })}>
