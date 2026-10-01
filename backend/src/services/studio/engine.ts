@@ -1096,6 +1096,8 @@ async function claimLines(batch: Batch, added: Line[], embStore: Record<string, 
 }
 export interface RunSummary {
   id: string; name: string; persona: string; territory: string; region: Region; created: string; updated: string; created_by: string;
+  /** Whose run it is, when it was entered for them (a copy check of their lines). */
+  created_for?: string;
   lines: number; yours: number; kept: number; undecided: number; usd: number;
   /** Lines not yet checked (a run interrupted by a restart); resume checks them. */
   unchecked: number;
@@ -1111,7 +1113,7 @@ export async function listBatches(user?: string, view?: RoundView): Promise<RunS
     const b: Batch = await st.getBatch(x);
     out.push({
       id: b.id, name: b.brief.name, persona: b.brief.persona, territory: b.brief.territory, region: regionOf({}, b.brief),
-      created: b.created, updated: b.updated || b.created, created_by: b.created_by || '',
+      created: b.created, updated: b.updated || b.created, created_by: b.created_by || '', ...(b.created_for || (b.brief as any).bulk?.for ? { created_for: b.created_for || (b.brief as any).bulk.for } : {}),
       lines: b.lines.length, yours: b.lines.filter(l => l.model === 'human').length,
       kept: b.lines.filter(l => l.decision === 'keep' || l.decision === 'edit').length,
       undecided: b.lines.filter(l => !l.decision).length, usd: b.stats.usd_total,
@@ -1942,6 +1944,8 @@ export async function stampFor(batchId: string, o: { bulk?: string; for?: string
     const b = await loadBatch(batchId);
     if (o.bulk) b.bulk = o.bulk;
     if (o.for) b.created_for = o.for;
+    // In the brief too: Postgres keeps the run header in fixed columns, and reads these back from the brief.
+    (b.brief as any).bulk = { ...((b.brief as any).bulk || {}), ...(o.bulk ? { id: o.bulk } : {}), ...(o.for ? { for: o.for } : {}) };
     for (const l of b.lines) if (o.for && l.model === 'human' && !l.added_for) l.added_for = o.for;
     await saveBatch(b, b.lines.map(l => l.id));
   });

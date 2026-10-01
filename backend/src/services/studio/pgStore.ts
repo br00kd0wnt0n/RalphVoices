@@ -137,6 +137,8 @@ export class PgStore implements StudioStore {
     return {
       id: row.id, brief: row.brief, created: new Date(row.created_at).toISOString(), created_by: row.created_by ?? undefined, rules_version: row.rules_version ?? undefined,
       updated: new Date(row.updated_at).toISOString(), lines: lines.rows.map(x => x.body), dropped: row.dropped, stats: row.stats,
+      // A run entered for someone (a copy check): the header has no column for it, so it's read from the brief (bulk: { id, for }).
+      ...(row.brief?.bulk?.for ? { created_for: row.brief.bulk.for } : {}), ...(row.brief?.bulk?.id ? { bulk: row.brief.bulk.id } : {}),
     };
   }
 

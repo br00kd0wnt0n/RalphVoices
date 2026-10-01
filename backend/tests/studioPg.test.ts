@@ -1426,3 +1426,17 @@ test('on behalf of: by + for stored on sign-off, expectation, line versions, ove
     assert.deepEqual((await call('GET', '/meta', null)).body.people, ['brook', 'nick', 'vivan']);
   } finally { server.close(); }
 });
+
+// ---------- finding 35: a copy check's "for" on Postgres (the run header has fixed columns) ----------
+test('copy check on Postgres: the run, its summary and its lines say whose copy it is', { skip }, async () => {
+  const { api } = await freshStudio();
+  const B = await import('../src/services/studio/bulk.js');
+  const parsed = B.parseBulk('OWN\tOWN_CALM\theadline\tCalm, covered.\nOWN\tOWN_CALM\tprimary\tCalm at the counter, with Trupanion.', await S.refreshRules());
+  const rec = await B.runBulk(parsed, api, { user: 'brook', for: 'Nick Larson', id: 'bulk-pg' });
+  const run = await S.loadBatch(rec.runs[0]);
+  assert.deepEqual([run.created_by, run.created_for, run.bulk], ['brook', 'Nick Larson', 'bulk-pg']);
+  assert.deepEqual((run.brief as any).bulk, { id: 'bulk-pg', for: 'Nick Larson' }, 'kept in the brief, which Postgres stores whole');
+  assert.ok(run.lines.every(l => l.added_by === 'brook' && l.added_for === 'Nick Larson' && l.decided_for === 'Nick Larson'));
+  assert.equal((await S.listBatches()).find(r => r.id === run.id)!.created_for, 'Nick Larson');
+  assert.equal((await B.bulkReport('bulk-pg')).for, 'Nick Larson');
+});

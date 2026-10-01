@@ -37,6 +37,8 @@ export interface Line {
   ready?: ReadyMark;
   /** Who added a person's line (Write & brief, or Add a line in Review). */
   added_by?: string;
+  /** Whose line it is, when someone entered it for them (a copy check). */
+  added_for?: string;
   rechecked_at?: string;
   /** Carousel on-image text written as a card sequence: its card number and sequence. */
   card?: number; sequence_id?: string;
@@ -75,9 +77,9 @@ export interface BulkReportRow {
 export interface BulkReport { id: string; at: string; by: string; for?: string; rows: BulkReportRow[]; errors: BulkPreview['errors']; summary: string; counts: { checked: number; red: number; amber: number; clear: number } }
 export interface StorageCheck { ok: boolean; bucket?: string; error?: string; at: string }
 export interface OrphanUpload { id: string; stub: string; uploaded_by: string | null; uploaded_at: string }
-export interface Batch { id: string; brief: Brief; created: string; created_by?: string; updated?: string; rules_version?: string; lines: Line[]; stats: RunStats; dropped?: DroppedLine[] }
+export interface Batch { id: string; brief: Brief; created: string; created_by?: string; /** Whose run it is, when entered for them (a copy check). */ created_for?: string; updated?: string; rules_version?: string; lines: Line[]; stats: RunStats; dropped?: DroppedLine[] }
 export interface RunSummary {
-  id: string; name: string; persona: string; territory: string; region?: Region; created: string; updated: string; created_by: string;
+  id: string; name: string; persona: string; territory: string; region?: Region; created: string; updated: string; created_by: string; created_for?: string;
   lines: number; yours: number; kept: number; undecided: number; usd: number;
   /** Lines left unchecked when a run was interrupted (e.g. a server restart). */
   unchecked: number;
