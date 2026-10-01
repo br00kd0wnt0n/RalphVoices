@@ -21,7 +21,7 @@ import type pg from 'pg';
 import * as S from './engine.js';
 import { latestSignoffs, setCompliance, type Signoff } from './ready.js';
 import { complianceFor, platformOf, signoffOnImage, signoffVersions, type SignedField } from './versions.js';
-import { getRounds, labelOf, roundOf, roundView } from './rounds.js';
+import { getRounds, labelOf, roundOf, roundView, testOnly } from './rounds.js';
 import { SIZES, detectSize, expectedSizes, parseSize, roleOf, sizeOfRole, slotOf, type Size } from './sizes.js';
 import { DEFAULT_REGION, parseCode, visualKey, type Region } from '../../utils/namingCode.js';
 import { downloadPrivateObject, getPrivateObject, getPrivateObjectStream, isR2Enabled, putPrivateObject } from '../r2.js';
@@ -276,10 +276,10 @@ export class Preflight {
   }
 
   /** The codes to upload for: the active round's by default (`round: 'all'` for every round, or a round's id). */
-  async stubs(filter: { persona?: string; territory?: string; region?: string; round?: string } = {}): Promise<StubRow[]> {
+  async stubs(filter: { persona?: string; territory?: string; region?: string; round?: string; user?: string } = {}): Promise<StubRow[]> {
     await this.expireStuck();
     const out: StubRow[] = [];
-    const view = await roundView(filter.round);
+    const view = await roundView(filter.round, filter.user);
     const rules = await S.getStore().getRules();
     for (const s of await latestSignoffs({ ...filter, view })) {
       for (const stub of signoffVersions(s).map(v => v.code).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) {
@@ -760,11 +760,13 @@ export class Preflight {
 
   /** The asset handoff list: stub, file, status, open flags. */
   /** The asset handoff to Add3: the active round's codes (or `round`), never a test round's. */
-  async handoffCsv(round?: string): Promise<string> {
+  async handoffCsv(round?: string, user?: string): Promise<string> {
     const rounds = await getRounds();
+    // A view of exactly one test round (a demo) includes its codes, marked TEST on the first line.
+    const test = testOnly(await roundView(round, user));
     const rows = [['Naming code', 'Region', 'Month', 'Persona', 'Territory', 'Kind', 'File', 'Sizes missing', 'Same visual as', 'Status', 'Ready to traffic', 'Pre-flight passed by', 'Pre-flight passed at', 'Open red flags', 'Amber flags', 'Overridden red flags', 'Compliance', 'Compliance note', 'Cleared at Trupanion by', 'Compliance recorded by']];
-    for (const s of await this.stubs({ round })) {
-      if (s.test) continue;
+    for (const s of await this.stubs({ round, user })) {
+      if (s.test && !test) continue;
       let open = '', amber = '', overridden = '';
       if (s.audit) {
         const f = await this.flagsFor(s.audit.id, s.stub);
@@ -782,7 +784,7 @@ export class Preflight {
         s.status.status === 'ready' ? s.status.ready_by || '' : '', s.status.status === 'ready' ? s.status.ready_at || '' : '', open, amber, overridden,
         COMPLIANCE_WORDS[c.status], c.note || '', c.client_by || '', c.by ? `${c.by}, ${c.at?.slice(0, 16).replace('T', ' ')}` : '']);
     }
-    return S.toCsv(rows);
+    return (test ? S.toCsv([['TEST – not for trafficking']]) : '') + S.toCsv(rows);
   }
 
   // ---------- Compliance (step 7, after Pre-flight): copy and visual together ----------
@@ -883,7 +885,7 @@ export class Preflight {
    * the visual (codes sharing an upload together), with each code's copy and
    * status, the audit's flags, and codes still waiting for their asset.
    */
-  async complianceAssets(filter: { persona?: string; territory?: string; region?: string; round?: string } = {}) {
+  async complianceAssets(filter: { persona?: string; territory?: string; region?: string; round?: string; user?: string } = {}) {
     const stubs = await this.stubs(filter);
     const byUpload = new Map<string, StubRow[]>();
     const waiting: StubRow[] = [];

@@ -31,8 +31,10 @@ async function keptRun(name: string, texts = ['Calm at the counter.', 'One less 
   const ids = run.lines.map(l => l.id);
   return { run, versions: ids.slice(0, -1).map(p => ({ visual: 'A', fields: { meta_primary: p, meta_headline: ids.at(-1)! } })) };
 }
+/** Nick (an admin here) works in a round: a test round is worked in per person, never made the active round. */
+const work = (id: string) => Rounds.setWorkingRound('nick', id, true);
 const signOff = async (versions: any[], round?: string) => {
-  const v = await R.readyView('OWN', 'OWN_CALM', 'US', { versions, on_image: {} }, { round });
+  const v = await R.readyView('OWN', 'OWN_CALM', 'US', { versions, on_image: {} }, { round, user: 'nick' });
   return (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', round, versions, expectation: { codes: [v.plan.versions[0].code], reason: 'x' } }, 'nick')).signoff;
 };
 
@@ -61,14 +63,18 @@ test('admin rounds: ids R + number, a name, R1 is never a test round; the active
   await assert.rejects(() => Rounds.saveRound({ id: 'x', name: 'x' }), /R and a number/);
   await assert.rejects(() => Rounds.saveRound({ id: 'R2', name: '' }), /name/);
   await assert.rejects(() => Rounds.saveRound({ id: 'R1', name: 'Round one', test: true }), /R1 is the first real round/);
-  const s = await Rounds.saveRound({ id: 'r0', name: 'Test run-through', test: true, activate: true }, 'brook');
-  assert.equal(s.active, 'R0');
+  // A test round is never the active round (everyone would be working in it).
+  await assert.rejects(() => Rounds.saveRound({ id: 'r0', name: 'Test run-through', test: true, activate: true }, 'brook'), /never the active round/);
+  const s = await Rounds.saveRound({ id: 'r0', name: 'Test run-through', test: true }, 'brook');
+  assert.equal(s.active, 'R1');
+  await assert.rejects(() => Rounds.setActiveRound('R0'), /never the active round/);
   assert.deepEqual(s.rounds.map(r => [r.id, !!r.test]), [['R0', true], ['R1', false]]);
   assert.equal(s.rounds[0].created_by, 'brook');
+  await work('R0');
   const { run } = await keptRun('test-run');
   assert.equal(run.brief.round, 'R0');
-  // Lines added to a run keep the run's round, even after the active round changes.
-  await Rounds.setActiveRound('R1');
+  // Lines added to a run keep the run's round, even after the person moves to another round.
+  await work('R1');
   const more = await S.generate(S.makeBrief({ ...run.brief, own_lines: [{ text: 'Added later.', field: 'meta_primary' }] }), api(), () => {}, { batchId: run.id, ownOnly: true, user: 'nick' });
   assert.equal(more.lines.at(-1)!.round, 'R0');
   await assert.rejects(() => Rounds.setActiveRound('R9'), /No round R9/);
@@ -87,16 +93,24 @@ test('a round carries its asset deadline (the round board): a date, kept when a 
 
 test('R0 (test) then R1: views default to the active round, R0 is hidden from R1 and never handed off; R1 codes start at A; R0 codes carry _TEST', async () => {
   await fresh();
-  await Rounds.saveRound({ id: 'R0', name: 'Test run-through', test: true, activate: true });
+  await Rounds.saveRound({ id: 'R0', name: 'Test run-through', test: true });
+  await work('R0');
   const r0 = await keptRun('r0', ['Test primary one.', 'Test primary two.']);
   const s0 = await signOff(r0.versions);
   assert.deepEqual(s0.versions!.map(v => v.code), ['OWN_CALM_UGC_A1_US_META_TEST', 'OWN_CALM_UGC_A2_US_META_TEST']);
   assert.equal(s0.round, 'R0');
-  // In R0 the views show R0; the handoff never has a test round's codes.
-  assert.deepEqual((await S.listBatches(undefined, await Rounds.roundView())).map(x => x.round), ['R0']);
-  assert.equal((await R.handoffPack()).count, 0, 'a test round never reaches Add3');
+  // In R0 the views show R0. Its own exports (a demo) carry its codes, marked TEST on the first line; any other view never does.
+  assert.deepEqual((await S.listBatches(undefined, await Rounds.roundView(undefined, 'nick'))).map(x => x.round), ['R0']);
+  assert.deepEqual((await S.listBatches(undefined, await Rounds.roundView())).map(x => x.round), [], 'everyone else (the active round) sees none of it');
+  const demo = await R.handoffPack({ user: 'nick' });
+  assert.deepEqual([demo.count, demo.test], [2, true]);
+  assert.equal(S.parseCsv(demo.csv)[0][0], 'TEST – not for trafficking');
+  assert.match(demo.md, /^# TEST – not for trafficking/);
+  assert.equal(S.parseCsv(demo.complianceCsv)[0][0], 'TEST – not for trafficking');
+  assert.equal((await R.handoffPack({ round: 'all', user: 'nick' })).count, 0, '"All rounds" never includes a test round');
+  assert.equal((await R.handoffPack()).count, 0, 'the active round\'s exports never include it');
 
-  await Rounds.setActiveRound('R1');
+  await work('R1');
   const r1 = await keptRun('r1');
   // R1's views: only R1.
   const v = await Rounds.roundView();
@@ -128,9 +142,10 @@ test('R0 (test) then R1: views default to the active round, R0 is hidden from R1
 
 test('taste from a test round never feeds a real round; a test round learns from everything', async () => {
   await fresh();
-  await Rounds.saveRound({ id: 'R0', name: 'Test run-through', test: true, activate: true });
+  await Rounds.saveRound({ id: 'R0', name: 'Test run-through', test: true });
+  await work('R0');
   await keptRun('r0', ['ZEBRA test line kept in R0.']);
-  await Rounds.setActiveRound('R1');
+  await work('R1');
   await keptRun('r1', ['Real R1 line about the counter.']);
   const systemFor = async () => {
     const a = api();
@@ -144,15 +159,16 @@ test('taste from a test round never feeds a real round; a test round learns from
   assert.match(sys, /Real R1 line about the counter/);
   assert.doesNotMatch(sys, /ZEBRA/, 'R0 taste is not used in R1');
   assert.equal((await S.loadTaste()).find(t => /ZEBRA/.test(t.text))!.round, 'R0', 'taste rows carry their round');
-  await Rounds.setActiveRound('R0');
+  await work('R0');
   sys = await systemFor();
   assert.match(sys, /ZEBRA/);
 });
 
 test('a test round\'s spend is real money: counted toward the cap, labelled with the round', async () => {
   await fresh();
-  await Rounds.saveRound({ id: 'R0', name: 'Test run-through', test: true, activate: true });
-  const a = api();
+  await Rounds.saveRound({ id: 'R0', name: 'Test run-through', test: true });
+  await Rounds.setWorkingRound('brook', 'R0', true);
+  const a = new S.Api({ mock: true, user: 'brook' });
   (a as any).mock = false;
   (a as any).runTotal = () => 0.42;
   await a.commit('generate OWN_CALM-test', 'brook');

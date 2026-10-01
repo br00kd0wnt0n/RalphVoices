@@ -77,7 +77,7 @@ export function Review({ meta, ctx, batch, setBatch, status, running, onMore, on
                 <select aria-label="Run" className="max-w-full rounded-lg border-2 border-[#343946] bg-[#101216] px-3 py-1.5 text-base" value={b?.id || ''} onChange={e => studio.batch(e.target.value).then(setBatch)}>
                   {!b && <option value="">Choose a run…</option>}
                   {[...here, ...(b && !here.some(r => r.id === b.id) ? [{ id: b.id, updated: b.updated || b.created, created_by: b.created_by || '', lines: b.lines.length } as RunSummary] : [])].map(r => (
-                    <option key={r.id} value={r.id} title={r.id}>{when(r.updated)}{r.created_by ? ` · ${r.created_by.split('@')[0]}` : ''} · {r.lines} lines{r.round && r.round !== meta.rounds?.active ? ` · ${roundName(meta.rounds, r.round)}` : ''}</option>
+                    <option key={r.id} value={r.id} title={r.id}>{when(r.updated)}{r.created_by ? ` · ${r.created_by.split('@')[0]}` : ''} · {r.lines} lines{r.round && r.round !== (meta.rounds?.working || meta.rounds?.active) ? ` · ${roundName(meta.rounds, r.round)}` : ''}</option>
                   ))}
                 </select>
               ) : <p className="text-base text-[#858B96]">No runs for {territoryName(meta.territories[ctx.territory]).replace(/\.$/, '')} yet: write lines on Write.</p>}
@@ -311,10 +311,10 @@ function KeptTray({ meta, ctx, onCount }: { meta: Meta; ctx: Ctx; onCount: (n: n
                 <li key={r.id} className="flex items-start gap-3 py-2">
                   <div className="min-w-0 flex-1">
                     <div className="text-base leading-snug text-[#F2F3F5]">{r.text}</div>
-                    {(r.compliance_flags?.length || r.warn_flags?.length || r.note || r.signed_off || (r.round && r.round !== meta.rounds?.active)) ? (
+                    {(r.compliance_flags?.length || r.warn_flags?.length || r.note || r.signed_off || (r.round && r.round !== (meta.rounds?.working || meta.rounds?.active))) ? (
                       <div className="mt-1 flex flex-wrap items-center gap-1">
                         {r.signed_off && <Chip tone="outline" className="border-[#D94D8F]/60 text-xs text-[#F2C4DA]">signed off</Chip>}
-                        {r.round && r.round !== meta.rounds?.active && <Chip tone={meta.rounds?.rounds.find(x => x.id === r.round)?.test ? 'amber' : 'outline'} className="text-xs">{roundName(meta.rounds, r.round)}</Chip>}
+                        {r.round && r.round !== (meta.rounds?.working || meta.rounds?.active) && <Chip tone={meta.rounds?.rounds.find(x => x.id === r.round)?.test ? 'amber' : 'outline'} className="text-xs">{roundName(meta.rounds, r.round)}</Chip>}
                         {(r.compliance_flags || []).map(x => <Chip key={x} tone="red" className="text-xs">{chipName(x)}</Chip>)}
                         {(r.warn_flags || []).map(x => <Chip key={x} tone="amber" className="text-xs">{chipName(x)}</Chip>)}
                         {r.note && <span className="text-sm text-[#858B96]">{r.note}</span>}

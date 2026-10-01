@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { HOSTED, studio, type ActiveRules, type Meta, type RuleEntry, type RulesVersion } from '@/lib/studioApi';
-import { Chip, GhostButton, Intro, Label, PersonaPanel, PinkButton, Src, personaKeys, when } from './ui';
+import { CastingNotes, Chip, GhostButton, Intro, Label, PersonaPanel, PinkButton, Src, personaKeys, when } from './ui';
 
 export function Rules({ meta, admin, onActivated }: { meta: Meta | null; admin: boolean; onActivated: () => void }) {
   const [list, setList] = useState<RulesVersion[]>([]);
@@ -131,6 +131,13 @@ function LiveRules({ active, meta }: { active: ActiveRules; meta: Meta | null })
         <section className="rounded-xl border border-[#272B34] bg-[#16181D] p-5">
           <h2 className="mb-3 text-lg font-semibold">Clarity</h2>
           {list(active.clarity)}
+        </section>
+      )}
+      {!!meta?.casting?.notes.length && (
+        <section className="rounded-xl border border-[#272B34] bg-[#16181D] p-5 text-sm">
+          <h2 className="mb-1 text-lg font-semibold">Who to cast</h2>
+          <p className="mb-3 text-[#858B96]">From Trupanion's breed data, for every persona; the writer is given it too.</p>
+          <CastingNotes meta={meta} heading={false} />
         </section>
       )}
       <section className="space-y-3 rounded-xl border border-[#272B34] bg-[#16181D] p-5">

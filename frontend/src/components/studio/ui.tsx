@@ -181,10 +181,30 @@ export function PersonaPanel({ meta, persona, region, open: startOpen = false, c
               <ul className="space-y-1">{c.language.map((l, i) => <li key={i}><span className={cn(l.caution ? 'text-amber-200' : 'text-[#C9CCD2]')}>“{l.text}”</span>{l.caution && <span className="ml-1 text-xs text-amber-300">use carefully</span>}<span className="ml-1 text-xs text-[#646A75]"><Src s={l.source} /></span></li>)}</ul>
             </div>
           )}
+          <CastingNotes meta={meta} />
           <p className="text-xs text-[#646A75]">From the live rules file.</p>
         </div>
       )}
     </section>
+  );
+}
+
+/** Who to cast (rules v2.12, Trupanion's breed data). The same for every persona: the data isn't split by persona. */
+export function CastingNotes({ meta, heading = true }: { meta: Meta; heading?: boolean }) {
+  const notes = meta.casting?.notes || [];
+  if (!notes.length) return null;
+  return (
+    <div>
+      {heading && <Label>Who to cast</Label>}
+      <ul className="space-y-1.5">
+        {notes.map((n, i) => (
+          <li key={i}>
+            <span className={cn(n.caution ? 'text-amber-200' : 'text-[#C9CCD2]')}>{n.text}</span>{n.caution && <span className="ml-1 text-xs text-amber-300">use carefully</span>}
+            <div className="text-xs text-[#646A75]"><Src s={n.source} /></div>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

@@ -132,7 +132,9 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     const pf = o.preflight ? { enabled: true, storage: o.preflight.service.storageStatus, engine: o.preflight.service.engineName, can_set_ready: o.preflight.canSetReady(req) } : { enabled: false };
     const rounds = await Rounds.getRounds();
     const isAdmin = o.rules ? o.rules.isAdmin(req) : true;
-    res.json({ ...m, ...(o.rules ? {} : { studio_dir }), preflight: pf, rounds: { ...rounds, can_edit: isAdmin }, can_set_compliance: o.canSetCompliance ? o.canSetCompliance(req) : true, can_override: o.canOverride ? o.canOverride(req) : true, can_sign_off: o.canSignOff ? o.canSignOff(req) : true, spend: await spent(), mock: o.mock, cap: o.cap, cap_window: o.capWindow, ask_over: o.askOver, ...(o.metaExtra?.(req) || {}) });
+    // working: the round this person works in (theirs; the active round unless an admin picked a test round); choices: what they may pick.
+    const working = await Rounds.workingRound(o.who(req), rounds);
+    res.json({ ...m, ...(o.rules ? {} : { studio_dir }), preflight: pf, rounds: { ...rounds, can_edit: isAdmin, working: working.id, choices: Rounds.workingChoices(rounds, isAdmin).map(x => x.id) }, can_set_compliance: o.canSetCompliance ? o.canSetCompliance(req) : true, can_override: o.canOverride ? o.canOverride(req) : true, can_sign_off: o.canSignOff ? o.canSignOff(req) : true, spend: await spent(), mock: o.mock, cap: o.cap, cap_window: o.capWindow, ask_over: o.askOver, ...(o.metaExtra?.(req) || {}) });
   }));
   r.post('/estimate', wrap(async (req, res) => {
     const b = S.makeBrief(req.body.brief || {});
@@ -143,11 +145,13 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   // ----- runs -----
   // Lists follow the round view: the active round by default, ?round=all for every round (test rounds marked by their id).
   const rq = (req: Request) => (req.query.round ? String(req.query.round) : req.body?.round ? String(req.body.round) : undefined);
-  r.get('/batches', wrap(async (req, res) => res.json(await S.listBatches(req.query.user ? String(req.query.user) : undefined, await Rounds.roundView(rq(req))))));
+  r.get('/batches', wrap(async (req, res) => res.json(await S.listBatches(req.query.user ? String(req.query.user) : undefined, await Rounds.roundView(rq(req), o.who(req))))));
 
   // ----- rounds (admin): the active round is stamped on new runs and sign-offs -----
   const roundsAdmin = (req: Request, res: Response) => { if (o.rules && !o.rules.isAdmin(req)) { res.status(403).json({ error: 'Rounds are set by an admin listed in ADMIN_EMAILS' }); return false; } return true; };
   r.get('/rounds', wrap(async (_req, res) => res.json(await Rounds.getRounds())));
+  // The round this person works in: the active round, or (admins) a test round. Never changes the global active round.
+  r.post('/rounds/working', wrap(async (req, res) => res.json(await Rounds.setWorkingRound(o.who(req) || '', String(req.body?.id || ''), o.rules ? o.rules.isAdmin(req) : true))));
   r.post('/rounds', wrap(async (req, res) => { if (roundsAdmin(req, res)) res.json(await Rounds.saveRound(req.body || {}, o.who(req))); }));
   r.post('/rounds/:id/activate', wrap(async (req, res) => { if (roundsAdmin(req, res)) res.json(await Rounds.setActiveRound(String(req.params.id).toUpperCase())); }));
   r.get('/batches/:id', wrap(async (req, res) => res.json(await S.loadBatch(req.params.id))));
@@ -201,9 +205,9 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
 
   // ----- curation -----
   r.post('/ingest', wrap(async (req, res) => res.json(await S.ingest(typeof req.body === 'string' ? req.body : String(req.body?.csv || ''), o.who(req)))));
-  r.get('/shortlist', wrap(async (req, res) => res.json(await S.shortlist(await Rounds.roundView(rq(req))))));
-  r.get('/shortlist.csv', wrap(async (req, res) => download(res, 'text/csv; charset=utf-8', 'shortlist.csv', (await S.writeShortlist(await Rounds.roundView(rq(req)))).csv)));
-  r.get('/shortlist.md', wrap(async (req, res) => download(res, 'text/markdown; charset=utf-8', 'shortlist.md', (await S.writeShortlist(await Rounds.roundView(rq(req)))).md)));
+  r.get('/shortlist', wrap(async (req, res) => res.json(await S.shortlist(await Rounds.roundView(rq(req), o.who(req))))));
+  r.get('/shortlist.csv', wrap(async (req, res) => download(res, 'text/csv; charset=utf-8', 'shortlist.csv', (await S.writeShortlist(await Rounds.roundView(rq(req), o.who(req)))).csv)));
+  r.get('/shortlist.md', wrap(async (req, res) => download(res, 'text/markdown; charset=utf-8', 'shortlist.md', (await S.writeShortlist(await Rounds.roundView(rq(req), o.who(req)))).md)));
   r.post('/check', wrap(async (req, res) => {
     const { persona, territory, lines } = req.body || {};
     res.json(await S.checkTexts(persona, territory, lines || [], o.api(req)));
@@ -217,13 +221,13 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     const { persona, territory, region } = pt(req.query);
     if (!persona || !territory) throw new Error('Pass persona and territory');
     // The versions default to the last sign-off's, or a first pairing of the kept lines (versions.ts defaultDraft).
-    res.json(await R.readyView(persona, territory, (region || 'US') as any, undefined, { round: rq(req) }));
+    res.json(await R.readyView(persona, territory, (region || 'US') as any, undefined, { round: rq(req), user: o.who(req) }));
   }));
   // The Ready screen's versions as the lead builds them: codes, what's missing, compliance per version.
   r.post('/ready/preview', wrap(async (req, res) => {
     const { persona, territory, region } = pt(req.body || {});
     if (!persona || !territory) throw new Error('Pass persona and territory');
-    res.json(await R.readyView(persona, territory, (region || 'US') as any, { versions: req.body.versions || [], on_image: req.body.on_image || {} }, { round: rq(req) }));
+    res.json(await R.readyView(persona, territory, (region || 'US') as any, { versions: req.body.versions || [], on_image: req.body.on_image || {} }, { round: rq(req), user: o.who(req) }));
   }));
   // The version checks' model part (conflicts between an ad's fields): a call per version whose wording hasn't been
   // checked, priced first (plan.check_estimate) and reserved against the cap like any run.
@@ -231,18 +235,18 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     const { persona, territory, region } = pt(req.body || {});
     if (!persona || !territory) throw new Error('Pass persona and territory');
     const draft = { versions: req.body.versions || [], on_image: req.body.on_image || {} };
-    const est = (await R.readyView(persona, territory, (region || 'US') as any, draft, { round: rq(req) })).plan.check_estimate;
+    const est = (await R.readyView(persona, territory, (region || 'US') as any, draft, { round: rq(req), user: o.who(req) })).plan.check_estimate;
     const api = o.api(req);
     const held = await reserve(`version-check ${persona} ${territory}`, est.usd, api, o.who(req));
     if ('error' in held) return res.status(402).json({ error: held.error });
-    try { res.json(await R.checkDraft(persona, territory, (region || 'US') as any, draft, api, { round: rq(req) })); } finally { await held.release(); }
+    try { res.json(await R.checkDraft(persona, territory, (region || 'US') as any, draft, api, { round: rq(req), user: o.who(req) })); } finally { await held.release(); }
   }));
   r.post('/ready', wrap(async (req, res) => {
     // Signing off is the creative lead's (or an admin's), like Ready to traffic; anyone on the Studio list can see it.
     if (o.canSignOff && !o.canSignOff(req)) return res.status(403).json({ error: 'Lines are signed off by the creative lead or an admin' });
     // Versions not yet checked for conflicts are checked as part of the sign-off (a few cents), so the record has them.
     const { persona, territory, region } = pt(req.body || {});
-    const est = persona && territory ? (await R.readyView(persona, territory, (region || 'US') as any, { versions: req.body.versions || [], on_image: req.body.on_image || {} }, { round: rq(req) })).plan.check_estimate : { usd: 0, calls: 0 };
+    const est = persona && territory ? (await R.readyView(persona, territory, (region || 'US') as any, { versions: req.body.versions || [], on_image: req.body.on_image || {} }, { round: rq(req), user: o.who(req) })).plan.check_estimate : { usd: 0, calls: 0 };
     const api = est.calls ? o.api(req) : undefined;
     const held = api ? await reserve(`version-check ${persona} ${territory}`, est.usd, api, o.who(req)) : { release: async () => {} };
     if ('error' in held) return res.status(402).json({ error: held.error });
@@ -263,9 +267,12 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     res.json(await R.recheckLine(req.params.id, req.params.line, o.api(req), o.who(req)));
   }));
   r.get('/lines/:line/versions', wrap(async (req, res) => res.json(await S.getStore().listLineVersions(req.params.line))));
-  r.get('/handoff.csv', wrap(async (req, res) => download(res, 'text/csv; charset=utf-8', 'ready-for-production.csv', (await R.handoffPack(pt(req.query), trafficOf)).csv)));
-  r.get('/handoff.md', wrap(async (req, res) => download(res, 'text/markdown; charset=utf-8', 'ready-for-production.md', (await R.handoffPack(pt(req.query), trafficOf)).md)));
-  r.get('/compliance-sheet.csv', wrap(async (req, res) => download(res, 'text/csv; charset=utf-8', 'trupanion-compliance-sheet.csv', (await R.handoffPack(pt(req.query), trafficOf)).complianceCsv)));
+  // A test round's own exports (a demo) are named TEST_… and say so on their first line.
+  const pack = async (req: Request) => R.handoffPack({ ...pt(req.query), user: o.who(req) }, trafficOf);
+  const named = (p: { test: boolean }, name: string) => (p.test ? `TEST_${name}` : name);
+  r.get('/handoff.csv', wrap(async (req, res) => { const p = await pack(req); download(res, 'text/csv; charset=utf-8', named(p, 'ready-for-production.csv'), p.csv); }));
+  r.get('/handoff.md', wrap(async (req, res) => { const p = await pack(req); download(res, 'text/markdown; charset=utf-8', named(p, 'ready-for-production.md'), p.md); }));
+  r.get('/compliance-sheet.csv', wrap(async (req, res) => { const p = await pack(req); download(res, 'text/csv; charset=utf-8', named(p, 'trupanion-compliance-sheet.csv'), p.complianceCsv); }));
 
   // ----- Pre-flight (step 6): finished assets per signed-off naming stub -----
   if (o.preflight) {
@@ -274,7 +281,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     const uploadDir = path.join(os.tmpdir(), 'studio-uploads');
     fs.mkdirSync(uploadDir, { recursive: true });
     const files = multer({ storage: multer.diskStorage({ destination: uploadDir }), limits: { fileSize: R2_FILE_CAP, files: 20 } });
-    r.get('/preflight/stubs', wrap(async (req, res) => res.json(await pf.stubs(pt(req.query)))));
+    r.get('/preflight/stubs', wrap(async (req, res) => res.json(await pf.stubs({ ...pt(req.query), user: o.who(req) }))));
     // Up to 40 files: a carousel is its cards in each size (10 cards × 3 sizes at most, plus room).
     r.post('/preflight/stubs/:stub/uploads', (req, res, next) => files.array('files', 40)(req, res, (err: any) => {
       if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? `A file is over the ${Math.round(R2_FILE_CAP / 1048576)} MB limit` : String(err.message || err) });
@@ -320,12 +327,15 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
       try { res.json(await pf.setReady(req.params.stub, req.body?.ready !== false, o.who(req))); }
       catch (err: any) { if (err.blocking) return res.status(409).json({ error: err.message, blocking: err.blocking }); throw err; }
     }));
-    r.get('/preflight/agreement', wrap(async (req, res) => res.json(await pf.agreement(pt(req.query)))));
+    r.get('/preflight/agreement', wrap(async (req, res) => res.json(await pf.agreement({ ...pt(req.query), user: o.who(req) } as any))));
     r.get('/preflight/features.csv', wrap(async (_req, res) => download(res, 'text/csv; charset=utf-8', 'preflight-features.csv', await pf.featuresCsv())));
-    r.get('/preflight/handoff.csv', wrap(async (req, res) => download(res, 'text/csv; charset=utf-8', 'asset-handoff.csv', await pf.handoffCsv(rq(req)))));
+    r.get('/preflight/handoff.csv', wrap(async (req, res) => {
+      const test = Rounds.testOnly(await Rounds.roundView(rq(req), o.who(req)));
+      download(res, 'text/csv; charset=utf-8', test ? 'TEST_asset-handoff.csv' : 'asset-handoff.csv', await pf.handoffCsv(rq(req), o.who(req)));
+    }));
 
     // ----- Compliance (step 7): each asset with its codes' copy and flags; Trupanion's reviewer sets the status -----
-    r.get('/compliance', wrap(async (req, res) => res.json(await pf.complianceAssets(pt(req.query)))));
+    r.get('/compliance', wrap(async (req, res) => res.json(await pf.complianceAssets({ ...pt(req.query), user: o.who(req) }))));
     r.post('/compliance/assets/:upload', wrap(async (req, res) => {
       if (o.canSetCompliance && !o.canSetCompliance(req)) return res.status(403).json({ error: 'Trupanion’s compliance decisions are recorded by the producer (Vivan) or an admin' });
       try { res.json(await pf.setAssetCompliance(req.params.upload, req.body || {}, o.who(req))); }

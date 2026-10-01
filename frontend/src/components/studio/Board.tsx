@@ -43,7 +43,7 @@ export function Board({ meta, onOpen, onHowItWorks, onRoundSaved }: {
     return c;
   };
   const rounds = meta.rounds;
-  const active = rounds?.rounds.find(r => r.id === rounds.active);
+  const active = rounds?.rounds.find(r => r.id === (rounds.working || rounds.active));
   const personas = personaKeys(meta.personas);
   const rows = personas.map(p => {
     const ts = Object.entries(meta.territories).filter(([, t]) => t.persona === p && t.status !== 'retired').map(([k]) => k);
