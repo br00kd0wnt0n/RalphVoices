@@ -431,6 +431,8 @@ export const studio = {
     for (const f of files) form.append('files', f, f.name);
     if (also.length) form.append('also', also.join(','));
     if (sizes.length) form.append('sizes', sizes.join(','));
+    // The code these files were chosen for: the server refuses the upload if it doesn't match the route (finding 25).
+    form.append('for_stub', stub);
     const res = await raw(`/preflight/stubs/${enc(stub)}/uploads`, { method: 'POST', body: form });
     return (await res.json()) as { upload_id: string; kind: string; storage: string; estimate: { usd: number; seconds: number; sizes?: number }; format_notes?: string[]; sizes?: Array<{ size: string; files: string[] }> };
   },

@@ -297,7 +297,8 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
       try {
         // sizes: each file's size as the page set it (1:1, 4:5, 9:16; '' to let the server read it), in file order.
         const sizes = ([] as string[]).concat((req.body?.sizes as any) || []).flatMap(x => String(x).split(',')).map(x => x.trim());
-        res.json(await pf.upload(req.params.stub, list.map(f => ({ path: f.path, size: f.size, filename: f.originalname, contentType: f.mimetype })), o.who(req), also, sizes));
+        const forStub = req.body?.for_stub ? String(req.body.for_stub) : undefined;
+        res.json(await pf.upload(req.params.stub, list.map(f => ({ path: f.path, size: f.size, filename: f.originalname, contentType: f.mimetype })), o.who(req), also, sizes, { forStub }));
       } finally {
         for (const f of list) fs.rm(f.path, { force: true }, () => {});
       }

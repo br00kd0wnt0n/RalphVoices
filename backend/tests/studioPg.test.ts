@@ -1281,3 +1281,20 @@ test('shared visual in 3 sizes: one verdict per text rule when the words are the
   assert.deepEqual(both.passed.sort(), [A1, A2].sort());
   assert.equal((await pf.report(A2)).status.status, 'ready');
 });
+
+// ---------- production test, 1 Oct, finding 25: an upload only lands on the code the files were chosen for ----------
+test('upload: the server refuses files chosen for another code (409), storing nothing', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const run = await keptRun(R, api, ['Calm at the counter.', 'One less worry.']);
+  const ads = adsOf(run.prims, run.head);
+  const so = (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: ads, expectation: { codes: [await leadOf(R, ads)], reason: 'x' } }, 'nick')).signoff;
+  const [A1, A2] = so.versions!.map((v: any) => v.code);
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
+  const png = [{ buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 1]), filename: 'B_1x1.png', contentType: 'image/png' }];
+  await assert.rejects(pf.upload(A1, png, 'brook', [], ['1:1'], { forStub: A2 }), (e: any) => e.status === 409 && new RegExp(`chosen for ${A2}, not ${A1}\\. Nothing was uploaded`).test(e.message));
+  assert.equal(Number((await (store as any).db.query(`SELECT count(*) n FROM studio_asset_uploads`)).rows[0].n), 0);
+  const ok = await pf.upload(A2, png, 'brook', [], ['1:1'], { forStub: A2 });
+  assert.deepEqual(ok.stubs, [A2]);
+});

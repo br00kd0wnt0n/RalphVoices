@@ -349,7 +349,10 @@ export class Preflight {
    * `sizes`: each file's size (1:1, 4:5, 9:16), as the person set it; otherwise read from the image, or the file name,
    * else the code's first expected size. A carousel is its cards in each size (card order within a size).
    */
-  async upload(stub: string, files: UploadFile[], user?: string, also: string[] = [], sizes: Array<string | null | undefined> = []): Promise<{ upload_id: string; kind: AssetKind; storage: 'r2' | 'db'; stubs: string[]; format_notes: string[]; sizes: Array<{ size: Size; files: string[] }>; estimate: { usd: number; seconds: number; sizes: number } }> {
+  async upload(stub: string, files: UploadFile[], user?: string, also: string[] = [], sizes: Array<string | null | undefined> = [], opts: { forStub?: string } = {}): Promise<{ upload_id: string; kind: AssetKind; storage: 'r2' | 'db'; stubs: string[]; format_notes: string[]; sizes: Array<{ size: Size; files: string[] }>; estimate: { usd: number; seconds: number; sizes: number } }> {
+    // The page says which code the files were chosen for; a different route code means the page moved under the person
+    // (production test, 1 Oct: files chosen for FAM_SUMMER_ST_B1 were recorded on DINK_UNEXPECTED_CAR_A1). Refused, nothing stored.
+    if (opts.forStub && opts.forStub !== stub) throw Object.assign(new Error(`These files were chosen for ${opts.forStub}, not ${stub}. Nothing was uploaded: choose the code and upload again.`), { status: 409 });
     if (!files.length) throw new Error('Choose a file to upload');
     const { signoff } = await this.findStub(stub);
     const stubs = [stub, ...new Set(also.filter(x => x && x !== stub))];
