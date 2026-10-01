@@ -849,6 +849,13 @@ export function screenWritten(text: string, cell: Pick<Cell, 'field' | 'structur
   if (PRODUCT_FIELDS.includes(cell.field) && !NAMES_PRODUCT.test(text)) return { reason: 'doesn’t say what’s sold (no "Trupanion" or "medical insurance for pets")', rule: 'CL_PRODUCT' };
   return null;
 }
+/** The last sentence asks for an action (get a quote, see how it works, learn more…). */
+const CTA = /^\W*(get|see|start|find|learn|compare|check|explore|visit|request|discover|try|tap|click|sign up|enrol+|join|ask|talk to)\b/i;
+export function endsOnCta(text: string): boolean {
+  const parts = text.trim().split(/(?<=[.!?…])\s+/).filter(Boolean);
+  const last = parts[parts.length - 1] || '';
+  return CTA.test(last) || /\b(get|request|start) (a|your) (free )?quote\b|\blearn more\b|\bsee how\b/i.test(last);
+}
 /** Fields that must say what's sold on their own: at generation there's no ad yet for a headline to cover it. */
 export const PRODUCT_FIELDS = ['meta_primary', 'tiktok_caption'];
 /** Trupanion, or the category: medical insurance for pets (cats and dogs), insurance for pets, pet insurance. */
@@ -879,7 +886,7 @@ function sharedAudience(b: Brief, r: Rules): string {
 - No persona-specific references: no particular household, life stage, income, age or kind of owner. The artwork carries the persona; this copy doesn't.
 - Build on what Trupanion is and does (the ANGLE is ${r.personas[b.persona].triggers[0].id} "${r.personas[b.persona].triggers[0].label}"). Reasons to believe, from the facts list:
 ${own.map(f => `  - ${f.text}`).join('\n') || '  - (the facts list below)'}
-- Primary text: say what Trupanion is (name it, or medical insurance for pets), give one reason to believe, and end on a call to action (e.g. get a quote, see how it works).
+- Primary text and captions, MUST: name Trupanion or "medical insurance for pets" in the words (a line that doesn't is thrown away), give one reason to believe from the list above, and make the LAST sentence a call to action that starts with a verb (e.g. "Get a quote in minutes.", "See how it works."). No line ends on a description or a feeling.
 - Meta headline: the benefit or the action, short. A bank of headlines that work under any primary text here.
 ${heads.length ? `APPROVED ON-IMAGE HEADLINES this copy will run under (each ad's artwork carries one; they are persona-specific, yours is not). Write post copy that works under any of them, supports them, and never repeats their words:\n${heads.map(h => `- ${h}`).join('\n')}\n` : ''}${r.casting?.writer_note ? `PETS: ${r.casting.writer_note}\n` : ''}
 TERRITORY: ${r.territories[b.territory].name}. ${r.territories[b.territory].premise}
@@ -1297,7 +1304,7 @@ export async function runMismatch(batchId: string | undefined, b: Pick<Brief, 'p
   return `This run is for ${name(run)}. Start a new run for ${name(b)}.`;
 }
 
-export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: { check?: boolean; batchId?: string; ownOnly?: boolean; user?: string } = {}): Promise<Batch> {
+export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: { check?: boolean; batchId?: string; ownOnly?: boolean; user?: string; for?: string } = {}): Promise<Batch> {
   const mismatch = await runMismatch(opts.batchId, b);
   if (mismatch) throw Object.assign(new Error(mismatch), { status: 409 });
   const r = loadRules();
@@ -1311,7 +1318,11 @@ export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: 
   const id = existing?.id || opts.batchId || (await newBatchId(b.territory));
   const started = Date.now();
   const batch: Batch = existing || { id, brief: b, created: new Date().toISOString(), lines: [], dropped: [], stats: { generated: 0, near_duplicates_removed: 0, similar_flagged: 0, timings_ms: {}, usd: {}, calls: {}, tokens: {}, usd_total: 0 } };
-  if (existing) batch.brief = { ...b, own_lines: [...(existing.brief.own_lines || []), ...(b.own_lines || []).filter(o => !(existing.brief.own_lines || []).some(x => x.text === o.text))] };
+  // "On behalf of": a run started for someone is theirs (created_for), entered by the signed-in person (created_by).
+  // In the brief too (bulk.for): Postgres reads the run header's "for" back from there. An existing run keeps its own.
+  const forWho = cleanFor(opts.for, opts.user);
+  if (!existing && forWho) { batch.created_for = forWho; (batch.brief as any) = { ...batch.brief, bulk: { ...((batch.brief as any).bulk || {}), for: forWho } }; }
+  if (existing) batch.brief = { ...b, ...((existing.brief as any).bulk ? { bulk: (existing.brief as any).bulk } : {}), own_lines: [...(existing.brief.own_lines || []), ...(b.own_lines || []).filter(o => !(existing.brief.own_lines || []).some(x => x.text === o.text))] };
   if (!batch.created_by && opts.user) batch.created_by = opts.user;
   const embStore: Record<string, number[]> = existing ? await getStore().getEmbeddings(id) : {};
   const mine: Line[] = [];   // the lines this job adds (numbered by claimLines)
@@ -1324,7 +1335,7 @@ export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: 
     emit({ type: 'status', message: `Reading your ${own.length} line${own.length === 1 ? '' : 's'}` });
     const [tags, embs] = await Promise.all([tagOwn(api, r, b, own), api.embed(own.map(o => o.text))]);
     const ownLines = own.map((o, i) => {
-      const l: Line = { ...newLine(b, r, id, 0, { cell: `y${String(i + 1).padStart(2, '0')}`, angle: tags[i].angle, structure: tags[i].structure, tone: b.tone, field: o.field }, o.text, 'human'), id: tmpId(id), added_by: opts.user };
+      const l: Line = { ...newLine(b, r, id, 0, { cell: `y${String(i + 1).padStart(2, '0')}`, angle: tags[i].angle, structure: tags[i].structure, tone: b.tone, field: o.field }, o.text, 'human'), id: tmpId(id), added_by: opts.user, ...(forWho ? { added_for: forWho } : {}) };
       batch.lines.push(l);
       embStore[l.id] = embs[i];
       return l;
@@ -1511,6 +1522,8 @@ export function deterministicFlags(l: { text: string; field: string; structure: 
   // On-asset text (in the artwork: on-image headline, subhead, cards) is never cut off: its length is a text-load
   // guideline. It gets its own flag in its own words, with no "truncated" and no quoted cut word (Nick's copy check,
   // 1 Oct: 11 of 19 ambers read "Truncated ('eater.')" on on-image headlines).
+  // Shared captions run under any persona's artwork, so the primary text or caption has to carry the call to action itself.
+  if (l.persona === SHARED_PERSONA && PRODUCT_FIELDS.includes(l.field) && !endsOnCta(l.text)) addFlag(flags, { rule: 'SHARED_CTA', severity: 'warn', label: 'No call to action at the end', source: 'HOUSE: Brook, 1 Oct 2026 (shared captions)', quote: '', why: 'Shared primary text ends on what to do next (e.g. get a quote, see how it works).' });
   if (f && onAsset(l.field, r) && chars > f.visible) addFlag(flags, { rule: 'LIMIT_ON_ASSET', severity: 'warn', label: `Long for ${onAssetWords(l.field, r)}: ${chars} characters (aim for ${f.visible} or fewer)`, source: f.source, quote: '', why: chars > f.max ? `Well over: the most that reads at a glance is about ${f.max}` : undefined, by: ['rule'] });
   else if (f && chars > f.max) addFlag(flags, { rule: 'LIMIT_MAX', severity: 'warn', label: `Over the ${f.label} limit (${chars}/${f.max})`, source: f.source, quote: '', why: `${chars} characters; limit ${f.max}`, by: ['rule'] });
   else if (f && chars > f.visible) addFlag(flags, { rule: 'LIMIT_VISIBLE', severity: 'warn', label: `Truncated: ${chars} characters, ${f.visible} visible in ${f.label}`, source: f.source, quote: truncTail(text, f.visible), why: `${chars} characters; ${f.visible} visible`, by: ['rule'] });
@@ -1972,6 +1985,30 @@ export const regionOfLine = (l: { region?: Region }, brief?: { region?: Region }
  * Mark a run and its lines as entered for someone else (`created_for` / `added_for` beside the usual `_by`), and with the
  * copy check they came from. The full "on behalf of" uses the same `<verb>_for` beside each `<verb>_by`.
  */
+/**
+ * Credit an existing run to someone (an admin's correction: a run started before the "for" picker was on Write), or
+ * clear it with ''. The run's own lines (typed by the person who started it) follow; `created_by` never changes.
+ */
+export async function setRunFor(batchId: string, forWho: string, user?: string): Promise<{ id: string; created_by?: string; created_for?: string }> {
+  return runLock(batchId, async () => {
+    const b = await loadBatch(batchId);
+    const f = cleanFor(forWho, b.created_by);
+    const before = b.created_for || (b.brief as any).bulk?.for || null;
+    const bulk = { ...((b.brief as any).bulk || {}) };
+    if (f) { b.created_for = f; bulk.for = f; } else { delete b.created_for; delete bulk.for; }
+    if (Object.keys(bulk).length) (b.brief as any).bulk = bulk; else delete (b.brief as any).bulk;
+    const touched: string[] = [];
+    for (const l of b.lines) {
+      if (l.model !== 'human' || (l.added_by || b.created_by) !== b.created_by || (l.added_for || null) !== before) continue;
+      if (f) l.added_for = f; else delete l.added_for;
+      touched.push(l.id);
+    }
+    await saveBatch(b, touched);
+    await getStore().recordEdit({ line_id: `run:${batchId}`, batch_id: batchId, before: { created_for: before }, after: { created_for: f || null }, by: user || 'unknown', at: new Date().toISOString() });
+    return { id: b.id, created_by: b.created_by, ...(f ? { created_for: f } : {}) };
+  });
+}
+
 export async function stampFor(batchId: string, o: { bulk?: string; for?: string; user?: string; cards?: Array<{ text: string; field: string; card: number }> }): Promise<void> {
   await runLock(batchId, async () => {
     const b = await loadBatch(batchId);

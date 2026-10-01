@@ -187,14 +187,24 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     const ownOnly = !!req.body.own_only;
     const e = S.estimate(b, { ownOnly });
     if (!o.mock && e.usd > o.askOver && !req.body.confirm) return res.status(409).json({ needs_confirm: true, estimate: e.usd });
+    // Whose run it is ("on behalf of"); permissions and spend stay the signed-in person's.
+    const who = o.who(req), forWho = forOf(req);
     const api = o.api(req);
     const held = await reserve(`generate ${b.territory}`, e.usd, api, o.who(req));
     if ('error' in held) return res.status(402).json({ error: held.error });
     await S.saveBrief(b);
     // Continue an existing run, or start a new one.
     const id = req.body.batch ? String(req.body.batch) : await S.newBatchId(b.territory);
-    const job = startJob(`${id}~${Date.now()}`, emit => S.generate(b, api, emit, { batchId: id, ownOnly, user: o.who(req) }).finally(held.release));
+    const job = startJob(`${id}~${Date.now()}`, emit => S.generate(b, api, emit, { batchId: id, ownOnly, user: who, for: forWho }).finally(held.release));
     res.json({ batch: id, job, estimate: e.usd });
+  }));
+  // An admin's correction: credit an existing run to someone (or clear it with an empty name).
+  r.post('/batches/:id/for', wrap(async (req, res) => {
+    if (o.rules && !o.rules.isAdmin(req)) return res.status(403).json({ error: 'Only an admin listed in ADMIN_EMAILS can change who a run is for' });
+    const f = String(req.body?.for || '').trim();
+    const listed = o.people ? o.people().find(p => p.toLowerCase() === f.toLowerCase()) : f;
+    if (f && !listed) return res.status(400).json({ error: `${f} isn't on the Studio list` });
+    res.json(await S.setRunFor(req.params.id, listed || '', o.who(req)));
   }));
   r.post('/batches/:id/resume', wrap(async (req, res) => {
     const api = o.api(req);

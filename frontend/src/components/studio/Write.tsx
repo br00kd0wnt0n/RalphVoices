@@ -5,7 +5,7 @@ import { toggleField as toggleFieldIn } from '@/lib/studioFields';
 import { roundName, studio, type Batch, type Brief, type Meta, type OwnLine, type RunSummary, type Tone, REGION_NAMES } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { personaColor, personaEdge, tint } from '@/lib/personaColors';
-import { CanadaNote, Chip, GhostButton, Intro, Label, PersonaChip, PersonaPanel, PinkButton, angleLabel, fieldOrder, regionOf, territoryName, when, isOpenTerritory, isSharedCtx, type Ctx } from './ui';
+import { CanadaNote, Chip, GhostButton, Intro, Label, PersonaChip, PersonaPanel, PinkButton, angleLabel, fieldOrder, regionOf, territoryName, when, ForPicker, isOpenTerritory, isSharedCtx, type Ctx } from './ui';
 
 /** A field's starting count: the rules' default_count, else an even split of n over the ticked fields. */
 export function defaultCount(meta: Meta, f: string, fields: string[], n: number): number {
@@ -255,6 +255,8 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
                 {est ? ` · about $${est.usd.toFixed(2)}${meta.mock ? ' (mock: free)' : ''}` : ''}
               </div>
             </div>
+            {/* Whose run this is: a run started for someone is theirs, entered by you. */}
+            <ForPicker meta={meta} doing="Writing" />
             <PinkButton disabled={running || !written.length} onClick={() => run({ ownOnly: true })}>Check my lines{written.length ? ` (${written.length})` : ''}</PinkButton>
             <GhostButton disabled={running || !brief.fields.length || !total} onClick={() => run()} className="px-4 py-2.5 text-base">
               {written.length ? `Check mine + generate ${total}` : `Generate ${total} lines`}

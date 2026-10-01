@@ -1363,6 +1363,17 @@ test('on behalf of: by + for stored on sign-off, expectation, line versions, ove
     for (const id of [p, h]) assert.equal((await call('PATCH', `/batches/${run.id}/lines/${id}`, { decision: 'keep' }, 'brook', 'nick')).status, 200);
     const keptLine = (await S.loadBatch(run.id)).lines.find(l => l.id === p)!;
     assert.deepEqual([keptLine.decided_by, keptLine.decided_for], ['brook', 'nick']);
+    // Generating for Nick: the run reads back from Postgres as Nick's, entered by Brook; an admin can credit a run later.
+    const gen = await call('POST', '/generate', { brief: { territory: 'OWN_CALM', name: 'gen for', own_lines: [HEAD] }, own_only: true }, 'brook', 'nick');
+    assert.equal(gen.status, 200);
+    for (let i = 0; i < 100 && !(await S.batchExists(gen.body.batch) && (await S.loadBatch(gen.body.batch)).lines.length); i++) await new Promise(r => setTimeout(r, 50));
+    const genRun = await S.loadBatch(gen.body.batch);
+    assert.deepEqual([genRun.created_by, genRun.created_for, genRun.lines[0].added_for], ['brook', 'nick', 'nick']);
+    assert.equal((await call('GET', '/batches', null)).body.find((x: any) => x.id === gen.body.batch).created_for, 'nick');
+    assert.equal((await call('POST', `/batches/${run.id}/for`, { for: 'nick' }, 'vivan')).status, 403, 'admins only');
+    assert.equal((await call('POST', `/batches/${run.id}/for`, { for: 'someone else' })).status, 400);
+    assert.equal((await call('POST', `/batches/${run.id}/for`, { for: 'Nick' })).body.created_for, 'nick');
+    assert.equal((await S.loadBatch(run.id)).created_for, 'nick');
     assert.deepEqual((await S.loadTaste()).filter(t => t.id === p).map(t => [t.by, t.for]), [['brook', 'nick']], 'taste records whose decision it was');
 
     // The override of its red flag, for Nick.

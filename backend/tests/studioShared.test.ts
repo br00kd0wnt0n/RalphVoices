@@ -88,3 +88,39 @@ test('kept shared captions are in every territory\'s Build set for their region,
   assert.equal(line.ready!.signoff_id, b.id);
   assert.equal(line.ready!.superseded_by, undefined, 'still signed off, in Busy Families’ set');
 });
+
+test('generating for someone: the run is theirs (created_for), their lines added_for; an admin can credit a run later', async () => {
+  await fresh();
+  const brief = () => S.makeBrief({ territory: S.SHARED_TERRITORY, persona: S.SHARED_PERSONA, name: 'for', fields: ['meta_primary'], n: 2, own_lines: [{ field: 'meta_primary', text: 'Trupanion is medical insurance for pets. Get a quote.' }] });
+  const run = await S.generate(brief(), new S.Api({ mock: true }), () => {}, { ownOnly: true, user: 'brook', for: 'nick' });
+  const stored = await S.loadBatch(run.id);
+  assert.equal(stored.created_by, 'brook');
+  assert.equal(stored.created_for, 'nick');
+  assert.deepEqual(stored.lines.map(l => [l.added_by, l.added_for]), [['brook', 'nick']]);
+  assert.equal((await S.listBatches()).find(r => r.id === run.id)!.created_for, 'nick');
+  // For yourself is nobody.
+  const own = await S.generate(brief(), new S.Api({ mock: true }), () => {}, { ownOnly: true, user: 'brook', for: 'Brook' });
+  assert.equal((await S.loadBatch(own.id)).created_for, undefined);
+  // Continuing someone's run for someone else doesn't change whose run it is.
+  await S.generate({ ...brief(), own_lines: [{ field: 'meta_primary', text: 'Trupanion pays your vet directly. See how it works.' }] }, new S.Api({ mock: true }), () => {}, { ownOnly: true, user: 'brook', for: 'vivan', batchId: run.id });
+  const again = await S.loadBatch(run.id);
+  assert.equal(again.created_for, 'nick');
+  assert.equal(again.lines[1].added_for, 'vivan');
+  // The admin's correction, and clearing it.
+  assert.deepEqual(await S.setRunFor(own.id, 'nick', 'admin'), { id: own.id, created_by: 'brook', created_for: 'nick' });
+  const credited = await S.loadBatch(own.id);
+  assert.deepEqual([credited.created_for, credited.lines[0].added_for], ['nick', 'nick']);
+  await S.setRunFor(own.id, '', 'admin');
+  const cleared = await S.loadBatch(own.id);
+  assert.deepEqual([cleared.created_for, cleared.lines[0].added_for], [undefined, undefined]);
+});
+
+test('shared primary text with no call to action at the end is flagged (amber); other personas and headlines are not', async () => {
+  const r = await fresh();
+  const cta = (text: string, field = 'meta_primary', persona = S.SHARED_PERSONA) => S.deterministicFlags({ text, field, structure: 'plain_promise', persona }, r).flags.filter(f => f.rule === 'SHARED_CTA').map(f => f.severity);
+  assert.deepEqual(cta('Trupanion is medical insurance for pets. We pay your vet directly.'), ['warn']);
+  assert.deepEqual(cta('Trupanion is medical insurance for pets. Get a quote in minutes.'), []);
+  assert.deepEqual(cta('Trupanion pays your vet directly. Ready? See how it works.'), []);
+  assert.deepEqual(cta('Calm, covered.', 'meta_headline'), []);
+  assert.deepEqual(cta('Trupanion pays your vet directly.', 'meta_primary', 'OWN'), []);
+});
