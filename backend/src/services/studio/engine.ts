@@ -139,6 +139,8 @@ export interface Line {
   compliance_by_code?: Record<string, NonNullable<Line['compliance']>>;
   /** Who added the line (a line written by a person: Write & brief, or Add a line in Review). */
   added_by?: string;
+  /** Whose line it is when someone entered it for them (a bulk check of Nick's copy, pasted by Brook). */
+  added_for?: string;
   /** When the final wording was last fully re-checked (after an edit). */
   rechecked_at?: string;
   /** Carousel on-image text written as a card sequence (item E): its card number and the sequence it belongs to. */
@@ -175,6 +177,9 @@ export interface Batch {
   brief: Brief;
   created: string;
   rules_version?: string;  // the rules version the lines were last checked under
+  /** Whose run it is when someone started it for them (bulk check); `bulk`: the copy check it came from. */
+  created_for?: string;
+  bulk?: string;
   created_by?: string;   // who started the run (local: the name the page asks for; hosted: the signed-in user)
   updated?: string;
   lines: Line[];
@@ -271,6 +276,11 @@ export function setRulesPath(p: string) { rulesPath = p; store = null; rulesCach
 let rulesCache: Rules | null = null;
 let seedsCache: any = null;
 let voicesCache: Record<string, string> = {};
+/** The shared captions pool's built-in persona and territory (see refreshRules). */
+export const SHARED_PERSONA = 'ALL';
+export const SHARED_TERRITORY = 'SHARED';
+export const isShared = (x: { persona?: string; territory?: string }) => x.persona === SHARED_PERSONA || x.territory === SHARED_TERRITORY;
+
 export async function refreshRules(): Promise<Rules> {
   const s = getStore();
   const r = await s.getRules() as Rules;
@@ -286,6 +296,20 @@ export async function refreshRules(): Promise<Rules> {
   for (const t of Object.values(r.territories)) t.origin = 'pitch';
   const edits = await s.getTerritoryEdits();
   for (const [code, t] of Object.entries(edits)) r.territories[code] = { ...(r.territories[code] || {}), ...(t as Territory) };
+  // The shared captions pool (Brook, 1 Oct): post copy that is generic across personas has no persona or territory of
+  // its own, so the loaded rules carry a built-in pair for it (unless the rules file defines them). Not a persona on
+  // the board or in the pickers: meta() leaves the pair out.
+  if (!r.personas[SHARED_PERSONA]) {
+    r.personas[SHARED_PERSONA] = {
+      name: 'All personas (shared captions)', default_fields: ['meta_primary', 'meta_headline'].filter(f => r.fields[f]),
+      triggers: [{ id: 'ALL_A1', label: 'Brand-level', detail: 'Generic across personas: what Trupanion is and why, with a call to action.', source: 'HOUSE: Brook, 1 Oct 2026' }],
+      turn_offs: [], language: [], verbatims: [],
+    } as any;
+  }
+  if (!r.territories[SHARED_TERRITORY]) {
+    r.territories[SHARED_TERRITORY] = { persona: SHARED_PERSONA, name: 'Shared captions', angle: 'ALL_A1', format: 'SHARED', origin: 'pitch', source: 'HOUSE: Brook, 1 Oct 2026',
+      premise: 'Post copy reused across personas: brand-level, no persona-specific references, names Trupanion or medical insurance for pets, ends on a call to action.' } as Territory;
+  }
   seedsCache = await s.getInput('personas');
   voicesCache = (await s.getInput('voices')) || {};
   rulesCache = r;
@@ -1901,6 +1925,23 @@ async function putTaste(l: Line) {
  * deciding on the same line are applied one after the other and the history chains (each `before` is the previous
  * `after`). Updates the line's taste example.
  */
+/** A line's region (its own, else its run's, else US). */
+export const regionOfLine = (l: { region?: Region }, brief?: { region?: Region }): Region => regionOf(l, brief);
+
+/**
+ * Mark a run and its lines as entered for someone else (`created_for` / `added_for` beside the usual `_by`), and with the
+ * copy check they came from. The full "on behalf of" uses the same `<verb>_for` beside each `<verb>_by`.
+ */
+export async function stampFor(batchId: string, o: { bulk?: string; for?: string; user?: string }): Promise<void> {
+  await runLock(batchId, async () => {
+    const b = await loadBatch(batchId);
+    if (o.bulk) b.bulk = o.bulk;
+    if (o.for) b.created_for = o.for;
+    for (const l of b.lines) if (o.for && l.model === 'human' && !l.added_for) l.added_for = o.for;
+    await saveBatch(b, b.lines.map(l => l.id));
+  });
+}
+
 /** What re-checking one line's final wording costs (the model check, the yes/no wordings and the objection). */
 export async function recheckEstimate(batchId: string, lineId: string): Promise<number> {
   const b = await loadBatch(batchId);
@@ -2125,7 +2166,7 @@ export async function meta() {
   const r = await refreshRules();
   return {
     // Who each persona is, from the active rules file (never the readout): shown on Territories and beside Write & brief.
-    personas: Object.fromEntries(Object.entries(r.personas).map(([k, v]) => [k, {
+    personas: Object.fromEntries(Object.entries(r.personas).filter(([k]) => k !== SHARED_PERSONA).map(([k, v]) => [k, {
       name: v.name, default_fields: v.default_fields,
       triggers: v.triggers.map(t => ({ id: t.id, label: t.label, detail: t.detail, source: t.source })),
       context: {
@@ -2140,7 +2181,9 @@ export async function meta() {
     what_to_do: Object.fromEntries([...r.compliance, ...r.brand, ...r.clarity, ...((r as any).disclaimer ? [(r as any).disclaimer] : [])]
       .filter((i: any) => i.what_to_do).map((i: any) => [i.id, i.what_to_do])),
     // Each territory's default fields (by its format), for Write & brief.
-    territories: Object.fromEntries(Object.entries(r.territories).map(([k, v]) => [k, { ...v, default_fields: defaultFields(k, r) }])),
+    territories: Object.fromEntries(Object.entries(r.territories).filter(([k]) => k !== SHARED_TERRITORY).map(([k, v]) => [k, { ...v, default_fields: defaultFields(k, r) }])),
+    // The shared captions pool (persona-less post copy): where a bulk check files lines with no persona.
+    shared: { persona: SHARED_PERSONA, territory: SHARED_TERRITORY, name: r.territories[SHARED_TERRITORY].name },
     formats: FORMATS,
     // Where ads run, and the naming code's pattern (utils/namingCode.ts), for the page's help text.
     regions: REGIONS,

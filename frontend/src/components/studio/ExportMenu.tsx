@@ -77,6 +77,8 @@ export function ExportMenu({ meta, ctx, view, batch, onImported }: { meta: Meta 
             <input type="file" accept=".csv,text/csv" className="hidden" onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) importSheet(f); }} />
           </label>
           <Head>Kept lines</Head>
+          <Item onClick={() => dl('/bulk/latest/report.md', 'copy-check.md')} title="The latest Check copy report: each line with its flags in plain words, to share back">Copy check report (Markdown)</Item>
+          <Item onClick={() => dl('/bulk/latest/report.csv', 'copy-check.csv')} title="The same, one row per line, for Sheets">Copy check report (CSV)</Item>
           <Item onClick={() => dl('/shortlist.csv', 'shortlist.csv')}>Kept lines (CSV)</Item>
           <Item onClick={() => dl('/shortlist.md', 'shortlist.md')}>Kept lines (Markdown)</Item>
           <Item disabled={!run} onClick={() => run && dl(`/batches/${encodeURIComponent(run.id)}/export.md`, `${run.id}.md`)}>This run (Markdown)</Item>
