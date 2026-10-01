@@ -24,7 +24,7 @@ import {
 import { DEFAULT_REGION, REGION_NAMES, parseCode, territoryToken, type Region } from '../../utils/namingCode.js';
 import {
   type Draft, type SignedField, type SignedOnImage, type SignedVersion,
-  complianceFor, defaultDraft, fieldRole, planDraft, platformOf, signoffOnImage, signoffVersions, versionFields,
+  complianceFor, defaultDraft, fieldRole, isSubField, planDraft, platformOf, signoffOnImage, signoffVersions, versionFields,
 } from './versions.js';
 import { type VersionCheck, checkVersions, estimateConflicts, seedConflicts, uncheckedAds } from './versionChecks.js';
 import { TEST_SUFFIX, inView, labelOf, roundOf, roundView, testOnly, type RoundView } from './rounds.js';
@@ -264,13 +264,13 @@ export async function checkDraft(persona: string, territory: string, region: Reg
  * expectations record (which version(s) should lead, and why). Refused while a version is incomplete (DraftError)
  * or a line in it has an unresolved red flag (GateError).
  */
-export async function signOff(input: { persona: string; territory: string; region?: string; round?: string; versions: Draft['versions']; on_image?: Draft['on_image']; expectation: { codes: string[]; reason: string }; expect_latest?: string | null }, user?: string, opts: { api?: Api } = {}): Promise<{ signoff: Signoff; expectation: Expectation }> {
+export async function signOff(input: { persona: string; territory: string; region?: string; round?: string; versions: Draft['versions']; on_image?: Draft['on_image']; on_image_sub?: Draft['on_image_sub']; expectation: { codes: string[]; reason: string }; expect_latest?: string | null }, user?: string, opts: { api?: Api } = {}): Promise<{ signoff: Signoff; expectation: Expectation }> {
   const ro = { round: input.round, user };
   const { persona, territory } = input;
   const region = String(input.region || DEFAULT_REGION).toUpperCase() as Region;
   if (!REGION_NAMES[region]) throw new Error(`Region must be ${Object.keys(REGION_NAMES).join(' or ')}`);
-  const draft: Draft = { versions: input.versions || [], on_image: input.on_image || {} };
-  const ids = [...new Set([...draft.versions.flatMap(v => Object.values(v.fields || {})), ...Object.values(draft.on_image).flat()].filter(Boolean))];
+  const draft: Draft = { versions: input.versions || [], on_image: input.on_image || {}, ...(input.on_image_sub ? { on_image_sub: input.on_image_sub } : {}) };
+  const ids = [...new Set([...draft.versions.flatMap(v => Object.values(v.fields || {})), ...Object.values(draft.on_image).flat(), ...Object.values(draft.on_image_sub || {}).flat()].filter(Boolean))];
   if (!ids.length) throw new Error('Build at least one version to sign off');
   // The conflicts check runs before the locks (it takes a few seconds); the sign-off stores whatever it found.
   if (opts.api) {
@@ -344,7 +344,9 @@ async function signOffLocked(input: { persona: string; territory: string; expect
   const versions: SignedVersion[] = view.plan.versions.map(v => ({ code: v.code, visual: v.visual, number: v.number, platform: v.platform, fields: Object.fromEntries(Object.entries(v.fields).map(([f, lid]) => [f, strip(signed.get(lid)!)])) }));
   const on_image: SignedOnImage[] = view.plan.on_image.map(o => ({ ...strip(signed.get(o.line_id)!), visual: o.visual, visual_key: o.visual_key, ...(o.card ? { card: o.card } : {}) }));
   const lines = [...signed.values()].sort((a, b) => a.stub.localeCompare(b.stub, undefined, { numeric: true }));
-  const setHash = sha256(JSON.stringify([versions.map(v => [v.code, Object.entries(v.fields).map(([f, x]) => [f, x.line_id, x.version, x.sha256])]), on_image.map(o => [o.visual_key, ...(o.card ? [o.card] : []), o.line_id, o.version, o.sha256])]));
+  // A subhead entry is told apart by its field (meta_on_image_sub); the hash marks it only when there is one, so sets
+  // signed off before subheads keep their hash.
+  const setHash = sha256(JSON.stringify([versions.map(v => [v.code, Object.entries(v.fields).map(([f, x]) => [f, x.line_id, x.version, x.sha256])]), on_image.map(o => [o.visual_key, ...(o.card ? [o.card] : []), o.line_id, o.version, o.sha256, ...(isSubField(o.field, loadRules()) ? ['sub'] : [])])]));
   const expLines = [...new Set(versions.filter(v => expCodes.includes(v.code)).flatMap(v => Object.values(v.fields).map(f => f.line_id)))];
   const expectation: Expectation = { id: `${id}-expectation`, persona, territory, signoff_id: id, line_ids: expLines, stubs: expCodes, reason, created_by: by, created_at: now, sha256: '' };
   expectation.sha256 = sha256(JSON.stringify({ persona, territory, signoff_id: id, signoff_sha256: setHash, line_ids: expLines, stubs: expCodes, reason, created_by: by, created_at: now }));
@@ -377,11 +379,13 @@ export interface HandoffRow {
   stub: string; region: Region; visual: string; number: number; persona: string; territory: string; platform: string; format: string;
   fields: Record<string, { text: string; chars: number; version: number; line_id: string }>;
   on_image: { text: string; chars: number; version: number; line_id: string } | null;
+  /** The subhead under the on-image headline (rules v2.14), if any. */
+  on_image_sub: { text: string; chars: number; version: number; line_id: string } | null;
   round: string;
   /** The round as people see it ("Month 1"). */
   month: string;
   /** A carousel visual's on-image text, card by card (the same set on every code of the visual). */
-  cards: Array<{ card: number; text: string; chars: number; version: number; line_id: string }>;
+  cards: Array<{ card: number; text: string; chars: number; version: number; line_id: string; sub?: { text: string; chars: number; version: number; line_id: string } }>;
   compliance: string; compliance_note: string;
   /** Internal: each overridden red flag with its reason and who (handoff only). */
   overrides: string;
@@ -413,8 +417,10 @@ export async function handoffRows(filter: { persona?: string; territory?: string
     const onImage = signoffOnImage(s);
     for (const v of signoffVersions(s)) {
       const mine = onImage.filter(o => o.visual === v.visual && o.visual_key && (parseCode(v.code, null) as any).platform === platformOf(o.field, r));
-      const oi = mine.find(o => !o.card);
-      const cards = mine.filter(o => o.card).sort((a, b) => a.card! - b.card!);
+      const isSub = (o: { field: string }) => isSubField(o.field, r);
+      const oi = mine.find(o => !o.card && !isSub(o)), oiSub = mine.find(o => !o.card && isSub(o));
+      const cards = mine.filter(o => o.card && !isSub(o)).sort((a, b) => a.card! - b.card!);
+      const cardSubs = mine.filter(o => o.card && isSub(o));
       const parts = [...Object.values(v.fields), ...mine];
       // Compliance for this code: every line in the ad, on the wording signed off.
       let status = parts.length ? 'cleared' : 'pending', note = '';
@@ -442,7 +448,8 @@ export async function handoffRows(filter: { persona?: string; territory?: string
         platform: v.platform || ('error' in p ? '' : p.platform), format: r.territories[s.territory]?.format || '',
         fields: Object.fromEntries(Object.entries(v.fields).map(([f, x]) => [f, { text: x.text, chars: x.chars, version: x.version, line_id: x.line_id }])),
         on_image: oi ? { text: oi.text, chars: oi.chars, version: oi.version, line_id: oi.line_id } : null,
-        cards: cards.map(c => ({ card: c.card!, text: c.text, chars: c.chars, version: c.version, line_id: c.line_id })),
+        on_image_sub: oiSub ? { text: oiSub.text, chars: oiSub.chars, version: oiSub.version, line_id: oiSub.line_id } : null,
+        cards: cards.map(c => { const sc = cardSubs.find(x => x.card === c.card); return { card: c.card!, text: c.text, chars: c.chars, version: c.version, line_id: c.line_id, ...(sc ? { sub: { text: sc.text, chars: sc.chars, version: sc.version, line_id: sc.line_id } } : {}) }; }),
         compliance: status, compliance_note: note, overrides: overrides.join(' | '),
         check_specifically: [...new Set(labels)].join(' '),
         ready_by: s.ready_by, ready_at: s.ready_at, changed_since: changed ? 'yes: a newer version of a line exists' : '',
@@ -465,14 +472,19 @@ export async function handoffPack(filter: { persona?: string; territory?: string
   const fieldCols = [...Object.keys(r.fields).filter(f => present.has(f)), ...[...present].filter(f => !r.fields[f])];
   const label = (f: string) => r.fields[f]?.label || f;
   const hasOnImage = rows.some(x => x.on_image);
-  // A carousel's cards as columns, in order (card 1 first), the same on every code of the visual.
+  const hasSub = rows.some(x => x.on_image_sub);
+  // A carousel's cards as columns, in order (card 1 first), the same on every code of the visual; each card's subhead
+  // after it when any card has one.
   const nCards = Math.max(0, ...rows.flatMap(x => x.cards.map(c => c.card)));
-  const cardCols = Array.from({ length: nCards }, (_, i) => `On-image card ${i + 1}`);
-  const cardVals = (x: HandoffRow) => Array.from({ length: nCards }, (_, i) => x.cards.find(c => c.card === i + 1)?.text || '');
-  const head = ['Naming code', 'Region', 'Month', 'Visual', 'Version', 'Persona', 'Territory', 'Platform', 'Format', ...fieldCols.map(label), ...(hasOnImage ? ['On-image text (the visual)'] : []), ...cardCols,
+  const cardSub = rows.some(x => x.cards.some(c => c.sub));
+  const cardCols = Array.from({ length: nCards }, (_, i) => [`On-image card ${i + 1}`, ...(cardSub ? [`On-image card ${i + 1} subhead`] : [])]).flat();
+  const cardVals = (x: HandoffRow) => Array.from({ length: nCards }, (_, i) => { const c = x.cards.find(y => y.card === i + 1); return [c?.text || '', ...(cardSub ? [c?.sub?.text || ''] : [])]; }).flat();
+  const oiCols = [...(hasOnImage ? ['On-image text (the visual)'] : []), ...(hasSub ? ['On-image subhead'] : [])];
+  const oiVals = (x: HandoffRow) => [...(hasOnImage ? [x.on_image?.text || ''] : []), ...(hasSub ? [x.on_image_sub?.text || ''] : [])];
+  const head = ['Naming code', 'Region', 'Month', 'Visual', 'Version', 'Persona', 'Territory', 'Platform', 'Format', ...fieldCols.map(label), ...oiCols, ...cardCols,
     'Compliance status', 'Compliance note', 'Ready to traffic', 'Red flag overridden', 'Ready for production by', 'Ready for production at', 'Changed since sign-off'];
   const csv = toCsv([head, ...rows.map(x => [x.stub, x.region, x.month, x.visual, String(x.number), x.persona, x.territory, x.platform, x.format,
-    ...fieldCols.map(f => x.fields[f]?.text || ''), ...(hasOnImage ? [x.on_image?.text || ''] : []), ...cardVals(x),
+    ...fieldCols.map(f => x.fields[f]?.text || ''), ...oiVals(x), ...cardVals(x),
     STATUS_WORDS[x.compliance] || x.compliance, x.compliance_note, x.traffic, x.overrides, x.ready_by, x.ready_at, x.changed_since])]);
 
   const expectations = (await getStore().listExpectations()) as Expectation[];
@@ -492,7 +504,8 @@ export async function handoffPack(filter: { persona?: string; territory?: string
       lastVisual = vk;
       md.push(`### Visual ${x.visual || '?'} (${x.platform === 'TT' ? 'TikTok' : 'Meta'})`, '');
       if (x.on_image) md.push(`On-image text: ${x.on_image.text.replace(/\s*\n\s*/g, ' ')} (${x.on_image.chars} chars)`, '');
-      if (x.cards.length) md.push('Carousel cards, in order:', '', ...x.cards.map(c => `${c.card}. ${c.text.replace(/\s*\n\s*/g, ' ')} (${c.chars} chars)`), '');
+      if (x.on_image_sub) md.push(`On-image subhead: ${x.on_image_sub.text.replace(/\s*\n\s*/g, ' ')} (${x.on_image_sub.chars} chars)`, '');
+      if (x.cards.length) md.push('Carousel cards, in order:', '', ...x.cards.map(c => `${c.card}. ${c.text.replace(/\s*\n\s*/g, ' ')} (${c.chars} chars)${c.sub ? ` / subhead: ${c.sub.text.replace(/\s*\n\s*/g, ' ')} (${c.sub.chars} chars)` : ''}`), '');
     }
     const parts = Object.entries(x.fields).map(([f, v]) => `${label(f)}: ${v.text.replace(/\s*\n\s*/g, ' ')} (${v.chars} chars)`);
     md.push(`- \`${x.stub}\`: ${parts.join(' · ')}  \n  Compliance: ${STATUS_WORDS[x.compliance] || x.compliance}${x.compliance_note ? ` (${x.compliance_note})` : ''}${x.traffic ? ` · ${x.traffic}` : ''}${x.overrides ? ` · Red flag overridden: ${x.overrides}` : ''}${x.changed_since ? ` · ${x.changed_since}` : ''}`);
@@ -500,8 +513,8 @@ export async function handoffPack(filter: { persona?: string; territory?: string
 
   // For Trupanion's compliance team: the words only, nothing internal. An ad that went through with an overridden red
   // flag says which rule to look at, in plain words; never the reason or who.
-  const complianceCsv = toCsv([['Naming code', 'Region', 'Platform', ...fieldCols.map(label), ...(hasOnImage ? ['On-image text (the visual)'] : []), ...cardCols, 'Please check'],
-    ...rows.map(x => [x.stub, REGION_NAMES[x.region], x.platform, ...fieldCols.map(f => x.fields[f]?.text || ''), ...(hasOnImage ? [x.on_image?.text || ''] : []), ...cardVals(x), x.check_specifically])]);
+  const complianceCsv = toCsv([['Naming code', 'Region', 'Platform', ...fieldCols.map(label), ...oiCols, ...cardCols, 'Please check'],
+    ...rows.map(x => [x.stub, REGION_NAMES[x.region], x.platform, ...fieldCols.map(f => x.fields[f]?.text || ''), ...oiVals(x), ...cardVals(x), x.check_specifically])]);
   const mark = (c: string) => (test ? toCsv([['TEST – not for trafficking']]) + c : c);
   return { count: rows.length, csv: mark(csv), md: md.join('\n') + '\n', complianceCsv: mark(complianceCsv), test };
 }

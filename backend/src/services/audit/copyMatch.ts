@@ -16,12 +16,15 @@ export interface SignedOffCopy {
   caption?: string;
   hook?: string;
   on_image?: string;
+  /** The subhead under the on-image headline (rules v2.14 meta_on_image_sub): on the asset too. */
+  on_image_sub?: string;
 }
 
 /** Signed-off fields → the rules file's field ids (limits, price-lead fields). */
 export const COPY_FIELDS: Record<keyof SignedOffCopy, { field?: string; label: string; onAsset: 'must' | 'maybe' | 'no' }> = {
   // meta_on_image arrives in rules v2.10: with it, on-image copy gets its limits and the price-lead check; without it they're skipped.
   on_image: { field: 'meta_on_image', label: 'On-image text (signed off)', onAsset: 'must' },
+  on_image_sub: { field: 'meta_on_image_sub', label: 'On-image subhead (signed off)', onAsset: 'must' },
   hook: { field: 'tiktok_hook', label: 'TikTok hook / on-screen text', onAsset: 'must' },
   // Post copy since 30 Sep (Brook): text on the image is its own field (on_image), so the headline runs below the image.
   headline: { field: 'meta_headline', label: 'Meta headline', onAsset: 'no' },
