@@ -11,7 +11,7 @@ import type { AuditEngine, AuditFlag, AuditInput, AuditResult, SignedCopy } from
 
 /** Studio field ids → B2's signed-off copy fields. */
 const FIELD: Record<string, keyof SignedOffCopy> = {
-  meta_primary: 'primary_text', meta_headline: 'headline', meta_description: 'description', tiktok_hook: 'hook', tiktok_caption: 'caption',
+  meta_primary: 'primary_text', meta_headline: 'headline', meta_description: 'description', tiktok_hook: 'hook', tiktok_caption: 'caption', meta_on_image_sub: 'on_image_sub',
 };
 export function signedOffCopy(copy: SignedCopy[]): SignedOffCopy {
   const out: SignedOffCopy = {};

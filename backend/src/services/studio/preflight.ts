@@ -185,8 +185,8 @@ export function copyMatchForStub(copy: SignedCopy[], assetText: Array<{ where: s
   const res = copyMatch(signedOffCopy(onAsset), assetText, rules);
   // A carousel's cards are matched card by card below; B2's whole-asset row for the joined text would only repeat them.
   // Its caveat check (COPY_CAVEAT) still runs on all the on-asset text.
-  const rows: any[] = cards.length ? res.rows.filter(x => x.field !== 'on_image') : res.rows;
-  const flags = cards.length ? res.flags.filter(f => !(f.rule === 'COPY_MATCH' && /On-image text/.test(f.label))) : res.flags;
+  const rows: any[] = cards.length ? res.rows.filter(x => x.field !== 'on_image' && x.field !== 'on_image_sub') : res.rows;
+  const flags = cards.length ? res.flags.filter(f => !(f.rule === 'COPY_MATCH' && /On-image (text|subhead)/.test(f.label))) : res.flags;
   const cardOf = (where?: string) => {
     if (kind === 'video' || !where) return undefined;
     const m = /card (\d+)/i.exec(where);
@@ -205,29 +205,33 @@ export function copyMatchForStub(copy: SignedCopy[], assetText: Array<{ where: s
  * expected card 2"). Reworded on its card: amber, both quoted. Not on the asset at all: red.
  */
 export function cardMatch(cards: SignedCopy[], assetText: Array<{ where: string; text: string }>) {
-  const rows: Array<{ field: 'on_image'; card: number; signed_off: string; found: string; similarity: number; status: string; found_on?: number }> = [];
+  const rows: Array<{ field: 'on_image' | 'on_image_sub'; card: number; signed_off: string; found: string; similarity: number; status: string; found_on?: number }> = [];
   const flags: AuditFlag[] = [];
   const onCard = (k: number) => assetText.filter(t => new RegExp(`^card ${k}\\b`, 'i').test(t.where)).map(t => t.text).join('\n');
   const cardNos = [...new Set(assetText.map(t => Number(/^card (\d+)/i.exec(t.where)?.[1])).filter(Boolean))];
   const frame = (k: number) => ({ asset_position: k - 1, label: `card ${k}` });
-  for (const c of [...cards].sort((a, b) => a.card! - b.card!)) {
+  for (const c of [...cards].sort((a, b) => a.card! - b.card! || Number(/_sub$/.test(a.field)) - Number(/_sub$/.test(b.field)))) {
     const k = c.card!;
+    // A card's subhead (rules v2.14) is matched on its card like the card's headline, and named as the subhead.
+    const sub = /_sub$/.test(c.field);
+    const field = sub ? 'on_image_sub' as const : 'on_image' as const;
+    const what = (kk: number) => `Card ${kk}'s ${sub ? 'subhead' : 'text'}`;
     const mine = onCard(k);
-    if (mine && normalise(mine).includes(normalise(c.text))) { rows.push({ field: 'on_image', card: k, signed_off: c.text, found: normalise(c.text), similarity: 1, status: 'match' }); continue; }
+    if (mine && normalise(mine).includes(normalise(c.text))) { rows.push({ field, card: k, signed_off: c.text, found: normalise(c.text), similarity: 1, status: 'match' }); continue; }
     const other = cardNos.filter(j => j !== k).find(j => normalise(onCard(j)).includes(normalise(c.text)));
     if (other) {
-      rows.push({ field: 'on_image', card: k, signed_off: c.text, found: normalise(c.text), similarity: 1, status: 'wrong card', found_on: other });
-      flags.push({ rule: 'COPY_CARD_ORDER', severity: 'amber', label: `Card ${k}'s text is on card ${other}`, source: COPY_MATCH_SOURCE, quote: `signed off for card ${k}: "${c.text.trim()}"`, why: `On card ${other}, expected card ${k}`, where: `card ${other}`, check: 'copy_match', frame: frame(other) });
+      rows.push({ field, card: k, signed_off: c.text, found: normalise(c.text), similarity: 1, status: 'wrong card', found_on: other });
+      flags.push({ rule: 'COPY_CARD_ORDER', severity: 'amber', label: `${what(k)} is on card ${other}`, source: COPY_MATCH_SOURCE, quote: `signed off for card ${k}${sub ? ' (subhead)' : ''}: "${c.text.trim()}"`, why: `On card ${other}, expected card ${k}`, where: `card ${other}`, check: 'copy_match', frame: frame(other) });
       continue;
     }
     const m = mine ? bestMatch(c.text, mine) : { similarity: 0, excerpt: '' };
     if (m.similarity >= REWORD_MIN) {
-      rows.push({ field: 'on_image', card: k, signed_off: c.text, found: m.excerpt, similarity: m.similarity, status: 'reworded' });
-      flags.push({ rule: 'COPY_MATCH', severity: 'amber', label: `Card ${k}'s text differs from the signed-off wording`, source: COPY_MATCH_SOURCE, quote: `signed off: "${c.text.trim()}" · on card ${k}: "${m.excerpt}"`, why: `${Math.round(m.similarity * 100)}% of the words match, in order`, where: `card ${k}`, check: 'copy_match', frame: frame(k) });
+      rows.push({ field, card: k, signed_off: c.text, found: m.excerpt, similarity: m.similarity, status: 'reworded' });
+      flags.push({ rule: 'COPY_MATCH', severity: 'amber', label: `${what(k)} differs from the signed-off wording`, source: COPY_MATCH_SOURCE, quote: `signed off: "${c.text.trim()}" · on card ${k}: "${m.excerpt}"`, why: `${Math.round(m.similarity * 100)}% of the words match, in order`, where: `card ${k}`, check: 'copy_match', frame: frame(k) });
       continue;
     }
-    rows.push({ field: 'on_image', card: k, signed_off: c.text, found: m.excerpt, similarity: m.similarity, status: 'not on asset' });
-    flags.push({ rule: 'COPY_CARD_MISSING', severity: 'red', label: `Card ${k}'s signed-off text isn't on the asset`, source: COPY_MATCH_SOURCE, quote: `signed off for card ${k}: "${c.text.trim()}"`, why: mine ? `Card ${k} reads: "${mine.slice(0, 80)}"` : `Nothing was read on card ${k}`, where: `card ${k}`, check: 'copy_match', ...(k <= cardNos.length ? { frame: frame(k) } : {}) });
+    rows.push({ field, card: k, signed_off: c.text, found: m.excerpt, similarity: m.similarity, status: 'not on asset' });
+    flags.push({ rule: 'COPY_CARD_MISSING', severity: 'red', label: `${sub ? `Card ${k}'s signed-off subhead` : `Card ${k}'s signed-off text`} isn't on the asset`, source: COPY_MATCH_SOURCE, quote: `signed off for card ${k}${sub ? ' (subhead)' : ''}: "${c.text.trim()}"`, why: mine ? `Card ${k} reads: "${mine.slice(0, 80)}"` : `Nothing was read on card ${k}`, where: `card ${k}`, check: 'copy_match', ...(k <= cardNos.length ? { frame: frame(k) } : {}) });
   }
   return { rows, flags };
 }

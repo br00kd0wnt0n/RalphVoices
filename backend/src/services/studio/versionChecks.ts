@@ -58,6 +58,23 @@ const words = (s: string) => s.toLowerCase().replace(/[’']/g, '').match(/[a-z0
 const stem = (w: string) => w.length > 4 ? w.replace(/(ing|ed|es|s)$/, '') : w;
 const content = (s: string) => words(s).filter(w => !STOP.has(w)).map(stem);
 
+/** Words a headline and its subhead may share: the brand and the category (rules v2.14 writer notes allow naming them). */
+const PAIR_ALLOWED = new Set(['trupanion', 'pet', 'pets', 'insurance', 'medical', 'cat', 'cats', 'dog', 'dogs'].map(stem));
+/** On-image headline and the subhead under it (the same card on a carousel). */
+const pairOf = (f: Field) => { const m = /^(meta_on_image)(_sub)?(#\d+)?$/.exec(f.field); return m ? { key: m[3] || '', sub: !!m[2] } : null; };
+
+/**
+ * A subhead shouldn't reuse its headline's words (Nick, 1 Oct: "redundant with word repetition"): any shared content
+ * word, beyond the brand and category, is a repeat. Stricter than the general rule, which needs a run or a majority.
+ */
+function pairRepeat(a: Field, b: Field): { quote: string; why: string } | null {
+  const pa = pairOf(a), pb = pairOf(b);
+  if (!pa || !pb || pa.key !== pb.key || pa.sub === pb.sub) return null;
+  const cb = new Set(content(b.text));
+  const shared = [...new Set(content(a.text).filter(w => cb.has(w) && !PAIR_ALLOWED.has(w)))];
+  return shared.length ? { quote: shared.join(', '), why: `The subhead repeats ${shared.map(w => `"${w}"`).join(', ')} from the headline` } : null;
+}
+
 function repeat(a: Field, b: Field): { quote: string; why: string } | null {
   // A run of words (as written) in both fields.
   const wa = words(a.text), wb = words(b.text);
@@ -191,7 +208,7 @@ export async function checkVersions(plan: Plan, lines: Line[], rules: Pick<Rules
     flags.push(...splitClaims(fs, rules));
     // 1. repeats between the fields of this ad.
     for (let a = 0; a < fs.length; a++) for (let b = a + 1; b < fs.length; b++) {
-      const r = repeat(fs[a], fs[b]);
+      const r = repeat(fs[a], fs[b]) || pairRepeat(fs[a], fs[b]);
       if (r) flags.push({ rule: 'VERSION_REPEAT', severity: 'amber', label: `${fs[a].label} and ${fs[b].label} say the same thing`, source: source('VERSION_REPEAT'), fields: [fs[a].field, fs[b].field], quote: r.quote, why: r.why, by: 'rule' });
     }
     // 2. too alike: another version on the same visual and platform.

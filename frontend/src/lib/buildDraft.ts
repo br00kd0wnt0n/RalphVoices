@@ -5,7 +5,8 @@
 // can check it (as studioFields.ts is checked).
 
 export interface DraftVersionLike { visual: string; fields: Record<string, string>; platform?: string }
-export interface DraftLike { versions: DraftVersionLike[]; on_image: Record<string, string | string[]> }
+/** on_image_sub: the subhead under each on-image headline (rules v2.14), same shape: a line per visual, or per card. */
+export interface DraftLike { versions: DraftVersionLike[]; on_image: Record<string, string | string[]>; on_image_sub?: Record<string, string | string[]> }
 
 const withoutEmpty = (f: Record<string, string>) => Object.fromEntries(Object.entries(f).filter(([, v]) => v));
 
@@ -25,6 +26,22 @@ export function setOnImage<D extends DraftLike>(d: D, visual: string, value: str
   if (value && (!Array.isArray(value) || value.some(Boolean))) on_image[visual] = value; else delete on_image[visual];
   return { ...d, on_image };
 }
+/** The visual's on-image subhead: a line, a carousel's per-card subheads, or nothing (null). */
+export function setOnImageSub<D extends DraftLike>(d: D, visual: string, value: string | string[] | null): D {
+  const on_image_sub = { ...(d.on_image_sub || {}) };
+  if (value && (!Array.isArray(value) || value.some(Boolean))) on_image_sub[visual] = value; else delete on_image_sub[visual];
+  return { ...d, on_image_sub };
+}
+/** One card's subhead (1-based); '' clears it. Optional card by card, so the list only grows as far as needed. */
+export function setCardSub<D extends DraftLike>(d: D, visual: string, card: number, lineId: string): D {
+  const cur = d.on_image_sub?.[visual];
+  const list = Array.isArray(cur) ? [...cur] : [];
+  while (list.length < card) list.push('');
+  list[card - 1] = lineId;
+  while (list.length && !list[list.length - 1]) list.pop();
+  return setOnImageSub(d, visual, list);
+}
+
 /** One card of a carousel visual (1-based), growing the card list if needed. */
 export function setCard<D extends DraftLike>(d: D, visual: string, card: number, lineId: string, cards = 4): D {
   const cur = d.on_image[visual];
@@ -41,10 +58,11 @@ export function moveAd<D extends DraftLike>(d: D, index: number, visual: string)
 export function removeAd<D extends DraftLike>(d: D, index: number): D {
   const gone = d.versions[index];
   const versions = d.versions.filter((_, i) => i !== index);
-  // A visual with no ads left keeps no on-image text.
+  // A visual with no ads left keeps no on-image text (nor subhead).
   const on_image = { ...d.on_image };
-  if (gone && !versions.some(v => v.visual === gone.visual)) delete on_image[gone.visual];
-  return { ...d, versions, on_image };
+  const on_image_sub = { ...(d.on_image_sub || {}) };
+  if (gone && !versions.some(v => v.visual === gone.visual)) { delete on_image[gone.visual]; delete on_image_sub[gone.visual]; }
+  return { ...d, versions, on_image, ...(d.on_image_sub ? { on_image_sub } : {}) };
 }
 /** A new ad on a visual, starting from the visual's last ad (so a shared headline carries over), else the first kept lines. */
 export function addAd<D extends DraftLike>(d: D, visual: string, platform: string, required: string[], firstLine: (field: string) => string | undefined): D {
@@ -72,6 +90,10 @@ export function usesOf(d: DraftLike, lineId: string, platformOf: (v: DraftVersio
     if (Array.isArray(val)) val.forEach((id, k) => { if (id === lineId) out.push(`Visual ${visual} · card ${k + 1}`); });
     else if (val === lineId) out.push(`Visual ${visual} · on the image`);
   }
+  for (const [visual, val] of Object.entries(d.on_image_sub || {})) {
+    if (Array.isArray(val)) val.forEach((id, k) => { if (id === lineId) out.push(`Visual ${visual} · card ${k + 1} subhead`); });
+    else if (val === lineId) out.push(`Visual ${visual} · subhead`);
+  }
   return out;
 }
 
@@ -95,6 +117,6 @@ export function flagsAt<F extends { rule: string; fields: string[]; other?: stri
  * `reds` maps a line id to its unresolved red flags' names; a line used in several places is named at its first.
  */
 export function redPlaces(d: DraftLike, reds: Record<string, string[]>, platformOf: (v: DraftVersionLike) => string): string[] {
-  const ids = [...new Set([...d.versions.flatMap(v => Object.values(v.fields)), ...Object.values(d.on_image).flat()].filter(Boolean))];
+  const ids = [...new Set([...d.versions.flatMap(v => Object.values(v.fields)), ...Object.values(d.on_image).flat(), ...Object.values(d.on_image_sub || {}).flat()].filter(Boolean))];
   return ids.filter(id => reds[id]?.length).map(id => `${usesOf(d, id, platformOf)[0] || 'A line'}: ${reds[id].join(', ')}`);
 }

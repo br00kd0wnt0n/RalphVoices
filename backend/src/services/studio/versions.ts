@@ -25,6 +25,16 @@ export function fieldRole(field: string, rules: Pick<Rules, 'fields'>): FieldRol
   if (/on_image/.test(field)) return 'per_visual';
   return DEFAULT_REQUIRED.has(field) ? 'required' : 'optional';
 }
+/**
+ * On-image text comes as a headline and, optionally, a subhead under it (rules v2.14 meta_on_image_sub; a field whose
+ * `on_image_role` is 'sub', or whose id ends in _sub). Both are per visual (per card on a carousel); the draft keeps the
+ * subheads in `on_image_sub`, and the plan and sign-off list both, each entry naming its field.
+ */
+export function isSubField(field: string, rules: Pick<Rules, 'fields'>): boolean {
+  const f: any = rules.fields[field];
+  return f?.on_image_role === 'sub' || (f?.on_image_role !== 'headline' && /_sub$/.test(field));
+}
+
 /** META or TT, from a field's platform in the rules. */
 export const platformOf = (field: string, rules: Pick<Rules, 'fields'>) => PLATFORM_CODES[String(rules.fields[field]?.platform || 'META').toUpperCase()] || 'META';
 /** The fields a version of a platform can have, in the rules' order, split by role. */
@@ -70,9 +80,10 @@ export const isCarousel = (format: string) => /^CAR/i.test(format || '');
  * a line id, or on a carousel the cards in order (card 1 first; '' for a card with no text).
  */
 export interface DraftVersion { visual: string; fields: Record<string, string>; platform?: string }
-export interface Draft { versions: DraftVersion[]; on_image: Record<string, string | string[]> }
+export interface Draft { versions: DraftVersion[]; on_image: Record<string, string | string[]>; /** The subhead under each on-image headline, same shape (per card on a carousel). */ on_image_sub?: Record<string, string | string[]> }
 export interface PlannedVersion extends DraftVersion { code: string; number: number; platform: string; issues: string[] }
-export interface PlannedOnImage { visual: string; visual_key: string; line_id: string; card?: number; issues: string[] }
+/** sub: the subhead (on_image_sub), not the on-image headline. */
+export interface PlannedOnImage { visual: string; visual_key: string; line_id: string; card?: number; sub?: boolean; issues: string[] }
 export interface Plan { versions: PlannedVersion[]; on_image: PlannedOnImage[]; issues: string[] }
 
 /** suffix: '_TEST' for a test round's codes (rounds.ts), so they never reach Add3 or share a code with a real round. */
@@ -90,7 +101,8 @@ export function defaultDraft(lines: Line[], rules: Pick<Rules, 'fields'>, latest
     if (vs.length) {
       return {
         versions: vs.map(v => ({ visual: v.visual || 'A', platform: v.platform, fields: Object.fromEntries(Object.entries(v.fields).map(([k, f]) => [k, f.line_id])) })),
-        on_image: onImageDraft(signoffOnImage(latest as any).filter(o => kept.has(o.line_id))),
+        on_image: onImageDraft(signoffOnImage(latest as any).filter(o => kept.has(o.line_id) && !isSubField(o.field, rules))),
+        on_image_sub: onImageDraft(signoffOnImage(latest as any).filter(o => kept.has(o.line_id) && isSubField(o.field, rules))),
       };
     }
   }
@@ -98,6 +110,7 @@ export function defaultDraft(lines: Line[], rules: Pick<Rules, 'fields'>, latest
   for (const l of lines) byField.set(l.field, [...(byField.get(l.field) || []), l]);
   const versions: DraftVersion[] = [];
   const on_image: Draft['on_image'] = {};
+  const on_image_sub: Draft['on_image'] = {};
   for (const platform of [...new Set(lines.map(l => platformOf(l.field, rules)))].sort()) {
     const vf = versionFields(platform, rules);
     const lead = vf.required.length ? vf.required : [...vf.optional];
@@ -115,7 +128,7 @@ export function defaultDraft(lines: Line[], rules: Pick<Rules, 'fields'>, latest
     const hasVisual = (v: string, f: string) => versions.some(x => x.visual === v && (x.platform || platform) === platformOf(f, rules));
     if (isCarousel(format)) {
       // A carousel visual takes a whole card sequence (as written), then any loose on-image lines as cards.
-      for (const f of vf.per_visual) {
+      for (const f of vf.per_visual.filter(x => !isSubField(x, rules))) {
         const ls = byField.get(f) || [];
         const seqs: string[][] = [];
         const bySeq = new Map<string, Line[]>();
@@ -126,13 +139,14 @@ export function defaultDraft(lines: Line[], rules: Pick<Rules, 'fields'>, latest
         seqs.forEach((cards, i) => { const v = VISUAL_LETTERS[i]; if (!on_image[v] && hasVisual(v, f)) on_image[v] = cards.slice(0, MAX_CARDS); });
       }
     } else {
-      vf.per_visual.forEach(f => (byField.get(f) || []).forEach((l, i) => {
-        const v = VISUAL_LETTERS[i];
-        if (!on_image[v] && hasVisual(v, f)) on_image[v] = l.id;
-      }));
+      // A headline per visual, and a subhead under it where there are subheads.
+      for (const f of vf.per_visual) {
+        const slot = isSubField(f, rules) ? on_image_sub : on_image;
+        (byField.get(f) || []).forEach((l, i) => { const v = VISUAL_LETTERS[i]; if (!slot[v] && hasVisual(v, f)) slot[v] = l.id; });
+      }
     }
   }
-  return { versions, on_image };
+  return { versions, on_image, ...(Object.keys(on_image_sub).length ? { on_image_sub } : {}) };
 }
 
 /** Signed-off on-image text back into the draft's shape: a line per visual, or a carousel's cards in order. */
@@ -196,26 +210,31 @@ export function planDraft(draft: Draft, lines: Line[], ctx: Ctx, signedCodes: st
     for (const x of vIssues) issues.push(`${code || `Version ${i + 1}`}: ${x}`);
   }
   const on_image: Plan['on_image'] = [];
-  for (const [v0, val] of Object.entries(draft.on_image || {})) {
+  const subs = Object.entries(draft.on_image_sub || {}).map(([v, val]) => [v, val, true] as const);
+  for (const [v0, val, sub] of [...Object.entries(draft.on_image || {}).map(([v, x]) => [v, x, false] as const), ...subs]) {
     const visual = v0.toUpperCase();
     const cards = Array.isArray(val);
     const ids = cards ? val as string[] : [val as string];
     if (cards && !isCarousel(ctx.format)) { issues.push(`On-image, visual ${visual}: only a carousel has cards`); continue; }
-    if (cards && ids.length > MAX_CARDS) issues.push(`On-image, visual ${visual}: at most ${MAX_CARDS} cards`);
+    if (cards && ids.length > MAX_CARDS && !sub) issues.push(`On-image, visual ${visual}: at most ${MAX_CARDS} cards`);
     // A carousel with a blank card isn't finished (production test, 1 Oct: signed off with card 2 cleared). Set fewer
-    // cards, or choose its text.
-    if (cards && ids.some(Boolean)) ids.slice(0, MAX_CARDS).forEach((id, i) => { if (!id) issues.push(`On-image, visual ${visual}: card ${i + 1} is empty (choose its text, or set fewer cards)`); });
+    // cards, or choose its text. Subheads are optional, card by card.
+    if (cards && !sub && ids.some(Boolean)) ids.slice(0, MAX_CARDS).forEach((id, i) => { if (!id) issues.push(`On-image, visual ${visual}: card ${i + 1} is empty (choose its text, or set fewer cards)`); });
+    const heads = draft.on_image?.[v0];
     ids.slice(0, MAX_CARDS).forEach((id, i) => {
       if (!id) return;
-      const where = cards ? `visual ${visual}, card ${i + 1}` : `visual ${visual}`;
+      const where = `${cards ? `visual ${visual}, card ${i + 1}` : `visual ${visual}`}${sub ? ' (subhead)' : ''}`;
       const oIssues: string[] = [];
       const l = byId.get(id);
       if (!l) oIssues.push(`${id} isn't a kept line of this set`);
       else if (fieldRole(l.field, r) !== 'per_visual') oIssues.push(`${r.fields[l.field]?.label || l.field} isn't on-image text`);
+      else if (isSubField(l.field, r) !== sub) oIssues.push(sub ? `${r.fields[l.field]?.label || l.field} is a headline, not a subhead` : `${r.fields[l.field]?.label || l.field} is a subhead: it goes under the headline`);
+      // A subhead sits under a headline: on a carousel, under that card's.
+      if (sub && !(cards ? Array.isArray(heads) && heads[i] : typeof heads === 'string' && heads)) oIssues.push(cards ? `card ${i + 1} has a subhead but no headline` : 'a subhead needs an on-image headline above it');
       const platform = l ? platformOf(l.field, r) : 'META';
       if (!planned.some(x => x.visual === visual && x.platform === platform)) oIssues.push(`there's no ${platform === 'TT' ? 'TikTok' : 'Meta'} version on visual ${visual}`);
       const key = /^[A-Z]$/.test(visual) ? visualKey(formatCode({ persona: ctx.persona, territory: ctx.territory, format: ctx.format, platform, region: ctx.region, visual, line: 1 }))! : '';
-      on_image.push({ visual, visual_key: key, line_id: id, ...(cards ? { card: i + 1 } : {}), issues: oIssues });
+      on_image.push({ visual, visual_key: key, line_id: id, ...(cards ? { card: i + 1 } : {}), ...(sub ? { sub: true } : {}), issues: oIssues });
       for (const x of oIssues) issues.push(`On-image, ${where}: ${x}`);
     });
   }

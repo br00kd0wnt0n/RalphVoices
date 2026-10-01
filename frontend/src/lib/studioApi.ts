@@ -148,7 +148,7 @@ export type FieldRole = 'required' | 'optional' | 'per_visual';
 export interface ReadyLine { line: Line; final_text: string; sha256: string; role: FieldRole; platform: string; in: string[]; red: Flag[]; versions: LineVersion[] }
 export interface DraftVersion { visual: string; fields: Record<string, string>; platform?: string }
 /** on_image: per visual letter, a line id, or on a carousel the cards in order ('' for a card with no text). */
-export interface ReadyDraft { versions: DraftVersion[]; on_image: Record<string, string | string[]> }
+export interface ReadyDraft { versions: DraftVersion[]; on_image: Record<string, string | string[]>; /** The subhead under each on-image headline (rules v2.14): a line per visual, or per card. */ on_image_sub?: Record<string, string | string[]> }
 export interface PlannedVersion extends DraftVersion {
   code: string; number: number; platform: string; issues: string[]; checks?: VersionCheck;
   compliance: {

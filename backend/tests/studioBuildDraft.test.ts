@@ -4,7 +4,7 @@
 // studioReady/studioVersionChecks/studioCarousel tests.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { addAd, adName, flagsAt, moveAd, redPlaces, nextVisual, placeLine, removeAd, setCard, setOnImage, useInAllAds, usesOf } from '../../frontend/src/lib/buildDraft.js';
+import { addAd, adName, flagsAt, moveAd, redPlaces, setCardSub, setOnImageSub, nextVisual, placeLine, removeAd, setCard, setOnImage, useInAllAds, usesOf } from '../../frontend/src/lib/buildDraft.js';
 
 const platformOf = (v: { platform?: string }) => v.platform || 'META';
 const base = () => ({
@@ -80,4 +80,17 @@ test('red places: the blocker names the flag and where it is, a carousel card in
   assert.deepEqual(redPlaces(d, { p1: ['direct pay'], c4: ['claim speed'] }, pf), ['Visual A · Ad 1: direct pay', 'Visual A · card 4: claim speed']);
   assert.deepEqual(redPlaces({ ...d, on_image: { A: 'oi' } }, { oi: ['pays for itself'] }, pf), ['Visual A · on the image: pays for itself']);
   assert.deepEqual(redPlaces(d, { zz: ['x'], c1: [] }, pf), [], 'a line not in the draft, or with no reds, is not named');
+});
+
+test('subheads (rules v2.14): per visual or per card, optional, named in uses, gone with their visual', () => {
+  const d0 = { versions: [{ visual: 'A', platform: 'META', fields: { meta_primary: 'p1', meta_headline: 'h1' } }], on_image: { A: ['c1', 'c2', 'c3'] } };
+  const pf = (v: { platform?: string }) => v.platform || 'META';
+  const d1 = setCardSub(d0, 'A', 2, 's2');
+  assert.deepEqual(d1.on_image_sub, { A: ['', 's2'] });
+  assert.deepEqual(usesOf(d1, 's2', pf), ['Visual A · card 2 subhead']);
+  assert.deepEqual(setCardSub(d1, 'A', 2, '').on_image_sub, {}, 'clearing the last subhead leaves none');
+  const d2 = setOnImageSub({ ...d0, on_image: { A: 'oi' } }, 'A', 'sub');
+  assert.deepEqual(usesOf(d2, 'sub', pf), ['Visual A · subhead']);
+  assert.deepEqual(removeAd(d2, 0).on_image_sub, {}, 'no ads left on the visual: no subhead either');
+  assert.deepEqual(redPlaces(d2, { sub: ['figure'] }, pf), ['Visual A · subhead: figure']);
 });

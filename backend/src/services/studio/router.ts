@@ -228,14 +228,14 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   r.post('/ready/preview', wrap(async (req, res) => {
     const { persona, territory, region } = pt(req.body || {});
     if (!persona || !territory) throw new Error('Pass persona and territory');
-    res.json(await R.readyView(persona, territory, (region || 'US') as any, { versions: req.body.versions || [], on_image: req.body.on_image || {} }, { round: rq(req), user: o.who(req) }));
+    res.json(await R.readyView(persona, territory, (region || 'US') as any, { versions: req.body.versions || [], on_image: req.body.on_image || {}, ...(req.body.on_image_sub ? { on_image_sub: req.body.on_image_sub } : {}) }, { round: rq(req), user: o.who(req) }));
   }));
   // The version checks' model part (conflicts between an ad's fields): a call per version whose wording hasn't been
   // checked, priced first (plan.check_estimate) and reserved against the cap like any run.
   r.post('/ready/check', wrap(async (req, res) => {
     const { persona, territory, region } = pt(req.body || {});
     if (!persona || !territory) throw new Error('Pass persona and territory');
-    const draft = { versions: req.body.versions || [], on_image: req.body.on_image || {} };
+    const draft = { versions: req.body.versions || [], on_image: req.body.on_image || {}, ...(req.body.on_image_sub ? { on_image_sub: req.body.on_image_sub } : {}) };
     const est = (await R.readyView(persona, territory, (region || 'US') as any, draft, { round: rq(req), user: o.who(req) })).plan.check_estimate;
     const api = o.api(req);
     const held = await reserve(`version-check ${persona} ${territory}`, est.usd, api, o.who(req));
@@ -247,7 +247,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     if (o.canSignOff && !o.canSignOff(req)) return res.status(403).json({ error: 'Lines are signed off by the creative lead or an admin' });
     // Versions not yet checked for conflicts are checked as part of the sign-off (a few cents), so the record has them.
     const { persona, territory, region } = pt(req.body || {});
-    const est = persona && territory ? (await R.readyView(persona, territory, (region || 'US') as any, { versions: req.body.versions || [], on_image: req.body.on_image || {} }, { round: rq(req), user: o.who(req) })).plan.check_estimate : { usd: 0, calls: 0 };
+    const est = persona && territory ? (await R.readyView(persona, territory, (region || 'US') as any, { versions: req.body.versions || [], on_image: req.body.on_image || {}, ...(req.body.on_image_sub ? { on_image_sub: req.body.on_image_sub } : {}) }, { round: rq(req), user: o.who(req) })).plan.check_estimate : { usd: 0, calls: 0 };
     const api = est.calls ? o.api(req) : undefined;
     const held = api ? await reserve(`version-check ${persona} ${territory}`, est.usd, api, o.who(req)) : { release: async () => {} };
     if ('error' in held) return res.status(402).json({ error: held.error });

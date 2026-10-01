@@ -6,7 +6,7 @@
 // overrides, carousel cards and TikTok versions. The draft rules are in lib/buildDraft.ts.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { onOriginal, studio, REGION_NAMES, type DraftVersion, type PlannedVersion, type Meta, type ReadyDraft, type ReadyView, type VersionFlag } from '@/lib/studioApi';
-import { addAd, adName, flagsAt, moveAd, redPlaces, nextVisual, placeLine, removeAd, setCard, setOnImage, useInAllAds, usesOf } from '@/lib/buildDraft';
+import { addAd, adName, flagsAt, moveAd, redPlaces, nextVisual, placeLine, removeAd, setCard, setCardSub, setOnImage, setOnImageSub, useInAllAds, usesOf } from '@/lib/buildDraft';
 import { cn } from '@/lib/utils';
 import { personaColor, personaEdge, tint } from '@/lib/personaColors';
 import { PersonaChip, Chip, GhostButton, Intro, Label, LineHistory, NAMING_TIP, Overrides, PINK, PinkButton, Src, chipName, flagName, sevTone, territoryName, when, type Ctx } from './ui';
@@ -14,6 +14,15 @@ import { PersonaChip, Chip, GhostButton, Intro, Label, LineHistory, NAMING_TIP, 
 type RL = ReadyView['lines'][number];
 /** Where the tray places a line: a field of one ad, or the visual's image (a carousel card, 1-based). */
 type Slot = { kind: 'ad'; index: number; field: string } | { kind: 'image'; visual: string; field: string; card?: number };
+/** The on-image subhead field (rules v2.14 meta_on_image_sub): under the on-image headline, per visual or per card. */
+const isSubField = (f: string) => /_sub$/.test(f);
+/** A slot's current line in the draft: an ad's field, the on-image headline or subhead, or a card's. */
+function currentIn(d: ReadyDraft, slot: Slot): string {
+  if (slot.kind === 'ad') return d.versions[slot.index]?.fields[slot.field] || '';
+  const map = isSubField(slot.field) ? d.on_image_sub || {} : d.on_image;
+  const v = map[slot.visual];
+  return slot.card ? ([v || ''].flat()[slot.card - 1] || '') : typeof v === 'string' ? v : '';
+}
 const DEFAULT_CARDS = 4, MAX_CARDS = 10;
 
 export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: Ctx; user: string; onNext: () => void; onReview: () => void }) {
@@ -71,7 +80,7 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
   const plan = view?.plan;
   const platformOf = (v: DraftVersion) => v.platform || fieldPlatform(Object.keys(v.fields)[0] || '');
   const byId = new Map((view?.lines || []).map(x => [x.line.id, x]));
-  const used = new Set(draft ? [...draft.versions.flatMap(v => Object.values(v.fields)), ...Object.values(draft.on_image).flat()].filter(Boolean) : []);
+  const used = new Set(draft ? [...draft.versions.flatMap(v => Object.values(v.fields)), ...Object.values(draft.on_image).flat(), ...Object.values(draft.on_image_sub || {}).flat()].filter(Boolean) : []);
   const reds = [...used].reduce((n, id) => n + (byId.get(id)?.red.length || 0), 0);
   // Which line, where: "Visual B · card 2: unsourced figure".
   const redList = draft ? redPlaces(draft, Object.fromEntries([...used].map(id => [id, (byId.get(id)?.red || []).map(f => chipName(f.rule))])), platformOf) : [];
@@ -131,6 +140,7 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
   const place = (id: string) => {
     if (!slot) return;
     if (slot.kind === 'ad') change(d => placeLine(d, slot.index, slot.field, id));
+    else if (isSubField(slot.field)) change(d => (slot.card ? setCardSub(d, slot.visual, slot.card, id) : setOnImageSub(d, slot.visual, id || null)));
     else if (slot.card) change(d => setCard(d, slot.visual, slot.card!, id, DEFAULT_CARDS));
     else change(d => setOnImage(d, slot.visual, id || null));
   };
@@ -159,7 +169,11 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
             <div key={p} className="space-y-5">
               {visualsOf(p).map(letter => {
                 const vs = indexed.filter(x => x.d.visual === letter && (x.p?.platform || platformOf(x.d)) === p);
-                const oiFields = view.fields[p].per_visual;
+                const oiFields = view.fields[p].per_visual.filter(f => !isSubField(f));
+                // The optional subhead under the on-image headline (per card on a carousel).
+                const subField = view.fields[p].per_visual.find(isSubField);
+                const subVal = draft.on_image_sub?.[letter];
+                const subs = Array.isArray(subVal) ? subVal : [];
                 const ois = plan.on_image.filter(o => o.visual === letter);
                 const cards = Array.isArray(draft.on_image[letter]) ? draft.on_image[letter] as string[] : draft.on_image[letter] ? [draft.on_image[letter] as string] : [];
                 const hookField = p === 'TT' ? [...view.fields[p].required, ...view.fields[p].optional].find(f => /hook/.test(f)) : undefined;
@@ -172,17 +186,26 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
                     </div>
 
                     {oiFields.length > 0 && (
-                      <Step n={++step} title={carousel ? 'The carousel cards (text on each card)' : 'The text on the image'} hint={carousel ? 'Card 1 is the hook; the last card is the end card. Every ad on this visual uses them.' : 'It goes into the artwork, so every ad on this visual uses it.'}>
+                      <Step n={++step} title={carousel ? 'The carousel cards (text on each card)' : 'The text on the image'} hint={`${carousel ? 'Card 1 is the hook; the last card is the end card. Every ad on this visual uses them.' : 'It goes into the artwork, so every ad on this visual uses it.'}${subField ? ` A subhead under the headline is optional${carousel ? ', card by card' : ''}.` : ''}`}>
                         {carousel ? oiFields.map(f => (
                           <CardStrip key={f} meta={meta} field={f} letter={letter} cards={cards} lines={linesFor(f)} byId={byId} flagsFor={k => flagsAt(plan.versions.filter(v => v.visual === letter).flatMap(v => v.checks?.flags || []), `${f}#${k}`)}
                             onOpen={card => setSlot({ kind: 'image', visual: letter, field: f, card })} onChange={next => change(d => setOnImage(d, letter, next))}
+                            subField={subField} subs={subs} onOpenSub={card => subField && setSlot({ kind: 'image', visual: letter, field: subField, card })} onSubsChange={next => change(d => setOnImageSub(d, letter, next))}
+                            subFlagsFor={k => (subField ? flagsAt(plan.versions.filter(v => v.visual === letter).flatMap(v => v.checks?.flags || []), `${subField}#${k}`) : [])}
                             nameOfCode={nameOfCode} onChanged={refresh} onError={setError} />
                         )) : oiFields.map(f => {
                           const id = typeof draft.on_image[letter] === 'string' ? draft.on_image[letter] as string : '';
                           return (
-                            <SlotBox key={f} meta={meta} x={id ? byId.get(id) : undefined} field={f} placeholder={`Choose ${short(f).toLowerCase()}`} className="text-xl font-semibold"
-                              active={slot?.kind === 'image' && slot.visual === letter} onOpen={() => setSlot({ kind: 'image', visual: letter, field: f })}
-                              flags={flagsAt(plan.versions.filter(v => v.visual === letter).flatMap(v => v.checks?.flags || []), f)} onChanged={refresh} onError={setError} />
+                            <div key={f} className="space-y-1.5">
+                              <SlotBox meta={meta} x={id ? byId.get(id) : undefined} field={f} placeholder={`Choose ${short(f).toLowerCase()}`} className="text-xl font-semibold"
+                                active={slot?.kind === 'image' && slot.visual === letter && !isSubField(slot.field)} onOpen={() => setSlot({ kind: 'image', visual: letter, field: f })}
+                                flags={flagsAt(plan.versions.filter(v => v.visual === letter).flatMap(v => v.checks?.flags || []), f)} onChanged={refresh} onError={setError} />
+                              {subField && (
+                                <SlotBox meta={meta} x={typeof subVal === 'string' && subVal ? byId.get(subVal) : undefined} field={subField} placeholder="Add a subhead (optional)" className="text-base text-[#C9CCD2]"
+                                  active={slot?.kind === 'image' && slot.visual === letter && isSubField(slot.field)} onOpen={() => setSlot({ kind: 'image', visual: letter, field: subField })}
+                                  flags={flagsAt(plan.versions.filter(v => v.visual === letter).flatMap(v => v.checks?.flags || []), subField)} onChanged={refresh} onError={setError} />
+                              )}
+                            </div>
                           );
                         })}
                         {ois.flatMap(o => o.issues).map(x => <div key={x} className="mt-2 text-sm text-red-200">{x}</div>)}
@@ -259,9 +282,9 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
           </div>
 
           {slot && (
-            <Tray meta={meta} title={slot.kind === 'ad' ? `${short(trayField)} for ${nameOf(slot.index)}` : slot.card ? `Card ${slot.card}, visual ${slot.visual}` : `${short(trayField)}, visual ${slot.visual}`}
+            <Tray meta={meta} title={slot.kind === 'ad' ? `${short(trayField)} for ${nameOf(slot.index)}` : slot.card ? `Card ${slot.card}${isSubField(trayField) ? ' subhead' : ''}, visual ${slot.visual}` : `${short(trayField)}, visual ${slot.visual}`}
               lines={linesFor(trayField)} draft={draft} platformOf={platformOf}
-              current={slot.kind === 'ad' ? draft.versions[slot.index]?.fields[trayField] || '' : slot.card ? ([draft.on_image[slot.visual] || ''].flat()[slot.card - 1] || '') : typeof draft.on_image[slot.visual] === 'string' ? draft.on_image[slot.visual] as string : ''}
+              current={currentIn(draft, slot)}
               optional={slot.kind === 'image' || !view.fields[platformOf(draft.versions[slot.index])]?.required.includes(trayField)}
               onPlace={id => { place(id); setSlot(null); }}
               onAll={slot.kind === 'ad' && /headline|description/.test(trayField) ? (id => { const v = draft.versions[slot.index]; change(d => useInAllAds(d, v.visual, platformOf(v), trayField, id)); setSlot(null); }) : undefined}
@@ -426,21 +449,29 @@ function RedFix({ meta, x, onEdit, onChanged, onError }: { meta: Meta; x: RL; on
 
 // ---------- ① a carousel's cards ----------
 
-function CardStrip({ meta, field, letter, cards, lines, byId, flagsFor, onOpen, onChange, nameOfCode, onChanged, onError }: {
+function CardStrip({ meta, field, letter, cards, lines, byId, flagsFor, onOpen, onChange, nameOfCode, onChanged, onError, subField, subs = [], onOpenSub, subFlagsFor, onSubsChange }: {
   meta: Meta; field: string; letter: string; cards: string[]; lines: RL[]; byId: Map<string, RL>; flagsFor: (card: number) => VersionFlag[];
   onOpen: (card: number) => void; onChange: (cards: string[] | null) => void;
   nameOfCode: (c?: string) => string; onChanged: () => void; onError: (m: string) => void;
+  /** The optional subhead field, and each card's subhead (rules v2.14). */
+  subField?: string; subs?: string[]; onOpenSub?: (card: number) => void; subFlagsFor?: (card: number) => VersionFlag[];
+  onSubsChange?: (subs: string[] | null) => void;
 }) {
   const slots = cards.length ? cards : Array(DEFAULT_CARDS).fill('');
   const set = (next: string[]) => onChange(next.some(Boolean) ? next : null);
-  const move = (i: number, d: number) => { const n = [...slots]; [n[i], n[i + d]] = [n[i + d], n[i]]; set(n); };
+  // A card's subhead moves with it, and goes when the card does.
+  const setSubs = (next: string[]) => { const t = [...next]; while (t.length && !t[t.length - 1]) t.pop(); onSubsChange?.(t.length ? t : null); };
+  const move = (i: number, d: number) => {
+    const n = [...slots]; [n[i], n[i + d]] = [n[i + d], n[i]]; set(n);
+    if (subs.length) { const m = [...subs]; while (m.length < slots.length) m.push(''); [m[i], m[i + d]] = [m[i + d], m[i]]; setSubs(m); }
+  };
   const seqs = [...new Map(lines.filter(x => x.line.sequence_id).map(x => [x.line.sequence_id!, lines.filter(y => y.line.sequence_id === x.line.sequence_id).sort((a, b) => (a.line.card || 0) - (b.line.card || 0))])).entries()];
   return (
     <div>
       <div className="mb-2 flex flex-wrap items-center gap-3 text-sm text-[#A3A8B1]">
         <label className="flex items-center gap-1">Cards
           <select aria-label={`Number of cards on visual ${letter}`} className="rounded border border-[#343946] bg-[#101216] px-1 py-0.5 text-sm" value={slots.length}
-            onChange={e => { const n = Number(e.target.value); set(n > slots.length ? [...slots, ...Array(n - slots.length).fill('')] : slots.slice(0, n)); }}>
+            onChange={e => { const n = Number(e.target.value); set(n > slots.length ? [...slots, ...Array(n - slots.length).fill('')] : slots.slice(0, n)); if (n < subs.length) setSubs(subs.slice(0, n)); }}>
             {Array.from({ length: MAX_CARDS }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n}</option>)}
           </select>
         </label>
@@ -470,6 +501,12 @@ function CardStrip({ meta, field, letter, cards, lines, byId, flagsFor, onOpen, 
               <SlotBox meta={meta} x={x} field={field} placeholder="Choose card text" onOpen={() => onOpen(i + 1)} flags={flagsFor(i + 1)} nameOfCode={nameOfCode}
                 className={cn('flex aspect-square w-full items-center justify-center p-2 text-center text-sm font-semibold leading-snug', x ? 'bg-[#1C1F26] text-[#F2F3F5] hover:bg-[#232733]' : '', x?.red.length ? 'ring-1 ring-red-500/60' : '')}
                 ariaLabel={x ? `Change card ${i + 1}: ${x.final_text}` : `Choose card ${i + 1}`} onChanged={onChanged} onError={onError} />
+              {subField && onOpenSub && (
+                <div className="mt-1">
+                  <SlotBox meta={meta} x={subs[i] ? byId.get(subs[i]) : undefined} field={subField} placeholder="Subhead (optional)" onOpen={() => onOpenSub(i + 1)} flags={subFlagsFor?.(i + 1) || []} nameOfCode={nameOfCode}
+                    className="w-full text-center text-xs text-[#C9CCD2]" ariaLabel={subs[i] ? `Change card ${i + 1}'s subhead` : `Add a subhead to card ${i + 1}`} onChanged={onChanged} onError={onError} />
+                </div>
+              )}
             </li>
           );
         })}
@@ -500,7 +537,11 @@ function AdPreview({ meta, view, draft, version, index, planned, platform, name,
   const others = [...vf.required, ...vf.optional].filter(f => ![primary, headline, description, caption, hook].includes(f));
   const oiId = typeof draft.on_image[version.visual] === 'string' ? draft.on_image[version.visual] as string : '';
   const oi = oiId ? byId.get(oiId) : undefined;
-  const oiField = vf.per_visual[0];
+  const oiField = vf.per_visual.find(f => !isSubField(f));
+  // The subhead under it (rules v2.14), on the image too; per card on a carousel.
+  const subVal = draft.on_image_sub?.[version.visual];
+  const sub = typeof subVal === 'string' && subVal ? byId.get(subVal) : undefined;
+  const cardSub = (k: number) => (Array.isArray(subVal) && subVal[k] ? byId.get(subVal[k]) : undefined);
   const adFlags = flags.filter(f => !f.fields.length);
   const tone = personaColor(view.persona);
   return (
@@ -539,7 +580,7 @@ function AdPreview({ meta, view, draft, version, index, planned, platform, name,
                     <button key={k} onClick={() => oiField && onSlot({ kind: 'image', visual: version.visual, field: oiField, card: k + 1 })}
                       className="flex aspect-square w-32 shrink-0 items-center justify-center rounded-md p-2 text-center text-xs font-semibold leading-snug text-white" style={{ background: `linear-gradient(160deg, ${tint(tone.base, 0.4)}, #16181D)` }}
                       aria-label={x ? `Card ${k + 1}: ${x.final_text}` : `Choose card ${k + 1}`}>
-                      {x ? x.final_text : <span className="text-[#A3A8B1]">Card {k + 1}</span>}
+                      {x ? <span>{x.final_text}{cardSub(k) && <span className="mt-1 block text-[10px] font-normal text-white/80">{cardSub(k)!.final_text}</span>}</span> : <span className="text-[#A3A8B1]">Card {k + 1}</span>}
                     </button>
                   );
                 })}
@@ -548,7 +589,7 @@ function AdPreview({ meta, view, draft, version, index, planned, platform, name,
               <button onClick={() => oiField && onSlot({ kind: 'image', visual: version.visual, field: oiField })} disabled={!oiField}
                 className="flex aspect-[4/3] w-full items-center justify-center p-6 text-center text-xl font-bold leading-tight text-white" style={{ background: `linear-gradient(160deg, ${tint(tone.base, 0.45)}, #16181D)` }}
                 aria-label={oi ? `On-image text: ${oi.final_text}` : oiField ? 'Choose the on-image text' : 'The image'}>
-                {oi ? oi.final_text : <span className="text-base font-normal text-[#A3A8B1]">{oiField ? 'Choose the on-image text (step ①)' : 'The image'}</span>}
+                {oi ? <span>{oi.final_text}{sub && <span className="mt-2 block text-base font-normal text-white/85">{sub.final_text}</span>}</span> : <span className="text-base font-normal text-[#A3A8B1]">{oiField ? 'Choose the on-image text (step ①)' : 'The image'}</span>}
               </button>
             )}
           </div>

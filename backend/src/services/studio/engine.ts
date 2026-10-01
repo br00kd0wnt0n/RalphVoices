@@ -21,7 +21,7 @@ import { claudeWrite, isClaude } from './claude.js';
 import { FileStore, mergeBatchHeader, type StudioStore } from './store.js';
 import { CURRENT_PATTERN, DEFAULT_REGION, REGIONS, type Region } from '../../utils/namingCode.js';
 import { CodeBook, regionOf } from './codes.js';
-import { signoffVersions } from './versions.js';
+import { isSubField, signoffVersions } from './versions.js';
 import { getRounds, inView, labelOf as monthOf, roundOf, roundView, workingRound, type RoundView } from './rounds.js';
 
 // ---------- paths ----------
@@ -900,7 +900,7 @@ export function fieldGuidance(field: string, r: Rules): string {
 export const isOnImageField = (f: string, r: Pick<Rules, 'fields'>) => ((r.fields[f] as any)?.in_version ? (r.fields[f] as any).in_version === 'per_visual' : /on_image/.test(f));
 export const isCarouselTerritory = (t?: Pick<Territory, 'format'>) => /^CAR/i.test(t?.format || '');
 /** The on-image field written as card sequences for this brief, if any (a carousel territory with on-image ticked). */
-export const sequenceField = (b: Brief, r: Rules) => (b.carousel ? b.fields.find(f => isOnImageField(f, r)) || null : null);
+export const sequenceField = (b: Brief, r: Rules) => (b.carousel ? b.fields.find(f => isOnImageField(f, r) && !isSubField(f, r)) || null : null);
 /** Per-field counts without the field written as card sequences (its count is the sequences × cards, not a line count). */
 export function looseCounts(b: Brief, seqField: string): Partial<Brief> {
   if (!b.field_counts) return {};
@@ -912,7 +912,8 @@ export function looseCounts(b: Brief, seqField: string): Partial<Brief> {
 
 /** Default fields by the territory's format; the persona's defaults for a format not listed (or fields the rules lack). */
 const FORMAT_FIELDS: Record<string, string[]> = {
-  STATIC: ['meta_primary', 'meta_headline', 'meta_on_image'], CAROUSEL: ['meta_primary', 'meta_headline', 'meta_on_image'],
+  // The on-image subhead (rules v2.14) is offered wherever the rules have it.
+  STATIC: ['meta_primary', 'meta_headline', 'meta_on_image', 'meta_on_image_sub'], CAROUSEL: ['meta_primary', 'meta_headline', 'meta_on_image', 'meta_on_image_sub'],
   VIDEO: ['meta_primary', 'meta_headline'], UGC: ['meta_primary', 'meta_headline'],
   TIKTOK: ['tiktok_hook', 'tiktok_caption'], TT: ['tiktok_hook', 'tiktok_caption'],
 };
