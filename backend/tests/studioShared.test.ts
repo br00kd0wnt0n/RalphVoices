@@ -121,6 +121,22 @@ test('shared primary text with no call to action at the end is flagged (amber); 
   assert.deepEqual(cta('Trupanion is medical insurance for pets. We pay your vet directly.'), ['warn']);
   assert.deepEqual(cta('Trupanion is medical insurance for pets. Get a quote in minutes.'), []);
   assert.deepEqual(cta('Trupanion pays your vet directly. Ready? See how it works.'), []);
+  // Production, 1 Oct: "Protect your pet today." is a call to action; a description that merely contains the verb isn't.
+  assert.deepEqual(cta('Trupanion paid $697M in vet bills last year. Protect your pet today.'), []);
+  assert.deepEqual(cta('Trupanion is medical insurance for pets. Enroll today.'), []);
+  assert.deepEqual(cta('Trupanion is medical insurance for pets. It can protect your pet for life.'), ['warn']);
   assert.deepEqual(cta('Calm, covered.', 'meta_headline'), []);
   assert.deepEqual(cta('Trupanion pays your vet directly.', 'meta_primary', 'OWN'), []);
+});
+
+test('a single-line re-check keeps "similar line" for unchanged wording, and drops it when an edit no longer resembles its neighbour', async () => {
+  await fresh();
+  const a = 'Trupanion paid $697M in vet invoices in 2025. Get a quote today.';
+  const run = await S.generate(S.makeBrief({ territory: S.SHARED_TERRITORY, persona: S.SHARED_PERSONA, name: 'dup', fields: ['meta_primary'], own_lines: [{ field: 'meta_primary', text: a }, { field: 'meta_primary', text: a + ' ' }] }), api(), () => {}, { ownOnly: true, user: 'nick' });
+  const id = run.lines[1].id;
+  const dup = (l: S.Line) => l.flags.some(f => f.rule === 'NEAR_DUP');
+  assert.equal(dup((await S.loadBatch(run.id)).lines[1]), true, 'flagged when the run was checked');
+  assert.equal(dup(await R.recheckLine(run.id, id, api(), 'nick')), true, 'still flagged after a re-check of the same wording');
+  await S.setDecision(run.id, id, { edited_text: 'See how direct payment to your vet works at participating hospitals with Trupanion.' }, 'nick');
+  assert.equal(dup(await R.recheckLine(run.id, id, api(), 'nick')), false, 'an edit that no longer resembles it loses the flag');
 });

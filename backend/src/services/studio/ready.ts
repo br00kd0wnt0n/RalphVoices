@@ -19,7 +19,7 @@
 
 import {
   type Api, type Batch, type ComplianceStatus, type Flag, type Line, type LineVersion, type Rules,
-  SHARED_PERSONA, checkBatch, finalText, getStore, keptLines, lineHash, loadBatch, loadRules, runLock, sha256, signedCodes, toCsv,
+  SHARED_PERSONA, checkBatch, similarFlag, finalText, getStore, keptLines, lineHash, loadBatch, loadRules, runLock, sha256, signedCodes, toCsv,
 } from './engine.js';
 import { DEFAULT_REGION, REGION_NAMES, parseCode, territoryToken, type Region } from '../../utils/namingCode.js';
 import { cleanFor, decidedBy, whoWords } from '../../utils/actor.js';
@@ -181,8 +181,11 @@ export async function recheckLine(batchId: string, lineId: string, api: Api, use
   };
   await api.resetRun();
   await checkBatch(scratch, api);
-  await api.commit(`recheck ${lineId}`, user);
   const checked = scratch.lines[0];
+  // The scratch run holds only this line, so "similar line" is worked out against the real run, on the current wording.
+  const near = await similarFlag(batch, lineId, finalText(line), api);
+  if (near) checked.flags.push(near);
+  await api.commit(`recheck ${lineId}`, user);
   // The checks ran without the lock (they take a while); they're applied under it, only if the wording is still what was checked.
   return runLock(batchId, async () => {
     const { line: now } = await lineAt(batchId, lineId);
