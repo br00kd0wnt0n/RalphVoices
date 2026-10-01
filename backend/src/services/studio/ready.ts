@@ -263,6 +263,9 @@ export async function readyView(persona: string, territory: string, region: Regi
   return { persona, territory, region, round, lines: out, draft: d, plan: { ...plan, versions, check_estimate }, fields, signoffs, expectations, latest };
 }
 
+/** An ad's caption: its primary text (Meta) or caption (TikTok). */
+export const captionOf = <T extends { line_id: string; batch_id: string }>(fields: Record<string, T>): T | undefined => fields.meta_primary || fields.tiktok_caption || Object.entries(fields).find(([f]) => /primary|caption/.test(f))?.[1];
+
 /** The shared captions a territory with no post copy of its own starts from: the first three per required field, the first of each optional one. */
 function sharedStarter(shared: Line[], r: Rules): Line[] {
   const out: Line[] = [];
@@ -424,6 +427,10 @@ export interface HandoffRow {
   ready_by: string; ready_at: string; changed_since: string;
   /** Whose creative call the sign-off was, when it was entered for them. */
   ready_for?: string;
+  /** The ad's caption (primary text, or TikTok caption) as a line id: ads sharing a caption share it, so Add3 and B3 can group by it. */
+  caption_id: string;
+  /** The caption is from the shared pool (reused across personas). */
+  caption_shared: boolean;
   /** From Pre-flight and Compliance when the Studio has the database ("Ready to traffic", or what's outstanding); '' otherwise. */
   traffic: string;
   signoff_id: string;
@@ -484,6 +491,7 @@ export async function handoffRows(filter: { persona?: string; territory?: string
         cards: cards.map(c => { const sc = cardSubs.find(x => x.card === c.card); return { card: c.card!, text: c.text, chars: c.chars, version: c.version, line_id: c.line_id, ...(sc ? { sub: { text: sc.text, chars: sc.chars, version: sc.version, line_id: sc.line_id } } : {}) }; }),
         compliance: status, compliance_note: note, overrides: overrides.join(' | '),
         check_specifically: [...new Set(labels)].join(' '),
+        caption_id: captionOf(v.fields)?.line_id || '', caption_shared: /^SHARED-/.test(captionOf(v.fields)?.batch_id || ''),
         ready_by: s.ready_by, ready_for: s.ready_for, ready_at: s.ready_at, changed_since: changed ? 'yes: a newer version of a line exists' : '',
         traffic: trafficOf ? (await trafficOf(v.code)).words : '', signoff_id: s.id,
       });
@@ -516,10 +524,12 @@ export async function handoffPack(filter: { persona?: string; territory?: string
   const head = ['Naming code', 'Region', 'Month', 'Visual', 'Version', 'Persona', 'Territory', 'Platform', 'Format', ...fieldCols.map(label), ...oiCols, ...cardCols,
     'Compliance status', 'Compliance note', 'Ready to traffic', 'Red flag overridden', 'Ready for production by', 'Ready for production at', 'Changed since sign-off',
     // Whose creative call the sign-off was (the "for" person, else who entered it), and who entered it.
-    'Decided by', 'Entered by'];
+    'Decided by', 'Entered by',
+    // The caption's line id: the same on every ad that uses that caption (shared captions run across personas).
+    'Caption ID', 'Shared caption'];
   const csv = toCsv([head, ...rows.map(x => [x.stub, x.region, x.month, x.visual, String(x.number), x.persona, x.territory, x.platform, x.format,
     ...fieldCols.map(f => x.fields[f]?.text || ''), ...oiVals(x), ...cardVals(x),
-    STATUS_WORDS[x.compliance] || x.compliance, x.compliance_note, x.traffic, x.overrides, x.ready_by, x.ready_at, x.changed_since, decidedBy(x.ready_by, x.ready_for), x.ready_by])]);
+    STATUS_WORDS[x.compliance] || x.compliance, x.compliance_note, x.traffic, x.overrides, x.ready_by, x.ready_at, x.changed_since, decidedBy(x.ready_by, x.ready_for), x.ready_by, x.caption_id, x.caption_shared ? 'yes' : ''])]);
 
   const expectations = (await getStore().listExpectations()) as Expectation[];
   const md = [...(test ? ['# TEST – not for trafficking', ''] : []), '# Ready for production: handoff', '', 'Creative sign-off, not compliance clearance. One naming code per ad (a live version: its fields together); compliance status per code.', ''];
