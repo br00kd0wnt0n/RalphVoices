@@ -1,7 +1,7 @@
 // Rules: the live rules in plain words, versions (hosted, admin uploads), and your verdicts on Pre-flight's flags.
 import { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
-import { HOSTED, studio, type ActiveRules, type Meta, type RuleEntry, type RulesVersion } from '@/lib/studioApi';
+import { HOSTED, studio, type ActiveRules, type Meta, type OrphanUpload, type RuleEntry, type RulesVersion, type StorageCheck } from '@/lib/studioApi';
 import { CastingNotes, Chip, GhostButton, Intro, Label, PersonaPanel, PinkButton, Src, personaKeys, when } from './ui';
 
 export function Rules({ meta, admin, onActivated }: { meta: Meta | null; admin: boolean; onActivated: () => void }) {
@@ -12,8 +12,15 @@ export function Rules({ meta, admin, onActivated }: { meta: Meta | null; admin: 
   const [file, setFile] = useState<File | null>(null);
   const [drafted, setDrafted] = useState<string | null>(null); // just uploaded as a draft: not live yet
   const [active, setActive] = useState<ActiveRules | null>(null);
+  // Nothing says "no rules" until the fetch has answered (it used to for a couple of seconds on every visit).
+  const [loaded, setLoaded] = useState(false);
   // Versions exist only hosted; the plain-words view of the live rules works everywhere.
-  const load = () => { if (HOSTED) studio.rules().then(setList).catch(e => setError(e.message)); studio.activeRules().then(setActive).catch(() => {}); };
+  const load = () => {
+    Promise.allSettled([
+      HOSTED ? studio.rules().then(setList).catch(e => setError(e.message)) : Promise.resolve(),
+      studio.activeRules().then(setActive).catch(() => {}),
+    ]).then(() => setLoaded(true));
+  };
   useEffect(() => { load(); }, []);
   const live = list.find(r => r.status === 'active') || (active && !HOSTED ? { version: active.version, status: 'active', created_at: active.updated || '' } as RulesVersion : undefined);
   async function activate(v: string, ask = true) {
@@ -37,12 +44,14 @@ export function Rules({ meta, admin, onActivated }: { meta: Meta | null; admin: 
       <Intro title="Rules" line="What every line and asset is checked against, in plain words.">
         <p>The live rules are built from the client’s legal, brand and persona material. Each run records the version it was checked under. {admin ? 'You can upload and activate versions below.' : 'Brook changes them.'}</p>
       </Intro>
+      {!loaded ? <div className="rounded-xl border-2 border-[#272B34] px-5 py-4 text-base text-[#858B96]">Loading the rules…</div> : (
       <div className={cn('flex flex-wrap items-center gap-3 rounded-xl border-2 px-5 py-4', live ? 'border-emerald-500/60 bg-emerald-500/10' : 'border-amber-400/60 bg-amber-400/10')}>
         <span className={cn('text-sm font-semibold uppercase tracking-wider', live ? 'text-emerald-300' : 'text-amber-200')}>Live</span>
         {live
           ? <span className="text-lg"><span className="font-mono font-semibold">{live.version}</span><span className="text-base text-[#A3A8B1]">{live.activated_by ? `, activated by ${live.activated_by}` : live.created_by ? `, uploaded by ${live.created_by}` : ''}{live.activated_at ? ` at ${when(live.activated_at)}` : ` on ${when(live.created_at)}`}</span></span>
           : <span className="text-base text-amber-100">No rules are live yet. Upload a version and activate it.</span>}
       </div>
+      )}
       {drafted && (
         <div className="flex flex-wrap items-center gap-3 rounded-xl border-2 border-amber-400/60 bg-amber-400/10 px-5 py-4 text-base text-amber-50">
           <span><span className="font-mono font-semibold">{drafted}</span> uploaded as a draft. {live ? <><span className="font-mono">{live.version}</span> is still live.</> : 'Nothing is live yet.'}</span>
@@ -50,6 +59,7 @@ export function Rules({ meta, admin, onActivated }: { meta: Meta | null; admin: 
         </div>
       )}
       {error && <div className="rounded-lg border-2 border-red-500/45 bg-red-500/10 p-3 text-base text-red-200">{error}</div>}
+      {admin && HOSTED && meta?.preflight?.enabled && <AssetStorage meta={meta} />}
       {meta?.preflight?.enabled && <Agreement />}
       {active && <LiveRules active={active} meta={meta} />}
       {HOSTED && <h2 className="pt-2 text-lg font-semibold">Versions</h2>}
@@ -62,7 +72,7 @@ export function Rules({ meta, admin, onActivated }: { meta: Meta | null; admin: 
             {admin && r.status !== 'active' && <GhostButton className="ml-auto" onClick={() => activate(r.version)}>Activate</GhostButton>}
           </li>
         ))}
-        {!list.length && !error && <li className="px-5 py-3 text-[#858B96]">No versions yet.</li>}
+        {!list.length && !error && <li className="px-5 py-3 text-[#858B96]">{loaded ? 'No versions yet.' : 'Loading…'}</li>}
       </ul>}
       {admin && (
         <section className="space-y-3 rounded-xl border border-dashed border-[#4A505D] p-5">
@@ -145,6 +155,37 @@ function LiveRules({ active, meta }: { active: ActiveRules; meta: Meta | null })
         {meta ? personaKeys(active.personas).map(k => <PersonaPanel key={k} meta={meta} persona={k} />) : Object.entries(active.personas).map(([k, p]) => <div key={k} className="font-semibold">{p.name}</div>)}
       </section>
     </div>
+  );
+}
+
+/**
+ * Admins: can the server write uploaded assets to storage (a put and delete at boot, or the last refused upload), and
+ * uploads a refused upload left with no files (every view ignores them) to remove.
+ */
+function AssetStorage({ meta }: { meta: Meta }) {
+  const [orphans, setOrphans] = useState<OrphanUpload[] | null>(null);
+  const [check, setCheck] = useState<StorageCheck | null | undefined>(meta.preflight?.storage_check);
+  const [msg, setMsg] = useState('');
+  const load = () => studio.pfOrphans().then(r => { setOrphans(r.orphans); if (r.storage_check) setCheck(r.storage_check); }).catch(e => setMsg(e.message));
+  useEffect(() => { load(); }, []);
+  const where = meta.preflight?.storage === 'r2' ? `the private bucket${check?.bucket ? ` (${check.bucket})` : ''}` : meta.preflight?.storage === 'db' ? 'the database (local)' : meta.preflight?.storage || '';
+  return (
+    <section className="space-y-2 rounded-xl border border-[#272B34] bg-[#16181D] px-5 py-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <Label>Asset storage</Label>
+        {meta.preflight?.storage === 'db' || check?.ok
+          ? <Chip tone="outline" className="border-emerald-500 text-emerald-300">OK</Chip>
+          : check ? <Chip tone="red">can't write</Chip> : <Chip tone="grey">not checked yet</Chip>}
+        <span className="text-sm text-[#A3A8B1]">Uploads go to {where}.{check && !check.ok ? ` Last check ${when(check.at)}: ${check.error}. Uploads fail until the R2 token can write to it.` : check?.ok ? ` Checked ${when(check.at)}.` : ''}</span>
+      </div>
+      {!!orphans?.length && (
+        <div className="flex flex-wrap items-center gap-3 text-sm text-[#A3A8B1]">
+          <span className="mr-auto">{orphans.length} upload{orphans.length === 1 ? '' : 's'} with no files (storage refused {orphans.length === 1 ? 'it' : 'them'}): {orphans.map(o => `${o.stub} (${o.uploaded_by || 'unknown'}, ${when(o.uploaded_at)})`).join('; ')}. Nothing shows them.</span>
+          <GhostButton onClick={() => studio.removePfOrphans().then(r => { setMsg(`Removed ${r.removed.length}.`); load(); }).catch(e => setMsg(e.message))}>Remove them</GhostButton>
+        </div>
+      )}
+      {msg && <p className="text-sm text-[#A3A8B1]">{msg}</p>}
+    </section>
   );
 }
 

@@ -19,18 +19,47 @@ import os from 'node:os';
 import path from 'node:path';
 import type pg from 'pg';
 import * as S from './engine.js';
-import { latestSignoffs, setCompliance, type Signoff } from './ready.js';
+import { clientOverrideLine, latestSignoffs, ruleName, setCompliance, type Signoff } from './ready.js';
 import { complianceFor, platformOf, signoffOnImage, signoffVersions, type SignedField } from './versions.js';
 import { getRounds, labelOf, roundOf, roundView, testOnly } from './rounds.js';
 import { SIZES, detectSize, expectedSizes, parseSize, roleOf, sizeOfRole, slotOf, type Size } from './sizes.js';
 import { DEFAULT_REGION, parseCode, visualKey, type Region } from '../../utils/namingCode.js';
-import { downloadPrivateObject, getPrivateObject, getPrivateObjectStream, isR2Enabled, putPrivateObject } from '../r2.js';
+import { deletePrivateObject, downloadPrivateObject, getPrivateObject, getPrivateObjectStream, isR2Enabled, putPrivateObject } from '../r2.js';
 import { FatalError } from '../audit/api.js';
 import type { AssetKind, AuditEngine, AuditFlag, AuditResult, SignedCopy } from './preflightEngine.js';
 import { COPY_MATCH_SOURCE, REWORD_MIN, bestMatch, copyMatch, normalise } from '../audit/copyMatch.js';
 import { signedOffCopy } from './preflightB2.js';
 
 type Queryable = Pick<pg.Pool, 'query'>;
+
+/** Every size carries the same words (case, spacing and punctuation aside). */
+export function sameTextAcrossSizes(results: Array<Pick<AuditResult, 'asset_text' | 'text_found'>>): boolean {
+  const norm = (r: Pick<AuditResult, 'asset_text' | 'text_found'>) => (r.asset_text?.map(t => t.text).join(' ') ?? r.text_found).toLowerCase().replace(/[^a-z0-9$%]+/g, ' ').trim();
+  return results.length > 1 && results.every(r => norm(r) === norm(results[0]));
+}
+/** A rule judged on the words (not visual-only): the rules' items applying to text, the figure rules and length limits. */
+export function textRule(rules: any, rule: string): boolean {
+  if (/^(FIG_|LIMIT_|COMP_)/.test(rule)) {
+    const it = [...(rules.compliance || []), ...(rules.brand || [])].find((x: any) => x.id === rule);
+    return !it || it.applies_to !== 'visual';
+  }
+  const it = [...(rules.compliance || []), ...(rules.brand || []), ...(rules.clarity || [])].find((x: any) => x.id === rule);
+  return !!it && it.applies_to !== 'visual';
+}
+
+/** Where Pre-flight files go when storage is R2: the private bucket (r2.ts), or a test's stand-in. */
+export interface ObjectStore {
+  put(key: string, body: Buffer | { path: string; size: number }, contentType: string): Promise<void>;
+  del(key: string): Promise<void>;
+}
+export interface StorageCheck { ok: boolean; bucket?: string; error?: string; at: string }
+/** Storage refused a file: nothing of the upload is kept. 503: it's the server's storage, not the person's files. */
+export class StorageError extends Error {
+  status = 503;
+  constructor(public detail: string, bucket?: string) {
+    super(`Couldn't store the files (storage refused: ${detail}${/denied|forbidden|403/i.test(detail) ? `; check the R2 token can write to ${bucket || 'the Pre-flight bucket'}` : ''}). Nothing was saved.`);
+  }
+}
 
 export const DB_FILE_CAP = 25 * 1024 * 1024;     // local/dev only (R2 off)
 /** Bump when the audit or copy-match logic changes what a stored audit would say (2: on-asset copy match per stub; 3: the disclaimer on the last screen). */
@@ -96,6 +125,8 @@ export interface Traffic {
   words: string;
   /** What's outstanding, in words. */
   blocker?: string;
+  /** With changes requested: what goes back (the copy, fixed at Build & sign off; or the visual, at Assets). */
+  send_back?: 'copy' | 'asset';
   legacy?: boolean;
 }
 /** When "Ready to traffic" started needing compliance. Pre-flight marks before this, with no compliance recorded, stay ready (legacy). */
@@ -239,7 +270,11 @@ export function staleness(a: { status: string; rules_version?: string | null; re
 }
 
 export class Preflight {
-  constructor(private db: Queryable, private engine: AuditEngine, private opts: { storage?: 'r2' | 'db' } = {}) {}
+  /** `objects`: where files go when storage is R2 (the private bucket; a test passes its own). */
+  constructor(private db: Queryable, private engine: AuditEngine, private opts: { storage?: 'r2' | 'db'; objects?: ObjectStore } = {}) {}
+  private get objects(): ObjectStore { return this.opts.objects || { put: putPrivateObject, del: deletePrivateObject }; }
+  /** The last storage check (a put and delete at boot, or after a refused upload), for admins on the Rules page. */
+  storageCheck: StorageCheck | null = null;
   get storage(): 'r2' | 'db' {
     if (this.opts.storage) return this.opts.storage;
     const s = preflightStorage();
@@ -344,10 +379,19 @@ export class Preflight {
     const big = files.find(f => sizeOf(f) > cap);
     if (big) throw new Error(`${big.filename} is ${fmtMb(sizeOf(big))}; the limit is ${fmtMb(cap)} per file${this.storage === 'db' ? ' when files are kept in the database (local; production uses R2)' : ''}`);
     const uploadId = id('up');
-    await this.db.query(
-      `INSERT INTO studio_asset_uploads (id, stub, persona, territory, signoff_id, kind, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [uploadId, stub, signoff.persona, signoff.territory, signoff.id, kind, user ?? null]);
-    for (const g of groups) for (let i = 0; i < g.files.length; i++) await this.putFile(uploadId, stub, slotOf(g.size) * 100 + i, g.files[i], roleOf(g.size));
+    // Files first, then the rows: an upload that storage refused used to leave a row with no files (production, 1 Oct).
+    // If storing any file fails, the ones already stored are removed and nothing is written.
+    const placed = groups.flatMap(g => g.files.map((f, i) => ({ f, position: slotOf(g.size) * 100 + i, role: roleOf(g.size) })));
+    const keys = await this.storeObjects(uploadId, stub, placed);
+    try {
+      await this.db.query(
+        `INSERT INTO studio_asset_uploads (id, stub, persona, territory, signoff_id, kind, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [uploadId, stub, signoff.persona, signoff.territory, signoff.id, kind, user ?? null]);
+      for (const p of placed) await this.putFileRow(uploadId, p.position, p.f, p.role, keys.get(p.position) ?? null);
+    } catch (err) {
+      await this.discardUpload(uploadId, [...keys.values()]);
+      throw err;
+    }
     for (const x of stubs) {
       await this.db.query(`INSERT INTO studio_upload_stubs (upload_id, stub) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [uploadId, x]);
       // A new upload replaces what was ready: each stub it serves is open until it's reviewed again.
@@ -363,10 +407,68 @@ export class Preflight {
     return { upload_id: uploadId, kind, storage: this.storage, stubs, format_notes: [...stubs.map(x => formatNote(x, kind)).filter(Boolean) as string[], ...notes], sizes: groups.map(g => ({ size: g.size, files: g.files.map(f => f.filename) })), estimate };
   }
 
+  private objectKey(uploadId: string, stub: string, position: number, f: UploadFile, role: string) {
+    return `studio/preflight/${safe(stub)}/${uploadId}/${role === 'frame' ? 'frames/' : ''}${position}-${safe(f.filename)}`;
+  }
+
+  /** Store an upload's files in R2 (nothing to do when they're kept in Postgres); all or none. Position → key. */
+  private async storeObjects(uploadId: string, stub: string, placed: Array<{ f: UploadFile; position: number; role: string }>): Promise<Map<number, string>> {
+    const keys = new Map<number, string>();
+    if (this.storage !== 'r2') return keys;
+    try {
+      for (const p of placed) {
+        const key = this.objectKey(uploadId, stub, p.position, p.f, p.role);
+        await this.objects.put(key, p.f.buffer ?? { path: p.f.path!, size: sizeOf(p.f) }, p.f.contentType);
+        keys.set(p.position, key);
+      }
+    } catch (err: any) {
+      await this.discardUpload(null, [...keys.values()]);
+      const detail = String(err?.message || err?.name || err);
+      this.storageCheck = { ok: false, bucket: process.env.STUDIO_R2_BUCKET, error: detail, at: new Date().toISOString() };
+      throw new StorageError(detail, process.env.STUDIO_R2_BUCKET);
+    }
+    return keys;
+  }
+
+  /** Undo a half-made upload: its stored objects (best effort) and any rows. */
+  private async discardUpload(uploadId: string | null, keys: string[]) {
+    for (const k of keys) await this.objects.del(k).catch(e => console.warn(`[studio] couldn't remove ${k} after a failed upload: ${e?.message || e}`));
+    if (!uploadId) return;
+    await this.db.query(`DELETE FROM studio_upload_files WHERE upload_id = $1`, [uploadId]).catch(() => {});
+    await this.db.query(`DELETE FROM studio_asset_uploads WHERE id = $1`, [uploadId]).catch(() => {});
+  }
+
+  /**
+   * Uploads with no files (left by a refused upload before uploads stored files first), older than ten minutes and
+   * never audited. Admins see the count on Rules and can remove them; every view already ignores them.
+   */
+  async orphanUploads(): Promise<Array<{ id: string; stub: string; uploaded_by: string | null; uploaded_at: string }>> {
+    return (await this.db.query(
+      `SELECT u.id, u.stub, u.uploaded_by, u.uploaded_at FROM studio_asset_uploads u
+        WHERE NOT EXISTS (SELECT 1 FROM studio_upload_files f WHERE f.upload_id = u.id)
+          AND NOT EXISTS (SELECT 1 FROM studio_audits a WHERE a.upload_id = u.id)
+          AND u.uploaded_at < now() - interval '10 minutes'
+        ORDER BY u.uploaded_at`)).rows.map(r => ({ ...r, uploaded_at: new Date(r.uploaded_at).toISOString() }));
+  }
+  async removeOrphanUploads(user?: string): Promise<{ removed: string[] }> {
+    const ids = (await this.orphanUploads()).map(o => o.id);
+    for (const x of ids) {
+      await this.db.query(`DELETE FROM studio_upload_stubs WHERE upload_id = $1`, [x]);
+      await this.db.query(`DELETE FROM studio_asset_uploads WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM studio_upload_files f WHERE f.upload_id = $1)`, [x]);
+    }
+    if (ids.length) await S.getStore().recordEdit({ line_id: 'preflight:orphans', batch_id: 'preflight', before: { uploads: ids }, after: { removed: ids }, by: user || 'unknown', at: new Date().toISOString() });
+    return { removed: ids };
+  }
+
+  /** A frame or other file added to an existing upload (the audit's thumbnails): stored, then its row. */
   private async putFile(uploadId: string, stub: string, position: number, f: UploadFile, role: string) {
-    const storage = this.storage;
-    const key = storage === 'r2' ? `studio/preflight/${safe(stub)}/${uploadId}/${role === 'frame' ? 'frames/' : ''}${position}-${safe(f.filename)}` : null;
-    if (storage === 'r2') await putPrivateObject(key!, f.buffer ?? { path: f.path!, size: sizeOf(f) }, f.contentType);
+    const key = this.storage === 'r2' ? this.objectKey(uploadId, stub, position, f, role) : null;
+    if (key) await this.objects.put(key, f.buffer ?? { path: f.path!, size: sizeOf(f) }, f.contentType);
+    await this.putFileRow(uploadId, position, f, role, key);
+  }
+
+  private async putFileRow(uploadId: string, position: number, f: UploadFile, role: string, key: string | null) {
+    const storage = key ? 'r2' : 'db';
     await this.db.query(
       `INSERT INTO studio_upload_files (upload_id, position, filename, content_type, size, storage, r2_key, data, role)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -412,7 +514,9 @@ export class Preflight {
   /** The latest upload serving a stub (its own, or a shared visual). */
   private async latestUpload(stub: string): Promise<StubRow['upload']> {
     const u = (await this.db.query(
-      `SELECT u.* FROM studio_asset_uploads u JOIN studio_upload_stubs us ON us.upload_id = u.id WHERE us.stub = $1 ORDER BY u.uploaded_at DESC LIMIT 1`, [stub])).rows[0];
+      // An upload with no files (storage refused it) is never the current one.
+      `SELECT u.* FROM studio_asset_uploads u JOIN studio_upload_stubs us ON us.upload_id = u.id WHERE us.stub = $1
+         AND EXISTS (SELECT 1 FROM studio_upload_files f WHERE f.upload_id = u.id) ORDER BY u.uploaded_at DESC LIMIT 1`, [stub])).rows[0];
     if (!u) return null;
     const files = (await this.db.query(`SELECT position, filename, content_type, size, role FROM studio_upload_files WHERE upload_id = $1 AND role LIKE 'asset%' ORDER BY position`, [u.id])).rows
       .map(({ role, ...f }) => ({ ...f, size: Number(f.size), aspect: sizeOfRole(role) }));
@@ -532,6 +636,24 @@ export class Preflight {
         }
         found.splice(0, found.length, ...kept);
       }
+      // The same words on every size get one verdict per text rule (production test, 1 Oct: COMP_FACT_FRAMING said "not
+      // framed as a statistic" on 1:1 and "framed as a Trupanion statistic" on 4:5 and 9:16, worded differently each
+      // time, so they didn't merge above). Text rules (not visual-only, not copy match) merge into one flag for all
+      // sizes, the strongest reading kept. Visual checks stay per size.
+      if (groups.length > 1 && sameTextAcrossSizes(results.map(x => x.result))) {
+        const isText = (rule: string) => textRule(rules, rule);
+        const rank: Record<string, number> = { red: 2, amber: 1, grey: 0 };
+        const best = new Map<string, (typeof found)[number]>();
+        for (const x of found) {
+          if (!x.raw || x.raw.check === 'copy_match' || x.raw.cross_persona || !isText(x.raw.rule)) continue;
+          const k = JSON.stringify([x.stub, x.raw.rule]);
+          const cur = best.get(k);
+          if (!cur || rank[x.raw.severity] > rank[cur.raw!.severity]) best.set(k, x);
+        }
+        const merged = found.filter(x => !(x.raw && x.raw.check !== 'copy_match' && !x.raw.cross_persona && isText(x.raw.rule)));
+        for (const x of best.values()) merged.push({ ...x, flag: { ...x.raw!, why: `${x.raw!.why ? `${x.raw!.why}; ` : ''}same text on every size: one verdict for all` }, size: undefined });
+        found.splice(0, found.length, ...merged);
+      }
       // An expected size not uploaded: amber (not red); Pre-flight can still be marked passed, and the handoff notes it.
       for (const st of served) {
         for (const m of expectedSizes(st, rules).filter(x => !groups.some(g => g.size === x))) {
@@ -631,13 +753,17 @@ export class Preflight {
     flags.sort((x, y) => (x.check === 'copy_match' ? -1 : 0) - (y.check === 'copy_match' ? -1 : 0) || sevRank[x.severity] - sevRank[y.severity] || x.position - y.position);
     const history = (await this.db.query(
       `SELECT u.id, u.kind, u.uploaded_by, u.uploaded_at, (SELECT count(*) FROM studio_upload_files f WHERE f.upload_id = u.id AND f.role = 'asset') AS files
-         FROM studio_asset_uploads u JOIN studio_upload_stubs us ON us.upload_id = u.id WHERE us.stub = $1 ORDER BY u.uploaded_at DESC`, [stub])).rows.map(x => ({ ...x, files: Number(x.files), uploaded_at: new Date(x.uploaded_at).toISOString() }));
+         FROM studio_asset_uploads u JOIN studio_upload_stubs us ON us.upload_id = u.id WHERE us.stub = $1
+          AND EXISTS (SELECT 1 FROM studio_upload_files f WHERE f.upload_id = u.id) ORDER BY u.uploaded_at DESC`, [stub])).rows.map(x => ({ ...x, files: Number(x.files), uploaded_at: new Date(x.uploaded_at).toISOString() }));
     const result = a?.result ? { ...a.result, copy_match: a.result.copy_match_by_stub?.[stub] ?? a.result.report?.copy_match } : null;
     return {
       stub, persona: signoff.persona, territory: signoff.territory, region: signoff.region || DEFAULT_REGION, visual_key: visualKey(stub), signoff_id: signoff.id, copy, upload, history,
       sizes: this.sizesOf(stub, upload, await S.getStore().getRules()),
       same_visual_as: upload ? upload.stubs.filter(x => x !== stub) : [],
       format_note: upload ? formatNote(stub, upload.kind) : null,
+      // Red flags on the copy overridden at sign-off: a Pre-flight flag on the same rule shows the earlier override and
+      // can reuse its reason in one click (production test, 1 Oct: the same $5,000 rule had to be justified twice).
+      copy_overrides: this.partsOf(signoff, stub).flatMap(l => (l.overrides || []).map(o => ({ rule: o.rule, label: (o.label || o.rule).replace(/\.$/, ''), field: copy.find(c => c.line_id === l.line_id)?.label || l.field, reason: o.reason, by: o.by, at: o.at }))),
       on_asset_copy: copy.filter(c => !POST_COPY_FIELDS.has(c.field)), post_copy: copy.filter(c => POST_COPY_FIELDS.has(c.field)),
       audit: a ? { id: a.id, upload_id: a.upload_id, status: a.status, engine: a.engine, rules_version: a.rules_version, usd: Number(a.usd), error: a.error, started_by: a.started_by, started_at: new Date(a.started_at).toISOString(), finished_at: a.finished_at ? new Date(a.finished_at).toISOString() : null, result, stale: staleness(a) } : null,
       flags, status: await this.status(stub),
@@ -708,6 +834,23 @@ export class Preflight {
     const after = await this.status(stub);
     await S.getStore().recordEdit({ line_id: `asset:${stub}`, batch_id: 'preflight', before, after, by: user || 'unknown', at: new Date().toISOString() });
     return after;
+  }
+
+  /**
+   * Mark Pre-flight passed for every code on this code's visual (one upload, one audit): each still needs its own red
+   * flags dealt with (copy match is per code), so the ones that can't pass say why and the rest pass (production test,
+   * 1 Oct: on A1–A3 sharing a visual, "Mark Pre-flight passed" only marked the selected code).
+   */
+  async setReadyVisual(stub: string, user?: string): Promise<{ passed: string[]; blocked: Array<{ code: string; error: string }> }> {
+    const upload = await this.latestUpload(stub);
+    if (!upload) throw new Error('Upload the asset first');
+    const codes = [];
+    for (const x of upload.stubs) if ((await this.latestUpload(x))?.id === upload.id) codes.push(x);
+    const passed: string[] = [], blocked: Array<{ code: string; error: string }> = [];
+    for (const code of codes) {
+      try { await this.setReady(code, true, user); passed.push(code); } catch (e: any) { blocked.push({ code, error: String(e?.message || e) }); }
+    }
+    return { passed, blocked };
   }
 
   // ---------- the round: agreement rate and exports ----------
@@ -808,14 +951,14 @@ export class Preflight {
     const passed = st.status === 'ready' && !!upload && (!st.upload_id || st.upload_id === upload.id);
     const c = await this.codeCompliance(stub, upload?.id ?? null);
     const pf = passed ? 'Pre-flight passed' : !upload ? 'Not uploaded' : 'Pre-flight open';
-    const cw = c.wording_edited ? 'Wording edited since sign-off' : `Compliance ${COMPLIANCE_WORDS[c.status].toLowerCase()}`;
+    const cw = c.wording_edited ? 'Wording edited since sign-off' : c.stale?.startsWith('Back with Trupanion') ? `Compliance pending (${c.stale.replace(/^Back with Trupanion: /, '')})` : `Compliance ${COMPLIANCE_WORDS[c.status].toLowerCase()}`;
     if (passed && c.status === 'cleared' && !c.wording_edited) return { ready: true, preflight: 'passed', compliance: 'cleared', words: 'Ready to traffic' };
     // Marked ready before the gate, and no compliance decision recorded since: stays ready, and says so.
     if (passed && !c.recorded && !c.wording_edited && st.ready_at && st.ready_at < COMPLIANCE_GATE_FROM) {
       return { ready: true, preflight: 'passed', compliance: 'pending', words: 'Ready to traffic · compliance not recorded', legacy: true };
     }
     const blocker = !passed ? (upload ? 'Pre-flight: mark it passed once the audit is reviewed' : 'Upload the asset') : c.wording_edited ? 'The wording was edited since sign-off: sign it off again' : c.status === 'changes_requested' ? `Trupanion asked for changes to the ${c.send_back === 'asset' ? 'visual' : 'copy'}` : 'Waiting for Trupanion’s compliance decision';
-    return { ready: false, preflight: passed ? 'passed' : 'open', compliance: c.status, words: `${pf} · ${cw}`, blocker };
+    return { ready: false, preflight: passed ? 'passed' : 'open', compliance: c.status, words: `${pf} · ${cw}`, blocker, ...(c.status === 'changes_requested' ? { send_back: c.send_back || 'copy' } : {}) };
   }
 
   /**
@@ -833,16 +976,31 @@ export class Preflight {
       if (c.upload_id && uploadId && c.upload_id !== uploadId) return { status: 'pending' as const, note: c.note, stale: 'Reviewed on an earlier upload', c };
       return { status: c.status, note: c.note, stale: undefined, c };
     });
+    // A copy send-back is recorded on every line of the code (primary, headline…), and the fix is usually one of them.
+    // Once any of the code's wording has changed since it, the request is answered: the whole code goes back to
+    // Trupanion (production test, 1 Oct: A3's primary fixed and signed off again, but the untouched headline still said
+    // "changes requested", so the ad never returned to the producer's queue).
+    const copyFixed = each.some(e => e.stale === 'Reviewed on a different wording')
+      && each.some(e => e.c?.status === 'changes_requested' && e.c.send_back === 'copy');
+    if (copyFixed) {
+      const set = (await this.findStub(stub)).signoff;
+      for (const e of each) if (e.status === 'changes_requested' && e.c?.send_back === 'copy') Object.assign(e, { status: 'pending', stale: `Back with Trupanion: copy fixed in set v${set.version}` });
+      for (const e of each) if (e.stale === 'Reviewed on a different wording') e.stale = `Back with Trupanion: copy fixed in set v${set.version}`;
+    }
     const latest = each.map(e => e.c).filter(Boolean).sort((a, b) => String(b!.at || '').localeCompare(String(a!.at || '')))[0];
     // Edited since sign-off: the wording on the asset is no longer the wording that will run, so an earlier "cleared"
     // doesn't carry over (it shows as needing review until the new wording is signed off and reviewed).
     const edited = lines.some(({ signed, line }) => line && S.lineHash(line) !== signed.sha256);
     const status: S.ComplianceStatus = edited ? 'pending' : each.some(e => e.status === 'changes_requested') ? 'changes_requested' : each.length && each.every(e => e.status === 'cleared') ? 'cleared' : 'pending';
     const overrideDetails = lines.flatMap(({ signed }) => (signed.overrides || []).map(o => ({ label: (o.label || o.rule).replace(/\.$/, ''), reason: o.reason, by: o.by })));
+    // What Trupanion is asked to check, in a sentence each: never the internal rule text (production test, 1 Oct).
+    const rules = S.loadRules();
+    const checkSpecifically = [...new Set(lines.flatMap(({ signed, line }) => (signed.overrides || []).map(o =>
+      clientOverrideLine(`${rules.fields[signed.field]?.label || signed.field}`, line?.flags.find(f => f.rule === o.rule)?.quote, ruleName(rules, o.rule, (o.label || o.rule).replace(/\.$/, ''))))))];
     return {
       status, note: latest?.note, by: latest?.by, at: latest?.at, client_by: status === 'pending' ? undefined : latest?.client_by, send_back: status === 'changes_requested' ? latest?.send_back : undefined,
       stale: edited ? 'Wording edited since sign-off' : each.find(e => e.stale)?.stale, on_asset: !!latest?.upload_id, recorded: each.some(e => !!e.c), wording_edited: edited,
-      overrides: overrideDetails.map(o => o.label), override_details: overrideDetails,
+      overrides: overrideDetails.map(o => o.label), override_details: overrideDetails, check_specifically: checkSpecifically,
     };
   }
 
@@ -943,7 +1101,10 @@ export class Preflight {
     // note saying what Trupanion accepted, as well as who at Trupanion cleared it.
     if (status === 'cleared' && !note) {
       const accepted = await this.overriddenReds(uploadId, codes);
-      if (accepted.length) throw Object.assign(new Error(`Went through with an overridden red flag (${accepted.map(x => `${x.code}: ${x.label}`).join('; ')}): add a note saying what Trupanion accepted`), { overridden: accepted });
+      // Each override once, with its codes (a copy override repeats per code on a shared visual).
+      const once = new Map<string, string[]>();
+      for (const x of accepted) { const k = `${x.label} (${x.where === 'copy' ? 'copy' : 'asset check'})`; once.set(k, [...(once.get(k) || []), x.code]); }
+      if (accepted.length) throw Object.assign(new Error(`Went through with ${once.size === 1 ? 'an overridden red flag' : `${once.size} overridden red flags`} (${[...once].map(([k, cs]) => `${k}: ${[...new Set(cs)].join(', ')}`).join('; ')}): add a note saying what Trupanion accepted`), { overridden: accepted });
     }
     for (const code of codes) {
       for (const { signed } of await this.codeLines(code)) {
@@ -973,5 +1134,7 @@ export interface CodeCompliance {
   overrides: string[];
   /** The same, with the reason each was overridden and who by (for the Compliance step's "what Trupanion accepted"). */
   override_details: Array<{ label: string; reason: string; by: string }>;
+  /** For Trupanion, one sentence per override: "<field>: '<quote>' went through sign-off despite '<rule>'. Please check it." */
+  check_specifically: string[];
 }
 const COMPLIANCE_WORDS: Record<string, string> = { pending: 'Pending', cleared: 'Cleared', changes_requested: 'Changes requested' };

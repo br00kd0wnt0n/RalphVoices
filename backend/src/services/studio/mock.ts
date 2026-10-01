@@ -23,14 +23,17 @@ function h(s: string): number {
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const usage = (inTok: number, outTok: number) => ({ prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok });
 
-function writer(user: string) {
+function writer(sys: string, user: string) {
+  // Headlines and hooks keep to the visible length the prompt gives (longer ones are dropped before anyone sees them).
+  const visible = Object.fromEntries([...sys.matchAll(/^- (\w+): .*?\((\d+) visible\)/gm)].map(m => [m[1], Number(m[2])]));
+  const fit = (t: string, n = 38) => (t.length <= n ? t : t.slice(0, n).replace(/\s+\S*$/, ''));
   const cells = [...user.matchAll(/^- (\w+): .*?structure (\w+).*?field (\w+)/gm)];
   const lines = cells.map(([, cell, structure, field], i) => {
     const k = h(cell + structure + user.length);
     // Every seventh cell repeats an earlier line almost word for word, to exercise dedupe.
     const base = `${OPENERS[k % OPENERS.length]} ${MIDDLES[(k >>> 3) % MIDDLES.length]}. ${ENDINGS[(k >>> 7) % ENDINGS.length]}`.trim();
     const text = i > 0 && i % 7 === 0 ? `${OPENERS[0]} ${MIDDLES[0]}.` : structure === 'question' ? `${MIDDLES[k % MIDDLES.length].replace(/^./, c => c.toUpperCase())}?` : base;
-    return { cell, text: field.includes('headline') || field.includes('hook') ? text.split(/[.?]/)[0].slice(0, 38) : text };
+    return { cell, text: field.includes('headline') || field.includes('hook') ? fit(text.split(/[.?]/)[0], visible[field]) : text };
   });
   return JSON.stringify({ lines });
 }
@@ -50,10 +53,18 @@ function tagger(sys: string, user: string) {
   return JSON.stringify({ tags: Array.from({ length: n }, (_, i) => ({ i: i + 1, angle: angles[i % Math.max(1, angles.length)], structure: structures[i % 6] })) });
 }
 
-function checker(user: string) {
+// The live false positive (production test, 1 Oct): a line about what surgery costs read as "pays for itself".
+// The mock makes it too, unless the rule lists the line as one that isn't a breach (not_examples).
+const costLine = (line: string) => /\$[\d,.]+k?\b[^.!?]*\b(surgery|bill)/i.test(line);
+const listedAsNo = (text: string, line: string) => text.includes(`"${line}"`);
+
+function checker(sys: string, user: string) {
   const line = /LINE: (.*)$/m.exec(user)?.[1] || '';
   const hits: any[] = [];
   if (/pays? for itself/i.test(line)) hits.push({ rule: 'COMP_PAYS_FOR_ITSELF', quote: /pays? for itself/i.exec(line)![0], why: 'Claims the policy pays for itself' });
+  else if (costLine(line) && !listedAsNo(sys, line)) hits.push({ rule: 'COMP_PAYS_FOR_ITSELF', quote: /\$[\d,.]+k?/.exec(line)![0], why: 'Implies it saves more than it costs' });
+  // The other live false positive: a speed that isn't about claims ("Build your plan in 60 seconds!") read as claim speed.
+  if (/\d+ seconds/i.test(line) && !/claim/i.test(line) && !listedAsNo(sys, line)) hits.push({ rule: 'COMP_CLAIM_SPEED', quote: /\d+ seconds/i.exec(line)![0], why: 'Overclaims speed' });
   if (/whole bill/i.test(line)) hits.push({ rule: 'COMP_PAID_SHARE', quote: 'whole bill', why: 'Implies the whole bill is paid' });
   if (/fancy bed/i.test(line)) hits.push({ rule: 'DINK_T_INDULGE', quote: 'fancy bed', why: 'Frames spend as indulgence' });
   const k = h(line);
@@ -79,6 +90,8 @@ function probe(user: string) {
   const q = user.split('\n').pop() || '';
   let p = 0.05 + (h(user) % 10) / 100;
   if (/pays for itself/i.test(q) && /pays? for itself/i.test(line)) p = 0.97;
+  if (/within seconds/i.test(q) && /\d+ seconds/i.test(line) && !listedAsNo(user.split('\n').find(l => l.startsWith('Lines like these are a No')) || '', line)) p = 0.85;
+  if (/more (money )?than it costs/i.test(q) && costLine(line) && !listedAsNo(user.split('\n').find(l => l.startsWith('Lines like these are a No')) || '', line)) p = 0.8;
   if (/participating hospitals/i.test(q) && /directly|checkout/i.test(line) && !/participating/i.test(line)) p = 0.9;
   if (/whole vet bill|pay nothing/i.test(q) && /whole bill/i.test(line)) p = 0.93;
   if (/pre-existing|already has/i.test(q) && /pre-?existing/i.test(line)) p = 0.9;
@@ -108,9 +121,9 @@ export function mockClient() {
       if (params.logprobs) { const p = probe(user); content = p.top[0].token; logprobs = { content: [{ token: content, logprob: p.top[0].logprob, top_logprobs: p.top }] }; }
       else if (params.response_format && /You classify lines of ad copy/.test(sys)) content = tagger(sys, user);
       else if (params.response_format && /^CAROUSEL SEQUENCES/.test(user)) content = sequences(user);
-      else if (params.response_format && /Write exactly one line per cell/.test(sys)) content = writer(user);
+      else if (params.response_format && /Write exactly one line per cell/.test(sys)) content = writer(sys, user);
       else if (params.response_format && /You check one ad made of several copy fields/.test(sys)) content = versionConflicts(user);
-      else if (params.response_format) content = checker(user);
+      else if (params.response_format) content = checker(sys, user);
       else content = 'Sounds nice, but what does it actually cost me when the premium goes up next year?';
       const inTok = Math.ceil((sys.length + user.length) / 4);
       return { model: params.model, choices: [{ message: { content }, logprobs }], usage: usage(inTok, Math.ceil(content.length / 4)) };

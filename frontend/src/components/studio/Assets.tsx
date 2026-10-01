@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { studio, type CodeCompliance, type ComplianceAsset, type ComplianceStatus, type ComplianceView, type Meta, type PfFlag, type PfReport, type PfStub, type StudioEvent } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
+import { groupOverrides, overrideWhere } from '@/lib/overrideGroups';
 import { SIZES, detectFileSize } from '@/lib/studioSizes';
 import { personaEdge } from '@/lib/personaColors';
 import { personaColor, tint } from '@/lib/personaColors';
@@ -72,7 +73,8 @@ function byVisual(rs: CodeRow[]): Array<[string, CodeRow[]]> {
 /** A thumbnail box in the shape of its size (a 4:5 card isn't squashed into a square). */
 const ASPECT: Record<string, string> = { '1:1': 'aspect-square', '4:5': 'aspect-[4/5]', '9:16': 'aspect-[9/16]' };
 
-export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: ViewFilter; setView: (v: ViewFilter) => void; onBuild: () => void }) {
+/** onFixCopy: open Build & sign off on a code's persona, territory and region (where copy Trupanion sent back is fixed). */
+export function Assets({ meta, view, setView, onBuild, onFixCopy }: { meta: Meta; view: ViewFilter; setView: (v: ViewFilter) => void; onBuild: () => void; onFixCopy?: (s: PfStub) => void }) {
   const enabled = !!meta.preflight?.enabled;
   const canReady = !!meta.preflight?.can_set_ready;
   const canCompliance = meta.can_set_compliance !== false;
@@ -86,11 +88,15 @@ export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: Vie
   const [sel, setSel] = useState<string | null>(params.get('stub'));
   const [report, setReport] = useState<PfReport | null>(null);
   const [error, setError] = useState('');
-  const [progress, setProgress] = useState('');
-  const [pending, setPending] = useState<{ upload_id: string; estimate: { usd: number; seconds: number; sizes?: number } } | null>(null);
-  const [files, setFiles] = useState<File[]>([]);
-  const esRef = useRef<{ close: () => void } | null>(null);
-  useEffect(() => () => esRef.current?.close(), []);
+  // Per code, so another code's upload or check never blocks this one, and the files chosen for a code (with their
+  // sizes) survive refreshes and moving between codes until they're uploaded (production test, 1 Oct: Upload was
+  // disabled with no reason while another code's audit ran, and the 12 files chosen were cleared when it finished).
+  const [progressBy, setProgressBy] = useState<Record<string, string>>({});
+  const setProgress = (stub: string, text: string) => setProgressBy(cur => { const n = { ...cur }; if (text) n[stub] = text; else delete n[stub]; return n; });
+  const [pendingBy, setPendingBy] = useState<Record<string, { upload_id: string; estimate: { usd: number; seconds: number; sizes?: number } } | null>>({});
+  const [picked, setPicked] = useState<Record<string, { files: File[]; sizes: string[] }>>({});
+  const esRef = useRef<Map<string, { close: () => void }>>(new Map());
+  useEffect(() => () => esRef.current.forEach(x => x.close()), []);
 
   const loadLists = useCallback(async () => {
     const [s, c] = await Promise.all([studio.pfStubs(), studio.complianceView()]);
@@ -105,7 +111,7 @@ export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: Vie
     catch (e: any) { setError(e.message); }
   }, [loadLists, loadReport, sel]);
   useEffect(() => { if (enabled) loadLists().catch(e => setError(e.message)); }, [enabled, loadLists]);
-  useEffect(() => { setPending(null); setFiles([]); setReport(null); if (sel && enabled) loadReport(sel).catch(e => setError(e.message)); }, [sel, enabled, loadReport]);
+  useEffect(() => { setReport(null); if (sel && enabled) loadReport(sel).catch(e => setError(e.message)); }, [sel, enabled, loadReport]);
 
   const rows: CodeRow[] = (stubs || []).map(s => {
     const asset = comp?.assets.find(a => a.codes.some(c => c.stub === s.stub));
@@ -123,17 +129,22 @@ export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: Vie
   if (!enabled) return <div className="max-w-3xl rounded-xl border border-[#272B34] bg-[#16181D] p-6 text-base text-[#A3A8B1]">Assets need the database: in <code>backend/</code>, run <code>npx tsx scripts/studio.ts serve --store pg --database-url …</code> (hosted Studio has it on).</div>;
 
   async function upload(also: string[], sizes: string[] = []) {
-    if (!sel || !files.length) return;
-    setError(''); setProgress('Uploading…');
+    const stub = sel;
+    const files = stub ? picked[stub]?.files || [] : [];
+    if (!stub || !files.length) return;
+    setError(''); setProgress(stub, 'Uploading…');
     try {
-      const r = await studio.pfUpload(sel, files, also, sizes);
+      const r = await studio.pfUpload(stub, files, also, sizes);
       if (r.format_notes?.length) setError(r.format_notes.join(' '));
-      setPending({ upload_id: r.upload_id, estimate: r.estimate });
-      setFiles([]); setProgress('');
+      setPendingBy(cur => ({ ...cur, [stub]: { upload_id: r.upload_id, estimate: r.estimate } }));
+      setPicked(cur => { const n = { ...cur }; delete n[stub]; return n; });
+      setProgress(stub, '');
       await refresh();
-    } catch (e: any) { setProgress(''); setError(e.message); }
+    } catch (e: any) { setProgress(stub, ''); setError(e.message); }
   }
   async function runAudit(uploadId: string) {
+    const stub = sel;
+    if (!stub) return;
     setError('');
     try {
       let r;
@@ -143,15 +154,15 @@ export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: Vie
         if (!window.confirm(`This check is estimated at $${e.body.estimate.toFixed(2)}, over the $${meta.ask_over} ask-first line. Run it?`)) return;
         r = await studio.pfAudit(uploadId, true);
       }
-      setPending(null);
-      setProgress('Starting the checks…');
+      setPendingBy(cur => ({ ...cur, [stub]: null }));
+      setProgress(stub, 'Starting the checks…');
       await refresh();
-      esRef.current?.close();
-      esRef.current = studio.events(r.job, (e: StudioEvent) => {
-        if (e.type === 'status') setProgress(e.message);
-        if (e.type === 'error') { setProgress(''); setError(`The checks stopped: ${e.message}`); refresh(); }
-        if (e.type === 'done') { setProgress(''); refresh(); }
-      });
+      esRef.current.get(stub)?.close();
+      esRef.current.set(stub, studio.events(r.job, (e: StudioEvent) => {
+        if (e.type === 'status') setProgress(stub, e.message);
+        if (e.type === 'error') { setProgress(stub, ''); setError(`The checks on ${stub} stopped: ${e.message}`); refresh(); }
+        if (e.type === 'done') { setProgress(stub, ''); esRef.current.delete(stub); refresh(); }
+      }));
     } catch (e: any) { setError(e.message); }
   }
 
@@ -178,7 +189,7 @@ export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: Vie
       <div className="space-y-2">
         <div className="flex flex-wrap items-center gap-2">
           <span className="w-16 text-xs font-semibold uppercase tracking-wider text-[#646A75]">Status</span>
-          {FILTERS.map(([k, l]) => <GhostButton key={k} active={filter === k} onClick={() => setFilter(k)} className="text-base">{l} ({count(k)})</GhostButton>)}
+          {FILTERS.map(([k, l]) => <GhostButton key={k} active={filter === k} onClick={() => setFilter(k)} className="text-base">{l} ({stubs ? count(k) : '…'})</GhostButton>)}
           {filter === (producer ? 'awaiting' : 'needs') && <span className="text-xs text-[#646A75]">your default</span>}
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -196,6 +207,7 @@ export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: Vie
         </div>
       </div>
 
+      {!stubs && !error && <div className="text-base text-[#858B96]">Loading the month’s codes…</div>}
       {stubs && !scoped.length && (
         <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#272B34] bg-[#16181D] p-5 text-base text-[#A3A8B1]">
           <span className="mr-auto">{view.persona !== 'all' || view.territory !== 'all' || view.region !== 'all' || format !== 'all' ? 'Nothing signed off for this filter.' : 'Nothing signed off yet this month.'} Each code gets its asset here once it’s signed off.</span>
@@ -239,8 +251,12 @@ export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: Vie
             {!row && <div className="text-base text-[#858B96]">Choose a code.</div>}
             {row && !report && <div className="text-base text-[#858B96]">Loading…</div>}
             {row && report && report.stub === row.s.stub && (
-              <CodeView meta={meta} row={row} report={report} stubs={stubs || []} canReady={canReady} canCompliance={canCompliance} producer={producer} progress={progress} pending={pending} files={files} setFiles={setFiles}
-                onUpload={upload} onAudit={runAudit} onChanged={refresh} onError={setError} />
+              <CodeView meta={meta} row={row} report={report} stubs={stubs || []} canReady={canReady} canCompliance={canCompliance} producer={producer} progress={progressBy[report.stub] || ''}
+                elsewhere={Object.keys(progressBy).filter(k => k !== report.stub)} pending={pendingBy[report.stub] || null}
+                files={picked[report.stub]?.files || []} fileSizes={picked[report.stub]?.sizes || []}
+                setFiles={f => setPicked(cur => ({ ...cur, [report.stub]: { files: f, sizes: f.map(() => '') } }))}
+                setFileSizes={z => setPicked(cur => ({ ...cur, [report.stub]: { files: cur[report.stub]?.files || [], sizes: typeof z === 'function' ? z(cur[report.stub]?.sizes || []) : z } }))}
+                onUpload={upload} onAudit={runAudit} onChanged={refresh} onError={setError} onFixCopy={onFixCopy} />
             )}
           </main>
         </div>
@@ -249,11 +265,14 @@ export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: Vie
   );
 }
 
-function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer, progress, pending, files, setFiles, onUpload, onAudit, onChanged, onError }: {
+function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer, progress, elsewhere, pending, files, setFiles, fileSizes, setFileSizes, onUpload, onAudit, onChanged, onError, onFixCopy }: {
   meta: Meta; row: CodeRow; report: PfReport; stubs: PfStub[]; canReady: boolean; canCompliance: boolean; producer: boolean; progress: string;
+  /** Other codes with an upload or check running (they don't block this one). */
+  elsewhere: string[];
+  fileSizes: string[]; setFileSizes: (z: string[] | ((cur: string[]) => string[])) => void;
   pending: { upload_id: string; estimate: { usd: number; seconds: number; sizes?: number } } | null;
   files: File[]; setFiles: (f: File[]) => void; onUpload: (also: string[], sizes: string[]) => void; onAudit: (uploadId: string) => void;
-  onChanged: () => Promise<void>; onError: (m: string) => void;
+  onChanged: () => Promise<void>; onError: (m: string) => void; onFixCopy?: (s: PfStub) => void;
 }) {
   report = { ...report, same_visual_as: report.same_visual_as ?? [], on_asset_copy: report.on_asset_copy ?? report.copy, post_copy: report.post_copy ?? [] };
   const a = report.audit;
@@ -265,13 +284,13 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
   const openRed = main.filter(f => f.severity === 'red' && !f.override).length;
   const auditForLatest = current;
   // Sizes (the client's WBS): each chosen file's size, read in the browser and correctable; the asset by size.
-  const [fileSizes, setFileSizes] = useState<string[]>([]);
+  // Sizes are read once, when the files are chosen; a choice made by hand is kept (in the parent, per code).
   useEffect(() => {
+    if (!files.length || fileSizes.some(Boolean)) return;
     let live = true;
-    setFileSizes(files.map(() => ''));
-    Promise.all(files.map(detectFileSize)).then(z => { if (live) setFileSizes(z.map(x => x || '')); });
+    Promise.all(files.map(detectFileSize)).then(z => { if (live) setFileSizes(cur => z.map((x, i) => cur[i] || x || '')); });
     return () => { live = false; };
-  }, [files]);
+  }, [files]); // eslint-disable-line react-hooks/exhaustive-deps
   const expected = report.sizes?.expected || [];
   const bySize = up ? SIZES.map(z => ({ z, fs: up.files.filter(f => (f.aspect || expected[0] || '1:1') === z) })).filter(g => g.fs.length) : [];
   const [sizeTab, setSizeTab] = useState('');
@@ -299,7 +318,22 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
           </div>
           {canReady && (ready
             ? <GhostButton className="text-base" onClick={() => act(() => studio.pfReady(report.stub, false))} title={`Pre-flight passed by ${report.status.ready_by}, ${when(report.status.ready_at)}`}>Take back Pre-flight</GhostButton>
-            : <PinkButton className="px-4 py-2 text-base" disabled={!!readyBlock} title={readyBlock || 'Ready to traffic once Trupanion has cleared it too'} onClick={() => act(() => studio.pfReady(report.stub, true))}>Mark Pre-flight passed</PinkButton>)}
+            : report.same_visual_as.length > 0
+              // A shared visual (one upload, one audit): every code on it by default, each passing on its own flags.
+              ? <span className="flex flex-wrap items-center gap-2">
+                  <PinkButton className="px-4 py-2 text-base" disabled={!!readyBlock} title={readyBlock || `Every code on this visual: ${[report.stub, ...report.same_visual_as].join(', ')}`}
+                    onClick={async () => {
+                      try {
+                        const r = await studio.pfReadyVisual(report.stub);
+                        await onChanged(); // refreshes (and clears the error line), so what didn't pass is said after it
+                        if (r.blocked.length) onError(`Passed: ${r.passed.join(', ') || 'none'}. Not passed: ${r.blocked.map(b => `${b.code} (${b.error})`).join('; ')}`);
+                      } catch (e: any) { onError(e.message); }
+                    }}>
+                    Mark all {report.same_visual_as.length + 1} codes on this visual passed
+                  </PinkButton>
+                  <button className="text-sm text-[#858B96] underline-offset-2 hover:text-[#ECEDEF] hover:underline disabled:opacity-40" disabled={!!readyBlock} onClick={() => act(() => studio.pfReady(report.stub, true))}>just {report.stub}</button>
+                </span>
+              : <PinkButton className="px-4 py-2 text-base" disabled={!!readyBlock} title={readyBlock || 'Ready to traffic once Trupanion has cleared it too'} onClick={() => act(() => studio.pfReady(report.stub, true))}>Mark Pre-flight passed</PinkButton>)}
         </div>
         <Track r={row} />
         <p className="text-sm text-[#A3A8B1]">
@@ -311,6 +345,7 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
           <div className="rounded-lg border border-amber-400/50 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
             <span className="font-semibold">Trupanion asked for changes {c.send_back === 'asset' ? 'to the visual' : 'to the copy'}{c.client_by ? ` (${c.client_by})` : ''}</span>{c.note ? `: “${c.note}”` : ''}
             <div className="text-amber-200/80">{c.send_back === 'asset' ? 'Upload a new version below; it goes back to Trupanion.' : 'The copy is edited and signed off again at Build & sign off.'} {c.by ? `Recorded by ${c.by}, ${when(c.at)}.` : ''}</div>
+            {c.send_back !== 'asset' && onFixCopy && <GhostButton className="mt-1.5 px-3 py-1 text-sm" onClick={() => onFixCopy(row.s)}>Fix the copy in Build & sign off →</GhostButton>}
           </div>
         )}
       </div>
@@ -394,6 +429,7 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
                 <button className="text-xs text-[#858B96] underline-offset-2 hover:text-[#ECEDEF] hover:underline" onClick={() => onAudit(up.id)} title="Run the checks again on this upload (e.g. after a rules change)">Check again</button>
               )}
               {progress && <div className="flex items-center gap-2 text-sm font-medium" style={{ color: PINK }}><span className="animate-pulse">●</span> {progress}</div>}
+              {!progress && elsewhere.length > 0 && <p className="text-xs text-[#858B96]">Checks running on {elsewhere.join(', ')}: you can upload and check this code meanwhile.</p>}
             </div>
             {report.history.length > 1 && (
               <details className="mt-3 text-sm text-[#858B96]"><summary className="cursor-pointer">Earlier uploads ({report.history.length - 1})</summary>
@@ -460,7 +496,7 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
             <h2 className="mb-2 text-lg font-semibold">Flags <span className="text-sm font-normal text-[#858B96]">{auditedLatest ? `${main.filter(f => f.severity === 'red').length} red · ${main.filter(f => f.severity === 'amber').length} amber · ${main.filter(f => f.severity === 'grey').length} grey` : ''}</span></h2>
             {!auditedLatest && <p className="text-sm text-[#858B96]">No finished checks for this upload yet.</p>}
             {auditedLatest && !main.length && <p className="text-sm text-emerald-200">No flags.</p>}
-            <ul className="space-y-3">{main.map(f => <FlagRow key={f.id} flag={f} canOverride={canReady} onChanged={onChanged} onError={onError} />)}</ul>
+            <ul className="space-y-3">{main.map(f => <FlagRow key={f.id} flag={f} canOverride={canReady} copyOverrides={report.copy_overrides} onChanged={onChanged} onError={onError} />)}</ul>
             {cross.length > 0 && (
               <details className="mt-3 text-sm">
                 <summary className="cursor-pointer text-[#858B96]">How it travels: {cross.length} note{cross.length === 1 ? '' : 's'} from the other personas</summary>
@@ -479,7 +515,7 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
   );
 }
 
-function FlagRow({ flag, canOverride, onChanged, onError }: { flag: PfFlag; canOverride: boolean; onChanged: () => Promise<void>; onError: (m: string) => void }) {
+function FlagRow({ flag, canOverride, copyOverrides = [], onChanged, onError }: { flag: PfFlag; canOverride: boolean; copyOverrides?: NonNullable<PfReport['copy_overrides']>; onChanged: () => Promise<void>; onError: (m: string) => void }) {
   const [overriding, setOverriding] = useState(false);
   const [details, setDetails] = useState(false);
   const numeric = !!flag.why && /^\s*P\(yes\)/i.test(flag.why);
@@ -506,6 +542,13 @@ function FlagRow({ flag, canOverride, onChanged, onError }: { flag: PfFlag; canO
             <button className="ml-2 underline-offset-2 hover:underline" onClick={() => setDetails(!details)}>{details ? 'hide details' : 'details'}</button>
             {details && <span className="ml-2">{[numeric ? flag.why : '', flag.rule, flag.source].filter(Boolean).join(' · ')}</span>}
           </div>
+          {/* The same rule was overridden on the copy at sign-off: say so, and offer its reason here in one click. */}
+          {flag.severity === 'red' && !flag.override && copyOverrides.filter(o => o.rule === flag.rule).map((o, k) => (
+            <div key={k} className="mt-2 flex flex-wrap items-center gap-2 rounded border border-amber-400/40 bg-amber-400/10 px-2 py-1 text-sm text-amber-100">
+              <span className="min-w-0 flex-1">Overridden at sign-off ({o.field}) by {o.by}, {when(o.at)}: “{o.reason}”. The asset needs its own override.</span>
+              {canOverride && <GhostButton className="px-2 py-0.5 text-xs" onClick={() => act(() => studio.pfOverride(flag.id, `Same as at sign-off (${o.by}): ${o.reason}`))}>Override here with the same reason</GhostButton>}
+            </div>
+          ))}
           {flag.override && <div className="mt-2 rounded border border-red-500/30 bg-red-500/5 px-2 py-1 text-sm text-red-100"><span className="font-semibold">Overridden</span> by {flag.override.by}, {when(flag.override.at)}: “{flag.override.reason}”</div>}
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <GhostButton active={flag.mine === true} className="px-2 py-0.5 text-xs" onClick={() => act(() => studio.pfAgree(flag.id, true))}>Agree</GhostButton>
@@ -544,11 +587,12 @@ function Decision({ meta, asset, stub, can, onChanged, onError }: { meta: Meta; 
   const [busy, setBusy] = useState(false);
   useEffect(() => { setNote(''); setSendBack(cur?.send_back || 'asset'); setApply(initial()); }, [asset.upload_id, stub, cur?.status]); // eslint-disable-line react-hooks/exhaustive-deps
   const reds = asset.flags.filter(f => !f.cross_persona && f.severity === 'red');
-  const acceptedReds = [
-    ...reds.filter(f => f.override && (!f.for_stub || apply.has(f.for_stub))).map(f => ({ key: f.id, label: f.label, where: `asset check${f.for_stub ? `, ${f.for_stub}` : ''}`, reason: f.override!.reason })),
+  // Each override once, with the codes it applies to (groupOverrides).
+  const acceptedReds = groupOverrides([
+    ...reds.filter(f => f.override && (!f.for_stub || apply.has(f.for_stub))).map(f => ({ kind: 'asset' as const, label: f.label.replace(/^\d+:\d+: /, ''), code: f.for_stub || undefined, reason: f.override!.reason })),
     ...asset.codes.filter(c => apply.has(c.stub)).flatMap(c => (c.compliance.override_details || c.compliance.overrides.map(label => ({ label, reason: '', by: '' })))
-      .map((o, i) => ({ key: `${c.stub}-${i}`, label: o.label, where: `copy, ${c.stub}${o.by ? `, by ${o.by}` : ''}`, reason: o.reason }))),
-  ];
+      .map(o => ({ kind: 'copy' as const, label: o.label, code: c.stub, by: o.by || undefined, reason: o.reason }))),
+  ]);
   const needsNote = acceptedReds.length > 0 && !note.trim();
   async function set(status: ComplianceStatus) {
     setBusy(true);
@@ -566,7 +610,11 @@ function Decision({ meta, asset, stub, can, onChanged, onError }: { meta: Meta; 
       </div>
       {cur && cur.status !== 'pending' && <p className="text-sm text-[#A3A8B1]">{cur.client_by ? `Trupanion: ${cur.client_by} · ` : ''}recorded by {cur.by}, {when(cur.at)}{cur.note ? ` · “${cur.note}”` : ''}</p>}
       {cur?.stale && <p className="rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">{cur.stale}: review it again.</p>}
-      {mine?.compliance.overrides.length > 0 && <p className="text-sm text-amber-200">Please check specifically: {mine.compliance.overrides.join('; ')}</p>}
+      {(mine?.compliance.check_specifically?.length ?? 0) > 0 && (
+        <div className="text-sm text-amber-200">Please check specifically:
+          <ul className="mt-1 list-disc space-y-0.5 pl-5">{mine!.compliance.check_specifically!.map(x => <li key={x}>{x}</li>)}</ul>
+        </div>
+      )}
       {!can && <p className="text-sm text-[#858B96]">Vivan (or an admin) records Trupanion’s decisions.</p>}
       {can && (
         <>
@@ -577,7 +625,7 @@ function Decision({ meta, asset, stub, can, onChanged, onError }: { meta: Meta; 
           {acceptedReds.length > 0 && (
             <div className="rounded-lg border border-amber-400/50 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
               <div className="font-semibold">Went through with {acceptedReds.length === 1 ? 'an overridden red flag' : `${acceptedReds.length} overridden red flags`}. To clear, say in the note what Trupanion accepted.</div>
-              <ul className="mt-1 list-disc space-y-0.5 pl-5">{acceptedReds.map(x => <li key={x.key}>{x.label} <span className="text-amber-200/70">({x.where}{x.reason ? `; overridden because “${x.reason}”` : ''})</span></li>)}</ul>
+              <ul className="mt-1 list-disc space-y-0.5 pl-5">{acceptedReds.map((x, i) => <li key={i}>{x.label} <span className="text-amber-200/70">({overrideWhere(x)}{x.reason ? `; overridden because “${x.reason}”` : ''})</span></li>)}</ul>
             </div>
           )}
           <textarea rows={2} className={cn('w-full rounded-lg border-2 px-3 py-2 text-base', needsNote ? 'border-amber-400/60' : 'border-[#343946]')} placeholder={acceptedReds.length ? 'Note (required to clear: what Trupanion accepted; for changes: what needs changing)' : 'Note (required for changes: what needs changing)'} value={note} onChange={e => setNote(e.target.value)} />

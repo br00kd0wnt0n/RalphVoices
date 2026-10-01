@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { auth } from '@/lib/api';
+import { clearToken, getToken, setToken } from '@/lib/tokenStore';
 import type { User } from '@/types';
 
 interface AuthContextType {
@@ -21,6 +22,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    // Loading always ends, even if something below throws: a page that waits on it (RequireAuth, /studio)
+    // would otherwise stay blank.
     (async () => {
       // Narrativ SSO: when this app loads inside the Narrativ shell iframe,
       // the shell appends `?narrativ_sso=<jwt>` to the src. The first time
@@ -42,7 +45,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!url || !ssoToken) return;
         url.searchParams.delete('narrativ_sso');
         const cleanUrl = url.pathname + (url.search ? url.search : '') + url.hash;
-        window.history.replaceState({}, '', cleanUrl);
+        try { window.history.replaceState({}, '', cleanUrl); } catch (err) { console.warn('[narrativ-sso] could not strip the param:', err); }
       };
 
       // A fresh SSO param in the URL is the most reliable signal — the
@@ -57,7 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           const data = await auth.exchangeNarrativSso(ssoToken);
           if (cancelled) return;
-          localStorage.setItem('token', data.token);
+          setToken(data.token);
           stripSsoParam();
           setUser(data.user);
           setBooting(true);
@@ -75,7 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      const token = localStorage.getItem('token');
+      const token = getToken();
       if (token) {
         try {
           const data = await auth.me();
@@ -83,11 +86,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(data.user);
           setBooting(true);
         } catch {
-          if (!cancelled) localStorage.removeItem('token');
+          if (!cancelled) clearToken();
         }
       }
       if (!cancelled) setLoading(false);
-    })();
+    })().catch(err => {
+      console.warn('[auth] sign-in check failed:', err);
+      if (!cancelled) setLoading(false);
+    });
     return () => {
       cancelled = true;
     };
@@ -95,20 +101,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string) => {
     const data = await auth.login(email, password);
-    localStorage.setItem('token', data.token);
+    setToken(data.token);
     setUser(data.user);
     setBooting(true); // Show boot sequence after login
   };
 
   const register = async (email: string, password: string, name?: string) => {
     const data = await auth.register(email, password, name);
-    localStorage.setItem('token', data.token);
+    setToken(data.token);
     setUser(data.user);
     setBooting(true); // Show boot sequence after register
   };
 
   const logout = () => {
-    localStorage.removeItem('token');
+    clearToken();
     setUser(null);
     setBooting(false);
   };

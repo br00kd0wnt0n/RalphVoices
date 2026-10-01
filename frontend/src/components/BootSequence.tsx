@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Check, Loader2, X } from 'lucide-react';
+import { getToken } from '@/lib/tokenStore';
 
 interface BootStep {
   id: string;
@@ -29,7 +30,7 @@ export function BootSequence({ onComplete }: BootSequenceProps) {
 
   useEffect(() => {
     async function runBootSequence() {
-      const token = localStorage.getItem('token');
+      const token = getToken();
       const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
       // Step 1: Connect to API

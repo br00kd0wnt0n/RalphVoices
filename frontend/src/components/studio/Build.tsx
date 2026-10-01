@@ -5,11 +5,11 @@
 // Draft, Signed off, Edited since sign-off. Behaviour and endpoints are unchanged: versions, checks, expect_latest,
 // overrides, carousel cards and TikTok versions. The draft rules are in lib/buildDraft.ts.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { studio, REGION_NAMES, type DraftVersion, type Meta, type ReadyDraft, type ReadyView, type VersionFlag } from '@/lib/studioApi';
-import { addAd, adName, moveAd, nextVisual, placeLine, removeAd, setCard, setOnImage, useInAllAds, usesOf } from '@/lib/buildDraft';
+import { onOriginal, studio, REGION_NAMES, type DraftVersion, type PlannedVersion, type Meta, type ReadyDraft, type ReadyView, type VersionFlag } from '@/lib/studioApi';
+import { addAd, adName, flagsAt, moveAd, redPlaces, nextVisual, placeLine, removeAd, setCard, setOnImage, useInAllAds, usesOf } from '@/lib/buildDraft';
 import { cn } from '@/lib/utils';
 import { personaColor, personaEdge, tint } from '@/lib/personaColors';
-import { PersonaChip, Chip, GhostButton, Intro, Label, LineHistory, NAMING_TIP, Overrides, PINK, PinkButton, Src, chipName, sevTone, territoryName, when, type Ctx } from './ui';
+import { PersonaChip, Chip, GhostButton, Intro, Label, LineHistory, NAMING_TIP, Overrides, PINK, PinkButton, Src, chipName, flagName, sevTone, territoryName, when, type Ctx } from './ui';
 
 type RL = ReadyView['lines'][number];
 /** Where the tray places a line: a field of one ad, or the visual's image (a carousel card, 1-based). */
@@ -69,9 +69,12 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
   useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') setSlot(null); }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k); }, []);
 
   const plan = view?.plan;
+  const platformOf = (v: DraftVersion) => v.platform || fieldPlatform(Object.keys(v.fields)[0] || '');
   const byId = new Map((view?.lines || []).map(x => [x.line.id, x]));
   const used = new Set(draft ? [...draft.versions.flatMap(v => Object.values(v.fields)), ...Object.values(draft.on_image).flat()].filter(Boolean) : []);
   const reds = [...used].reduce((n, id) => n + (byId.get(id)?.red.length || 0), 0);
+  // Which line, where: "Visual B · card 2: unsourced figure".
+  const redList = draft ? redPlaces(draft, Object.fromEntries([...used].map(id => [id, (byId.get(id)?.red || []).map(f => chipName(f.rule))])), platformOf) : [];
   const leads = [...lead].filter(c => plan?.versions.some(v => v.code === c));
   const latest = view?.latest;
   const sameAsLatest = !!latest && !!plan && JSON.stringify((latest.versions || []).map(v => [v.code, Object.entries(v.fields).map(([f, x]) => [f, x.line_id, x.sha256]).sort()]))
@@ -80,7 +83,7 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
   const canSignOff = meta.can_sign_off !== false;
   const blockedBy = !canSignOff ? 'Ads are signed off by the creative lead or an admin.' : !plan ? '' : sameAsLatest ? `These ads are signed off (set v${latest!.version}). Change a line or an ad to sign off again.`
     : plan.issues.length ? `${plan.issues.length} thing${plan.issues.length === 1 ? '' : 's'} to finish: ${plan.issues[0]}${plan.issues.length > 1 ? '…' : ''}`
-    : reds ? `${reds} red flag${reds === 1 ? '' : 's'} to fix or override first.` : !leads.length ? 'Choose the ad(s) you expect to lead (step ③).' : !reason.trim() ? 'Say why you expect them to lead (step ③).' : '';
+    : reds ? `${reds} red flag${reds === 1 ? '' : 's'} to fix or override first: ${redList[0]}${redList.length > 1 ? ` (and ${redList.length - 1} more)` : ''}.` : !leads.length ? 'Choose the ad(s) you expect to lead (step ③).' : !reason.trim() ? 'Say why you expect them to lead (step ③).' : '';
 
   async function signOff() {
     if (!draft) return;
@@ -103,7 +106,6 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
 
   // Ads by platform, then visual letter (the draft's order is kept inside a visual).
   const fieldPlatform = (f: string) => (/tiktok/i.test(meta.fields[f]?.platform || '') ? 'TT' : 'META');
-  const platformOf = (v: DraftVersion) => v.platform || fieldPlatform(Object.keys(v.fields)[0] || '');
   const platforms = view ? Object.keys(view.fields).filter(p => view.fields[p].required.length || view.fields[p].optional.length) : [];
   const indexed = (draft?.versions || []).map((d, i) => ({ d, i, p: plan?.versions[i] }));
   const visualsOf = (p: string) => [...new Set(indexed.filter(x => (x.p?.platform || platformOf(x.d)) === p).map(x => x.d.visual))].sort();
@@ -173,7 +175,8 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
                       <Step n={++step} title={carousel ? 'The carousel cards (text on each card)' : 'The text on the image'} hint={carousel ? 'Card 1 is the hook; the last card is the end card. Every ad on this visual uses them.' : 'It goes into the artwork, so every ad on this visual uses it.'}>
                         {carousel ? oiFields.map(f => (
                           <CardStrip key={f} meta={meta} field={f} letter={letter} cards={cards} lines={linesFor(f)} byId={byId} flagsFor={k => flagsAt(plan.versions.filter(v => v.visual === letter).flatMap(v => v.checks?.flags || []), `${f}#${k}`)}
-                            onOpen={card => setSlot({ kind: 'image', visual: letter, field: f, card })} onChange={next => change(d => setOnImage(d, letter, next))} />
+                            onOpen={card => setSlot({ kind: 'image', visual: letter, field: f, card })} onChange={next => change(d => setOnImage(d, letter, next))}
+                            nameOfCode={nameOfCode} onChanged={refresh} onError={setError} />
                         )) : oiFields.map(f => {
                           const id = typeof draft.on_image[letter] === 'string' ? draft.on_image[letter] as string : '';
                           return (
@@ -288,10 +291,6 @@ function Step({ n, title, hint, children }: { n: number; title: string; hint?: s
 // ---------- flags: plain labels at the slot they concern ----------
 
 /** The ads' version flags that concern a field (or a carousel card, `field#k`). */
-function flagsAt(flags: VersionFlag[], field: string): VersionFlag[] {
-  const seen = new Set<string>();
-  return flags.filter(f => f.fields[f.fields.length - 1] === field || (f.fields.length === 1 && f.fields[0] === field)).filter(f => { const k = `${f.rule}|${f.why}`; if (seen.has(k)) return false; seen.add(k); return true; });
-}
 function versionFlagWords(meta: Meta, f: VersionFlag, nameOfCode: (c?: string) => string): string {
   const fl = (id: string) => { const [base, card] = id.split('#'); return `${(meta.fields[base]?.label || base).replace(/^(Meta|TikTok) /, '').replace(/ text$/, '').toLowerCase()}${card ? ` card ${card}` : ''}`; };
   const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -312,15 +311,24 @@ function FlagNote({ meta, f, nameOfCode }: { meta: Meta; f: VersionFlag; nameOfC
 
 // ---------- a slot: a line on the ad, with its edit and its line flags ----------
 
-function SlotBox({ meta, x, field, placeholder, active, onOpen, flags = [], nameOfCode = c => c || '', className, onChanged, onError }: {
+function SlotBox({ meta, x, field, placeholder, active, onOpen, flags = [], nameOfCode = c => c || '', className, ariaLabel, onChanged, onError }: {
   meta: Meta; x?: RL; field: string; placeholder: string; active?: boolean; onOpen: () => void; flags?: VersionFlag[]; nameOfCode?: (c?: string) => string;
-  className?: string; onChanged: () => void; onError: (m: string) => void;
+  className?: string; ariaLabel?: string; onChanged: () => void; onError: (m: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState('');
   const f = meta.fields[field];
   const chars = x ? [...x.final_text].length : 0;
-  const save = async () => { try { await studio.decide(x!.line.batch, x!.line.id, { decision: 'edit', edited_text: text }); setEditing(false); onChanged(); } catch (e: any) { onError(e.message); } };
+  // Save, then re-check the new wording straight away (the model's flags were found on the old one).
+  const [rechecking, setRechecking] = useState(false);
+  const save = async () => {
+    let saved = false;
+    try {
+      setRechecking(true);
+      await studio.editAndRecheck(x!.line.batch, x!.line.id, text, () => { saved = true; setEditing(false); onChanged(); });
+      onChanged();
+    } catch (e: any) { onError(saved ? `Saved, but not re-checked: ${e.message}. Flags marked "original wording" are from the old wording.` : e.message); } finally { setRechecking(false); }
+  };
   return (
     <div className="group">
       {editing && x ? (
@@ -335,21 +343,41 @@ function SlotBox({ meta, x, field, placeholder, active, onOpen, flags = [], name
         </div>
       ) : (
         <div className="flex items-start gap-1">
-          <button onClick={onOpen} aria-label={x ? `Change ${f?.label || field}: ${x.final_text}` : placeholder}
+          <button onClick={onOpen} aria-label={ariaLabel || (x ? `Change ${f?.label || field}: ${x.final_text}` : placeholder)}
             className={cn('min-w-0 flex-1 rounded-md px-1.5 py-1 text-left transition', active ? 'ring-2 ring-[#D94D8F]' : 'hover:bg-white/5', !x && 'border border-dashed border-[#4A505D] text-[#858B96]', x?.red.length ? 'text-red-100' : '', className)}>
             {x ? x.final_text : placeholder}
           </button>
           {x && <button onClick={() => { setText(x.final_text); setEditing(true); }} className="shrink-0 rounded px-1 text-sm text-[#646A75] opacity-60 hover:text-[#ECEDEF] group-hover:opacity-100" aria-label={`Edit the wording of ${f?.label || field}`} title="Edit the wording">✎</button>}
         </div>
       )}
+      {rechecking && <div className="animate-pulse px-1.5 text-xs" style={{ color: '#D94D8F' }}>Re-checking the new wording…</div>}
       {x && f && chars > f.visible && <div className="px-1.5 text-xs text-amber-300">{chars}/{f.visible}: cut off on screen</div>}
       {(flags.length > 0 || (x && x.line.flags.some(fl => fl.severity !== 'compliance'))) && (
         <div className="px-1">
           {flags.map((fl, k) => <FlagNote key={k} meta={meta} f={fl} nameOfCode={nameOfCode} />)}
-          {x?.line.flags.filter(fl => fl.severity !== 'compliance').map(fl => <span key={fl.rule} className={cn('mr-1.5 mt-1 inline-flex rounded-full border px-2 py-0.5 text-xs', sevTone(fl.severity) === 'amber' ? 'border-amber-400/40 text-amber-200' : 'border-[#343946] text-[#A3A8B1]')} title={`${fl.label}\n${fl.rule} · ${fl.source}`}>{chipName(fl.rule)}</span>)}
+          {x?.line.flags.filter(fl => fl.severity !== 'compliance').map(fl => <span key={fl.rule} className={cn('mr-1.5 mt-1 inline-flex rounded-full border px-2 py-0.5 text-xs', sevTone(fl.severity) === 'amber' ? 'border-amber-400/40 text-amber-200' : 'border-[#343946] text-[#A3A8B1]')} title={`${fl.label}\n${fl.rule} · ${fl.source}`}>{flagName(fl)}</span>)}
         </div>
       )}
       {x && x.red.length > 0 && <RedFix meta={meta} x={x} onEdit={() => { setText(x.final_text); setEditing(true); }} onChanged={onChanged} onError={onError} />}
+    </div>
+  );
+}
+
+/**
+ * Trupanion asked for a copy change on this ad (recorded at Assets): where the fix happens, so it says what was asked,
+ * then that the edit needs signing off, then that it's back with Trupanion (production test, 1 Oct).
+ */
+function ChangeRequest({ request, status }: { request: NonNullable<PlannedVersion['compliance']['request']>; status: 'draft' | 'signed' | 'edited' }) {
+  const who = [request.client_by, request.at ? when(request.at) : ''].filter(Boolean).join(', ');
+  if (!request.answered) return (
+    <div role="alert" className="rounded-lg border border-red-500/50 bg-red-500/10 p-2 text-sm text-red-100">
+      <span className="font-semibold">Trupanion asked for changes{who ? ` (${who})` : ''}:</span> “{request.note}”. Edit the wording above and sign off again.
+    </div>
+  );
+  return (
+    <div className="rounded-lg border border-amber-400/50 bg-amber-400/10 p-2 text-sm text-amber-100">
+      {status === 'signed' ? 'Fixed and signed off again: back with Trupanion for review.' : 'Edited for Trupanion’s request: sign off again to send it back to them.'}
+      <span className="block text-xs text-amber-200/80">They asked{who ? ` (${who})` : ''}: “{request.note}”</span>
     </div>
   );
 }
@@ -361,12 +389,12 @@ function RedFix({ meta, x, onEdit, onChanged, onError }: { meta: Meta; x: RL; on
   const [checking, setChecking] = useState(false);
   const canOverride = meta.can_override !== false;
   const act = async (fn: () => Promise<unknown>) => { try { await fn(); onChanged(); } catch (e: any) { onError(e.message); } };
-  const onOriginal = x.line.flags.some(f => (f.why || '').includes('on the original wording'));
+  const fromOriginal = x.line.flags.some(onOriginal);
   return (
     <div className="mt-1.5 space-y-2 rounded-lg border border-red-500/45 bg-red-500/10 p-2.5 text-sm">
       {x.red.map(fl => (
         <div key={fl.rule}>
-          <div className="flex flex-wrap items-center gap-1.5"><Chip tone="red" className="text-xs">{chipName(fl.rule)}</Chip><span className="text-[#ECEDEF]">{fl.label}</span>{fl.quote && <mark className="bg-amber-400/30 px-1 text-amber-50">{fl.quote}</mark>}</div>
+          <div className="flex flex-wrap items-center gap-1.5"><Chip tone="red" className="text-xs">{flagName(fl)}</Chip><span className="text-[#ECEDEF]">{fl.label}</span>{fl.quote && <mark className="bg-amber-400/30 px-1 text-amber-50">{fl.quote}</mark>}</div>
           <details className="text-xs text-[#A3A8B1]"><summary className="cursor-pointer">details</summary>{fl.rule} · <Src s={fl.source} />{fl.why ? ` · ${fl.why}` : ''}</details>
           {overriding === fl.rule ? (
             <div className="mt-1.5 space-y-1.5">
@@ -385,7 +413,7 @@ function RedFix({ meta, x, onEdit, onChanged, onError }: { meta: Meta; x: RL; on
           )}
         </div>
       ))}
-      {onOriginal && (
+      {fromOriginal && (
         <div className="flex flex-wrap items-center gap-2 border-t border-red-500/30 pt-2 text-red-100">
           Some flags were found on the original wording.
           <GhostButton className="px-2 py-0.5 text-sm" disabled={checking} onClick={() => act(async () => { setChecking(true); try { await studio.recheck(x.line.batch, x.line.id); } finally { setChecking(false); } })}>{checking ? 'Re-checking…' : 'Re-check this wording'}</GhostButton>
@@ -398,15 +426,15 @@ function RedFix({ meta, x, onEdit, onChanged, onError }: { meta: Meta; x: RL; on
 
 // ---------- ① a carousel's cards ----------
 
-function CardStrip({ meta, field, letter, cards, lines, byId, flagsFor, onOpen, onChange }: {
+function CardStrip({ meta, field, letter, cards, lines, byId, flagsFor, onOpen, onChange, nameOfCode, onChanged, onError }: {
   meta: Meta; field: string; letter: string; cards: string[]; lines: RL[]; byId: Map<string, RL>; flagsFor: (card: number) => VersionFlag[];
   onOpen: (card: number) => void; onChange: (cards: string[] | null) => void;
+  nameOfCode: (c?: string) => string; onChanged: () => void; onError: (m: string) => void;
 }) {
   const slots = cards.length ? cards : Array(DEFAULT_CARDS).fill('');
   const set = (next: string[]) => onChange(next.some(Boolean) ? next : null);
   const move = (i: number, d: number) => { const n = [...slots]; [n[i], n[i + d]] = [n[i + d], n[i]]; set(n); };
   const seqs = [...new Map(lines.filter(x => x.line.sequence_id).map(x => [x.line.sequence_id!, lines.filter(y => y.line.sequence_id === x.line.sequence_id).sort((a, b) => (a.line.card || 0) - (b.line.card || 0))])).entries()];
-  const f = meta.fields[field];
   return (
     <div>
       <div className="mb-2 flex flex-wrap items-center gap-3 text-sm text-[#A3A8B1]">
@@ -438,12 +466,10 @@ function CardStrip({ meta, field, letter, cards, lines, byId, flagsFor, onOpen, 
                   <button className="px-1 hover:text-[#ECEDEF] disabled:opacity-30" disabled={i === slots.length - 1} onClick={() => move(i, 1)} aria-label={`Move card ${i + 1} right`}>→</button>
                 </span>
               </div>
-              <button onClick={() => onOpen(i + 1)} aria-label={x ? `Change card ${i + 1}: ${x.final_text}` : `Choose card ${i + 1}`}
-                className={cn('flex aspect-square w-full items-center justify-center rounded-md p-2 text-center text-sm font-semibold leading-snug', x ? 'bg-[#1C1F26] text-[#F2F3F5] hover:bg-[#232733]' : 'border border-dashed border-[#4A505D] text-[#858B96]', x?.red.length ? 'ring-1 ring-red-500/60' : '')}>
-                {x ? x.final_text : 'Choose card text'}
-              </button>
-              {x && f && [...x.final_text].length > f.visible && <div className="text-xs text-amber-300">{[...x.final_text].length}/{f.visible}</div>}
-              {flagsFor(i + 1).map((fl, k) => <span key={k} className={cn('mt-1 block text-xs', fl.severity === 'red' ? 'text-red-200' : 'text-amber-200')} title={`${fl.why || fl.label}\n${fl.rule} · ${fl.source}`}>{fl.rule === 'VERSION_REPEAT' ? 'Repeats another card' : fl.severity === 'red' ? `${chipName(fl.rule)}: caveat on another card` : fl.label}</span>)}
+              {/* The same slot as every other field: the line's flags, the version checks for this card, an inline edit (re-checked), and Fix / Override for a red. */}
+              <SlotBox meta={meta} x={x} field={field} placeholder="Choose card text" onOpen={() => onOpen(i + 1)} flags={flagsFor(i + 1)} nameOfCode={nameOfCode}
+                className={cn('flex aspect-square w-full items-center justify-center p-2 text-center text-sm font-semibold leading-snug', x ? 'bg-[#1C1F26] text-[#F2F3F5] hover:bg-[#232733]' : '', x?.red.length ? 'ring-1 ring-red-500/60' : '')}
+                ariaLabel={x ? `Change card ${i + 1}: ${x.final_text}` : `Choose card ${i + 1}`} onChanged={onChanged} onError={onError} />
             </li>
           );
         })}
@@ -538,6 +564,7 @@ function AdPreview({ meta, view, draft, version, index, planned, platform, name,
       {others.map(f => <div key={f} className="px-2 pb-1"><SlotBox {...slotProps(f)} className="text-sm" /></div>)}
 
       <footer className="mt-auto space-y-1.5 border-t border-[#272B34] px-3 py-2">
+        {planned?.compliance.request && <ChangeRequest request={planned.compliance.request} status={status} />}
         {planned?.issues.map(i => <div key={i} className="text-sm text-red-200">{i[0].toUpperCase() + i.slice(1)}</div>)}
         {adFlags.length > 0 && <div>{adFlags.map((f, k) => <FlagNote key={k} meta={meta} f={f} nameOfCode={nameOfCode} />)}</div>}
         <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -576,8 +603,8 @@ function Tray({ meta, title, lines, draft, platformOf, current, optional, onPlac
         <button className="w-full text-left text-base leading-snug text-[#F2F3F5] hover:text-white" onClick={() => onPlace(x.line.id)}>{x.final_text}</button>
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
           <span className={cn('font-mono', f && chars > f.visible ? 'text-amber-300' : 'text-[#858B96]')}>{chars}/{f?.visible}</span>
-          {x.red.map(fl => <Chip key={fl.rule} tone="red" className="text-xs" title={fl.label}>{chipName(fl.rule)}</Chip>)}
-          {x.line.flags.filter(fl => fl.severity !== 'compliance').map(fl => <Chip key={fl.rule} tone={sevTone(fl.severity)} className="text-xs" title={fl.label}>{chipName(fl.rule)}</Chip>)}
+          {x.red.map(fl => <Chip key={fl.rule} tone="red" className="text-xs" title={fl.label}>{flagName(fl)}</Chip>)}
+          {x.line.flags.filter(fl => fl.severity !== 'compliance').map(fl => <Chip key={fl.rule} tone={sevTone(fl.severity)} className="text-xs" title={fl.label}>{flagName(fl)}</Chip>)}
           {x.line.card && <span className="text-[#858B96]">sequence card {x.line.card}</span>}
           {uses.length > 0 && <span className="text-[#A3A8B1]">In: {uses.join(', ')}</span>}
         </div>

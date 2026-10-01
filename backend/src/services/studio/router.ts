@@ -129,9 +129,10 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
 
   r.get('/meta', wrap(async (req, res) => {
     const { studio_dir, ...m } = await S.meta();
-    const pf = o.preflight ? { enabled: true, storage: o.preflight.service.storageStatus, engine: o.preflight.service.engineName, can_set_ready: o.preflight.canSetReady(req) } : { enabled: false };
-    const rounds = await Rounds.getRounds();
     const isAdmin = o.rules ? o.rules.isAdmin(req) : true;
+    // Admins see whether storage can take files (the boot check, or the last refused upload) on the Rules page.
+    const pf = o.preflight ? { enabled: true, storage: o.preflight.service.storageStatus, engine: o.preflight.service.engineName, can_set_ready: o.preflight.canSetReady(req), ...(isAdmin ? { storage_check: o.preflight.service.storageCheck } : {}) } : { enabled: false };
+    const rounds = await Rounds.getRounds();
     // working: the round this person works in (theirs; the active round unless an admin picked a test round); choices: what they may pick.
     const working = await Rounds.workingRound(o.who(req), rounds);
     res.json({ ...m, ...(o.rules ? {} : { studio_dir }), preflight: pf, rounds: { ...rounds, can_edit: isAdmin, working: working.id, choices: Rounds.workingChoices(rounds, isAdmin).map(x => x.id) }, can_set_compliance: o.canSetCompliance ? o.canSetCompliance(req) : true, can_override: o.canOverride ? o.canOverride(req) : true, can_sign_off: o.canSignOff ? o.canSignOff(req) : true, spend: await spent(), mock: o.mock, cap: o.cap, cap_window: o.capWindow, ask_over: o.askOver, ...(o.metaExtra?.(req) || {}) });
@@ -262,9 +263,13 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     if (o.canSetCompliance && !o.canSetCompliance(req)) return res.status(403).json({ error: 'Compliance status is updated by the producer (Vivan) or an admin' });
     res.json(await R.setCompliance(req.params.id, req.params.line, String(req.body?.status || ''), req.body?.note, o.who(req)));
   }));
+  // After an edit (Review and Build re-check the new wording straight away): the checks on one line, priced and reserved like a run.
   r.post('/batches/:id/lines/:line/recheck', wrap(async (req, res) => {
-    if (!o.mock && (await spent()) + 0.02 > o.cap) return res.status(402).json({ error: `Spend is at ${capText()}.` });
-    res.json(await R.recheckLine(req.params.id, req.params.line, o.api(req), o.who(req)));
+    const api = o.api(req);
+    const usd = await S.recheckEstimate(req.params.id, req.params.line);
+    const held = await reserve(`recheck ${req.params.line}`, usd, api, o.who(req));
+    if ('error' in held) return res.status(402).json({ error: held.error });
+    try { res.json({ ...(await R.recheckLine(req.params.id, req.params.line, api, o.who(req))), recheck_usd: usd }); } finally { await held.release(); }
   }));
   r.get('/lines/:line/versions', wrap(async (req, res) => res.json(await S.getStore().listLineVersions(req.params.line))));
   // A test round's own exports (a demo) are named TEST_… and say so on their first line.
@@ -297,6 +302,15 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
         for (const f of list) fs.rm(f.path, { force: true }, () => {});
       }
     }));
+    // Admin: uploads left with no files by a refused upload (every view ignores them), and removing them.
+    r.get('/preflight/orphans', wrap(async (req, res) => {
+      if (o.rules && !o.rules.isAdmin(req)) return res.status(403).json({ error: 'Admin only' });
+      res.json({ orphans: await pf.orphanUploads(), storage_check: pf.storageCheck });
+    }));
+    r.delete('/preflight/orphans', wrap(async (req, res) => {
+      if (o.rules && !o.rules.isAdmin(req)) return res.status(403).json({ error: 'Admin only' });
+      res.json(await pf.removeOrphanUploads(o.who(req)));
+    }));
     r.get('/preflight/uploads/:id/estimate', wrap(async (req, res) => res.json(await pf.estimate(req.params.id))));
     r.post('/preflight/uploads/:id/audit', wrap(async (req, res) => {
       const e = await pf.estimate(req.params.id);
@@ -324,6 +338,8 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     }));
     r.post('/preflight/stubs/:stub/ready', wrap(async (req, res) => {
       if (!o.preflight!.canSetReady(req)) return res.status(403).json({ error: 'Pre-flight is marked passed by the creative lead or an admin (Ready to traffic also needs Trupanion’s compliance cleared)' });
+      // all_on_visual: every code on this code's visual (the default on a shared visual), each passing on its own flags.
+      if (req.body?.all_on_visual && req.body?.ready !== false) return res.json(await pf.setReadyVisual(req.params.stub, o.who(req)));
       try { res.json(await pf.setReady(req.params.stub, req.body?.ready !== false, o.who(req))); }
       catch (err: any) { if (err.blocking) return res.status(409).json({ error: err.message, blocking: err.blocking }); throw err; }
     }));

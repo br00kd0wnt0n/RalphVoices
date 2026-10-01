@@ -80,15 +80,16 @@ test('Ready: a sequence becomes visual A\'s cards (shared by A1–A3), cards can
   assert.deepEqual(v.plan.on_image.map(o => [o.card, o.line_id]), cards.map((id, i) => [i + 1, id]));
   assert.deepEqual(v.lines.find(x => x.line.id === cards[1])!.in, ['on-image A card 2']);
 
-  // Swap cards 2 and 3, and leave card 4 empty.
+  // Swap cards 2 and 3, and leave card 4 empty: an empty card blocks sign-off (set three cards instead).
   const swapped = [cards[0], cards[2], cards[1], ''];
   const sv = await R.readyView('OWN', 'OWN_CARDS', 'US', { versions: v.draft.versions, on_image: { A: swapped } });
   assert.deepEqual(sv.plan.on_image.map(o => [o.card, o.line_id]), [[1, cards[0]], [2, cards[2]], [3, cards[1]]]);
-  assert.deepEqual(sv.plan.issues, []);
+  assert.deepEqual(sv.plan.issues, ['On-image, visual A: card 4 is empty (choose its text, or set fewer cards)']);
+  assert.deepEqual((await R.readyView('OWN', 'OWN_CARDS', 'US', { versions: v.draft.versions, on_image: { A: swapped.slice(0, 3) } })).plan.issues, []);
   // Cards only on a carousel; at most 10.
   assert.match((await R.readyView('OWN', 'OWN_CARDS', 'US', { versions: v.draft.versions, on_image: { A: Array(11).fill(cards[0]) } })).plan.issues.join(), /at most 10 cards/);
 
-  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CARDS', versions: v.draft.versions, on_image: { A: swapped }, expectation: { codes: ['OWN_CARDS_CAR_A1_US_META'], reason: 'Hook first.' } }, 'nick');
+  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CARDS', versions: v.draft.versions, on_image: { A: swapped.slice(0, 3) }, expectation: { codes: ['OWN_CARDS_CAR_A1_US_META'], reason: 'Hook first.' } }, 'nick');
   assert.deepEqual(signoff.on_image!.map(o => [o.card, o.line_id, o.visual_key]), [[1, cards[0], 'OWN_CARDS_CAR_A_US_META'], [2, cards[2], 'OWN_CARDS_CAR_A_US_META'], [3, cards[1], 'OWN_CARDS_CAR_A_US_META']]);
   // Signed off again unchanged: the default draft brings the cards back as they were signed.
   assert.deepEqual((await R.readyView('OWN', 'OWN_CARDS')).draft.on_image, { A: [cards[0], cards[2], cards[1]] });
@@ -154,4 +155,19 @@ test('per-field counts on a carousel: the on-image count gives way to the card s
   assert.equal(loose('meta_headline'), 2);
   assert.equal(loose('meta_on_image'), 0, 'no loose on-image lines on a carousel');
   assert.equal(run.lines.filter(l => l.sequence_id).length, 3, 'one sequence of three cards');
+});
+
+test('a carousel with a blank card is not finished: sign-off is blocked, naming the card (production test, 1 Oct)', async () => {
+  await fresh();
+  const run = await S.generate(S.makeBrief({ territory: 'OWN_CARDS', name: 'blank', own_lines: own([
+    ['meta_primary', 'Calm at the counter, every single visit.'], ['meta_headline', 'Calm, covered.'],
+    ['meta_on_image', 'Vet bill at 2am?'], ['meta_on_image', 'We sort the rest'], ['meta_on_image', 'Calm, covered.'],
+  ]) }), new S.Api({ mock: true }), () => {}, { ownOnly: true, user: 'nick' });
+  await keepAll(run);
+  const [p, h, c1, c3, c4] = run.lines.map(l => l.id);
+  const blank = (await R.readyView('OWN', 'OWN_CARDS', 'US', { versions: [{ visual: 'A', fields: { meta_primary: p, meta_headline: h } }], on_image: { A: [c1, '', c3, c4] } })).plan;
+  assert.ok(blank.issues.includes('On-image, visual A: card 2 is empty (choose its text, or set fewer cards)'));
+  // Three cards, all chosen: fine.
+  const three = (await R.readyView('OWN', 'OWN_CARDS', 'US', { versions: [{ visual: 'A', fields: { meta_primary: p, meta_headline: h } }], on_image: { A: [c1, c3, c4] } })).plan;
+  assert.ok(!three.issues.some(i => /empty/.test(i)));
 });

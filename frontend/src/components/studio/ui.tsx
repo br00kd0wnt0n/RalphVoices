@@ -3,7 +3,7 @@
 // flags as neutral chips (red = compliance, amber = warning). Nothing here is a score.
 
 import { useEffect, useState } from 'react';
-import { studio, type Flag, type Meta, type Territory, type Tone, type Line, type EditRecord, type LineVersion, type ComplianceStatus, type Region, REGION_NAMES, CANADA_NOTE } from '@/lib/studioApi';
+import { onOriginal, studio, type Flag, type Meta, type Territory, type Tone, type Line, type EditRecord, type LineVersion, type ComplianceStatus, type Region, REGION_NAMES, CANADA_NOTE } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { personaColor, personaEdge, tint } from '@/lib/personaColors';
 import { HelpCircle } from 'lucide-react';
@@ -37,6 +37,8 @@ export const CHIP: Record<string, string> = {
   COMP_FACT_FRAMING: 'figure framing', BR_NAMING: '"pet insurance"', BR_CASE: 'all caps', BR_BOAST: 'boastful', BR_PLAIN: 'not plain', BR_SAD_PET: 'sad pet', CHECK_FAILED: 'check failed',
 };
 export const chipName = (rule: string) => CHIP[rule] || (rule.startsWith('BRIEF_BANNED:') ? `banned: ${rule.slice(13)}` : /^[A-Z]+_T_/.test(rule) ? `turn-off: ${rule.replace(/^[A-Z]+_T_/, '').replace(/_/g, ' ').toLowerCase()}` : rule.replace(/_/g, ' ').toLowerCase());
+/** A flag's chip name, saying when it was found on the wording before an edit (until the re-check replaces it). */
+export const flagName = (f: Pick<Flag, 'rule' | 'original' | 'why'>) => `${chipName(f.rule)}${onOriginal(f) ? ' (original wording)' : ''}`;
 export const sevTone = (s: Flag['severity']) => (s === 'compliance' ? 'red' : s === 'warn' ? 'amber' : 'grey') as 'red' | 'amber' | 'grey';
 
 // ---------- plain words for codes ----------

@@ -3,6 +3,7 @@
 // and limits all come from the rules file; this file only applies them.
 // (Studio has its own version of these checks; B2 doesn't import Studio code.)
 import type { Flag, Pattern, RuleItem, Rules, Severity } from './types.js';
+import { figureKey } from '../../utils/figures.js';
 
 export interface TextBlock {
   where: string;      // "Meta headline", "card 1", "1.5 s (hook)"
@@ -36,9 +37,6 @@ export function addFlag(flags: Flag[], f: Flag): void {
 
 function words(s: string) { return s.toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9' ]+/g, ' ').split(/\s+/).filter(Boolean); }
 
-function figureKey(raw: string): string {
-  return raw.toLowerCase().replace(/\s+/g, '').replace(/million/, 'm').replace(/billion/, 'b').replace(/^\$/, '').replace(/,/g, '');
-}
 export function figuresIn(text: string): string[] {
   // 24/7 and decades or ages ("late 50s", "the 1990s") aren't claims.
   const t = text.replace(/24\/7/g, ' ').replace(/\b\d{1,3}0['’]?s\b/g, ' ');

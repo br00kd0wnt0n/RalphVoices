@@ -1133,3 +1133,151 @@ test('sizes: a static in 3 sizes, one missing its on-image text → a flag on th
   assert.ok(rep.flags.filter((f: any) => f.rule === 'COPY_CARD_ORDER').every((f: any) => f.frame?.position >= 100 && f.frame?.position < 200), 'the flags point at the 4:5 cards');
   await store.putRules('example-1', JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8')), { activate: true, by: 'test' }).catch(() => {});
 });
+
+// ---------- storage refused an upload (production, 1 Oct: "Access Denied" left an upload row with no files) ----------
+test('upload: storage refusing a file keeps nothing (rows or objects) and says why (503); orphans are ignored and an admin can remove them', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const run = await keptRun(R, api, ['Calm at the counter.']);
+  const ads = adsOf([run.prims[0]], run.head);
+  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: ads, expectation: { codes: [await leadOf(R, ads)], reason: 'x' } }, 'nick');
+  const code = signoff.versions[0].code;
+  const { Preflight, StorageError } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const db = (store as any).db;
+  const png = (name: string) => ({ buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]), filename: name, contentType: 'image/png' });
+  const count = async (sql: string) => Number((await db.query(sql)).rows[0].n);
+
+  // A bucket that takes the first file, then refuses: the first is removed again, and no row is written.
+  const objects = new Map<string, number>();
+  const refusing = {
+    put: async (key: string) => { if (objects.size >= 1) throw Object.assign(new Error('Access Denied'), { name: 'AccessDenied' }); objects.set(key, 1); },
+    del: async (key: string) => { objects.delete(key); },
+  };
+  process.env.STUDIO_R2_BUCKET = 'voices-private';
+  try {
+    const pf = new Preflight(db, mockEngine, { storage: 'r2', objects: refusing });
+    await assert.rejects(pf.upload(code, [png('a-1x1.png'), png('a-4x5.png'), png('a-9x16.png')], 'brook', [], ['1:1', '4:5', '9:16']), (e: any) => {
+      assert.ok(e instanceof StorageError);
+      assert.equal(e.status, 503);
+      assert.match(e.message, /Couldn't store the files \(storage refused: Access Denied; check the R2 token can write to voices-private\)\. Nothing was saved\./);
+      return true;
+    });
+    assert.equal(objects.size, 0, 'the file already stored was removed');
+    assert.equal(await count(`SELECT count(*) n FROM studio_asset_uploads`), 0, 'no upload row');
+    assert.equal(pf.storageCheck?.ok, false, 'admins see the refusal on Rules');
+    assert.match(pf.storageCheck!.error!, /Access Denied/);
+
+    // With a bucket that takes them: three objects, three file rows, one upload.
+    const ok = new Map<string, number>();
+    const pf2 = new Preflight(db, mockEngine, { storage: 'r2', objects: { put: async k => { ok.set(k, 1); }, del: async k => { ok.delete(k); } } });
+    const up = await pf2.upload(code, [png('a-1x1.png'), png('a-4x5.png'), png('a-9x16.png')], 'brook', [], ['1:1', '4:5', '9:16']);
+    assert.equal(ok.size, 3);
+    assert.equal(await count(`SELECT count(*) n FROM studio_upload_files WHERE upload_id = '${up.upload_id}' AND storage = 'r2' AND r2_key IS NOT NULL`), 3);
+
+    // An orphan left by the old order (a row, no files, an hour old) is never the code's current upload, and an admin can remove it.
+    await db.query(`INSERT INTO studio_asset_uploads (id, stub, persona, territory, signoff_id, kind, uploaded_by, uploaded_at) VALUES ('up_orphan', $1, 'OWN', 'OWN_CALM', $2, 'static', 'brook', now() - interval '1 hour')`, [code, signoff.id]);
+    await db.query(`INSERT INTO studio_upload_stubs (upload_id, stub) VALUES ('up_orphan', $1)`, [code]);
+    await db.query(`UPDATE studio_asset_uploads SET uploaded_at = now() - interval '2 hours' WHERE id = $1`, [up.upload_id]);
+    assert.equal((await pf2.report(code)).upload?.id, up.upload_id, 'the newer, empty upload is ignored');
+    assert.deepEqual((await pf2.orphanUploads()).map(o => o.id), ['up_orphan']);
+    assert.deepEqual((await pf2.removeOrphanUploads('brook')).removed, ['up_orphan']);
+    assert.equal(await count(`SELECT count(*) n FROM studio_asset_uploads WHERE id = 'up_orphan'`), 0);
+    assert.equal(await count(`SELECT count(*) n FROM studio_asset_uploads WHERE id = '${up.upload_id}'`), 1, 'a real upload is never an orphan');
+  } finally { delete process.env.STUDIO_R2_BUCKET; }
+});
+
+// ---------- production test, 1 Oct, finding 23: a copy fixed after "changes requested" goes back to Trupanion ----------
+test('compliance: changes requested on the copy → edit → signed off again → the code is pending (back with Trupanion), everywhere', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const run = await keptRun(R, api, ['Calm at the counter.', 'One less worry.', 'Home by nine.']);
+  const ads = adsOf(run.prims, run.head);
+  const first = (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: ads, expectation: { codes: [await leadOf(R, ads)], reason: 'x' } }, 'nick')).signoff;
+  const [A1, A2, A3] = first.versions!.map((v: any) => v.code);
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
+  const png = [{ buffer: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from('fake VOICES_TEXT: Calm')]), filename: 'v.png', contentType: 'image/png' }];
+  const up = await pf.upload(A1, png, 'nick', [A2, A3]);
+  await pf.runAudit(await pf.createAudit(up.upload_id));
+  await pf.setAssetCompliance(up.upload_id, { status: 'cleared', note: 'ok', client_by: 'J. Doe', codes: [A1, A2] }, 'vivan');
+  await pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', note: 'Say "at participating hospitals"', send_back: 'copy', client_by: 'J. Doe', codes: [A3] }, 'vivan');
+  assert.equal((await pf.codeCompliance(A3, up.upload_id)).status, 'changes_requested');
+  // 22. Build shows the request on that ad (and only that ad); the board opens Build for a copy send-back.
+  const atA3 = async () => (await R.readyView('OWN', 'OWN_CALM')).plan.versions.find((v: any) => v.code === A3)!.compliance;
+  assert.deepEqual({ ...(await atA3()).request, at: undefined }, { note: 'Say "at participating hospitals"', client_by: 'J. Doe', by: 'vivan', at: undefined, answered: false });
+  assert.equal((await R.readyView('OWN', 'OWN_CALM')).plan.versions.find((v: any) => v.code === A1)!.compliance.request, undefined);
+  assert.equal((await pf.traffic(A3)).send_back, 'copy');
+
+  // The fix: A3's primary edited, then the set signed off again (same ads).
+  await S.setDecision(run.id, run.prims[2], { decision: 'edit', edited_text: 'Home by nine, at participating hospitals.' }, 'nick');
+  const edited = await atA3();
+  assert.equal(edited.status, 'pending', 'no longer "changes requested" once the copy is edited');
+  assert.equal(edited.request?.answered, true, 'Build says: sign off again to send it back');
+  const second = (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: ads, expectation: { codes: [A1], reason: 'x' }, expect_latest: first.id } as any, 'nick')).signoff;
+  assert.deepEqual(second.versions!.map((v: any) => v.code), [A1, A2, A3], 'the codes are kept');
+
+  const c = await pf.codeCompliance(A3, up.upload_id);
+  assert.equal(c.status, 'pending', 'back with Trupanion');
+  assert.match(c.stale || '', /Back with Trupanion: copy fixed in set v2/);
+  assert.equal((await pf.codeCompliance(A1, up.upload_id)).status, 'cleared', 'the untouched codes keep their decision');
+  const view = await pf.complianceAssets();
+  const a3 = view.assets[0].codes.find((x: any) => x.stub === A3)!;
+  assert.equal(a3.compliance.status, 'pending');
+  const hand = S.parseCsv(await pf.handoffCsv());
+  assert.equal(hand.find(r => r[0] === A3)![hand[0].indexOf('Compliance')], 'Pending');
+  assert.match((await pf.traffic(A3)).words, /Compliance pending \(copy fixed in set v2\)/);
+  assert.equal((await pf.traffic(A3)).send_back, undefined);
+});
+
+// ---------- production test, 1 Oct, findings 18–20 ----------
+test('shared visual in 3 sizes: one verdict per text rule when the words are the same (19); the copy override is offered on the Pre-flight flag (18); all codes on the visual pass at once (20)', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const rules = JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8'));
+  rules.territories.OWN_STILL = { ...rules.territories.OWN_CALM, name: 'Still', format: 'STATIC' };
+  rules.compliance.push({ id: 'COMP_FACT_FRAMING', rule: 'A stat is framed as whose it is.', severity: 'warn', check: 'model', source: 'LEGAL §7' });
+  await store.putRules('example-1820', rules, { activate: true, by: 'test' });
+  await S.refreshRules();
+  const run = await S.generate(S.makeBrief({ territory: 'OWN_STILL', name: 'sv', own_lines: [{ text: 'Over 7,000 owners switched.', field: 'meta_primary' }, { text: 'Calm at the counter.', field: 'meta_primary' }, HEAD] }), api, () => {}, { ownOnly: true, user: 'nick' });
+  for (const l of run.lines) {
+    await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+    for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find((x: any) => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'The client confirmed the figure', 'nick');
+  }
+  const [p1, p2, h] = run.lines.map(l => l.id);
+  const versions = [{ visual: 'A', fields: { meta_primary: p1, meta_headline: h } }, { visual: 'A', fields: { meta_primary: p2, meta_headline: h } }];
+  const v = await R.readyView('OWN', 'OWN_STILL', 'US', { versions, on_image: {} } as any);
+  const so = (await R.signOff({ persona: 'OWN', territory: 'OWN_STILL', versions, expectation: { codes: [v.plan.versions[0].code], reason: 'x' } } as any, 'nick')).signoff;
+  const [A1, A2] = so.versions!.map((x: any) => x.code);
+
+  // An engine that reads the same words on every size but words its text verdict differently each time, and finds the figure.
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  let n = 0;
+  const engine = { ...mockEngine, name: 'sizes', run: async () => ({
+    engine: 'sizes', text_found: 'Over 7,000 owners switched.', asset_text: [{ where: 'image', text: 'Over 7,000 owners switched.' }], features: {}, usd: 0,
+    flags: [
+      { rule: 'COMP_FACT_FRAMING', severity: (n === 0 ? 'amber' : 'grey') as any, label: 'A stat is framed as whose it is.', source: 'LEGAL §7', why: ++n === 1 ? 'not framed as a statistic' : 'framed as a Trupanion statistic' },
+      { rule: 'FIG_UNSOURCED', severity: 'red' as const, label: 'Every figure must come from the facts list.', source: 'LEGAL §2', quote: '7,000' },
+    ],
+  }) };
+  const pf = new Preflight((store as any).db, engine as any, { storage: 'db' });
+  const png = (name: string) => ({ buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 1]), filename: name, contentType: 'image/png' });
+  const up = await pf.upload(A1, [png('a-1x1.png'), png('a-4x5.png'), png('a-9x16.png')], 'nick', [A2], ['1:1', '4:5', '9:16']);
+  await pf.runAudit(await pf.createAudit(up.upload_id));
+  const rep = await pf.report(A1);
+  const framing = rep.flags.filter((f: any) => f.rule === 'COMP_FACT_FRAMING');
+  assert.equal(framing.length, 1, '19: one verdict for the three sizes');
+  assert.equal(framing[0].severity, 'amber', 'the strongest reading kept');
+  assert.match(framing[0].why, /same text on every size/);
+  // 18: the copy's override at sign-off is offered on the Pre-flight flag for the same rule.
+  assert.ok(rep.copy_overrides.some((o: any) => o.rule === 'FIG_UNSOURCED' && o.reason === 'The client confirmed the figure' && o.by === 'nick'));
+
+  // 20: blocked by the open red on the asset; once overridden, both codes on the visual pass at once.
+  const blocked = await pf.setReadyVisual(A1, 'nick');
+  assert.deepEqual(blocked.passed, []);
+  assert.equal(blocked.blocked.length, 2);
+  for (const f of rep.flags.filter((x: any) => x.severity === 'red' && !x.override)) await pf.override(f.id, 'Same as at sign-off (nick): The client confirmed the figure', 'nick');
+  for (const f of (await pf.report(A2)).flags.filter((x: any) => x.severity === 'red' && !x.override)) await pf.override(f.id, 'Same as at sign-off', 'nick');
+  const both = await pf.setReadyVisual(A1, 'nick');
+  assert.deepEqual(both.passed.sort(), [A1, A2].sort());
+  assert.equal((await pf.report(A2)).status.status, 'ready');
+});

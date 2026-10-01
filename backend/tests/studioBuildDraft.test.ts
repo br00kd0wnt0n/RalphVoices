@@ -4,7 +4,7 @@
 // studioReady/studioVersionChecks/studioCarousel tests.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { addAd, adName, moveAd, nextVisual, placeLine, removeAd, setCard, setOnImage, useInAllAds, usesOf } from '../../frontend/src/lib/buildDraft.js';
+import { addAd, adName, flagsAt, moveAd, redPlaces, nextVisual, placeLine, removeAd, setCard, setOnImage, useInAllAds, usesOf } from '../../frontend/src/lib/buildDraft.js';
 
 const platformOf = (v: { platform?: string }) => v.platform || 'META';
 const base = () => ({
@@ -59,4 +59,25 @@ test('ads: add from the visual\'s last ad (a shared headline carries over), move
   const onlyA = removeAd(removeAd(removeAd(base(), 1), 0), 0);
   assert.equal('A' in onlyA.on_image, false, 'a visual with no ads left keeps no on-image text');
   assert.deepEqual(usesOf({ versions: [], on_image: { A: ['k1', 'k2'] } }, 'k2', platformOf), ['Visual A · card 2']);
+});
+
+test('flags at a slot: once per rule, even when two ads on the visual word it differently (production test, 1 Oct)', () => {
+  const clash = (why: string, severity: 'red' | 'amber' = 'amber') => ({ rule: 'VERSION_CONFLICT', severity, label: 'The fields clash in tone', fields: ['meta_primary', 'meta_on_image'], why });
+  const shown = flagsAt([clash('Playful image text, sombre primary'), clash('Tone of the image text jars with the primary')], 'meta_on_image');
+  assert.equal(shown.length, 1);
+  // Red in one ad wins over amber in another.
+  assert.equal(flagsAt([clash('a'), clash('b', 'red')], 'meta_on_image')[0].severity, 'red');
+  // Different targets stay separate; flags ending on another field aren't shown here.
+  const rep = (other: string) => ({ rule: 'VERSION_REPEAT', severity: 'amber' as const, fields: ['meta_on_image'], other });
+  assert.equal(flagsAt([rep('A1'), rep('A2'), rep('A1')], 'meta_on_image').length, 2);
+  assert.equal(flagsAt([clash('x')], 'meta_primary').length, 0);
+});
+
+test('red places: the blocker names the flag and where it is, a carousel card included (production test, 1 Oct)', () => {
+  const d = { versions: [{ visual: 'A', platform: 'META', fields: { meta_primary: 'p1', meta_headline: 'h1' } }], on_image: { A: ['c1', 'c2', 'c3', 'c4'] } };
+  const pf = (v: { platform?: string }) => v.platform || 'META';
+  assert.deepEqual(redPlaces(d, { c2: ['unsourced figure', 'price lead'] }, pf), ['Visual A · card 2: unsourced figure, price lead']);
+  assert.deepEqual(redPlaces(d, { p1: ['direct pay'], c4: ['claim speed'] }, pf), ['Visual A · Ad 1: direct pay', 'Visual A · card 4: claim speed']);
+  assert.deepEqual(redPlaces({ ...d, on_image: { A: 'oi' } }, { oi: ['pays for itself'] }, pf), ['Visual A · on the image: pays for itself']);
+  assert.deepEqual(redPlaces(d, { zz: ['x'], c1: [] }, pf), [], 'a line not in the draft, or with no reds, is not named');
 });

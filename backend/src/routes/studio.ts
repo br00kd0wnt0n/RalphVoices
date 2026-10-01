@@ -27,7 +27,7 @@ import { Preflight } from '../services/studio/preflight.js';
 import { mockEngine, type AuditEngine } from '../services/studio/preflightEngine.js';
 import { b2Engine } from '../services/studio/preflightB2.js';
 import { monthStart } from '../services/studio/router.js';
-import { checkPrivateBucket } from '../services/r2.js';
+import { probePrivateBucket } from '../services/r2.js';
 import { preflightStorage } from '../services/studio/preflight.js';
 
 const store = new PgStore(pool);
@@ -59,9 +59,12 @@ const preflight = new Preflight(pool, auditEngine);
 if (process.env.ENABLE_STUDIO === 'true') {
   const st = preflightStorage();
   if (st.mode === 'refuse') console.warn(`[studio] ${st.reason}. Pre-flight uploads are refused until it is set.`);
-  else if (st.mode === 'r2') checkPrivateBucket().then(r => r.ok
-    ? console.log('[studio] Pre-flight files: private R2 bucket reachable')
-    : console.warn(`[studio] Pre-flight: the R2 keys can't reach STUDIO_R2_BUCKET (${r.error}); uploads will fail until they can`));
+  // A real write (put and delete a tiny object): HeadBucket passed in production while every upload was refused (1 Oct).
+  else if (st.mode === 'r2') probePrivateBucket().then(r => {
+    preflight.storageCheck = { ...r, at: new Date().toISOString() };
+    if (r.ok) console.log(`[studio] Pre-flight files: can write to the private R2 bucket (${r.bucket})`);
+    else console.warn(`[studio] Pre-flight: the R2 keys can't write to STUDIO_R2_BUCKET ${r.bucket} (${r.error}); uploads will fail until they can`);
+  });
   else console.log('[studio] Pre-flight files: kept in Postgres (local/dev; 25 MB per file)');
 }
 
