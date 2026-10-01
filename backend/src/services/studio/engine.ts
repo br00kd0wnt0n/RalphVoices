@@ -850,7 +850,7 @@ export function screenWritten(text: string, cell: Pick<Cell, 'field' | 'structur
   return null;
 }
 /** The last sentence asks for an action (get a quote, see how it works, learn more…). */
-const CTA = /^\W*(get|see|start|find|learn|compare|check|explore|visit|request|discover|try|tap|click|sign up|enrol+|join|ask|talk to)\b/i;
+const CTA = /^\W*(get|see|start|begin|find|learn|compare|check|explore|visit|request|discover|try|tap|click|sign up|enrol+|join|ask|talk to|protect|cover|quote|choose|meet|give|make|take|keep|plan|call|download|shop|apply|switch|look|read|watch)\b/i;
 export function endsOnCta(text: string): boolean {
   const parts = text.trim().split(/(?<=[.!?…])\s+/).filter(Boolean);
   const last = parts[parts.length - 1] || '';
@@ -1523,7 +1523,7 @@ export function deterministicFlags(l: { text: string; field: string; structure: 
   // guideline. It gets its own flag in its own words, with no "truncated" and no quoted cut word (Nick's copy check,
   // 1 Oct: 11 of 19 ambers read "Truncated ('eater.')" on on-image headlines).
   // Shared captions run under any persona's artwork, so the primary text or caption has to carry the call to action itself.
-  if (l.persona === SHARED_PERSONA && PRODUCT_FIELDS.includes(l.field) && !endsOnCta(l.text)) addFlag(flags, { rule: 'SHARED_CTA', severity: 'warn', label: 'No call to action at the end', source: 'HOUSE: Brook, 1 Oct 2026 (shared captions)', quote: '', why: 'Shared primary text ends on what to do next (e.g. get a quote, see how it works).' });
+  if (l.persona === SHARED_PERSONA && PRODUCT_FIELDS.includes(l.field) && !endsOnCta(l.text)) addFlag(flags, { rule: 'SHARED_CTA', severity: 'warn', label: 'No call to action at the end', source: 'HOUSE: Brook, 1 Oct 2026 (shared captions)', quote: '', by: ['rule'], why: 'Shared primary text ends on what to do next (e.g. get a quote, see how it works).' });
   if (f && onAsset(l.field, r) && chars > f.visible) addFlag(flags, { rule: 'LIMIT_ON_ASSET', severity: 'warn', label: `Long for ${onAssetWords(l.field, r)}: ${chars} characters (aim for ${f.visible} or fewer)`, source: f.source, quote: '', why: chars > f.max ? `Well over: the most that reads at a glance is about ${f.max}` : undefined, by: ['rule'] });
   else if (f && chars > f.max) addFlag(flags, { rule: 'LIMIT_MAX', severity: 'warn', label: `Over the ${f.label} limit (${chars}/${f.max})`, source: f.source, quote: '', why: `${chars} characters; limit ${f.max}`, by: ['rule'] });
   else if (f && chars > f.visible) addFlag(flags, { rule: 'LIMIT_VISIBLE', severity: 'warn', label: `Truncated: ${chars} characters, ${f.visible} visible in ${f.label}`, source: f.source, quote: truncTail(text, f.visible), why: `${chars} characters; ${f.visible} visible`, by: ['rule'] });
@@ -1720,6 +1720,21 @@ async function objection(line: Line, r: Rules, api: Api, model: string) {
   line.objection = res.text.trim().replace(/^["“]|["”]$/g, '');
 }
 
+/** The "similar line" flag for a line's vector against the rest of its run, or null. */
+function nearest(mine: number[], lineId: string, batch: Batch, embs: Record<string, number[]>): Flag | null {
+  let best = 0, bestId = '';
+  for (const o of batch.lines) if (o.id !== lineId && embs[o.id]) { const s = cosine(mine, embs[o.id]); if (s > best) { best = s; bestId = o.id; } }
+  return best >= SIMILAR ? { rule: 'NEAR_DUP', severity: 'warn', label: `Close to ${bestId.split('-').pop()} (similarity ${round(best, 2)})`, source: 'Embedding similarity, text-embedding-3-small', quote: '', by: ['rule'] } : null;
+}
+/**
+ * "Similar line" for a single line's current wording (a re-check): the wording is embedded again and compared with the
+ * rest of the run, so unchanged wording keeps its flag and an edit that no longer resembles its neighbour loses it.
+ */
+export async function similarFlag(batch: Batch, lineId: string, text: string, api: Api): Promise<Flag | null> {
+  const [mine] = await api.embed([text]);
+  return mine ? nearest(mine, lineId, batch, await getStore().getEmbeddings(batch.id)) : null;
+}
+
 export async function checkBatch(batch: Batch, api: Api, emit: Emit = () => {}, onlyIds?: string[]) {
   const r = loadRules();
   const b = batch.brief;
@@ -1739,9 +1754,8 @@ export async function checkBatch(batch: Batch, api: Api, emit: Emit = () => {}, 
     // Similar, not duplicate (duplicates were removed at generation).
     const mine = embs[l.id];
     if (mine) {
-      let best = 0, bestId = '';
-      for (const o of batch.lines) if (o.id !== l.id && embs[o.id]) { const s = cosine(mine, embs[o.id]); if (s > best) { best = s; bestId = o.id; } }
-      if (best >= SIMILAR) addFlag(l.flags, { rule: 'NEAR_DUP', severity: 'warn', label: `Close to ${bestId.split('-').pop()} (similarity ${round(best, 2)})`, source: 'Embedding similarity, text-embedding-3-small', quote: '', by: ['rule'] });
+      const near = nearest(mine, l.id, batch, embs);
+      if (near) addFlag(l.flags, near);
     }
     emit({ type: 'line', line: l });
   }

@@ -28,3 +28,8 @@ Tests: `studioShared.test.ts`, the "shared caption in 3 codes" and "retired terr
 
 - The "also record it for the other codes" checkbox was not exercised in the browser (it needs two signed-off, uploaded codes on one caption); the server side is covered by the Postgres test.
 - Ad-set mode is on the backlog.
+
+## Re-check fixes (1 Oct, from the production re-check of the shared run)
+
+- `endsOnCta` takes more opening imperatives (protect, cover, enroll, choose, call, switch and so on). It is still a test of how the last sentence starts, so a description that only contains the verb is still flagged.
+- A single-line re-check (`recheckLine`) embeds the current wording again and compares it with the rest of the run (`similarFlag`), so "similar line" survives a re-check of unchanged wording and goes when an edit no longer resembles its neighbour. Other lines' vectors are of their original wording.
