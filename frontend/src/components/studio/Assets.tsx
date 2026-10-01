@@ -278,6 +278,13 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
 }) {
   report = { ...report, same_visual_as: report.same_visual_as ?? [], on_asset_copy: report.on_asset_copy ?? report.copy, post_copy: report.post_copy ?? [] };
   const a = report.audit;
+  // A check this page isn't following (started elsewhere, or before a reload or a restart) is polled, so it flips to
+  // done, or to "interrupted: run again", without a reload.
+  useEffect(() => {
+    if (!a || (a.status !== 'running' && a.status !== 'queued') || progress) return;
+    const t = setInterval(() => { onChanged().catch(() => {}); }, 20_000);
+    return () => clearInterval(t);
+  }, [a?.id, a?.status, progress]); // eslint-disable-line react-hooks/exhaustive-deps
   const res = a?.result || null;
   const up = report.upload;
   const current = !!(a && up && a.upload_id === up.id);
@@ -299,7 +306,7 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
   const shownSize = bySize.find(g => g.z === sizeTab) || bySize[0];
   const auditedLatest = auditForLatest && a!.status === 'done';
   const ready = report.status.status === 'ready';
-  const readyBlock = !up ? 'Upload the asset first.' : !auditForLatest ? 'Run the checks on this upload first.' : a!.status === 'running' || a!.status === 'queued' ? 'The checks are still running.' : a!.status === 'failed' ? 'The checks failed; run them again.' : openRed ? `${openRed} red flag${openRed === 1 ? '' : 's'} to fix (a new upload) or override.` : '';
+  const readyBlock = !up ? 'Upload the asset first.' : !auditForLatest ? 'Run the checks on this upload first.' : a!.status === 'running' || a!.status === 'queued' ? 'The checks are still running.' : a!.status === 'failed' ? (a!.result?.interrupted ? 'The checks were interrupted by a server restart; run them again.' : 'The checks failed; run them again.') : openRed ? `${openRed} red flag${openRed === 1 ? '' : 's'} to fix (a new upload) or override.` : '';
   const act = async (fn: () => Promise<unknown>) => { try { await fn(); await onChanged(); } catch (e: any) { onError(e.body?.blocking ? `${e.message}: ${e.body.blocking.map((b: any) => b.label || b.rule).join('; ')}` : e.message); } };
   const copyRows = res?.copy_match ?? res?.report?.copy_match;
   const sameVisual = (s: PfStub) => !!report.visual_key && s.visual_key === report.visual_key;
@@ -416,8 +423,8 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
               )}
               {a && up && auditForLatest && a.status === 'failed' && !progress && (
                 <div className="flex flex-wrap items-center gap-2 rounded-lg border border-red-500/45 bg-red-500/10 px-3 py-2 text-sm text-red-100">
-                  <span className="min-w-0 flex-1">The checks failed: {a.error}</span>
-                  <PinkButton className="px-3 py-1 text-sm" onClick={() => onAudit(report.stub, up.id)}>Run again</PinkButton>
+                  <span className="min-w-0 flex-1">{a.result?.interrupted ? a.error : `The checks failed: ${a.error}`}</span>
+                  <PinkButton className="px-3 py-1 text-sm" onClick={() => onAudit(report.stub, up.id)}>Run the checks again</PinkButton>
                 </div>
               )}
               {a?.stale && auditForLatest && up && (

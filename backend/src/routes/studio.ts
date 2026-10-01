@@ -23,7 +23,7 @@ import * as S from '../services/studio/engine.js';
 import { PgStore } from '../services/studio/pgStore.js';
 import { createStudioRouter } from '../services/studio/router.js';
 import { canSetCompliance, canSetReady, studioAccess } from '../utils/studioAccess.js';
-import { Preflight } from '../services/studio/preflight.js';
+import { STALE_SECONDS, Preflight } from '../services/studio/preflight.js';
 import { mockEngine, type AuditEngine } from '../services/studio/preflightEngine.js';
 import { b2Engine } from '../services/studio/preflightB2.js';
 import { monthStart } from '../services/studio/router.js';
@@ -54,6 +54,13 @@ const auditEngine: AuditEngine = mock ? mockEngine : b2Engine({
   capUsd: async () => Math.max(0, cap - (await store.spendTotal(monthStart()))),
 });
 const preflight = new Preflight(pool, auditEngine);
+// Audits a restart left 'running' (no heartbeat for STALE_SECONDS) are failed as interrupted, with their reservations
+// released: now, and once more when a just-stopped process's last heartbeat has gone stale.
+if (process.env.ENABLE_STUDIO === 'true') {
+  const sweep = () => preflight.expireStuck().then(n => { if (n) console.log(`[studio] Pre-flight: ${n} audit${n === 1 ? '' : 's'} interrupted by a restart marked to run again`); }).catch(err => console.warn(`[studio] couldn't sweep interrupted audits: ${err?.message || err}`));
+  sweep();
+  setTimeout(sweep, (STALE_SECONDS + 10) * 1000).unref?.();
+}
 
 // Pre-flight storage: say at startup whether uploads will work (the private bucket, reachable).
 if (process.env.ENABLE_STUDIO === 'true') {

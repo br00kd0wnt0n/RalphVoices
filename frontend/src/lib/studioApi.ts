@@ -212,6 +212,8 @@ export interface PfReport {
   history: Array<{ id: string; kind: string; uploaded_by: string; uploaded_at: string; files: number }>;
   audit: null | { id: string; upload_id: string; status: string; engine: string; stale?: string | null; rules_version?: string; usd: number; error?: string; started_by?: string; started_at: string; finished_at: string | null;
     result: null | { text_found: string; transcript?: string; copy_match?: Array<{ field: string; signed_off: string; found: string; similarity: number; status: string; card?: number; found_on?: number; size?: string }>; features: Record<string, number>; objection?: string; notes?: string[]; frames_unavailable?: boolean;
+      /** A failed audit worth running again; interrupted: the server restarted mid-audit. */
+      retryable?: boolean; interrupted?: boolean;
       report?: { copy_match?: Array<{ field: string; signed_off: string; found: string; similarity: number; status: string; card?: number; found_on?: number; size?: string }>; tagged_features?: string[]; set_aside?: Array<{ rule: string; quote?: string; why: string }> } } };
   flags: PfFlag[]; status: PfStatus;
   compliance?: CodeCompliance;
