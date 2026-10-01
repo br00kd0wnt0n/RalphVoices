@@ -19,6 +19,6 @@ export function groupOverrides(items: OverrideItem[]): OverrideGroup[] {
 
 /** "on the copy at sign-off, A1, A2 and A3" / "in the asset check (every code on it)". */
 export function overrideWhere(g: OverrideGroup): string {
-  const codes = g.codes.length > 2 ? `${g.codes.slice(0, -1).join(', ')} and ${g.codes.at(-1)}` : g.codes.join(' and ');
+  const codes = g.codes.length > 2 ? `${g.codes.slice(0, -1).join(', ')} and ${g.codes[g.codes.length - 1]}` : g.codes.join(' and ');
   return g.kind === 'copy' ? `on the copy at sign-off${codes ? `, ${codes}` : ''}${g.by ? `, by ${g.by}` : ''}` : `in the asset check${codes ? `, ${codes}` : ' (every code on it)'}`;
 }
