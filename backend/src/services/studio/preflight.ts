@@ -84,7 +84,15 @@ export function preflightStorage(env: NodeJS.ProcessEnv = process.env, r2Enabled
  */
 export const R2_FILE_CAP = 200 * 1024 * 1024;
 /** An audit that hasn't reported progress for this long died with the process (a deploy or a crash). */
-export const STUCK_MINUTES = 10;
+export const STUCK_MINUTES = 10;   // kept for older callers; the sweep uses STALE_SECONDS
+/**
+ * An audit with no heartbeat for this long died with its process (a deploy or a crash). A running audit beats every
+ * HEARTBEAT_MS on a timer, whatever the engine is doing, so a long model call never looks dead (production, 1 Oct:
+ * a deploy left a 12-file audit 'running' with no way to re-run, its reservation held). STUDIO_AUDIT_STALE_SECONDS.
+ */
+export const STALE_SECONDS = Number(process.env.STUDIO_AUDIT_STALE_SECONDS) || 120;
+export const HEARTBEAT_MS = 30_000;
+export const INTERRUPTED = 'Interrupted by a server restart: run the checks again. The upload is kept.';
 const IMAGE = /^image\/(png|jpe?g|webp|gif)$/;
 const VIDEO = /^video\/(mp4|quicktime)$/;
 
@@ -271,7 +279,7 @@ export function staleness(a: { status: string; rules_version?: string | null; re
 
 export class Preflight {
   /** `objects`: where files go when storage is R2 (the private bucket; a test passes its own). */
-  constructor(private db: Queryable, private engine: AuditEngine, private opts: { storage?: 'r2' | 'db'; objects?: ObjectStore } = {}) {}
+  constructor(private db: Queryable, private engine: AuditEngine, private opts: { storage?: 'r2' | 'db'; objects?: ObjectStore; heartbeatMs?: number } = {}) {}
   private get objects(): ObjectStore { return this.opts.objects || { put: putPrivateObject, del: deletePrivateObject }; }
   /** The last storage check (a put and delete at boot, or after a refused upload), for admins on the Rules page. */
   storageCheck: StorageCheck | null = null;
@@ -561,15 +569,19 @@ export class Preflight {
   }
 
   /**
-   * Audits left 'queued' or 'running' by a process that has gone (a deploy or a
-   * crash mid-audit) are marked failed and retryable. A live audit reports
-   * progress (heartbeat_at) well inside STUCK_MINUTES.
+   * Audits left 'queued' or 'running' by a process that has gone (a deploy or a crash mid-audit): no heartbeat for
+   * STALE_SECONDS. Marked failed and retryable ("Interrupted by a server restart…"), and the spend reserved for them is
+   * released (a reservation for that upload made before the audit's last heartbeat: never a newer run's). Swept at boot
+   * and on every read of the Assets views.
    */
   async expireStuck(): Promise<number> {
     const r = await this.db.query(
-      `UPDATE studio_audits SET status = 'failed', finished_at = NOW(), result = '{"retryable": true}',
-         error = 'The audit stopped part way (the server restarted). The upload is kept: run the audit again.'
-       WHERE status IN ('queued', 'running') AND COALESCE(heartbeat_at, started_at) < NOW() - make_interval(mins => $1)`, [STUCK_MINUTES]);
+      `UPDATE studio_audits SET status = 'failed', finished_at = NOW(), result = '{"retryable": true, "interrupted": true}', error = $2
+       WHERE status IN ('queued', 'running') AND COALESCE(heartbeat_at, started_at) < NOW() - make_interval(secs => $1)
+       RETURNING upload_id, COALESCE(heartbeat_at, started_at) AS last`, [STALE_SECONDS, INTERRUPTED]);
+    for (const x of r.rows) {
+      await this.db.query(`DELETE FROM studio_spend WHERE label LIKE $1 AND at <= $2`, [`reserved: preflight ${x.upload_id} %`, x.last]).catch(() => {});
+    }
     return r.rowCount ?? 0;
   }
 
@@ -589,10 +601,13 @@ export class Preflight {
     await this.db.query(`UPDATE studio_audits SET status = 'running', started_at = NOW(), heartbeat_at = NOW() WHERE id = $1`, [auditId]);
     let beat = Date.now();
     const heartbeat = () => {
-      if (Date.now() - beat < 30_000) return;
+      if (Date.now() - beat < (this.opts.heartbeatMs ?? HEARTBEAT_MS)) return;
       beat = Date.now();
       this.db.query(`UPDATE studio_audits SET heartbeat_at = NOW() WHERE id = $1 AND status = 'running'`, [auditId]).catch(() => {});
     };
+    // On a timer too, so a long engine call (12 files, one model call) never looks like a dead process.
+    const ticker = setInterval(() => { beat = 0; heartbeat(); }, this.opts.heartbeatMs ?? HEARTBEAT_MS);
+    ticker.unref?.();
     try {
       const rows = await this.materialise(a.upload_id, tmp);
       const { copy } = await this.findStub(a.stub);
@@ -713,6 +728,7 @@ export class Preflight {
         [auditId, retryable ? `${msg} (The upload is kept: run the audit again.)` : msg, { retryable }]);
       throw err;
     } finally {
+      clearInterval(ticker);
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   }

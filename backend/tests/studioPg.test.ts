@@ -345,17 +345,24 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   assert.ok(seen[0]?.items?.length, 'the rubric came from the rules file');
   assert.ok(S.personaSeed('OWN') && S.voiceSample('OWN'), 'the skeptic’s seed and voice come from the rules file');
 
-  // An audit orphaned by a restart (no progress for STUCK_MINUTES) reads as failed and retryable, and Audit again works.
+  // An audit orphaned by a restart (no heartbeat for STALE_SECONDS, 2 min) reads as failed and retryable, its spend
+  // reservation is released (a newer run's isn't), and Run the checks again works (production, 1 Oct: a deploy).
+  const db = (store as any).db;
   const orphan = await pf.createAudit(upOut.upload_id);
-  await (store as any).db.query(`UPDATE studio_audits SET status = 'running', heartbeat_at = NOW() - interval '11 minutes' WHERE id = $1`, [orphan]);
+  await db.query(`UPDATE studio_audits SET status = 'running', heartbeat_at = NOW() - interval '3 minutes' WHERE id = $1`, [orphan]);
+  await db.query(`INSERT INTO studio_spend (label, usd, at) VALUES ($1, 0.83, NOW() - interval '20 minutes'), ($2, 0.5, NOW())`, [`reserved: preflight ${upOut.upload_id} 1-old`, `reserved: preflight ${upOut.upload_id} 2-new`]);
   const ro = await pf.report(stub);
   assert.equal(ro.audit!.id, orphan);
   assert.equal(ro.audit!.status, 'failed');
   assert.equal(ro.audit!.result.retryable, true);
-  assert.match(ro.audit!.error!, /server restarted.*run the audit again/);
+  assert.equal(ro.audit!.result.interrupted, true);
+  assert.equal(ro.audit!.error, 'Interrupted by a server restart: run the checks again. The upload is kept.');
+  const left = (await db.query(`SELECT label FROM studio_spend WHERE label LIKE 'reserved: preflight %'`)).rows.map((r: any) => r.label);
+  assert.deepEqual(left, [`reserved: preflight ${upOut.upload_id} 2-new`], 'the stranded reservation is released; a newer one stays');
+  await db.query(`DELETE FROM studio_spend WHERE label LIKE 'reserved:%'`);
   const live = await pf.createAudit(upOut.upload_id);
-  await (store as any).db.query(`UPDATE studio_audits SET status = 'running', heartbeat_at = NOW() - interval '1 minute' WHERE id = $1`, [live]);
-  assert.equal((await pf.report(stub)).audit!.status, 'running', 'a long audit that is still reporting progress is left alone');
+  await db.query(`UPDATE studio_audits SET status = 'running', heartbeat_at = NOW() - interval '60 seconds' WHERE id = $1`, [live]);
+  assert.equal((await pf.report(stub)).audit!.status, 'running', 'an audit that beat within the window is left alone');
   await pf.runAudit(live);
 
   // 7. Over HTTP: a real multipart upload through the shared router.
@@ -1297,4 +1304,27 @@ test('upload: the server refuses files chosen for another code (409), storing no
   assert.equal(Number((await (store as any).db.query(`SELECT count(*) n FROM studio_asset_uploads`)).rows[0].n), 0);
   const ok = await pf.upload(A2, png, 'brook', [], ['1:1'], { forStub: A2 });
   assert.deepEqual(ok.stubs, [A2]);
+});
+
+// ---------- production, 1 Oct, finding 31: a running audit beats on a timer, so a long engine call never looks dead ----------
+test('audit heartbeat: a long engine call with no progress messages still keeps heartbeat_at fresh', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  await store.putRules('example-hb', JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8')), { activate: true, by: 'test' });
+  await S.refreshRules();
+  const run = await keptRun(R, api, ['Calm at the counter.']);
+  const ads = adsOf(run.prims, run.head);
+  const code = (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: ads, expectation: { codes: [await leadOf(R, ads)], reason: 'x' } }, 'nick')).signoff.versions![0].code;
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const db = (store as any).db;
+  let mid: Date | null = null;
+  // An engine that is silent for 400 ms (one long model call), then answers.
+  const slow = { ...mockEngine, run: async (i: any, p: any) => { await new Promise(r => setTimeout(r, 400)); mid = (await db.query(`SELECT heartbeat_at FROM studio_audits WHERE status = 'running'`)).rows[0]?.heartbeat_at; return mockEngine.run(i, p); } };
+  const pf = new Preflight(db, slow as any, { storage: 'db', heartbeatMs: 100 });
+  const up = await pf.upload(code, [{ buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 1]), filename: 'a.png', contentType: 'image/png' }], 'nick');
+  const id = await pf.createAudit(up.upload_id);
+  const started = Date.now();
+  await pf.runAudit(id);
+  assert.ok(mid && new Date(mid).getTime() > started + 50, 'the timer beat while the engine was silent');
+  assert.equal((await pf.report(code)).audit!.status, 'done');
 });
