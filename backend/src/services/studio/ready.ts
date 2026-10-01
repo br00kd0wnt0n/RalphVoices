@@ -18,7 +18,7 @@
 // "cleared". No scores.
 
 import {
-  type Api, type Batch, type ComplianceStatus, type Flag, type Line, type LineVersion,
+  type Api, type Batch, type ComplianceStatus, type Flag, type Line, type LineVersion, type Rules,
   checkBatch, finalText, getStore, keptLines, lineHash, loadBatch, loadRules, runLock, sha256, signedCodes, toCsv,
 } from './engine.js';
 import { DEFAULT_REGION, REGION_NAMES, parseCode, territoryToken, type Region } from '../../utils/namingCode.js';
@@ -142,6 +142,26 @@ export async function setCompliance(batchId: string, lineId: string, status: str
     line.compliance = rec;
     return write(batchId, line, before, { compliance: line.compliance }, user);
   });
+}
+
+/**
+ * A rule's short name for the client: the rules' `short` if set, else its first clause ("Every figure in a line must
+ * come from the facts list"). Never the rest of the rule text, which carries internal notes (production test, 1 Oct:
+ * the compliance sheet showed "…'12,700+ emergency calls' stay out until confirmed").
+ */
+export function ruleName(r: Pick<Rules, 'compliance' | 'brand' | 'figure_rule'>, rule: string, fallback = rule): string {
+  const it: any = [...r.compliance, ...r.brand, r.figure_rule, (r.figure_rule as any)?.citation_rule, (r.figure_rule as any)?.attribution_rule].find((x: any) => x?.id === rule);
+  if (it?.short) return String(it.short);
+  const text = String(it?.rule || fallback);
+  return text.split(/(?<=[a-z0-9’'”)])[.:;]\s|\s\(/)[0].replace(/[.:;]$/, '').trim();
+}
+
+/**
+ * One sentence per overridden red flag, for Trupanion: where, the words and the rule in short. Never the reason, who,
+ * or "approved" (the sheet carries no internal notes, and Studio never says approved; readyScenario checks both).
+ */
+export function clientOverrideLine(where: string, quote: string | undefined, rule: string): string {
+  return `${where}: ${quote ? `“${quote}” ` : ''}went through sign-off despite “${rule}”. Please check it.`;
 }
 
 /**
@@ -387,6 +407,7 @@ export async function handoffRows(filter: { persona?: string; territory?: string
   // The person's working round by default ('all' for every round). A test round is left out, except in a view of
   // exactly that test round (a demo's exports, labelled TEST by handoffPack).
   const view = await roundView(filter.round, filter.user);
+  const fieldName = (x: { field: string; card?: number }) => `${r.fields[x.field]?.label || x.field}${x.card ? `, card ${x.card}` : ''}`;
   for (const s of await latestSignoffs({ ...filter, view })) {
     if (view.isTest(roundOf(s)) && !testOnly(view)) continue;
     const onImage = signoffOnImage(s);
@@ -410,7 +431,10 @@ export async function handoffRows(filter: { persona?: string; territory?: string
         else if (c?.note && !note) note = c.note;
         if (now?.ready?.signoff_id === s.id && now.ready.changed_since) changed = true;
         const labelOf = (o: { rule: string; label?: string }) => (o.label || now?.flags.find(f => f.rule === o.rule)?.label || o.rule).replace(/\.$/, '');
-        for (const o of x.overrides || []) { labels.push(labelOf(o)); overrides.push(`${labelOf(o)} (${r.fields[x.field]?.label || x.field}): overridden by ${o.by}, “${o.reason}”`); }
+        for (const o of x.overrides || []) {
+          labels.push(clientOverrideLine(fieldName(x), now?.flags.find(f => f.rule === o.rule)?.quote, ruleName(r, o.rule, labelOf(o))));
+          overrides.push(`${labelOf(o)} (${r.fields[x.field]?.label || x.field}): overridden by ${o.by}, “${o.reason}”`);
+        }
       }
       const p = parseCode(v.code, null);
       rows.push({
@@ -420,7 +444,7 @@ export async function handoffRows(filter: { persona?: string; territory?: string
         on_image: oi ? { text: oi.text, chars: oi.chars, version: oi.version, line_id: oi.line_id } : null,
         cards: cards.map(c => ({ card: c.card!, text: c.text, chars: c.chars, version: c.version, line_id: c.line_id })),
         compliance: status, compliance_note: note, overrides: overrides.join(' | '),
-        check_specifically: labels.length ? `Please check specifically: ${[...new Set(labels)].join('; ')}` : '',
+        check_specifically: [...new Set(labels)].join(' '),
         ready_by: s.ready_by, ready_at: s.ready_at, changed_since: changed ? 'yes: a newer version of a line exists' : '',
         traffic: trafficOf ? (await trafficOf(v.code)).words : '', signoff_id: s.id,
       });

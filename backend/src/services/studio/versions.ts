@@ -202,6 +202,9 @@ export function planDraft(draft: Draft, lines: Line[], ctx: Ctx, signedCodes: st
     const ids = cards ? val as string[] : [val as string];
     if (cards && !isCarousel(ctx.format)) { issues.push(`On-image, visual ${visual}: only a carousel has cards`); continue; }
     if (cards && ids.length > MAX_CARDS) issues.push(`On-image, visual ${visual}: at most ${MAX_CARDS} cards`);
+    // A carousel with a blank card isn't finished (production test, 1 Oct: signed off with card 2 cleared). Set fewer
+    // cards, or choose its text.
+    if (cards && ids.some(Boolean)) ids.slice(0, MAX_CARDS).forEach((id, i) => { if (!id) issues.push(`On-image, visual ${visual}: card ${i + 1} is empty (choose its text, or set fewer cards)`); });
     ids.slice(0, MAX_CARDS).forEach((id, i) => {
       if (!id) return;
       const where = cards ? `visual ${visual}, card ${i + 1}` : `visual ${visual}`;

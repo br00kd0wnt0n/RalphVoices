@@ -1228,3 +1228,56 @@ test('compliance: changes requested on the copy → edit → signed off again �
   assert.match((await pf.traffic(A3)).words, /Compliance pending \(copy fixed in set v2\)/);
   assert.equal((await pf.traffic(A3)).send_back, undefined);
 });
+
+// ---------- production test, 1 Oct, findings 18–20 ----------
+test('shared visual in 3 sizes: one verdict per text rule when the words are the same (19); the copy override is offered on the Pre-flight flag (18); all codes on the visual pass at once (20)', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const rules = JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8'));
+  rules.territories.OWN_STILL = { ...rules.territories.OWN_CALM, name: 'Still', format: 'STATIC' };
+  rules.compliance.push({ id: 'COMP_FACT_FRAMING', rule: 'A stat is framed as whose it is.', severity: 'warn', check: 'model', source: 'LEGAL §7' });
+  await store.putRules('example-1820', rules, { activate: true, by: 'test' });
+  await S.refreshRules();
+  const run = await S.generate(S.makeBrief({ territory: 'OWN_STILL', name: 'sv', own_lines: [{ text: 'Over 7,000 owners switched.', field: 'meta_primary' }, { text: 'Calm at the counter.', field: 'meta_primary' }, HEAD] }), api, () => {}, { ownOnly: true, user: 'nick' });
+  for (const l of run.lines) {
+    await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+    for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find((x: any) => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'The client confirmed the figure', 'nick');
+  }
+  const [p1, p2, h] = run.lines.map(l => l.id);
+  const versions = [{ visual: 'A', fields: { meta_primary: p1, meta_headline: h } }, { visual: 'A', fields: { meta_primary: p2, meta_headline: h } }];
+  const v = await R.readyView('OWN', 'OWN_STILL', 'US', { versions, on_image: {} } as any);
+  const so = (await R.signOff({ persona: 'OWN', territory: 'OWN_STILL', versions, expectation: { codes: [v.plan.versions[0].code], reason: 'x' } } as any, 'nick')).signoff;
+  const [A1, A2] = so.versions!.map((x: any) => x.code);
+
+  // An engine that reads the same words on every size but words its text verdict differently each time, and finds the figure.
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  let n = 0;
+  const engine = { ...mockEngine, name: 'sizes', run: async () => ({
+    engine: 'sizes', text_found: 'Over 7,000 owners switched.', asset_text: [{ where: 'image', text: 'Over 7,000 owners switched.' }], features: {}, usd: 0,
+    flags: [
+      { rule: 'COMP_FACT_FRAMING', severity: (n === 0 ? 'amber' : 'grey') as any, label: 'A stat is framed as whose it is.', source: 'LEGAL §7', why: ++n === 1 ? 'not framed as a statistic' : 'framed as a Trupanion statistic' },
+      { rule: 'FIG_UNSOURCED', severity: 'red' as const, label: 'Every figure must come from the facts list.', source: 'LEGAL §2', quote: '7,000' },
+    ],
+  }) };
+  const pf = new Preflight((store as any).db, engine as any, { storage: 'db' });
+  const png = (name: string) => ({ buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 1]), filename: name, contentType: 'image/png' });
+  const up = await pf.upload(A1, [png('a-1x1.png'), png('a-4x5.png'), png('a-9x16.png')], 'nick', [A2], ['1:1', '4:5', '9:16']);
+  await pf.runAudit(await pf.createAudit(up.upload_id));
+  const rep = await pf.report(A1);
+  const framing = rep.flags.filter((f: any) => f.rule === 'COMP_FACT_FRAMING');
+  assert.equal(framing.length, 1, '19: one verdict for the three sizes');
+  assert.equal(framing[0].severity, 'amber', 'the strongest reading kept');
+  assert.match(framing[0].why, /same text on every size/);
+  // 18: the copy's override at sign-off is offered on the Pre-flight flag for the same rule.
+  assert.ok(rep.copy_overrides.some((o: any) => o.rule === 'FIG_UNSOURCED' && o.reason === 'The client confirmed the figure' && o.by === 'nick'));
+
+  // 20: blocked by the open red on the asset; once overridden, both codes on the visual pass at once.
+  const blocked = await pf.setReadyVisual(A1, 'nick');
+  assert.deepEqual(blocked.passed, []);
+  assert.equal(blocked.blocked.length, 2);
+  for (const f of rep.flags.filter((x: any) => x.severity === 'red' && !x.override)) await pf.override(f.id, 'Same as at sign-off (nick): The client confirmed the figure', 'nick');
+  for (const f of (await pf.report(A2)).flags.filter((x: any) => x.severity === 'red' && !x.override)) await pf.override(f.id, 'Same as at sign-off', 'nick');
+  const both = await pf.setReadyVisual(A1, 'nick');
+  assert.deepEqual(both.passed.sort(), [A1, A2].sort());
+  assert.equal((await pf.report(A2)).status.status, 'ready');
+});

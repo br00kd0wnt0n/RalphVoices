@@ -203,6 +203,8 @@ export interface PfReport {
   stub: string; persona: string; territory: string; region: Region; visual_key: string | null; signoff_id: string; copy: SignedCopy[]; upload: PfUpload | null;
   sizes?: PfSizes;
   same_visual_as: string[]; on_asset_copy: SignedCopy[]; post_copy: SignedCopy[];
+  /** Red flags on the copy overridden at sign-off (a Pre-flight flag on the same rule can reuse the reason). */
+  copy_overrides?: Array<{ rule: string; label: string; field: string; reason: string; by: string; at: string }>;
   /** Set when the upload's type doesn't fit the code's format (a note, never a block). */
   format_note?: string | null;
   history: Array<{ id: string; kind: string; uploaded_by: string; uploaded_at: string; files: number }>;
@@ -220,6 +222,8 @@ export interface CodeCompliance {
   /** by: who recorded it in Studio (the producer); client_by: who at Trupanion made the decision. */
   by?: string; client_by?: string; recorded?: boolean; wording_edited?: boolean;
   stale?: string; on_asset: boolean; overrides: string[];
+  /** For Trupanion, one sentence per override (no internal rule text). */
+  check_specifically?: string[];
   override_details?: Array<{ label: string; reason: string; by: string }>;
 }
 export interface ComplianceAsset {
@@ -439,6 +443,8 @@ export const studio = {
   pfAgree: (flagId: string, agree: boolean, note?: string) => req<unknown>(`/preflight/flags/${enc(flagId)}/agree`, { method: 'POST', body: JSON.stringify({ agree, note }) }),
   pfOverride: (flagId: string, reason: string) => req<unknown>(`/preflight/flags/${enc(flagId)}/override`, { method: 'POST', body: JSON.stringify({ reason }) }),
   pfReady: (stub: string, ready: boolean) => req<PfStatus>(`/preflight/stubs/${enc(stub)}/ready`, { method: 'POST', body: JSON.stringify({ ready }) }),
+  /** Every code on this code's visual: each passes on its own flags; the ones that can't say why. */
+  pfReadyVisual: (stub: string) => req<{ passed: string[]; blocked: Array<{ code: string; error: string }> }>(`/preflight/stubs/${enc(stub)}/ready`, { method: 'POST', body: JSON.stringify({ ready: true, all_on_visual: true }) }),
   pfOrphans: () => req<{ orphans: OrphanUpload[]; storage_check: StorageCheck | null }>('/preflight/orphans'),
   removePfOrphans: () => req<{ removed: string[] }>('/preflight/orphans', { method: 'DELETE' }),
   pfAgreement: () => req<{ marked: number; agree: number; rate: number | null; by_severity: Record<string, { marked: number; agree: number }> }>('/preflight/agreement'),

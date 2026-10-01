@@ -338,6 +338,8 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     }));
     r.post('/preflight/stubs/:stub/ready', wrap(async (req, res) => {
       if (!o.preflight!.canSetReady(req)) return res.status(403).json({ error: 'Pre-flight is marked passed by the creative lead or an admin (Ready to traffic also needs Trupanion’s compliance cleared)' });
+      // all_on_visual: every code on this code's visual (the default on a shared visual), each passing on its own flags.
+      if (req.body?.all_on_visual && req.body?.ready !== false) return res.json(await pf.setReadyVisual(req.params.stub, o.who(req)));
       try { res.json(await pf.setReady(req.params.stub, req.body?.ready !== false, o.who(req))); }
       catch (err: any) { if (err.blocking) return res.status(409).json({ error: err.message, blocking: err.blocking }); throw err; }
     }));

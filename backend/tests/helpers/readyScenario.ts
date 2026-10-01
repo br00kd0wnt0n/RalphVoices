@@ -121,7 +121,7 @@ export async function scenario() {
   const sheet = S.parseCsv(pack.complianceCsv);
   assert.deepEqual(sheet[0], ['Naming code', 'Region', 'Platform', 'Meta primary text', 'Meta headline', 'Please check']);
   // The ad with the overridden line tells the reviewer which rule to look at, in the rule's plain words; clean ones say nothing.
-  assert.equal(sheet.find(r => r[0] === 'OWN_CALM_UGC_A2_US_META')![5], 'Please check specifically: Never say it pays for itself');
+  assert.equal(sheet.find(r => r[0] === 'OWN_CALM_UGC_A2_US_META')![5], 'Meta primary text: “pays for itself” went through sign-off despite “Never say it pays for itself”. Please check it.');
   assert.equal(sheet.find(r => r[0] === 'OWN_CALM_UGC_A1_US_META')![5], '');
   const all = pack.complianceCsv.toLowerCase();
   for (const internal of ['comp_pays_for_itself', 'legal cleared', 'skeptic', 'override', 'nick', 'vivan', 'j. doe', 'legal §4', 'owners told us']) assert.equal(all.includes(internal), false, `compliance sheet leaks "${internal}"`);
