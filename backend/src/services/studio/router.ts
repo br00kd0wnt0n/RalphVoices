@@ -9,6 +9,7 @@ import * as S from './engine.js';
 import type { PgStore } from './pgStore.js';
 import * as R from './ready.js';
 import * as Rounds from './rounds.js';
+import * as Bulk from './bulk.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -201,6 +202,33 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     if ('error' in held) return res.status(402).json({ error: held.error });
     res.json({ job: startJob(`${req.params.id}~more~${Date.now()}`, emit => S.moreLikeThis(req.params.id, req.params.line, String(req.body?.note || ''), k, api, emit).finally(held.release)) });
   }));
+  // ----- Copy check (bulk check + report): paste a table of someone's copy, check every line, share the report -----
+  const bulkView = (p: Bulk.BulkParse) => {
+    const rules = S.loadRules();
+    return {
+      header: p.header, errors: p.errors, estimate: p.rows.length ? Bulk.estimateBulk(p.rows) : { usd: 0, seconds: 0, lines: 0, runs: 0 },
+      rows: p.rows.map(x => ({ ...x, persona_name: rules.personas[x.persona]?.name, territory_name: rules.territories[x.territory]?.name?.replace(/\.$/, ''), field_label: rules.fields[x.field]?.label, shared: x.persona === S.SHARED_PERSONA })),
+    };
+  };
+  r.post('/bulk/parse', wrap(async (req, res) => { await S.refreshRules(); res.json(bulkView(Bulk.parseBulk(String(req.body?.text || ''), S.loadRules(), req.body?.defaults || {}))); }));
+  r.post('/bulk/check', wrap(async (req, res) => {
+    await S.refreshRules();
+    const parsed = Bulk.parseBulk(String(req.body?.text || ''), S.loadRules(), req.body?.defaults || {});
+    if (!parsed.rows.length) return res.status(400).json({ error: parsed.errors[0] ? `Nothing to check: ${parsed.errors[0].error}` : 'Paste the lines to check' });
+    const est = Bulk.estimateBulk(parsed.rows);
+    if (!o.mock && est.usd > o.askOver && !req.body?.confirm) return res.status(409).json({ needs_confirm: true, estimate: est.usd });
+    const api = o.api(req);
+    const id = `bulk-${new Date().toISOString().replace(/[-:T]/g, '').slice(2, 14)}`;
+    const held = await reserve(`copy-check ${id}`, est.usd, api, o.who(req));
+    if ('error' in held) return res.status(402).json({ error: held.error });
+    const who = o.who(req), forWhom = String(req.body?.for || '').trim() || undefined;
+    res.json({ bulk: id, estimate: est, job: startJob(`${id}~${Date.now()}`, emit => Bulk.runBulk(parsed, api, { user: who, for: forWhom, id }, emit).finally(held.release)) });   // each run records its own spend (generate)
+  }));
+  r.get('/bulk', wrap(async (_req, res) => res.json(await Bulk.listBulk())));
+  r.get('/bulk/:id', wrap(async (req, res) => { await S.refreshRules(); res.json(await Bulk.bulkReport(req.params.id === 'latest' ? undefined : req.params.id)); }));
+  r.get('/bulk/:id/report.md', wrap(async (req, res) => { await S.refreshRules(); const rep = await Bulk.bulkReport(req.params.id === 'latest' ? undefined : req.params.id); download(res, 'text/markdown; charset=utf-8', `copy-check-${rep.id}.md`, Bulk.reportMd(rep)); }));
+  r.get('/bulk/:id/report.csv', wrap(async (req, res) => { await S.refreshRules(); const rep = await Bulk.bulkReport(req.params.id === 'latest' ? undefined : req.params.id); download(res, 'text/csv; charset=utf-8', `copy-check-${rep.id}.csv`, Bulk.reportCsv(rep)); }));
+
   r.get('/batches/:id/export.csv', wrap(async (req, res) => download(res, 'text/csv; charset=utf-8', `${req.params.id}.csv`, (await S.exportBatch(req.params.id)).csv)));
   r.get('/batches/:id/export.md', wrap(async (req, res) => download(res, 'text/markdown; charset=utf-8', `${req.params.id}.md`, (await S.exportBatch(req.params.id)).md)));
 

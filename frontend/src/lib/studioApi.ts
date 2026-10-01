@@ -63,6 +63,16 @@ export interface RunStats {
 }
 /** A line Studio wrote but didn't show: a near-duplicate (dup_of), or one that broke a hard rule or ran past a headline's or hook's visible length (reason). */
 export interface DroppedLine { text: string; cell: string; dup_of?: string; similarity?: number; reason?: string; rule?: string; field?: string }
+/** Copy check (bulk check + report): a pasted table of someone's copy, checked line by line. */
+export interface BulkRow { n: number; persona: string; territory: string; field: string; text: string; region: Region; notes: string[]; persona_name?: string; territory_name?: string; field_label?: string; shared?: boolean }
+export interface BulkPreview { header: boolean; rows: BulkRow[]; errors: Array<{ n: number; error: string; raw: string }>; estimate: { usd: number; seconds: number; lines: number; runs: number } }
+export interface BulkDefaults { persona?: string; territory?: string; field?: string; region?: string }
+export interface BulkRecord { id: string; at: string; by: string; for?: string; runs: string[]; lines: number }
+export interface BulkReportRow {
+  persona: string; territory: string; region: Region; field: string; text: string; chars: number; visible: number; over: boolean; status: 'red' | 'amber' | 'clear';
+  flags: Array<{ severity: 'red' | 'amber' | 'grey'; name: string; what: string; quote: string; todo: string }>; objection: string; run: string; line_id: string; shared?: boolean;
+}
+export interface BulkReport { id: string; at: string; by: string; for?: string; rows: BulkReportRow[]; errors: BulkPreview['errors']; summary: string; counts: { checked: number; red: number; amber: number; clear: number } }
 export interface StorageCheck { ok: boolean; bucket?: string; error?: string; at: string }
 export interface OrphanUpload { id: string; stub: string; uploaded_by: string | null; uploaded_at: string }
 export interface Batch { id: string; brief: Brief; created: string; created_by?: string; updated?: string; rules_version?: string; lines: Line[]; stats: RunStats; dropped?: DroppedLine[] }
@@ -451,6 +461,13 @@ export const studio = {
   pfReady: (stub: string, ready: boolean) => req<PfStatus>(`/preflight/stubs/${enc(stub)}/ready`, { method: 'POST', body: JSON.stringify({ ready }) }),
   /** Every code on this code's visual: each passes on its own flags; the ones that can't say why. */
   pfReadyVisual: (stub: string) => req<{ passed: string[]; blocked: Array<{ code: string; error: string }> }>(`/preflight/stubs/${enc(stub)}/ready`, { method: 'POST', body: JSON.stringify({ ready: true, all_on_visual: true }) }),
+  bulkParse: (text: string, defaults: BulkDefaults) => req<BulkPreview>('/bulk/parse', { method: 'POST', body: JSON.stringify({ text, defaults }) }),
+  /** forWhom: whose copy it is (the lines are filed "for" them, entered by you). */
+  bulkCheck: (text: string, defaults: BulkDefaults, forWhom: string, confirm = false) =>
+    req<{ bulk: string; job: string; estimate: BulkPreview['estimate'] }>('/bulk/check', { method: 'POST', body: JSON.stringify({ text, defaults, for: forWhom, confirm }) }),
+  bulkList: () => req<BulkRecord[]>('/bulk'),
+  bulkReport: (id = 'latest') => req<BulkReport>(`/bulk/${enc(id)}`),
+  bulkReportMd: async (id = 'latest') => (await raw(`/bulk/${enc(id)}/report.md`)).text(),
   pfOrphans: () => req<{ orphans: OrphanUpload[]; storage_check: StorageCheck | null }>('/preflight/orphans'),
   removePfOrphans: () => req<{ removed: string[] }>('/preflight/orphans', { method: 'DELETE' }),
   pfAgreement: () => req<{ marked: number; agree: number; rate: number | null; by_severity: Record<string, { marked: number; agree: number }> }>('/preflight/agreement'),
