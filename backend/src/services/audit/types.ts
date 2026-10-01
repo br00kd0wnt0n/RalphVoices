@@ -9,6 +9,8 @@ export type Pattern = string | { re: string; severity?: 'compliance' | 'warn' | 
 export interface RuleItem {
   id: string;
   rule: string;
+  /** Lines that don't break the rule (rules v2.13+), given to the reviewer and the yes/no wordings. */
+  not_examples?: string[];
   severity?: 'compliance' | 'warn' | 'note';
   check?: string;
   patterns?: Pattern[];

@@ -216,3 +216,14 @@ test('files by path: nothing copied into memory, extensionless names work, cards
   await assert.rejects(runAudit({ stub: 'DINK_JOKE_ST_v1_META', files: [{ name: 'x.png', mime: 'image/png' }] }, { rules, rubric, openai, tmpDir }), /give either data or path/);
   await assert.rejects(runAudit({ stub: 'DINK_JOKE_ST_v1_META', files: [{ name: 'x.png', mime: 'image/png', path: path.join(work, 'nope') }] }, { rules, rubric, openai, tmpDir }), /File not found/);
 });
+
+test('32: a reviewer hit resting on a line some rule lists as not a breach is set aside, whichever rule it was filed under', async () => {
+  const { listedAsNotABreach } = await import('../src/services/audit/engine.js');
+  const r = { compliance: [{ id: 'COMP_CLAIM_SPEED', not_examples: ['Build your plan in 60 seconds!'] }, { id: 'COMP_FACT_FRAMING' }], brand: [] } as any;
+  assert.equal(listedAsNotABreach('Build your plan in 60 seconds!', r), true);
+  assert.equal(listedAsNotABreach('build your plan in 60 seconds', r), true, 'case and punctuation aside');
+  assert.equal(listedAsNotABreach('Build your plan in 60 seconds', r), true, 'most of the listed line');
+  assert.equal(listedAsNotABreach('in 60 seconds', r), false, 'a fragment could come from a real breach: not set aside');
+  assert.equal(listedAsNotABreach('Every claim paid in seconds', r), false);
+  assert.equal(listedAsNotABreach('', r), false);
+});

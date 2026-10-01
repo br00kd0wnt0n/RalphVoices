@@ -22,6 +22,7 @@ import { extractAudio, ocr, runTool } from './assets.js';
 import { CONFIG } from './config.js';
 import { copyMatch, type SignedOffCopy } from './copyMatch.js';
 import { defaultTools, type Tools } from './tools.js';
+import { withoutSmallPrint } from './smallPrint.js';
 import type { Asset, AssetAudit, Flag, FrameText, Rubric, RuleItem, Rules, YesNo } from './types.js';
 import { CURRENT_PATTERN } from '../../utils/namingCode.js';
 
@@ -65,6 +66,21 @@ async function pool<T>(tasks: Array<() => Promise<T>>, n: number): Promise<T[]> 
 const img = (p: string, detail: 'low' | 'high') => ({ type: 'image' as const, image: { path: p, detail } });
 const txt = (text: string) => ({ type: 'text' as const, text });
 const withWording = (source: string, w: string) => (w.startsWith('B2') || w === 'rules' || source.includes(w) ? source : `${source}; ${w}`);
+/** A rule's "not a breach" lines (rules v2.13+), as Studio's line checks give them (services/studio/engine.ts). */
+const notExamples = (i: { not_examples?: string[] }) => (i.not_examples?.length ? ` Not a breach, for example: ${i.not_examples.map(x => `"${x}"`).join('; ')}.` : '');
+const noLines = (i: { not_examples?: string[] }) => (i.not_examples?.length ? `Lines like these are a No: ${i.not_examples.map(x => `"${x}"`).join('; ')}.\n` : '');
+const normText = (s: string) => s.toLowerCase().replace(/[’']/g, '').replace(/[^a-z0-9$%]+/g, ' ').trim();
+/**
+ * A reviewer hit resting on a line some rule lists as not a breach is set aside, whichever rule the reviewer filed it
+ * under (production, 1 Oct: "Build your plan in 60 seconds!", a claim-speed not_example, came back under the
+ * fact-framing rule with the reason "Overclaims speed").
+ */
+export function listedAsNotABreach(quote: string | undefined, rules: { compliance: Array<{ not_examples?: string[] }>; brand: Array<{ not_examples?: string[] }> }): boolean {
+  const q = normText(quote || '');
+  if (!q) return false;
+  // The whole listed line, or most of it: a fragment ("in 60 seconds") could come from a real breach.
+  return [...rules.compliance, ...rules.brand].flatMap(i => i.not_examples || []).map(normText).some(x => x && (q.includes(x) || (x.includes(q) && q.length >= x.length * 0.7)));
+}
 const yesNoPrompt = (ad: string, q: string) => `AD:\n${ad}\n\n${q} Answer with exactly one word: Yes or No.`;
 
 /** A 512 px copy for detail-low questions: smaller uploads, same tokens (85). */
@@ -145,17 +161,17 @@ async function reviewer(a: Asset, ad: string, images: Content, ctx: AuditContext
     ...r.brand,
     ...Object.entries(r.personas).flatMap(([code, p]) => p.turn_offs.map(t => ({ ...t, id: t.id, rule: `(${code}: ${p.name}) ${t.rule}` }))),
   ];
-  const system = `You check one finished social ad for Trupanion (medical insurance for cats and dogs) against fixed rules. Judge only what the ad shows and says. A rule is hit only when the ad itself does what the rule forbids; don't flag an ad for touching a topic. For every hit, say where (the card, frame or copy field) and quote the exact words, or describe the image in a few words if it's visual.
+  const system = `You check one finished social ad for Trupanion (medical insurance for cats and dogs) against fixed rules. Judge only what the ad shows and says. A rule is hit only when the ad itself does what the rule forbids; don't flag an ad for touching a topic. For every hit, say where (the card, frame or copy field) and quote the exact words, or describe the image in a few words if it's visual. File each hit under the rule your reason is about: if the reason belongs to another rule, use that rule's id; if a rule lists the words as not a breach, report nothing for them.
 
 RULES (id: rule):
-${items.map(i => `${i.id}: ${i.rule}`).join('\n')}
+${items.map(i => `${i.id}: ${i.rule}${notExamples(i as any)}`).join('\n')}
 
 Return JSON only: {"hits":[{"rule":"<id>","where":"<card/frame/field>","quote":"<exact words, or what the image shows>","why":"<12 words or fewer>"}]}. Use "hits":[] when nothing is hit.`;
   const res = await ctx.api.chat({ stage: `review ${a.name}`, model: MODELS.reviewer, max_tokens: 700, temperature: 0, json: true, system, content: [...images, txt(`AD:\n${ad}`)] });
   let j: any = {};
   try { j = JSON.parse(res.text || '{}'); } catch { /* none */ }
   const ids = new Set(items.map(i => i.id));
-  return (Array.isArray(j.hits) ? j.hits : []).filter((h: any) => ids.has(h?.rule));
+  return (Array.isArray(j.hits) ? j.hits : []).filter((h: any) => ids.has(h?.rule) && !listedAsNotABreach(h?.quote, r));
 }
 
 async function objection(a: Asset, ad: string, images: Content, persona: Persona | undefined, ctx: AuditContext): Promise<string> {
@@ -256,10 +272,12 @@ export async function auditAsset(a: Asset, ctx: AuditContext): Promise<AssetAudi
   progress('compliance', 'compliance checks');
 
   // 4. Compliance yes/no on the words alone.
-  const words = blocks.map(b => b.text).filter(t => t.trim()).join('\n');
+  // The asset's legal small print isn't ad copy (smallPrint.ts): only the disclaimer check reads it.
+  const disclaimerText = (ctx.rules as any).disclaimer?.text as string | undefined;
+  const words = blocks.map(b => (b.onImage ? withoutSmallPrint(b.text, disclaimerText) : b.text)).filter(t => t.trim()).join('\n');
   const compItems = ctx.rules.compliance.filter(c => c.wordings && c.wordings.length === 2);
   const compReads = words.trim() ? await pool(compItems.flatMap(c => c.wordings!.map((w, k) => async () => {
-    try { return { id: c.id, k, p: await ctx.api.yesNo(`${a.name} ${c.id} ${'AB'[k]}`, MODELS.compliance, COPY_SYSTEM, [txt(`AD COPY (all the words in the ad):\n${words}\n\n${w} Answer with exactly one word: Yes or No.`)]) }; }
+    try { return { id: c.id, k, p: await ctx.api.yesNo(`${a.name} ${c.id} ${'AB'[k]}`, MODELS.compliance, COPY_SYSTEM, [txt(`AD COPY (all the words in the ad):\n${words}\n\n${noLines(c)}${w} Answer with exactly one word: Yes or No.`)]) }; }
     catch (e: any) { if (e instanceof FatalError) throw e; errors.push(`${c.id} ${'AB'[k]}: ${e?.message}`); return { id: c.id, k, p: null }; }
   })), n) : [];
   const compP: Record<string, number> = {};
@@ -304,7 +322,7 @@ export async function auditAsset(a: Asset, ctx: AuditContext): Promise<AssetAudi
   // it's asked again on gpt-4o with the same two wordings, and flagged only if both agree.
   for (const c of lone) {
     const ps = (await pool(c.wordings!.map((w, k) => async () => {
-      try { return await ctx.api.yesNo(`${a.name} ${c.id} confirm ${'AB'[k]}`, MODELS.yesno, COPY_SYSTEM, [txt(`AD COPY (all the words in the ad):\n${words}\n\n${w} Answer with exactly one word: Yes or No.`)]); }
+      try { return await ctx.api.yesNo(`${a.name} ${c.id} confirm ${'AB'[k]}`, MODELS.yesno, COPY_SYSTEM, [txt(`AD COPY (all the words in the ad):\n${words}\n\n${noLines(c)}${w} Answer with exactly one word: Yes or No.`)]); }
       catch (e: any) { if (e instanceof FatalError) throw e; return null; }
     }), 2)).filter((x): x is number => x !== null);
     const p2 = ps.length ? Math.round((ps.reduce((s, x) => s + x, 0) / ps.length) * 1000) / 1000 : null;
