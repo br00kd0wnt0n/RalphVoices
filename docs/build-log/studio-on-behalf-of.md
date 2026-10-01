@@ -31,3 +31,12 @@ The page's "for" picker (beside Sign off, the expectation, an override's reason,
 ## Tests
 
 `backend/tests/studioActor.test.ts` (pack/unpack) and the "on behalf of" test in `studioPg.test.ts` (HTTP: every call above with by + for, the Studio-list check, role checks on the signed-in person, the exports).
+
+## Generation honours "for" (1 Oct, follow-up)
+
+- `POST /generate` passes the `X-Studio-For` person to `S.generate` (`opts.for`). A **new** run gets `created_for`; the lines the person typed get `added_for`. Continuing an existing run never changes whose run it is. Permissions and spend stay the signed-in person's.
+- Storage: `created_for` on the run, and `brief.bulk.for` (Postgres reads the run header's "for" back from the brief, as it already did for copy checks). No migration.
+- The "for" picker is by the Generate buttons on Write and in Review's run header.
+- Admin correction: `POST /batches/:id/for {for}` (admins only; the name must be on the Studio list; `''` clears it). In Review's run header as "This run is for" (shown to admins when the Studio list is available, so hosted only). The run's own typed lines follow; `created_by` never changes; the change is in the edit log as `run:<id>`.
+- Generated lines carry no person, so "Generate more" and "More like this" have nothing to stamp; resume only finishes checks.
+- Shared captions: the writer prompt now makes naming the product and ending on a call to action a MUST for primary text and captions, and a shared primary text or caption whose last sentence isn't a call to action gets an amber flag (`SHARED_CTA`, "no call to action").

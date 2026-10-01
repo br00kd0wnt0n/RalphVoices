@@ -424,6 +424,8 @@ export const studio = {
   history: (line: string) => req<EditRecord[]>(`/lines/${enc(line)}/history`),
   versions: (line: string) => req<LineVersion[]>(`/lines/${enc(line)}/versions`),
   /** Check the lines an interrupted run left unchecked. */
+  /** Admin: credit a run to someone on the Studio list ('' clears it). */
+  setRunFor: (batch: string, who: string) => req<{ id: string; created_by?: string; created_for?: string }>(`/batches/${enc(batch)}/for`, { method: 'POST', body: JSON.stringify({ for: who }) }),
   resume: (batch: string) => req<{ job: string }>(`/batches/${enc(batch)}/resume`, { method: 'POST' }),
   more: (batch: string, line: string, note: string, k = 3) =>
     req<{ job: string }>(`${lineUrl(batch, line)}/more`, { method: 'POST', body: JSON.stringify({ note, k }) }),

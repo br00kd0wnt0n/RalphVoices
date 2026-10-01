@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { roundName, studio, finalText, isEdited, type Batch, type Line, type Meta, type RunSummary, type ShortRow } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { personaEdge } from '@/lib/personaColors';
-import { Chip, GhostButton, Intro, Label, LineHistory, Overrides, PINK, PersonaChip, PinkButton, Src, chipName, fieldOrder, flagName, params, plainSource, regionOf, sameCtx, sevTone, territoryName, toneWords, when, whatToDo, whoWords, type Ctx } from './ui';
+import { Chip, ForPicker, GhostButton, Intro, Label, LineHistory, Overrides, PINK, PersonaChip, PinkButton, Src, chipName, fieldOrder, flagName, params, plainSource, regionOf, sameCtx, sevTone, territoryName, toneWords, when, whatToDo, whoWords, type Ctx } from './ui';
 
 type Filter = 'all' | 'compliance' | 'open' | 'kept';
 const shortField = (meta: Meta, f: string) => (meta.fields[f]?.label || f).replace(/^(Meta|TikTok) /, '').replace(/\s*\(.*\)$/, '').replace(/^./, c => c.toUpperCase());
@@ -86,6 +86,23 @@ export function Review({ meta, ctx, batch, setBatch, status, running, onMore, on
               {b && <div className="mt-1 text-sm text-[#858B96]">{checked} of {lines.length} checked{yours ? ` · ${yours} yours` : ''} · writer {b.brief.model}{b.stats.generated ? ` · ${b.stats.generated} written` : ''}{b.stats.near_duplicates_removed ? ` · ${b.stats.near_duplicates_removed} near-duplicates removed` : ''}{b.stats.spare ? ` · ${b.stats.spare} spare (beyond the counts asked for)` : ''}</div>}
               {b && <DroppedNote meta={meta} batch={b} />}
             </div>
+            {b && (
+              <div className="flex flex-col items-end gap-1">
+                <ForPicker meta={meta} doing="Working" />
+                {/* An admin's correction: whose run this is (e.g. one started before the picker was on Write). */}
+                {(meta.user ? meta.user.admin : true) && !!meta.people?.length && (
+                  <label className="inline-flex items-center gap-1 text-xs text-[#858B96]">
+                    <span>This run is for</span>
+                    <select aria-label="Who this run is for" className="rounded border border-[#343946] bg-[#101216] px-1.5 py-0.5 text-xs text-[#C9CCD2]" value={b.created_for || ''} disabled={running}
+                      onChange={e => { studio.setRunFor(b.id, e.target.value).then(() => studio.batch(b.id)).then(setBatch).catch(x => window.alert(x.message)); }}>
+                      <option value="">{b.created_by ? `${b.created_by.split('@')[0]} (who started it)` : 'whoever started it'}</option>
+                      {b.created_for && !meta.people.includes(b.created_for) && <option value={b.created_for}>{b.created_for}</option>}
+                      {meta.people.filter(p => p.toLowerCase() !== (b.created_by || '').toLowerCase()).map(p => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                  </label>
+                )}
+              </div>
+            )}
             {b && <GhostButton className="text-base" disabled={running} onClick={onMoreRun}>{yours ? 'Generate around your lines' : 'Generate more in this run'}</GhostButton>}
           </div>
           {running && (
