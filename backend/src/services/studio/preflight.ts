@@ -19,7 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type pg from 'pg';
 import * as S from './engine.js';
-import { clientOverrideLine, latestSignoffs, ruleName, setCompliance, type Signoff } from './ready.js';
+import { captionOf, clientOverrideLine, latestSignoffs, ruleName, setCompliance, type Signoff } from './ready.js';
 import { complianceFor, platformOf, signoffOnImage, signoffVersions, type SignedField } from './versions.js';
 import { getRounds, labelOf, roundOf, roundView, testOnly } from './rounds.js';
 import { SIZES, detectSize, expectedSizes, parseSize, roleOf, sizeOfRole, slotOf, type Size } from './sizes.js';
@@ -909,14 +909,16 @@ export class Preflight {
     // B2's own row when the audit came from B2 (same columns either way).
     // Every real round (B3 keys round close and expected-vs-actual on the round column); never a test round.
     // decided_by: whose creative call the sign-off was (the "for" person, else who entered it); entered_by: who entered it.
-    const head = ['stub', 'features', 'angle', 'persona', 'kind', 'red', 'amber', 'grey', ...keys.map(k => `p_${k}`), 'decided_by', 'entered_by', 'round'];
+    const head = ['stub', 'features', 'angle', 'persona', 'kind', 'red', 'amber', 'grey', ...keys.map(k => `p_${k}`), 'decided_by', 'entered_by', 'caption_line_id', 'round'];
     const rows = [head];
     const { b2FeaturesRow } = await import('./preflightB2.js');
     for (const s of await this.stubs({ round: 'all' })) {
       if (s.test || s.audit?.status !== 'done') continue;
       const a = (await this.db.query(`SELECT result FROM studio_audits WHERE id = $1`, [s.audit.id])).rows[0];
       const so = (await this.findStub(s.stub)).signoff;
-      const who = { decided_by: decidedBy(so.ready_by, so.ready_for), entered_by: so.ready_by };
+      // caption_line_id: the ad's primary text (or TikTok caption) line, the same across personas for a shared caption,
+      // so the weekly read can pool a caption's effect.
+      const who = { decided_by: decidedBy(so.ready_by, so.ready_for), entered_by: so.ready_by, caption_line_id: captionOf(signoffVersions(so).find(v => v.code === s.stub)?.fields || {})?.line_id || '' };
       if (a?.result?.report) {
         const row: Record<string, string | number> = { ...b2FeaturesRow({ ...a.result.report, stub: s.stub }, keys), red: s.audit.red, amber: s.audit.amber, grey: s.audit.grey, round: s.round, ...who };
         rows.push(head.map(h => String(row[h] ?? '')));
@@ -925,7 +927,7 @@ export class Preflight {
       const feats: Record<string, number> = a?.result?.features || {};
       rows.push([s.stub, keys.filter(k => (feats[k] ?? 0) >= threshold).join('; '), r.territories[s.territory]?.angle || '', s.persona,
         s.upload?.kind || '', String(s.audit.red), String(s.audit.amber), String(s.audit.grey),
-        ...keys.map(k => (feats[k] === undefined ? '' : Number(feats[k]).toFixed(3))), who.decided_by, who.entered_by, s.round]);
+        ...keys.map(k => (feats[k] === undefined ? '' : Number(feats[k]).toFixed(3))), who.decided_by, who.entered_by, who.caption_line_id, s.round]);
     }
     return S.toCsv(rows);
   }
@@ -1024,6 +1026,9 @@ export class Preflight {
     const edited = lines.some(({ signed, line }) => line && S.lineHash(line) !== signed.sha256);
     const status: S.ComplianceStatus = edited ? 'pending' : each.some(e => e.status === 'changes_requested') ? 'changes_requested' : each.length && each.every(e => e.status === 'cleared') ? 'cleared' : 'pending';
     const overrideDetails = lines.flatMap(({ signed }) => (signed.overrides || []).map(o => ({ label: (o.label || o.rule).replace(/\.$/, ''), reason: o.reason, by: o.by })));
+    // Other codes using this code's shared caption on the same wording: a decision here can be applied to them too.
+    const sharedAlso: string[] = [];
+    for (const { signed } of lines.filter(x => isSharedLine(x.signed))) for (const c of await this.sharedCaptionCodes(signed, [stub])) if (!sharedAlso.includes(c)) sharedAlso.push(c);
     // What Trupanion is asked to check, in a sentence each: never the internal rule text (production test, 1 Oct).
     const rules = S.loadRules();
     const checkSpecifically = [...new Set(lines.flatMap(({ signed, line }) => (signed.overrides || []).map(o =>
@@ -1032,6 +1037,7 @@ export class Preflight {
       status, note: latest?.note, by: latest?.by, for: (latest as any)?.for, at: latest?.at, client_by: status === 'pending' ? undefined : latest?.client_by, send_back: status === 'changes_requested' ? latest?.send_back : undefined,
       stale: edited ? 'Wording edited since sign-off' : each.find(e => e.stale)?.stale, on_asset: !!latest?.upload_id, recorded: each.some(e => !!e.c), wording_edited: edited,
       overrides: overrideDetails.map(o => o.label), override_details: overrideDetails, check_specifically: checkSpecifically,
+      shared_also: sharedAlso,
     };
   }
 
@@ -1109,7 +1115,7 @@ export class Preflight {
    * (Ready for production, to edit and sign off again) or 'asset' (Pre-flight,
    * for a new upload). Anything but cleared keeps a code out of Ready to traffic.
    */
-  async setAssetCompliance(uploadId: string, input: { status: string; note?: string; send_back?: string; codes?: string[]; client_by?: string; for?: string }, user?: string) {
+  async setAssetCompliance(uploadId: string, input: { status: string; note?: string; send_back?: string; codes?: string[]; client_by?: string; for?: string; apply_shared?: boolean }, user?: string) {
     const status = String(input.status || '');
     if (!['pending', 'cleared', 'changes_requested'].includes(status)) throw new Error('Compliance status must be one of pending, cleared, changes_requested');
     const note = String(input.note || '').trim();
@@ -1145,9 +1151,35 @@ export class Preflight {
       if (status === 'changes_requested' && sendBack === 'asset') await this.setStatusRow(code, 'open', null, null, null);
       await S.getStore().recordEdit({ line_id: `asset:${code}`, batch_id: 'compliance', before: null, after: { compliance: status, note, send_back: sendBack, client_by: clientBy, upload: uploadId }, by: user || 'unknown', at: new Date().toISOString() });
     }
-    return { upload_id: uploadId, codes, status };
+    // A shared caption's wording, decided once: the same decision on that line for every other code that uses it on
+    // the same wording (other personas' ads). Only the caption line: each of those codes still needs its artwork reviewed.
+    const also: string[] = [];
+    if (input.apply_shared && status !== 'pending') {
+      for (const code of codes) {
+        for (const { signed } of (await this.codeLines(code)).filter(x => isSharedLine(x.signed))) {
+          for (const other of await this.sharedCaptionCodes(signed, codes)) {
+            await setCompliance(signed.batch_id, signed.line_id, status, note || undefined, user, { upload_id: '', code: other, sha256: signed.sha256, send_back: status === 'changes_requested' ? 'copy' : undefined, client_by: clientBy || undefined, for: input.for });
+            if (!also.includes(other)) also.push(other);
+          }
+        }
+      }
+    }
+    return { upload_id: uploadId, codes, status, ...(also.length ? { also_shared: also } : {}) };
+  }
+
+  /** Other codes (latest sign-offs, any persona) whose ad uses this shared caption line on the same wording. */
+  async sharedCaptionCodes(signed: Pick<SignedField, 'line_id' | 'sha256'>, except: string[] = []): Promise<string[]> {
+    const out: string[] = [];
+    for (const s of await this.latestSignoffs()) {
+      for (const v of signoffVersions(s)) {
+        if (!except.includes(v.code) && Object.values(v.fields).some(f => f.line_id === signed.line_id && f.sha256 === signed.sha256)) out.push(v.code);
+      }
+    }
+    return out;
   }
 }
+/** A signed field from the shared captions pool (its run is the SHARED territory's). */
+const isSharedLine = (x: { batch_id: string }) => x.batch_id.startsWith(`${S.SHARED_TERRITORY}-`);
 
 export interface CodeCompliance {
   status: S.ComplianceStatus; note?: string; at?: string; send_back?: 'copy' | 'asset';
@@ -1169,5 +1201,7 @@ export interface CodeCompliance {
   override_details: Array<{ label: string; reason: string; by: string }>;
   /** For Trupanion, one sentence per override: "<field>: '<quote>' went through sign-off despite '<rule>'. Please check it." */
   check_specifically: string[];
+  /** Other codes (any persona) whose ad uses this code's shared caption on the same wording. */
+  shared_also: string[];
 }
 const COMPLIANCE_WORDS: Record<string, string> = { pending: 'Pending', cleared: 'Cleared', changes_requested: 'Changes requested' };

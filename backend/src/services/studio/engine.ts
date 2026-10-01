@@ -76,6 +76,8 @@ export interface Brief {
   round?: string;
   /** Lines Studio writes per field (Write's per-field counts). When set, n is their sum and each field gets exactly its count. */
   field_counts?: Record<string, number>;
+  /** Shared captions: the kept on-image headlines (every persona, this region and round) the post copy is written to sit under. Filled at generation. */
+  approved_headlines?: string[];
   model: string;
   checker_model?: string;
   probe_model?: string;
@@ -823,6 +825,10 @@ export async function tasteFor(b: Pick<Brief, 'round'>): Promise<TasteExample[]>
 
 // ---------- writer prompt ----------
 
+/** Text that goes into the artwork: the rules' `on_asset`, else a per-visual field (on-image headline, subhead). */
+export const onAsset = (field: string, r: Pick<Rules, 'fields'>) => ((r.fields[field] as any)?.on_asset ?? isOnImageField(field, r)) === true;
+const onAssetWords = (field: string, r: Pick<Rules, 'fields'>) => (isSubField(field, r) ? 'an on-image subhead' : 'on-image text');
+
 /** Short fields whose visible length is a hard limit for written lines: a headline or hook cut off in the feed doesn't work. */
 export const isShortField = (f: string) => /headline|hook/.test(f);
 
@@ -861,6 +867,25 @@ export function droppedSummary(dropped: Batch['dropped']): string {
   return `${broke.length} line${broke.length === 1 ? '' : 's'} dropped before you saw ${broke.length === 1 ? 'it' : 'them'}: ${parts.join(', ')}`;
 }
 
+/**
+ * Shared captions (Brook, 1 Oct): post copy reused across personas. Brand-level, no persona references, built on
+ * Trupanion's own reasons to believe, with a call to action; written to sit under the approved on-image headlines
+ * (`brief.approved_headlines`: the kept in-asset headlines of every persona, which carry the persona's angle).
+ */
+function sharedAudience(b: Brief, r: Rules): string {
+  const own = r.facts.filter(f => f.own && (!f.regions?.length || f.regions.includes(regionOf({}, b))));
+  const heads = (b.approved_headlines || []).slice(0, 30);
+  return `AUDIENCE: every pet owner Trupanion talks to. This is SHARED post copy: the same primary texts and headlines run under ads for different personas, so write at brand level.
+- No persona-specific references: no particular household, life stage, income, age or kind of owner. The artwork carries the persona; this copy doesn't.
+- Build on what Trupanion is and does (the ANGLE is ${r.personas[b.persona].triggers[0].id} "${r.personas[b.persona].triggers[0].label}"). Reasons to believe, from the facts list:
+${own.map(f => `  - ${f.text}`).join('\n') || '  - (the facts list below)'}
+- Primary text: say what Trupanion is (name it, or medical insurance for pets), give one reason to believe, and end on a call to action (e.g. get a quote, see how it works).
+- Meta headline: the benefit or the action, short. A bank of headlines that work under any primary text here.
+${heads.length ? `APPROVED ON-IMAGE HEADLINES this copy will run under (each ad's artwork carries one; they are persona-specific, yours is not). Write post copy that works under any of them, supports them, and never repeats their words:\n${heads.map(h => `- ${h}`).join('\n')}\n` : ''}${r.casting?.writer_note ? `PETS: ${r.casting.writer_note}\n` : ''}
+TERRITORY: ${r.territories[b.territory].name}. ${r.territories[b.territory].premise}
+`;
+}
+
 /** The client's hard rules, given to the writer as MUST: the compliance items a line can break outright (red), not structure checks. */
 const mustRules = (r: Rules) => r.compliance.filter(c => (c.severity || 'compliance') === 'compliance' && c.check !== 'structure' && c.check !== 'verbatim' && !c.status);
 
@@ -873,12 +898,8 @@ export function writerSystem(b: Brief, r: Rules, own: string[] = [], allTaste: T
   const taste = allTaste.filter(x => x.persona === b.persona);
   const keeps = taste.filter(x => x.decision !== 'cut').sort((x, y) => Number(y.territory === b.territory) - Number(x.territory === b.territory)).slice(0, 8);
   const cuts = taste.filter(x => x.decision === 'cut' && x.note).slice(0, 4);
-
-  return `You write social ad copy for Trupanion (medical insurance for cats and dogs) alongside a creative director. You write options, not finished ads: each line must be distinct, specific and usable.
-
-BRAND VOICE (Trupanion Brand Guidelines): confident but never boastful or disparaging of competitors; genuine; knowledgeable; empathetic; a little playful. Concise, simple, conversational: everyday words, contractions, active voice. Refer to the product as medical insurance for pets (or cats and dogs), never "pet insurance".
-
-AUDIENCE: ${pr.name}${seed ? `. ${seed.household || ''} ${seed.occupation ? `(${seed.occupation})` : ''}` : ''}
+  // Who it's for: the persona and territory, or (shared captions) nobody in particular.
+  const audience = isShared(b) ? sharedAudience(b, r) : `AUDIENCE: ${pr.name}${seed ? `. ${seed.household || ''} ${seed.occupation ? `(${seed.occupation})` : ''}` : ''}
 What moves them (these are the ANGLES):
 ${pr.triggers.map(x => `- ${x.id} "${x.label}": ${x.detail}`).join('\n')}
 Turn-offs (never do these):
@@ -887,7 +908,13 @@ Their language: ${pr.language.map(l => l.text).join(' · ')}
 Real owners' words, for inspiration only (never copy more than four words in a row):
 ${pr.verbatims.map(v => `- "${v.text}"`).join('\n')}
 ${r.casting?.writer_note ? `PETS: ${r.casting.writer_note}\n` : ''}
-TERRITORY: ${t.name} ${t.premise}
+TERRITORY: ${t.name} ${t.premise}`;
+
+  return `You write social ad copy for Trupanion (medical insurance for cats and dogs) alongside a creative director. You write options, not finished ads: each line must be distinct, specific and usable.
+
+BRAND VOICE (Trupanion Brand Guidelines): confident but never boastful or disparaging of competitors; genuine; knowledgeable; empathetic; a little playful. Concise, simple, conversational: everyday words, contractions, active voice. Refer to the product as medical insurance for pets (or cats and dogs), never "pet insurance".
+
+${audience}
 ${regionBlock(regionOf({}, b))}
 MUST (a line that breaks one of these is thrown away before anyone sees it):
 ${mustRules(r).map(c => `- ${c.rule}${c.what_to_do ? ` ${c.what_to_do}` : ''}`).join('\n')}
@@ -1279,6 +1306,8 @@ export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: 
   // A new run belongs to the round the person is working in (an admin can work in a test round; everyone else in the active round).
   b = existing ? { ...b, round: existing.brief.round } : { ...b, round: b.round || (await workingRound(opts.user)).id };
   if (!b.round) delete b.round;
+  // Shared captions are written to sit under the approved on-image headlines: every persona's kept ones, this region and round.
+  if (isShared(b) && !opts.ownOnly && !b.approved_headlines) b = { ...b, approved_headlines: await approvedHeadlines(regionOf({}, b), b.round) };
   const id = existing?.id || opts.batchId || (await newBatchId(b.territory));
   const started = Date.now();
   const batch: Batch = existing || { id, brief: b, created: new Date().toISOString(), lines: [], dropped: [], stats: { generated: 0, near_duplicates_removed: 0, similar_flagged: 0, timings_ms: {}, usd: {}, calls: {}, tokens: {}, usd_total: 0 } };
@@ -1479,7 +1508,11 @@ export function deterministicFlags(l: { text: string; field: string; structure: 
   const text = l.text;
   const f = r.fields[l.field];
   const chars = [...text].length;
-  if (f && chars > f.max) addFlag(flags, { rule: 'LIMIT_MAX', severity: 'warn', label: `Over the ${f.label} limit (${chars}/${f.max})`, source: f.source, quote: '', why: `${chars} characters; limit ${f.max}`, by: ['rule'] });
+  // On-asset text (in the artwork: on-image headline, subhead, cards) is never cut off: its length is a text-load
+  // guideline. It gets its own flag in its own words, with no "truncated" and no quoted cut word (Nick's copy check,
+  // 1 Oct: 11 of 19 ambers read "Truncated ('eater.')" on on-image headlines).
+  if (f && onAsset(l.field, r) && chars > f.visible) addFlag(flags, { rule: 'LIMIT_ON_ASSET', severity: 'warn', label: `Long for ${onAssetWords(l.field, r)}: ${chars} characters (aim for ${f.visible} or fewer)`, source: f.source, quote: '', why: chars > f.max ? `Well over: the most that reads at a glance is about ${f.max}` : undefined, by: ['rule'] });
+  else if (f && chars > f.max) addFlag(flags, { rule: 'LIMIT_MAX', severity: 'warn', label: `Over the ${f.label} limit (${chars}/${f.max})`, source: f.source, quote: '', why: `${chars} characters; limit ${f.max}`, by: ['rule'] });
   else if (f && chars > f.visible) addFlag(flags, { rule: 'LIMIT_VISIBLE', severity: 'warn', label: `Truncated: ${chars} characters, ${f.visible} visible in ${f.label}`, source: f.source, quote: truncTail(text, f.visible), why: `${chars} characters; ${f.visible} visible`, by: ['rule'] });
 
   const pr = r.personas[l.persona];
@@ -1939,9 +1972,15 @@ export const regionOfLine = (l: { region?: Region }, brief?: { region?: Region }
  * Mark a run and its lines as entered for someone else (`created_for` / `added_for` beside the usual `_by`), and with the
  * copy check they came from. The full "on behalf of" uses the same `<verb>_for` beside each `<verb>_by`.
  */
-export async function stampFor(batchId: string, o: { bulk?: string; for?: string; user?: string }): Promise<void> {
+export async function stampFor(batchId: string, o: { bulk?: string; for?: string; user?: string; cards?: Array<{ text: string; field: string; card: number }> }): Promise<void> {
   await runLock(batchId, async () => {
     const b = await loadBatch(batchId);
+    // Pasted carousel cards keep their order: each gets its card number, and the pasted group is one sequence, so
+    // Build pre-fills the cards (and their subheads) in order.
+    for (const c of o.cards || []) {
+      const l = b.lines.find(x => x.model === 'human' && x.field === c.field && x.text === c.text && !x.card);
+      if (l) { l.card = c.card; l.sequence_id = `${batchId}-S${o.bulk ? o.bulk.replace(/\W+/g, '') : 'P'}`; }
+    }
     if (o.bulk) b.bulk = o.bulk;
     if (o.for) b.created_for = o.for;
     // In the brief too: Postgres keeps the run header in fixed columns, and reads these back from the brief.
@@ -2026,6 +2065,17 @@ export async function keptLines(view?: RoundView): Promise<Line[]> {
   // US before Canada within a persona and territory.
   const key = (l: Line) => `${l.persona}|${l.territory}|${l.region === DEFAULT_REGION ? 0 : 1}${l.region}|${l.id}`;
   return lines.sort((a, b) => key(a).localeCompare(key(b), undefined, { numeric: true }));
+}
+
+/**
+ * The approved in-asset headlines: kept on-image headlines (not subheads) and TikTok hooks of every persona, in a
+ * region and round. Shared captions are generated against them (Brook, 1 Oct: Nick's headlines first, post copy around them).
+ */
+export async function approvedHeadlines(region: Region, round?: string): Promise<string[]> {
+  const r = loadRules();
+  const lines = (await keptLines()).filter(l => l.persona !== SHARED_PERSONA && l.region === region && (!round || l.round === round)
+    && ((isOnImageField(l.field, r) && !isSubField(l.field, r)) || /hook/.test(l.field)));
+  return [...new Set(lines.map(l => finalText(l)))];
 }
 
 /** What goes into a line's naming code, from the rules (format from the territory, platform from the field). */
@@ -2177,8 +2227,10 @@ export async function meta() {
   const r = await refreshRules();
   return {
     // Who each persona is, from the active rules file (never the readout): shown on Territories and beside Write & brief.
-    personas: Object.fromEntries(Object.entries(r.personas).filter(([k]) => k !== SHARED_PERSONA).map(([k, v]) => [k, {
-      name: v.name, default_fields: v.default_fields,
+    // The shared captions pool's built-in persona is listed too (flagged `shared`), so a shared run opens like any
+    // other; the persona lists on the page leave it out (personaKeys).
+    personas: Object.fromEntries(Object.entries(r.personas).map(([k, v]) => [k, {
+      name: v.name, default_fields: v.default_fields, ...(k === SHARED_PERSONA ? { shared: true } : {}),
       triggers: v.triggers.map(t => ({ id: t.id, label: t.label, detail: t.detail, source: t.source })),
       context: {
         who: (v as any).who, tension: (v as any).tension, who_source: (v as any).who_source, platforms: (v as any).platforms || [],
@@ -2192,7 +2244,7 @@ export async function meta() {
     what_to_do: Object.fromEntries([...r.compliance, ...r.brand, ...r.clarity, ...((r as any).disclaimer ? [(r as any).disclaimer] : [])]
       .filter((i: any) => i.what_to_do).map((i: any) => [i.id, i.what_to_do])),
     // Each territory's default fields (by its format), for Write & brief.
-    territories: Object.fromEntries(Object.entries(r.territories).filter(([k]) => k !== SHARED_TERRITORY).map(([k, v]) => [k, { ...v, default_fields: defaultFields(k, r) }])),
+    territories: Object.fromEntries(Object.entries(r.territories).map(([k, v]) => [k, { ...v, default_fields: defaultFields(k, r), ...(k === SHARED_TERRITORY ? { shared: true } : {}) }])),
     // The shared captions pool (persona-less post copy): where a bulk check files lines with no persona.
     shared: { persona: SHARED_PERSONA, territory: SHARED_TERRITORY, name: r.territories[SHARED_TERRITORY].name },
     formats: FORMATS,

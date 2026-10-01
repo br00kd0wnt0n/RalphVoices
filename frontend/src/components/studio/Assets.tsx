@@ -596,6 +596,9 @@ function Decision({ meta, asset, stub, can, onChanged, onError }: { meta: Meta; 
   const initial = () => new Set(asset.codes.filter(c => c.stub === stub || c.compliance.status === cur?.status).map(c => c.stub));
   const [apply, setApply] = useState<Set<string>>(initial);
   const [busy, setBusy] = useState(false);
+  // A shared caption is one piece of copy: Trupanion's decision on it can go to every other code using the same wording.
+  const sharedAlso = [...new Set(asset.codes.filter(c => apply.has(c.stub)).flatMap(c => c.compliance.shared_also || []))].filter(s => !apply.has(s));
+  const [applyShared, setApplyShared] = useState(true);
   useEffect(() => { setNote(''); setSendBack(cur?.send_back || 'asset'); setApply(initial()); }, [asset.upload_id, stub, cur?.status]); // eslint-disable-line react-hooks/exhaustive-deps
   const reds = asset.flags.filter(f => !f.cross_persona && f.severity === 'red');
   // Each override once, with the codes it applies to (groupOverrides).
@@ -608,7 +611,7 @@ function Decision({ meta, asset, stub, can, onChanged, onError }: { meta: Meta; 
   async function set(status: ComplianceStatus) {
     setBusy(true);
     try {
-      await studio.setAssetCompliance(asset.upload_id, { status, note: note.trim() || undefined, client_by: clientBy.trim() || undefined, send_back: status === 'changes_requested' ? sendBack : undefined, codes: apply.size === asset.codes.length ? undefined : [...apply] });
+      await studio.setAssetCompliance(asset.upload_id, { status, note: note.trim() || undefined, client_by: clientBy.trim() || undefined, send_back: status === 'changes_requested' ? sendBack : undefined, codes: apply.size === asset.codes.length ? undefined : [...apply], ...(sharedAlso.length && applyShared && status !== 'pending' ? { apply_shared: true } : {}) });
       setNote('');
       await onChanged();
     } catch (e: any) { onError(e.message); } finally { setBusy(false); }
@@ -651,6 +654,15 @@ function Decision({ meta, asset, stub, can, onChanged, onError }: { meta: Meta; 
                 </label>
               ))}
             </fieldset>
+          )}
+          {sharedAlso.length > 0 && (
+            <label className="flex cursor-pointer items-start gap-2 text-sm text-[#C9CCD2]">
+              <input type="checkbox" className="mt-1 accent-[#D94D8F]" checked={applyShared} onChange={e => setApplyShared(e.target.checked)} />
+              <span>Also record it for the {sharedAlso.length} other code{sharedAlso.length === 1 ? '' : 's'} using this shared caption on the same wording
+                <span className="block font-mono text-xs text-[#858B96]">{sharedAlso.join(', ')}</span>
+                <span className="block text-xs text-[#858B96]">Covers the caption only: each code’s own asset still needs its decision.</span>
+              </span>
+            </label>
           )}
           <fieldset className="text-sm">
             <legend className="mb-1 text-[#858B96]">If you request changes, what goes back?</legend>

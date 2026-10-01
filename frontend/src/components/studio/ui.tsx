@@ -30,7 +30,7 @@ export function Chip({ children, tone = 'grey', className, ...p }: React.HTMLAtt
 }
 // Plain names for the chips; the full rule, quote and source open on click.
 export const CHIP: Record<string, string> = {
-  LIMIT_VISIBLE: 'cut off on screen', LIMIT_MAX: 'too long for the field', NEAR_DUP: 'similar line', CL_GLANCE: 'not a glance read', CL_PRODUCT: 'product unclear',
+  LIMIT_VISIBLE: 'cut off on screen', LIMIT_MAX: 'too long for the field', LIMIT_ON_ASSET: 'long for the image', NEAR_DUP: 'similar line', CL_GLANCE: 'not a glance read', CL_PRODUCT: 'product unclear',
   COMP_UGC_MEMBER: 'cast a member', COMP_VERBATIM: 'verbatim quote', FIG_UNSOURCED: 'unsourced figure', FIG_CITATION: 'needs citation', FIG_ATTRIBUTION: 'misattributed figure',
   COMP_DIRECT_PAY: 'direct pay caveat', COMP_PAYS_FOR_ITSELF: 'pays for itself', COMP_PAID_SHARE: 'whole bill', COMP_PREEXISTING: 'pre-existing', COMP_ROUTINE: 'routine care',
   COMP_CLAIM_SPEED: 'claim speed', COMP_CHEAP_LOCKED: 'cheap / locked price', COMP_PRICE_LEAD: 'price lead', COMP_COVERAGE_CAVEAT: 'coverage caveat', COMP_SUPERLATIVE: 'superlative',
@@ -109,10 +109,15 @@ export function territoryName(t?: Territory): string {
 export const personaName = (meta: Meta, code: string) => meta.personas[code]?.name || code;
 /** One persona order everywhere (the database doesn't keep the rules file's key order). */
 export const PERSONA_ORDER = ['DINK', 'CUR', 'FAM'];
+/** The personas, in deck order. The shared captions pool's built-in persona isn't one of them (it has its own entry in the pickers). */
 export function personaKeys(personas: Record<string, unknown>): string[] {
   const rank = (k: string) => (PERSONA_ORDER.indexOf(k) + 1) || PERSONA_ORDER.length + 1;
-  return Object.keys(personas).sort((a, b) => rank(a) - rank(b));
+  return Object.keys(personas).filter(k => !(personas[k] as { shared?: boolean } | undefined)?.shared).sort((a, b) => rank(a) - rank(b));
 }
+/** A territory the pickers and the board show: active, or retired with runs or sign-offs in the round in view. */
+export const isOpenTerritory = (meta: Pick<Meta, 'retired_with_work'>, code: string, t: { status?: string }) => t.status !== 'retired' || !!meta.retired_with_work?.includes(code);
+/** The context is the shared captions pool (post copy reused across personas). */
+export const isSharedCtx = (meta: Meta | null, c: { persona: string }) => !!meta?.personas[c.persona]?.shared;
 export const angleLabel = (meta: Meta, persona: string, id: string) => meta.personas[persona]?.triggers.find(x => x.id === id)?.label || id;
 export const NAMING_TIP = 'Naming code: Add3 reports results by this';
 export const regionOf = (x?: { region?: Region } | null): Region => x?.region || 'US';
@@ -129,6 +134,7 @@ export function setWhatToDo(m: Record<string, string>) { WHAT_TO_DO = m; }
 export function whatToDo(rule: string, f?: { visible?: number; max?: number }): string {
   if (WHAT_TO_DO[rule]) return WHAT_TO_DO[rule];
   if (rule === 'LIMIT_VISIBLE') return f?.visible ? `Keep the point in the first ${f.visible} characters; the rest is cut off on screen.` : 'Keep the point early; the end is cut off on screen.';
+  if (rule === 'LIMIT_ON_ASSET') return f?.visible ? `Text in the artwork reads best at ${f.visible} characters or fewer. Nothing is cut off; it's about how much there is to read.` : 'Keep the text in the artwork short.';
   if (rule === 'LIMIT_MAX') return f?.max ? `Cut it to ${f.max} characters or fewer.` : 'Cut it to fit the field.';
   const map: Record<string, string> = {
     COMP_PAYS_FOR_ITSELF: 'Say what it does instead of what it saves.',
@@ -164,7 +170,7 @@ export function PersonaPanel({ meta, persona, region, open: startOpen = false, c
       {region === 'CA' && <CanadaNote className="mx-4 mb-3" />}
       {open && (
         <div className="space-y-3 border-t border-[#272B34] px-4 py-3 text-sm">
-          {(c?.who || c?.platforms?.length) && <p className="text-base text-[#C9CCD2]">{c?.who || p.name}{c?.platforms?.length ? <span className="text-[#858B96]"> · on {c.platforms.join(', ')}</span> : null}</p>}
+          {(c?.who || !!c?.platforms?.length) && <p className="text-base text-[#C9CCD2]">{c?.who || p.name}{c?.platforms?.length ? <span className="text-[#858B96]"> · on {c.platforms.join(', ')}</span> : null}</p>}
           {c?.tension && <p className="text-[#C9CCD2]"><span className="font-semibold">The tension:</span> {c.tension}</p>}
           {(c?.who || c?.tension) && c?.who_source && <p className="-mt-2 text-xs text-[#646A75]"><Src s={c.who_source} /></p>}
           <div>

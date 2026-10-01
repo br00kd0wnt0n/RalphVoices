@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react';
 import { roundLabel, studio, type Meta, type PfStub, type RunSummary, type ShortRow } from '@/lib/studioApi';
 import { personaColor, tint } from '@/lib/personaColors';
 import { cn } from '@/lib/utils';
-import { GhostButton, HEADING_FONT, Label, PersonaDot, personaKeys, territoryName } from './ui';
+import { GhostButton, HEADING_FONT, Label, PersonaDot, personaKeys, territoryName, isOpenTerritory } from './ui';
 
 export type Step = 'write' | 'review' | 'build' | 'assets';
 interface Counts { runs: number; kept: number; signed: number; uploaded: number; cleared: number; ready: number; changes: number; /** Of those, the copy sent back: fixed at Build & sign off. */ copyChanges: number }
@@ -49,7 +49,8 @@ export function Board({ meta, onOpen, onHowItWorks, onRoundSaved }: {
   const active = rounds?.rounds.find(r => r.id === (rounds.working || rounds.active));
   const personas = personaKeys(meta.personas);
   const rows = personas.map(p => {
-    const ts = Object.entries(meta.territories).filter(([, t]) => t.persona === p && t.status !== 'retired').map(([k]) => k);
+    // Retired territories with runs or sign-offs in this round keep their cell (marked retired).
+    const ts = Object.entries(meta.territories).filter(([k, t]) => t.persona === p && isOpenTerritory(meta, k, t)).map(([k]) => k);
     const cells = ts.map(t => ({ t, c: cell(p, t) }));
     return { p, cells, total: cells.reduce((a, x) => add(a, x.c), zero()) };
   });
@@ -98,7 +99,7 @@ export function Board({ meta, onOpen, onHowItWorks, onRoundSaved }: {
                         <button onClick={() => onOpen(p, x.t, stepFor(x.c))} title={`Open ${territoryName(t)}: ${stepFor(x.c) === 'assets' ? 'Assets' : stepFor(x.c) === 'build' ? 'Build & sign off' : stepFor(x.c) === 'review' ? 'Review' : 'Write'}`}
                           className={cn('h-full w-full rounded-xl border-2 border-l-4 bg-[#16181D] px-3 py-2.5 text-left transition hover:bg-[#1C1F26]', x.c.changes ? 'border-red-500/60' : 'border-[#272B34] hover:border-[#4A505D]')}
                           style={{ borderLeftColor: x.c.changes ? undefined : pc.edge }}>
-                          <div className="mb-1.5 text-sm font-semibold leading-snug text-[#ECEDEF]">{territoryName(t).replace(/ \(idea from the research; not in the pitch\)/, ' (research idea)')}</div>
+                          <div className="mb-1.5 text-sm font-semibold leading-snug text-[#ECEDEF]">{territoryName(t).replace(/ \(idea from the research; not in the pitch\)/, ' (research idea)')}{t?.status === 'retired' && <span className="ml-1.5 rounded-full border border-[#4A505D] px-1.5 py-px text-[10px] font-normal uppercase tracking-wide text-[#858B96]" title="Retired: its runs and sign-offs in this round still open; no new briefs">retired</span>}</div>
                           <Pipeline c={x.c} />
                         </button>
                       </td>
@@ -108,6 +109,23 @@ export function Board({ meta, onOpen, onHowItWorks, onRoundSaved }: {
                 </tr>
               );
             })}
+            {/* The shared captions pool: post copy reused across personas. Its lines are built into each territory's ads. */}
+            {meta.shared && (() => {
+              const sp = meta.shared.persona, st = meta.shared.territory, c = cell(sp, st);
+              return (
+                <tr className="align-top">
+                  <th scope="row" className="rounded-xl border border-[#343946] bg-[#16181D] px-3 py-3 text-sm font-semibold text-[#ECEDEF]">{meta.shared.name}</th>
+                  <td colSpan={cols} className="p-0">
+                    <button onClick={() => onOpen(sp, st, c.runs ? 'review' : 'write')} title={`Open ${meta.shared.name}: ${c.runs ? 'Review' : 'Write'}`}
+                      className="h-full w-full rounded-xl border-2 border-[#272B34] bg-[#16181D] px-3 py-2.5 text-left text-sm text-[#C9CCD2] transition hover:border-[#4A505D] hover:bg-[#1C1F26]">
+                      {c.runs ? <><span className="font-mono text-base font-semibold text-[#ECEDEF]">{c.kept}</span> kept · {c.runs} run{c.runs === 1 ? '' : 's'}</> : <span className="text-[#646A75]">not started</span>}
+                      <span className="ml-2 text-[#858B96]">Captions and primary text for all personas, offered in every territory’s Build.</span>
+                    </button>
+                  </td>
+                  <td />
+                </tr>
+              );
+            })()}
             <tr className="align-top">
               <th scope="row" className="rounded-xl border border-[#272B34] bg-[#121419] px-3 py-3 text-sm font-semibold text-[#C9CCD2]">All personas</th>
               <td colSpan={cols} className="rounded-xl border border-[#272B34] bg-[#121419] px-3 py-2.5 text-sm text-[#858B96]">

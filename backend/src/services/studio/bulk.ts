@@ -15,9 +15,20 @@ import { DEFAULT_REGION, REGIONS, type Region } from '../../utils/namingCode.js'
 const { SHARED_PERSONA, SHARED_TERRITORY } = S;
 export { SHARED_PERSONA, SHARED_TERRITORY };
 
-export interface BulkRow { n: number; persona: string; territory: string; field: string; text: string; region: Region; notes: string[] }
+/** card: a carousel card's number (from a card/slide column, or "card 2" / "slide 02 subhead" in the field cell). */
+export interface BulkRow { n: number; persona: string; territory: string; field: string; text: string; region: Region; notes: string[]; card?: number }
 export interface BulkParse { rows: BulkRow[]; errors: Array<{ n: number; error: string; raw: string }>; header: boolean }
 export interface BulkDefaults { persona?: string; territory?: string; field?: string; region?: string }
+type ColKey = keyof BulkDefaults | 'text' | 'card';
+
+/**
+ * A carousel card named in the field cell: "card 2", "slide 02", "card 3 subhead", "slide 2 sub". Gives the card
+ * number and the field in words (on-image, or subhead).
+ */
+export function cardField(raw: string): { card: number; field: string } | null {
+  const m = /^(?:on[- ]image |image |carousel )?(?:card|slide)\s*#?\s*0*(\d{1,2})(?:\s*[-:,]?\s*(sub ?head(?:line)?|sub ?copy|sub|headline|text))?$/i.exec(raw.trim());
+  return m ? { card: Number(m[1]), field: /^sub/i.test(m[2] || '') ? 'subhead' : 'on-image' } : null;
+}
 
 const norm = (s: string) => s.toLowerCase().replace(/[’']/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 
@@ -65,8 +76,8 @@ export function resolveTerritory(raw: string, persona: string, r: Pick<Rules, 't
   return part.length === 1 ? { code: part[0][0] } : { code: null };
 }
 
-const HEADER = /^(persona|audience|territory|concept|field|type|text|copy|line|region|market)$/;
-const COLS: Record<string, keyof BulkDefaults | 'text'> = { persona: 'persona', audience: 'persona', territory: 'territory', concept: 'territory', field: 'field', type: 'field', text: 'text', copy: 'text', line: 'text', region: 'region', market: 'region' };
+const HEADER = /^(persona|audience|territory|concept|field|type|text|copy|line|region|market|card|slide)$/;
+const COLS: Record<string, ColKey> = { persona: 'persona', audience: 'persona', territory: 'territory', concept: 'territory', field: 'field', type: 'field', text: 'text', copy: 'text', line: 'text', region: 'region', market: 'region', card: 'card', slide: 'card' };
 
 /** Rows of cells from a pasted table: tab-separated (a Google Docs or Sheets table), else comma-separated (quotes honoured). */
 function cells(text: string, r: Rules): string[][] {
@@ -93,7 +104,7 @@ export function parseBulk(text: string, r: Rules, defaults: BulkDefaults = {}): 
   if (!table.length) return { rows, errors, header: false };
   const first = table[0].map(norm);
   const header = first.filter(c => HEADER.test(c)).length >= 2 || (first.length === 1 && HEADER.test(first[0]));
-  type Col = keyof BulkDefaults | 'text' | null;
+  type Col = ColKey | null;
   const headed: Col[] = first.map(c => COLS[c] ?? null);
   // Without a header, each row is read by its own number of cells (a doc's table rows all have the same).
   const byWidth = (w: number): Col[] => (w >= 4 ? ['persona', 'territory', 'field', 'text'] : w === 3 ? ['persona', 'field', 'text'] : w === 2 ? ['field', 'text'] : ['text']);
@@ -101,12 +112,16 @@ export function parseBulk(text: string, r: Rules, defaults: BulkDefaults = {}): 
   table.slice(header ? 1 : 0).forEach((row, i) => {
     const n = i + (header ? 2 : 1);
     const order = header ? headed : byWidth(row.length);
-    const get = (k: keyof BulkDefaults | 'text') => { const j = order.indexOf(k); return (j >= 0 ? row[j] : '') || ''; };
+    const get = (k: ColKey) => { const j = order.indexOf(k); return (j >= 0 ? row[j] : '') || ''; };
     const fail = (error: string) => { errors.push({ n, error, raw: row.filter(Boolean).join(' | ') }); };
     const body = get('text').replace(/^["“]|["”]$/g, '').trim();
     if (!body) return fail('No text');
     const notes: string[] = [];
-    const fieldRaw = get('field') || defaults.field || '';
+    // A carousel card: "card 2" / "slide 02 subhead" in the field cell, or a card/slide column beside the field.
+    const inCell = cardField(get('field'));
+    const cardCol = Number(/\d+/.exec(get('card'))?.[0] || 0);
+    const card = inCell?.card || cardCol || undefined;
+    const fieldRaw = inCell ? inCell.field : get('field') || (cardCol ? 'on-image' : '') || defaults.field || '';
     const field = resolveField(fieldRaw, r);
     if (!field) return fail(fieldRaw ? `Unknown field "${fieldRaw}" (on-image, subhead, primary, headline, description, caption or hook)` : 'No field (on-image, subhead, primary, headline, caption or hook)');
     const personaRaw = get('persona') || defaults.persona || '';
@@ -120,7 +135,9 @@ export function parseBulk(text: string, r: Rules, defaults: BulkDefaults = {}): 
     const regionRaw = (get('region') || defaults.region || DEFAULT_REGION).toUpperCase().replace(/^CANADA$/, 'CA').replace(/^(USA|UNITED STATES)$/, 'US');
     if (!REGIONS.includes(regionRaw as Region)) return fail(`Unknown region "${get('region')}" (US or CA)`);
     if (rows.some(x => x.persona === persona && x.territory === terr.code && x.field === field && x.region === regionRaw && x.text === body)) return fail('The same line is in the table twice');
-    rows.push({ n, persona, territory: terr.code, field, text: body, region: regionRaw as Region, notes });
+    if (card && !S.isOnImageField(field, r)) return fail(`A card number goes with on-image text or a subhead, not ${r.fields[field].label}`);
+    if (card && (card < 1 || card > 10)) return fail('A carousel has cards 1 to 10');
+    rows.push({ n, persona, territory: terr.code, field, text: body, region: regionRaw as Region, notes, ...(card ? { card } : {}) });
   });
   return { rows, errors, header };
 }
@@ -161,7 +178,7 @@ export async function runBulk(parse: BulkParse, api: Api, opts: { user?: string;
     const brief = S.makeBrief({ persona: g.persona, territory: g.territory, region: g.region, name: `${id} ${g.territory}`, fields: [...new Set(g.rows.map(x => x.field))], own_lines: g.rows.map(x => ({ text: x.text, field: x.field })) });
     (brief as any).bulk = { id, for: opts.for || undefined };
     const batch = await S.generate(brief, api, () => {}, { ownOnly: true, user: opts.user });
-    await S.stampFor(batch.id, { bulk: id, for: opts.for, user: opts.user });
+    await S.stampFor(batch.id, { bulk: id, for: opts.for, user: opts.user, cards: g.rows.filter(x => x.card).map(x => ({ text: x.text, field: x.field, card: x.card! })) });
     for (const l of batch.lines) await S.setDecision(batch.id, l.id, { decision: 'keep' }, opts.user, opts.for);
     runs.push(batch.id);
     done += g.rows.length;
@@ -187,6 +204,8 @@ export interface ReportRow {
   status: 'red' | 'amber' | 'clear';
   flags: Array<{ severity: 'red' | 'amber' | 'grey'; name: string; what: string; quote: string; todo: string }>;
   objection: string; run: string; line_id: string;
+  /** Text in the artwork: its length is a guideline (text load), never a cut-off. */
+  on_asset: boolean;
   /** In the shared captions pool (no persona). */
   shared: boolean;
 }
@@ -216,7 +235,7 @@ export async function bulkReport(id?: string): Promise<BulkReport> {
         persona: r.personas[l.persona]?.name || l.persona, territory: (r.territories[l.territory]?.name || l.territory).replace(/\.$/, ''), region: S.regionOfLine(l, b.brief),
         field: f?.label || l.field, text, chars: [...text].length, visible: f?.visible ?? 0, over: !!f && [...text].length > f.visible,
         status: flags.some(x => x.severity === 'red') ? 'red' : flags.some(x => x.severity === 'amber') ? 'amber' : 'clear',
-        flags, objection: l.objection || '', run, line_id: l.id, shared: l.persona === SHARED_PERSONA,
+        flags, objection: l.objection || '', run, line_id: l.id, on_asset: S.onAsset(l.field, r), shared: l.persona === SHARED_PERSONA,
       });
     }
   }
@@ -234,7 +253,7 @@ const flagLine = (x: ReportRow['flags'][number]) => `${WORD[x.severity]}: ${x.na
 export function reportCsv(rep: BulkReport): string {
   return S.toCsv([
     ['Persona', 'Territory', 'Region', 'Field', 'Text', 'Characters', 'Visible', 'Result', 'Flags', 'What a skeptic would say'],
-    ...rep.rows.map(x => [x.persona, x.territory, x.region, x.field, x.text, String(x.chars), x.visible ? `${x.visible}${x.over ? ' (over)' : ''}` : '', WORD[x.status], x.flags.map(flagLine).join('\n'), x.objection]),
+    ...rep.rows.map(x => [x.persona, x.territory, x.region, x.field, x.text, String(x.chars), x.visible ? `${x.visible}${x.over ? (x.on_asset ? ' (long for the image)' : ' (over)') : ''}` : '', WORD[x.status], x.flags.map(flagLine).join('\n'), x.objection]),
     ...rep.errors.map(e => ['', '', '', '', e.raw, '', '', 'Not checked', e.error, '']),
   ]);
 }
@@ -247,7 +266,7 @@ export function reportMd(rep: BulkReport): string {
   for (const x of [...rep.rows].sort((a, b) => `${a.persona}|${a.territory}`.localeCompare(`${b.persona}|${b.territory}`) || order[a.status] - order[b.status])) {
     const g = `${x.persona} · ${x.territory}${x.region !== DEFAULT_REGION ? ` · ${x.region === 'CA' ? 'Canada' : x.region}` : ''}`;
     if (g !== last) { if (last) out.push(''); out.push(`## ${g}`, ''); last = g; }
-    out.push(`- **${WORD[x.status]}** · ${x.field} · ${x.chars}${x.visible ? `/${x.visible}` : ''} characters${x.over ? ' (over what shows)' : ''}  `, `  “${x.text}”`);
+    out.push(`- **${WORD[x.status]}** · ${x.field} · ${x.chars}${x.visible ? `/${x.visible}` : ''} characters${x.over ? (x.on_asset ? ' (long for the image)' : ' (over what shows)') : ''}  `, `  “${x.text}”`);
     for (const f of x.flags) out.push(`  - ${flagLine(f)}`);
   }
   if (rep.errors.length) out.push('', '## Not checked', '', ...rep.errors.map(e => `- Row ${e.n}: ${e.error} (“${e.raw}”)`));

@@ -108,3 +108,15 @@ test('Pre-flight copy match: the subhead must be on the asset (red if not), as m
   const noSub = copyMatchForStub(cards, onCards('You pay the vet as normal'), { compliance: [] }, 'carousel');
   assert.deepEqual(noSub.flags.map(f => [f.rule, f.severity, f.label]), [['COPY_CARD_MISSING', 'red', "Card 2's signed-off subhead isn't on the asset"]]);
 });
+
+test('33: on-asset text that runs long is "long for on-image text", never "truncated", with no quoted cut word', async () => {
+  const r = await fresh();
+  const flags = (field: string, text: string) => S.deterministicFlags({ text, field, structure: 'plain_promise', persona: 'OWN' }, r).flags.filter(f => /^LIMIT/.test(f.rule));
+  const head = flags('meta_on_image', 'Your sock-eating dog deserves a calmer vet visit');
+  assert.deepEqual(head.map(f => [f.rule, f.severity, f.label, f.quote]), [['LIMIT_ON_ASSET', 'warn', 'Long for on-image text: 48 characters (aim for 40 or fewer)', '']]);
+  assert.match(flags('meta_on_image_sub', 'x'.repeat(70))[0].label, /^Long for an on-image subhead: 70 characters \(aim for 60 or fewer\)$/);
+  assert.deepEqual(flags('meta_on_image', 'Vet visits, calmer'), []);
+  // Post copy is still cut off in the feed, and says so.
+  assert.equal(flags('meta_headline', 'A headline that runs well past what shows')[0].rule, 'LIMIT_MAX');
+  assert.equal(flags('meta_headline', 'A headline just a bit too long')[0].rule, 'LIMIT_VISIBLE');
+});

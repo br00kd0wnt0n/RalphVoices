@@ -5,7 +5,7 @@ import { toggleField as toggleFieldIn } from '@/lib/studioFields';
 import { roundName, studio, type Batch, type Brief, type Meta, type OwnLine, type RunSummary, type Tone, REGION_NAMES } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { personaColor, personaEdge, tint } from '@/lib/personaColors';
-import { CanadaNote, Chip, GhostButton, Intro, Label, PersonaChip, PersonaPanel, PinkButton, angleLabel, fieldOrder, regionOf, territoryName, when, type Ctx } from './ui';
+import { CanadaNote, Chip, GhostButton, Intro, Label, PersonaChip, PersonaPanel, PinkButton, angleLabel, fieldOrder, regionOf, territoryName, when, isOpenTerritory, isSharedCtx, type Ctx } from './ui';
 
 /** A field's starting count: the rules' default_count, else an even split of n over the ticked fields. */
 export function defaultCount(meta: Meta, f: string, fields: string[], n: number): number {
@@ -28,9 +28,21 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
   fieldNote?: string;
 }) {
   const [more, setMore] = useState(false);
-  const territories = Object.entries(meta.territories).filter(([, x]) => x.persona === ctx.persona && x.status !== 'retired');
+  const territories = Object.entries(meta.territories).filter(([k, x]) => x.persona === ctx.persona && isOpenTerritory(meta, k, x));
   const t = meta.territories[ctx.territory];
   const pc = personaColor(ctx.persona);
+  // The shared captions pool: post copy only, written to sit under every persona's kept on-image headlines.
+  const shared = isSharedCtx(meta, ctx);
+  const retired = t?.status === 'retired';
+  const usable = (k: string) => !shared || !((meta.fields[k] as { in_version?: string }).in_version ? (meta.fields[k] as { in_version?: string }).in_version === 'per_visual' : /on_image/.test(k));
+  const [approved, setApproved] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (!shared) { setApproved(null); return; }
+    studio.approvedHeadlines(ctx.region).then(x => setApproved(x.headlines)).catch(() => setApproved([]));
+  }, [shared, ctx.region, runsTick]);
+  const [lastPersona, setLastPersona] = useState(shared ? '' : ctx.persona);
+  useEffect(() => { if (!shared) setLastPersona(ctx.persona); }, [shared, ctx.persona]);
+  const toShared = () => meta.shared && setCtx({ ...ctx, persona: meta.shared.persona, territory: meta.shared.territory });
   // "Territory changed since this run": the open run (or the latest for this territory) predates the territory's last edit.
   const [latestRun, setLatestRun] = useState<RunSummary | null>(null);
   useEffect(() => { studio.batches().then(rs => setLatestRun(rs.find(r => r.territory === ctx.territory && regionOf(r) === ctx.region) || null)).catch(() => setLatestRun(null)); }, [ctx.territory, ctx.region, runsTick]);
@@ -100,7 +112,7 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
         <div className="mb-2 flex flex-wrap items-center gap-3">
           <Label>Territory</Label>
           <PersonaChip meta={meta} persona={ctx.persona} short className="mb-1.5" />
-          {t && <button onClick={() => onEditTerritory(ctx.territory)} className="mb-1.5 text-sm font-medium text-[#C9CCD2] underline-offset-2 hover:text-[#ECEDEF] hover:underline">Edit territory</button>}
+          {t && !shared && <button onClick={() => onEditTerritory(ctx.territory)} className="mb-1.5 text-sm font-medium text-[#C9CCD2] underline-offset-2 hover:text-[#ECEDEF] hover:underline">Edit territory</button>}
           <button onClick={onTerritories} className="mb-1.5 text-xs text-[#646A75] underline-offset-2 hover:text-[#ECEDEF] hover:underline">all territories and history</button>
         </div>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
@@ -114,12 +126,37 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
               {x.premise && <div className="mt-1 line-clamp-2 text-sm text-[#C9CCD2]" title={x.premise}>{x.premise}</div>}
             </button>
           ))}
-          <button onClick={() => onEditTerritory(null)} className="rounded-xl border-2 border-dashed border-[#343946] px-4 py-3 text-left text-[#858B96] transition hover:border-[#6B7280] hover:text-[#ECEDEF]">
-            <div className="font-semibold">+ New territory</div>
-            <div className="text-sm">For {meta.personas[ctx.persona]?.name}</div>
-          </button>
+          {!shared && meta.shared && (
+            <button onClick={toShared} className="rounded-xl border-2 border-[#272B34] bg-[#16181D] px-4 py-3 text-left transition hover:border-[#4A505D]">
+              <div className="font-semibold">{meta.shared.name}</div>
+              <div className="text-sm text-[#858B96]">Post copy for all personas</div>
+              <div className="mt-1 text-sm text-[#C9CCD2]">Captions and primary text reused across personas, written to sit under the kept on-image headlines.</div>
+            </button>
+          )}
+          {!shared && (
+            <button onClick={() => onEditTerritory(null)} className="rounded-xl border-2 border-dashed border-[#343946] px-4 py-3 text-left text-[#858B96] transition hover:border-[#6B7280] hover:text-[#ECEDEF]">
+              <div className="font-semibold">+ New territory</div>
+              <div className="text-sm">For {meta.personas[ctx.persona]?.name}</div>
+            </button>
+          )}
+          {shared && lastPersona && meta.personas[lastPersona] && (
+            <button onClick={() => { const first = Object.entries(meta.territories).find(([k, x]) => x.persona === lastPersona && isOpenTerritory(meta, k, x))?.[0] || ''; setCtx({ ...ctx, persona: lastPersona, territory: first }); }}
+              className="rounded-xl border-2 border-dashed border-[#343946] px-4 py-3 text-left text-[#858B96] transition hover:border-[#6B7280] hover:text-[#ECEDEF]">
+              <div className="font-semibold">Back to {meta.personas[lastPersona].name.replace(/\s*\(.*\)$/, '')}</div>
+              <div className="text-sm">Persona territories</div>
+            </button>
+          )}
         </div>
         {t && <p className="mt-2 px-1 text-sm text-[#A3A8B1]">{t.premise}</p>}
+        {retired && <p className="mt-1 px-1 text-sm text-amber-200">This territory is retired: it takes no new briefs. Its runs and sign-offs in this round are still in Review, Build and Assets.</p>}
+        {shared && approved && (
+          <div className="mt-3 rounded-xl border border-[#272B34] bg-[#16181D] px-4 py-3">
+            <Label>Kept on-image headlines these captions sit under ({approved.length})</Label>
+            {approved.length ? (
+              <ul className="mt-1 max-h-40 space-y-0.5 overflow-y-auto text-sm text-[#C9CCD2]">{approved.map(h => <li key={h}>{h}</li>)}</ul>
+            ) : <p className="text-sm text-[#858B96]">No on-image headlines kept in {ctx.region === 'CA' ? 'Canada' : 'the US'} this round yet. Captions are written without them; keep headlines in Review first for a closer fit.</p>}
+          </div>
+        )}
         {changedSinceRun && <p className="mt-1 px-1 text-sm text-amber-200" title={`Edited by ${t!.updated_by || 'someone'}, ${when(t!.updated_at)}`}>Territory changed since this run: generate again to use it.</p>}
       </section>
       {ctx.region === 'CA' && <CanadaNote className="text-base" />}
@@ -151,7 +188,7 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
                       onPaste={e => onPaste(i, e)}
                       className="min-w-0 flex-1 resize-none rounded-lg border-2 border-[#343946] px-3 py-2 text-[20px] leading-snug focus:border-[#D94D8F] focus:outline-none" />
                     <select aria-label="Field" value={o.field} onChange={e => setRow(i, { field: e.target.value })} className="w-40 rounded-lg border-2 border-[#343946] bg-[#16181D] px-2 py-2 text-sm">
-                      {Object.keys(meta.fields).sort((a, b) => fieldOrder(meta, a) - fieldOrder(meta, b)).map(k => <option key={k} value={k}>{meta.fields[k].label}</option>)}
+                      {Object.keys(meta.fields).filter(usable).sort((a, b) => fieldOrder(meta, a) - fieldOrder(meta, b)).map(k => <option key={k} value={k}>{meta.fields[k].label}</option>)}
                     </select>
                     <span className={cn('w-14 pt-2.5 text-right font-mono text-sm', f && n > f.visible ? 'font-bold text-amber-300' : 'text-[#858B96]')}>{n}/{f?.visible}</span>
                     <button aria-label="Remove line" onClick={() => setOwn(own.length > 1 ? own.filter((_, k) => k !== i) : [{ text: '', field: o.field }])} className="pt-2 text-base text-[#646A75] hover:text-[#C9CCD2]">×</button>
@@ -173,7 +210,7 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
               {platforms.map(pl => (
                 <div key={pl}>
                   <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-[#646A75]">{pl}</div>
-                  {Object.keys(meta.fields).filter(k => (String(meta.fields[k].platform).toUpperCase().startsWith('META') ? 'Meta' : 'TikTok') === pl).sort((a, b) => fieldOrder(meta, a) - fieldOrder(meta, b)).map(k => {
+                  {Object.keys(meta.fields).filter(k => (String(meta.fields[k].platform).toUpperCase().startsWith('META') ? 'Meta' : 'TikTok') === pl).filter(usable).sort((a, b) => fieldOrder(meta, a) - fieldOrder(meta, b)).map(k => {
                     const f = meta.fields[k];
                     const on = brief.fields.includes(k);
                     // On a carousel territory, on-image text is written as card sequences: sequences × cards, not a count.

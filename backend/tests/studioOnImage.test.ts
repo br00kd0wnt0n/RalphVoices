@@ -44,7 +44,7 @@ test('meta_on_image: listed, briefed, written for the visual, checked, coded and
 
   // Deterministic checks: its own limits, and all caps is a warning (sentence case; caps are a design treatment).
   const long = S.deterministicFlags({ text: 'Your summer trip stays booked, whatever the vet says today', field: 'meta_on_image', structure: 'plain_promise', persona: 'OWN' }, r).flags;
-  assert.ok(long.some(f => f.rule === 'LIMIT_VISIBLE'));
+  assert.ok(long.some(f => f.rule === 'LIMIT_ON_ASSET' && /^Long for on-image text/.test(f.label)), 'long for the image, never "truncated" (1 Oct)');
   const caps = S.deterministicFlags({ text: 'VET BILL? SORTED.', field: 'meta_on_image', structure: 'plain_promise', persona: 'OWN' }, r).flags;
   assert.ok(caps.some(f => f.rule === 'BR_CASE'), 'all caps is flagged');
 

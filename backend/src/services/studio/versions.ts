@@ -138,6 +138,17 @@ export function defaultDraft(lines: Line[], rules: Pick<Rules, 'fields'>, latest
         for (let i = 0; i < loose.length; i += DEFAULT_CARDS) seqs.push(loose.slice(i, i + DEFAULT_CARDS));
         seqs.forEach((cards, i) => { const v = VISUAL_LETTERS[i]; if (!on_image[v] && hasVisual(v, f)) on_image[v] = cards.slice(0, MAX_CARDS); });
       }
+      // A card's subhead (pasted with its card number, in the same sequence) sits under its card.
+      for (const f of vf.per_visual.filter(x => isSubField(x, rules))) {
+        for (const l of (byField.get(f) || []).filter(x => x.card && x.sequence_id)) {
+          const v = Object.keys(on_image).find(k => Array.isArray(on_image[k]) && (on_image[k] as string[]).some(id => lines.find(y => y.id === id)?.sequence_id === l.sequence_id));
+          if (!v || !(on_image[v] as string[])[l.card! - 1]) continue;
+          const subs = Array.isArray(on_image_sub[v]) ? on_image_sub[v] as string[] : [];
+          while (subs.length < l.card!) subs.push('');
+          subs[l.card! - 1] = l.id;
+          on_image_sub[v] = subs;
+        }
+      }
     } else {
       // A headline per visual, and a subhead under it where there are subheads.
       for (const f of vf.per_visual) {

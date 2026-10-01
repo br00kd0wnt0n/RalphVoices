@@ -74,11 +74,13 @@ test('check: a run per persona × territory, lines kept and attributed, and a re
   const fam = await S.loadBatch(rec.runs[0]);
   assert.deepEqual(fam.lines.map(l => [l.model, l.status, l.decision, l.added_by, l.added_for]), [['human', 'checked', 'keep', 'brook', 'Nick Larson'], ['human', 'checked', 'keep', 'brook', 'Nick Larson']]);
   assert.deepEqual([fam.created_by, fam.created_for, fam.bulk], ['brook', 'Nick Larson', 'bulk-test']);
-  // Persona-less post copy is in the shared captions run; the shared pair isn't a persona in the pickers.
+  // Persona-less post copy is in the shared captions run; the shared pair is flagged, and left out of the persona pickers.
   const shared = await S.loadBatch(rec.runs[2]);
   assert.deepEqual([shared.brief.persona, shared.brief.territory], ['ALL', 'SHARED']);
   const meta = await S.meta();
-  assert.equal('ALL' in meta.personas || 'SHARED' in meta.territories, false);
+  // The shared pair is in /meta, flagged, so a shared run opens like any other; the page's persona lists leave it out.
+  assert.equal((meta.personas as any).ALL.shared, true);
+  assert.equal((meta.territories as any).SHARED.shared, true);
   assert.deepEqual(meta.shared, { persona: 'ALL', territory: 'SHARED', name: 'Shared captions' });
 
   const rep = await B.bulkReport('bulk-test');
@@ -101,4 +103,40 @@ test('check: a run per persona × territory, lines kept and attributed, and a re
   assert.equal(csv.length, 1 + 4 + 1, 'a row per line, and one for the row that could not be checked');
   assert.equal(csv.find(x => x[4] === 'Summer plans, covered')![0], 'Busy Families');
   assert.equal(csv.at(-1)![7], 'Not checked');
+});
+
+test('34: carousel cards pasted with their numbers ("card 2", "slide 02 subhead", or a card column) keep their order into Build', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-bulk-cards-'));
+  const rules = JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8'));
+  rules.fields.meta_on_image = { platform: 'META', label: 'On-image text', visible: 40, max: 60, source: 'HOUSE: test', in_version: 'per_visual' };
+  rules.fields.meta_on_image_sub = { platform: 'META', label: 'On-image subhead', visible: 60, max: 90, source: 'HOUSE: test', in_version: 'per_visual', on_image_role: 'sub' };
+  rules.territories.OWN_CARDS = { ...rules.territories.OWN_CALM, name: 'Cards', format: 'CAROUSEL' };
+  const rulesPath = path.join(dir, 'rules.json');
+  fs.writeFileSync(rulesPath, JSON.stringify(rules));
+  S.setStudioDir(dir);
+  S.setStore(new FileStore(dir, { rulesPath }));
+  const r = await S.refreshRules();
+  assert.deepEqual(B.cardField('Slide 02 subhead'), { card: 2, field: 'subhead' });
+  assert.deepEqual(B.cardField('card 3'), { card: 3, field: 'on-image' });
+  assert.equal(B.cardField('headline'), null);
+
+  // Out of order in the doc, numbered in the field cell; and the same with a card column.
+  const table = ['persona\tterritory\tfield\ttext', 'OWN\tOWN_CARDS\tcard 3\tWe sort the rest', 'OWN\tOWN_CARDS\tcard 1\tVet bill at 2am?', 'OWN\tOWN_CARDS\tslide 02\tYou pay the vet as normal',
+    'OWN\tOWN_CARDS\tslide 2 subhead\tAt partner clinics', 'OWN\tOWN_CARDS\tprimary\tTrupanion pays the vet at partner clinics.', 'OWN\tOWN_CARDS\theadline\tCalm, covered.', 'OWN\tOWN_CARDS\tcard 2 headline\t'].join('\n');
+  const p = B.parseBulk(table, r);
+  assert.deepEqual(p.rows.map(x => [x.field, x.card || 0]), [['meta_on_image', 3], ['meta_on_image', 1], ['meta_on_image', 2], ['meta_on_image_sub', 2], ['meta_primary', 0], ['meta_headline', 0]]);
+  assert.deepEqual(B.parseBulk('persona\tterritory\tcard\tfield\ttext\nOWN\tOWN_CARDS\t2\tsubhead\tAt partner clinics\nOWN\tOWN_CARDS\t1\t\tVet bill at 2am?', r).rows.map(x => [x.field, x.card]), [['meta_on_image_sub', 2], ['meta_on_image', 1]]);
+  assert.match(B.parseBulk('OWN\tOWN_CARDS\tcard 2\tx\nprimary\ty', r, {}).errors.map(e => e.error).join(), /^$/);
+  assert.match(B.parseBulk('persona\tterritory\tcard\tfield\ttext\nOWN\tOWN_CARDS\t2\tprimary\tHello Trupanion', r).errors[0].error, /A card number goes with on-image text or a subhead/);
+
+  const rec = await B.runBulk(p, new S.Api({ mock: true }), { user: 'brook', for: 'Nick Larson', id: 'bulk-cards' });
+  const run = await S.loadBatch(rec.runs[0]);
+  const byText = (t: string) => run.lines.find(l => l.text === t)!;
+  assert.deepEqual(['Vet bill at 2am?', 'You pay the vet as normal', 'We sort the rest'].map(t => byText(t).card), [1, 2, 3]);
+  assert.ok(byText('At partner clinics').sequence_id && byText('At partner clinics').sequence_id === byText('Vet bill at 2am?').sequence_id, 'one pasted group, one sequence');
+  // Build opens with the cards in order and card 2's subhead under it.
+  const R = await import('../src/services/studio/ready.js');
+  const d = (await R.readyView('OWN', 'OWN_CARDS')).draft;
+  assert.deepEqual(d.on_image, { A: [byText('Vet bill at 2am?').id, byText('You pay the vet as normal').id, byText('We sort the rest').id] });
+  assert.deepEqual(d.on_image_sub, { A: ['', byText('At partner clinics').id] });
 });

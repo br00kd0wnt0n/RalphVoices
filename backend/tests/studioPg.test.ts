@@ -1440,3 +1440,92 @@ test('copy check on Postgres: the run, its summary and its lines say whose copy 
   assert.equal((await S.listBatches()).find(r => r.id === run.id)!.created_for, 'Nick Larson');
   assert.equal((await B.bulkReport('bulk-pg')).for, 'Nick Larson');
 });
+
+// ---------- shared captions (Brook, 1 Oct): one caption, several personas' ads ----------
+test('shared caption in 3 codes across 2 personas: one compliance decision applies to all on the same wording; an edit marks all 3; handoff Caption ID; features caption_line_id', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const rules = JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8'));
+  rules.personas.FAM = { ...rules.personas.OWN, name: 'Busy Families' };
+  rules.territories.FAM_SUMMER = { ...rules.territories.OWN_CALM, persona: 'FAM', name: 'Summer' };
+  await store.putRules('example-shared', rules, { activate: true, by: 'test' });
+  await S.refreshRules();
+  const kept = async (territory: string, lines: Array<[string, string]>) => {
+    const run = await S.generate(S.makeBrief({ territory, name: `${territory}-x`, own_lines: lines.map(([field, text]) => ({ field, text })) }), api, () => {}, { ownOnly: true, user: 'nick' });
+    for (const l of run.lines) {
+      await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+      for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find((x: any) => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'Test line', 'nick');
+    }
+    return run.lines.map(l => l.id);
+  };
+  const [cap] = await kept('SHARED', [['meta_primary', 'Trupanion is medical insurance for pets. Get a quote.']]);
+  const [h1, h2] = await kept('OWN_CALM', [['meta_headline', 'Calm, covered.'], ['meta_headline', 'One less worry.']]);
+  const [h3] = await kept('FAM_SUMMER', [['meta_headline', 'Summer, sorted.']]);
+  const sign = async (persona: string, territory: string, versions: any[]) => {
+    const v = await R.readyView(persona, territory, 'US', { versions, on_image: {} });
+    assert.deepEqual(v.plan.issues, []);
+    return (await R.signOff({ persona, territory, versions, on_image: {}, expectation: { codes: [v.plan.versions[0].code], reason: 'x' } }, 'nick')).signoff.versions!.map((x: any) => x.code);
+  };
+  const [A1, A2] = await sign('OWN', 'OWN_CALM', [{ visual: 'A', fields: { meta_primary: cap, meta_headline: h1 } }, { visual: 'A', fields: { meta_primary: cap, meta_headline: h2 } }]);
+  const [F1] = await sign('FAM', 'FAM_SUMMER', [{ visual: 'A', fields: { meta_primary: cap, meta_headline: h3 } }]);
+
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
+  const png = [{ buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 1]), filename: 'a.png', contentType: 'image/png' }];
+  const up = await pf.upload(A1, png, 'nick');
+  await pf.runAudit(await pf.createAudit(up.upload_id));
+  assert.deepEqual((await pf.codeCompliance(A1, up.upload_id)).shared_also.sort(), [A2, F1].sort(), 'the caption is in two more codes');
+
+  // Trupanion clears A1; "apply to every code using this caption" clears the caption line on A2 and F1 too.
+  const res = await pf.setAssetCompliance(up.upload_id, { status: 'cleared', note: 'Wording fine', client_by: 'J. Doe', apply_shared: true }, 'vivan');
+  assert.deepEqual((res as any).also_shared.sort(), [A2, F1].sort());
+  const line = (await S.loadBatch(cap.replace(/-L\d+$/, ''))).lines.find(l => l.id === cap)!;
+  assert.deepEqual([A1, A2, F1].map(c => line.compliance_by_code![c]?.status), ['cleared', 'cleared', 'cleared'], 'one line, cleared for each code');
+  // The other codes still need their own lines (and artwork) reviewed: only the caption is decided.
+  assert.equal((await pf.codeCompliance(F1, null)).status, 'pending');
+  assert.equal((await pf.codeCompliance(A1, up.upload_id)).status, 'cleared');
+
+  // Handoff and features: the caption's line id on every ad that uses it.
+  const csv = S.parseCsv((await R.handoffPack()).csv);
+  const cid = csv[0].indexOf('Caption ID'), sh = csv[0].indexOf('Shared caption');
+  assert.deepEqual(csv.slice(1).map(r => [r[cid], r[sh]]), [[cap, 'yes'], [cap, 'yes'], [cap, 'yes']]);
+  await pf.setReady(A1, true, 'nick').catch(() => {});
+  const feats = S.parseCsv(await pf.featuresCsv());
+  assert.equal(feats[1][feats[0].indexOf('caption_line_id')], cap);
+
+  // One edit to the shared caption: all three codes read "edited since sign-off".
+  await S.setDecision(cap.replace(/-L\d+$/, ''), cap, { decision: 'edit', edited_text: 'Trupanion is medical insurance for pets. See how it works.' }, 'nick');
+  for (const c of [A1, A2, F1]) assert.equal((await pf.codeCompliance(c, null)).wording_edited, true, c);
+});
+
+// ---------- finding 36: a retired territory that still has work in the round in view ----------
+test('retired territories with runs or sign-offs in the round stay reachable: /meta names them; new briefs are still refused', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const rules = JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8'));
+  rules.territories.OWN_OLD = { ...rules.territories.OWN_CALM, name: 'Old pitch' };
+  rules.territories.OWN_EMPTY = { ...rules.territories.OWN_CALM, name: 'Never used' };
+  await store.putRules('example-retired', rules, { activate: true, by: 'test' });
+  await (store as any).db.query(`TRUNCATE studio_territory_edits`);
+  await S.refreshRules();
+  const run = await S.generate(S.makeBrief({ territory: 'OWN_OLD', name: 'old', own_lines: [{ text: 'Calm at the counter, with Trupanion.', field: 'meta_primary' }, HEAD] }), api, () => {}, { ownOnly: true, user: 'nick' });
+  for (const l of run.lines) await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+  await S.saveTerritory('OWN_OLD', { status: 'retired' } as any, 'Replaced by per-asset territories', 'brook');
+  await S.saveTerritory('OWN_EMPTY', { status: 'retired' } as any, 'Never used', 'brook');
+  const { createStudioRouter } = await import('../src/services/studio/router.js');
+  const express = (await import('express')).default;
+  const app = express();
+  app.use(express.json());
+  app.use('/s', createStudioRouter({ who: () => 'brook', api: () => api, mock: true, cap: 50, capWindow: 'month', askOver: 2, rules: { store, isAdmin: () => true } }));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(r => server.once('listening', r));
+  try {
+    const meta = await (await fetch(`http://127.0.0.1:${(server.address() as any).port}/s/meta`)).json() as any;
+    assert.deepEqual(meta.retired_with_work, ['OWN_OLD'], 'the one with a run; not the unused one');
+    assert.equal(meta.territories.OWN_OLD.status, 'retired');
+  } finally { server.close(); }
+  // Its kept lines still open at Build & sign off, and can be signed off; a new brief on it is refused.
+  const v = await R.readyView('OWN', 'OWN_OLD');
+  assert.equal(v.lines.length, 2);
+  assert.deepEqual(v.plan.issues, []);
+  assert.throws(() => S.makeBrief({ territory: 'OWN_OLD' }), /is retired/);
+});
