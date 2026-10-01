@@ -5,7 +5,7 @@
 // Draft, Signed off, Edited since sign-off. Behaviour and endpoints are unchanged: versions, checks, expect_latest,
 // overrides, carousel cards and TikTok versions. The draft rules are in lib/buildDraft.ts.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { onOriginal, studio, REGION_NAMES, type DraftVersion, type Meta, type ReadyDraft, type ReadyView, type VersionFlag } from '@/lib/studioApi';
+import { onOriginal, studio, REGION_NAMES, type DraftVersion, type PlannedVersion, type Meta, type ReadyDraft, type ReadyView, type VersionFlag } from '@/lib/studioApi';
 import { addAd, adName, flagsAt, moveAd, redPlaces, nextVisual, placeLine, removeAd, setCard, setOnImage, useInAllAds, usesOf } from '@/lib/buildDraft';
 import { cn } from '@/lib/utils';
 import { personaColor, personaEdge, tint } from '@/lib/personaColors';
@@ -363,6 +363,25 @@ function SlotBox({ meta, x, field, placeholder, active, onOpen, flags = [], name
   );
 }
 
+/**
+ * Trupanion asked for a copy change on this ad (recorded at Assets): where the fix happens, so it says what was asked,
+ * then that the edit needs signing off, then that it's back with Trupanion (production test, 1 Oct).
+ */
+function ChangeRequest({ request, status }: { request: NonNullable<PlannedVersion['compliance']['request']>; status: 'draft' | 'signed' | 'edited' }) {
+  const who = [request.client_by, request.at ? when(request.at) : ''].filter(Boolean).join(', ');
+  if (!request.answered) return (
+    <div role="alert" className="rounded-lg border border-red-500/50 bg-red-500/10 p-2 text-sm text-red-100">
+      <span className="font-semibold">Trupanion asked for changes{who ? ` (${who})` : ''}:</span> “{request.note}”. Edit the wording above and sign off again.
+    </div>
+  );
+  return (
+    <div className="rounded-lg border border-amber-400/50 bg-amber-400/10 p-2 text-sm text-amber-100">
+      {status === 'signed' ? 'Fixed and signed off again: back with Trupanion for review.' : 'Edited for Trupanion’s request: sign off again to send it back to them.'}
+      <span className="block text-xs text-amber-200/80">They asked{who ? ` (${who})` : ''}: “{request.note}”</span>
+    </div>
+  );
+}
+
 /** A red flag on a line: fix the wording, or override with a reason (creative lead or admin). Blocks sign-off until then. */
 function RedFix({ meta, x, onEdit, onChanged, onError }: { meta: Meta; x: RL; onEdit: () => void; onChanged: () => void; onError: (m: string) => void }) {
   const [overriding, setOverriding] = useState<string | null>(null);
@@ -545,6 +564,7 @@ function AdPreview({ meta, view, draft, version, index, planned, platform, name,
       {others.map(f => <div key={f} className="px-2 pb-1"><SlotBox {...slotProps(f)} className="text-sm" /></div>)}
 
       <footer className="mt-auto space-y-1.5 border-t border-[#272B34] px-3 py-2">
+        {planned?.compliance.request && <ChangeRequest request={planned.compliance.request} status={status} />}
         {planned?.issues.map(i => <div key={i} className="text-sm text-red-200">{i[0].toUpperCase() + i.slice(1)}</div>)}
         {adFlags.length > 0 && <div>{adFlags.map((f, k) => <FlagNote key={k} meta={meta} f={f} nameOfCode={nameOfCode} />)}</div>}
         <div className="flex flex-wrap items-center gap-2 text-xs">

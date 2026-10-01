@@ -72,7 +72,8 @@ function byVisual(rs: CodeRow[]): Array<[string, CodeRow[]]> {
 /** A thumbnail box in the shape of its size (a 4:5 card isn't squashed into a square). */
 const ASPECT: Record<string, string> = { '1:1': 'aspect-square', '4:5': 'aspect-[4/5]', '9:16': 'aspect-[9/16]' };
 
-export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: ViewFilter; setView: (v: ViewFilter) => void; onBuild: () => void }) {
+/** onFixCopy: open Build & sign off on a code's persona, territory and region (where copy Trupanion sent back is fixed). */
+export function Assets({ meta, view, setView, onBuild, onFixCopy }: { meta: Meta; view: ViewFilter; setView: (v: ViewFilter) => void; onBuild: () => void; onFixCopy?: (s: PfStub) => void }) {
   const enabled = !!meta.preflight?.enabled;
   const canReady = !!meta.preflight?.can_set_ready;
   const canCompliance = meta.can_set_compliance !== false;
@@ -241,7 +242,7 @@ export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: Vie
             {row && !report && <div className="text-base text-[#858B96]">Loading…</div>}
             {row && report && report.stub === row.s.stub && (
               <CodeView meta={meta} row={row} report={report} stubs={stubs || []} canReady={canReady} canCompliance={canCompliance} producer={producer} progress={progress} pending={pending} files={files} setFiles={setFiles}
-                onUpload={upload} onAudit={runAudit} onChanged={refresh} onError={setError} />
+                onUpload={upload} onAudit={runAudit} onChanged={refresh} onError={setError} onFixCopy={onFixCopy} />
             )}
           </main>
         </div>
@@ -250,11 +251,11 @@ export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: Vie
   );
 }
 
-function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer, progress, pending, files, setFiles, onUpload, onAudit, onChanged, onError }: {
+function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer, progress, pending, files, setFiles, onUpload, onAudit, onChanged, onError, onFixCopy }: {
   meta: Meta; row: CodeRow; report: PfReport; stubs: PfStub[]; canReady: boolean; canCompliance: boolean; producer: boolean; progress: string;
   pending: { upload_id: string; estimate: { usd: number; seconds: number; sizes?: number } } | null;
   files: File[]; setFiles: (f: File[]) => void; onUpload: (also: string[], sizes: string[]) => void; onAudit: (uploadId: string) => void;
-  onChanged: () => Promise<void>; onError: (m: string) => void;
+  onChanged: () => Promise<void>; onError: (m: string) => void; onFixCopy?: (s: PfStub) => void;
 }) {
   report = { ...report, same_visual_as: report.same_visual_as ?? [], on_asset_copy: report.on_asset_copy ?? report.copy, post_copy: report.post_copy ?? [] };
   const a = report.audit;
@@ -312,6 +313,7 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
           <div className="rounded-lg border border-amber-400/50 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
             <span className="font-semibold">Trupanion asked for changes {c.send_back === 'asset' ? 'to the visual' : 'to the copy'}{c.client_by ? ` (${c.client_by})` : ''}</span>{c.note ? `: “${c.note}”` : ''}
             <div className="text-amber-200/80">{c.send_back === 'asset' ? 'Upload a new version below; it goes back to Trupanion.' : 'The copy is edited and signed off again at Build & sign off.'} {c.by ? `Recorded by ${c.by}, ${when(c.at)}.` : ''}</div>
+            {c.send_back !== 'asset' && onFixCopy && <GhostButton className="mt-1.5 px-3 py-1 text-sm" onClick={() => onFixCopy(row.s)}>Fix the copy in Build & sign off →</GhostButton>}
           </div>
         )}
       </div>

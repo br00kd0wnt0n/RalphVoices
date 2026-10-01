@@ -1185,3 +1185,46 @@ test('upload: storage refusing a file keeps nothing (rows or objects) and says w
     assert.equal(await count(`SELECT count(*) n FROM studio_asset_uploads WHERE id = '${up.upload_id}'`), 1, 'a real upload is never an orphan');
   } finally { delete process.env.STUDIO_R2_BUCKET; }
 });
+
+// ---------- production test, 1 Oct, finding 23: a copy fixed after "changes requested" goes back to Trupanion ----------
+test('compliance: changes requested on the copy → edit → signed off again → the code is pending (back with Trupanion), everywhere', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const run = await keptRun(R, api, ['Calm at the counter.', 'One less worry.', 'Home by nine.']);
+  const ads = adsOf(run.prims, run.head);
+  const first = (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: ads, expectation: { codes: [await leadOf(R, ads)], reason: 'x' } }, 'nick')).signoff;
+  const [A1, A2, A3] = first.versions!.map((v: any) => v.code);
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
+  const png = [{ buffer: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from('fake VOICES_TEXT: Calm')]), filename: 'v.png', contentType: 'image/png' }];
+  const up = await pf.upload(A1, png, 'nick', [A2, A3]);
+  await pf.runAudit(await pf.createAudit(up.upload_id));
+  await pf.setAssetCompliance(up.upload_id, { status: 'cleared', note: 'ok', client_by: 'J. Doe', codes: [A1, A2] }, 'vivan');
+  await pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', note: 'Say "at participating hospitals"', send_back: 'copy', client_by: 'J. Doe', codes: [A3] }, 'vivan');
+  assert.equal((await pf.codeCompliance(A3, up.upload_id)).status, 'changes_requested');
+  // 22. Build shows the request on that ad (and only that ad); the board opens Build for a copy send-back.
+  const atA3 = async () => (await R.readyView('OWN', 'OWN_CALM')).plan.versions.find((v: any) => v.code === A3)!.compliance;
+  assert.deepEqual({ ...(await atA3()).request, at: undefined }, { note: 'Say "at participating hospitals"', client_by: 'J. Doe', by: 'vivan', at: undefined, answered: false });
+  assert.equal((await R.readyView('OWN', 'OWN_CALM')).plan.versions.find((v: any) => v.code === A1)!.compliance.request, undefined);
+  assert.equal((await pf.traffic(A3)).send_back, 'copy');
+
+  // The fix: A3's primary edited, then the set signed off again (same ads).
+  await S.setDecision(run.id, run.prims[2], { decision: 'edit', edited_text: 'Home by nine, at participating hospitals.' }, 'nick');
+  const edited = await atA3();
+  assert.equal(edited.status, 'pending', 'no longer "changes requested" once the copy is edited');
+  assert.equal(edited.request?.answered, true, 'Build says: sign off again to send it back');
+  const second = (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: ads, expectation: { codes: [A1], reason: 'x' }, expect_latest: first.id } as any, 'nick')).signoff;
+  assert.deepEqual(second.versions!.map((v: any) => v.code), [A1, A2, A3], 'the codes are kept');
+
+  const c = await pf.codeCompliance(A3, up.upload_id);
+  assert.equal(c.status, 'pending', 'back with Trupanion');
+  assert.match(c.stale || '', /Back with Trupanion: copy fixed in set v2/);
+  assert.equal((await pf.codeCompliance(A1, up.upload_id)).status, 'cleared', 'the untouched codes keep their decision');
+  const view = await pf.complianceAssets();
+  const a3 = view.assets[0].codes.find((x: any) => x.stub === A3)!;
+  assert.equal(a3.compliance.status, 'pending');
+  const hand = S.parseCsv(await pf.handoffCsv());
+  assert.equal(hand.find(r => r[0] === A3)![hand[0].indexOf('Compliance')], 'Pending');
+  assert.match((await pf.traffic(A3)).words, /Compliance pending \(copy fixed in set v2\)/);
+  assert.equal((await pf.traffic(A3)).send_back, undefined);
+});

@@ -203,10 +203,18 @@ export async function readyView(persona: string, territory: string, region: Regi
   // Compliance per version (set at the Compliance step, per code); a status given on another wording shows as needing review.
   const versions = plan.versions.map(v => {
     const ls = [...Object.values(v.fields), ...plan.on_image.filter(o => o.visual === v.visual).map(o => o.line_id)].map(id => byId.get(id)!).filter(Boolean);
-    const cs = ls.map(l => { const c = complianceFor(l, v.code); return c && c.status !== 'pending' && c.sha256 && c.sha256 !== lineHash(l) ? { ...c, status: 'pending' as const, edited: true } : c; });
+    let cs = ls.map(l => { const c = complianceFor(l, v.code); return c && c.status !== 'pending' && c.sha256 && c.sha256 !== lineHash(l) ? { ...c, status: 'pending' as const, edited: true } : c; });
+    // A copy send-back sits on every line of the ad; once any of them is edited the request is being answered, so the
+    // ad isn't "changes requested" any more (it goes back to Trupanion when it's signed off again; preflight.ts codeCompliance).
+    if (cs.some(c => (c as any)?.edited) && cs.some(c => c?.status === 'changes_requested' && c.send_back === 'copy')) cs = cs.map(c => (c?.status === 'changes_requested' && c.send_back === 'copy' ? { ...c, status: 'pending' as const, edited: true } : c));
     const status = cs.some(c => c?.status === 'changes_requested') ? 'changes_requested' : cs.length && cs.every(c => c?.status === 'cleared') ? 'cleared' : 'pending';
     const latestC = cs.filter(Boolean).sort((a, b) => String(b!.at || '').localeCompare(String(a!.at || '')))[0];
-    return { ...v, checks: checks[plan.versions.indexOf(v)], compliance: { status, note: cs.some(c => (c as any)?.edited) ? 'Edited since Trupanion’s review: the new wording needs their review' : latestC?.note, client_by: latestC?.client_by, by: latestC?.by, at: latestC?.at, send_back: latestC?.send_back } };
+    // Trupanion's copy change request on this ad, kept after the edit so Build can say what was asked and whether it's
+    // been answered (production test, 1 Oct: Build showed a sent-back ad as plain "Signed off").
+    const req = cs.filter(c => c?.send_back === 'copy' && (c.status === 'changes_requested' || (c as any).edited) && complianceFor(ls[cs.indexOf(c)], v.code)?.status === 'changes_requested')
+      .sort((a, b) => String(b!.at || '').localeCompare(String(a!.at || '')))[0];
+    const request = req ? { note: req.note, client_by: req.client_by, by: req.by, at: req.at, answered: cs.some(c => (c as any)?.edited) } : undefined;
+    return { ...v, checks: checks[plan.versions.indexOf(v)], compliance: { status, note: cs.some(c => (c as any)?.edited) ? 'Edited since Trupanion’s review: the new wording needs their review' : latestC?.note, client_by: latestC?.client_by, by: latestC?.by, at: latestC?.at, send_back: latestC?.send_back, request } };
   });
   const inCodes = (id: string) => [...versions.filter(v => Object.values(v.fields).includes(id)).map(v => v.code), ...plan.on_image.filter(o => o.line_id === id).map(o => `on-image ${o.visual}${o.card ? ` card ${o.card}` : ''}`)];
   const out = [];

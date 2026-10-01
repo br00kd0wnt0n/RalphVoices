@@ -110,6 +110,8 @@ export interface Traffic {
   words: string;
   /** What's outstanding, in words. */
   blocker?: string;
+  /** With changes requested: what goes back (the copy, fixed at Build & sign off; or the visual, at Assets). */
+  send_back?: 'copy' | 'asset';
   legacy?: boolean;
 }
 /** When "Ready to traffic" started needing compliance. Pre-flight marks before this, with no compliance recorded, stay ready (legacy). */
@@ -896,14 +898,14 @@ export class Preflight {
     const passed = st.status === 'ready' && !!upload && (!st.upload_id || st.upload_id === upload.id);
     const c = await this.codeCompliance(stub, upload?.id ?? null);
     const pf = passed ? 'Pre-flight passed' : !upload ? 'Not uploaded' : 'Pre-flight open';
-    const cw = c.wording_edited ? 'Wording edited since sign-off' : `Compliance ${COMPLIANCE_WORDS[c.status].toLowerCase()}`;
+    const cw = c.wording_edited ? 'Wording edited since sign-off' : c.stale?.startsWith('Back with Trupanion') ? `Compliance pending (${c.stale.replace(/^Back with Trupanion: /, '')})` : `Compliance ${COMPLIANCE_WORDS[c.status].toLowerCase()}`;
     if (passed && c.status === 'cleared' && !c.wording_edited) return { ready: true, preflight: 'passed', compliance: 'cleared', words: 'Ready to traffic' };
     // Marked ready before the gate, and no compliance decision recorded since: stays ready, and says so.
     if (passed && !c.recorded && !c.wording_edited && st.ready_at && st.ready_at < COMPLIANCE_GATE_FROM) {
       return { ready: true, preflight: 'passed', compliance: 'pending', words: 'Ready to traffic · compliance not recorded', legacy: true };
     }
     const blocker = !passed ? (upload ? 'Pre-flight: mark it passed once the audit is reviewed' : 'Upload the asset') : c.wording_edited ? 'The wording was edited since sign-off: sign it off again' : c.status === 'changes_requested' ? `Trupanion asked for changes to the ${c.send_back === 'asset' ? 'visual' : 'copy'}` : 'Waiting for Trupanion’s compliance decision';
-    return { ready: false, preflight: passed ? 'passed' : 'open', compliance: c.status, words: `${pf} · ${cw}`, blocker };
+    return { ready: false, preflight: passed ? 'passed' : 'open', compliance: c.status, words: `${pf} · ${cw}`, blocker, ...(c.status === 'changes_requested' ? { send_back: c.send_back || 'copy' } : {}) };
   }
 
   /**
@@ -921,6 +923,17 @@ export class Preflight {
       if (c.upload_id && uploadId && c.upload_id !== uploadId) return { status: 'pending' as const, note: c.note, stale: 'Reviewed on an earlier upload', c };
       return { status: c.status, note: c.note, stale: undefined, c };
     });
+    // A copy send-back is recorded on every line of the code (primary, headline…), and the fix is usually one of them.
+    // Once any of the code's wording has changed since it, the request is answered: the whole code goes back to
+    // Trupanion (production test, 1 Oct: A3's primary fixed and signed off again, but the untouched headline still said
+    // "changes requested", so the ad never returned to the producer's queue).
+    const copyFixed = each.some(e => e.stale === 'Reviewed on a different wording')
+      && each.some(e => e.c?.status === 'changes_requested' && e.c.send_back === 'copy');
+    if (copyFixed) {
+      const set = (await this.findStub(stub)).signoff;
+      for (const e of each) if (e.status === 'changes_requested' && e.c?.send_back === 'copy') Object.assign(e, { status: 'pending', stale: `Back with Trupanion: copy fixed in set v${set.version}` });
+      for (const e of each) if (e.stale === 'Reviewed on a different wording') e.stale = `Back with Trupanion: copy fixed in set v${set.version}`;
+    }
     const latest = each.map(e => e.c).filter(Boolean).sort((a, b) => String(b!.at || '').localeCompare(String(a!.at || '')))[0];
     // Edited since sign-off: the wording on the asset is no longer the wording that will run, so an earlier "cleared"
     // doesn't carry over (it shows as needing review until the new wording is signed off and reviewed).

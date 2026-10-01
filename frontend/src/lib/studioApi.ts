@@ -149,7 +149,11 @@ export interface DraftVersion { visual: string; fields: Record<string, string>; 
 export interface ReadyDraft { versions: DraftVersion[]; on_image: Record<string, string | string[]> }
 export interface PlannedVersion extends DraftVersion {
   code: string; number: number; platform: string; issues: string[]; checks?: VersionCheck;
-  compliance: { status: ComplianceStatus; note?: string; client_by?: string; by?: string; at?: string; send_back?: 'copy' | 'asset' };
+  compliance: {
+    status: ComplianceStatus; note?: string; client_by?: string; by?: string; at?: string; send_back?: 'copy' | 'asset';
+    /** Trupanion's copy change request on this ad (kept after the edit); answered once the wording has been edited. */
+    request?: { note?: string; client_by?: string; by?: string; at?: string; answered: boolean };
+  };
 }
 export interface ReadyView {
   persona: string; territory: string; region: Region; lines: ReadyLine[]; draft: ReadyDraft;
@@ -209,7 +213,7 @@ export interface PfReport {
   compliance?: CodeCompliance;
   traffic?: Traffic;
 }
-export interface Traffic { ready: boolean; preflight: 'passed' | 'open'; compliance: ComplianceStatus; words: string; blocker?: string; legacy?: boolean }
+export interface Traffic { ready: boolean; preflight: 'passed' | 'open'; compliance: ComplianceStatus; words: string; blocker?: string; legacy?: boolean; /** With changes requested: what goes back. */ send_back?: 'copy' | 'asset' }
 /** A code's compliance status on its current asset (Compliance step, after Pre-flight). */
 export interface CodeCompliance {
   status: ComplianceStatus; note?: string; at?: string; send_back?: 'copy' | 'asset';

@@ -10,12 +10,15 @@ import { cn } from '@/lib/utils';
 import { GhostButton, HEADING_FONT, Label, PersonaDot, personaKeys, territoryName } from './ui';
 
 export type Step = 'write' | 'review' | 'build' | 'assets';
-interface Counts { runs: number; kept: number; signed: number; uploaded: number; cleared: number; ready: number; changes: number }
-const zero = (): Counts => ({ runs: 0, kept: 0, signed: 0, uploaded: 0, cleared: 0, ready: 0, changes: 0 });
+interface Counts { runs: number; kept: number; signed: number; uploaded: number; cleared: number; ready: number; changes: number; /** Of those, the copy sent back: fixed at Build & sign off. */ copyChanges: number }
+const zero = (): Counts => ({ runs: 0, kept: 0, signed: 0, uploaded: 0, cleared: 0, ready: 0, changes: 0, copyChanges: 0 });
 const add = (a: Counts, b: Counts): Counts => Object.fromEntries(Object.keys(a).map(k => [k, (a as any)[k] + (b as any)[k]])) as unknown as Counts;
 const STAGES: Array<[keyof Counts, string]> = [['kept', 'kept'], ['signed', 'signed off'], ['uploaded', 'uploaded'], ['cleared', 'cleared'], ['ready', 'ready']];
-/** The step a cell opens: Assets once anything is signed off, Build when lines are kept, else Review (or Write, not started). */
-export const stepFor = (c: Counts): Step => (c.signed ? 'assets' : c.kept ? 'build' : c.runs ? 'review' : 'write');
+/**
+ * The step a cell opens: Build when Trupanion sent copy back (it's fixed there), Assets once anything is signed off,
+ * Build when lines are kept, else Review (or Write, not started).
+ */
+export const stepFor = (c: Counts): Step => (c.copyChanges ? 'build' : c.signed ? 'assets' : c.kept ? 'build' : c.runs ? 'review' : 'write');
 
 export function Board({ meta, onOpen, onHowItWorks, onRoundSaved }: {
   meta: Meta; onOpen: (persona: string, territory: string, step: Step) => void; onHowItWorks: () => void; onRoundSaved: () => void;
@@ -38,7 +41,7 @@ export function Board({ meta, onOpen, onHowItWorks, onRoundSaved }: {
       if (s.upload) c.uploaded++;
       if (s.traffic?.compliance === 'cleared') c.cleared++;
       if (s.traffic?.ready) c.ready++;
-      if (s.traffic?.compliance === 'changes_requested') c.changes++;
+      if (s.traffic?.compliance === 'changes_requested') { c.changes++; if (s.traffic.send_back !== 'asset') c.copyChanges++; }
     }
     return c;
   };
@@ -133,7 +136,7 @@ function Pipeline({ c }: { c: Counts }) {
           </span>
         ))}
       </div>
-      {c.changes > 0 && <div className="text-xs font-semibold text-red-200">{c.changes} with changes requested</div>}
+      {c.changes > 0 && <div className="text-xs font-semibold text-red-200">{c.changes} with changes requested{c.copyChanges ? ` (${c.copyChanges === c.changes ? '' : `${c.copyChanges} `}copy: fix in Build & sign off)` : ''}</div>}
     </div>
   );
 }
