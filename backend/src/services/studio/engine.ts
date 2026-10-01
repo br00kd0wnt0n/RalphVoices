@@ -825,6 +825,10 @@ export async function tasteFor(b: Pick<Brief, 'round'>): Promise<TasteExample[]>
 
 // ---------- writer prompt ----------
 
+/** Text that goes into the artwork: the rules' `on_asset`, else a per-visual field (on-image headline, subhead). */
+export const onAsset = (field: string, r: Pick<Rules, 'fields'>) => ((r.fields[field] as any)?.on_asset ?? isOnImageField(field, r)) === true;
+const onAssetWords = (field: string, r: Pick<Rules, 'fields'>) => (isSubField(field, r) ? 'an on-image subhead' : 'on-image text');
+
 /** Short fields whose visible length is a hard limit for written lines: a headline or hook cut off in the feed doesn't work. */
 export const isShortField = (f: string) => /headline|hook/.test(f);
 
@@ -1504,7 +1508,11 @@ export function deterministicFlags(l: { text: string; field: string; structure: 
   const text = l.text;
   const f = r.fields[l.field];
   const chars = [...text].length;
-  if (f && chars > f.max) addFlag(flags, { rule: 'LIMIT_MAX', severity: 'warn', label: `Over the ${f.label} limit (${chars}/${f.max})`, source: f.source, quote: '', why: `${chars} characters; limit ${f.max}`, by: ['rule'] });
+  // On-asset text (in the artwork: on-image headline, subhead, cards) is never cut off: its length is a text-load
+  // guideline. It gets its own flag in its own words, with no "truncated" and no quoted cut word (Nick's copy check,
+  // 1 Oct: 11 of 19 ambers read "Truncated ('eater.')" on on-image headlines).
+  if (f && onAsset(l.field, r) && chars > f.visible) addFlag(flags, { rule: 'LIMIT_ON_ASSET', severity: 'warn', label: `Long for ${onAssetWords(l.field, r)}: ${chars} characters (aim for ${f.visible} or fewer)`, source: f.source, quote: '', why: chars > f.max ? `Well over: the most that reads at a glance is about ${f.max}` : undefined, by: ['rule'] });
+  else if (f && chars > f.max) addFlag(flags, { rule: 'LIMIT_MAX', severity: 'warn', label: `Over the ${f.label} limit (${chars}/${f.max})`, source: f.source, quote: '', why: `${chars} characters; limit ${f.max}`, by: ['rule'] });
   else if (f && chars > f.visible) addFlag(flags, { rule: 'LIMIT_VISIBLE', severity: 'warn', label: `Truncated: ${chars} characters, ${f.visible} visible in ${f.label}`, source: f.source, quote: truncTail(text, f.visible), why: `${chars} characters; ${f.visible} visible`, by: ['rule'] });
 
   const pr = r.personas[l.persona];
@@ -1964,9 +1972,15 @@ export const regionOfLine = (l: { region?: Region }, brief?: { region?: Region }
  * Mark a run and its lines as entered for someone else (`created_for` / `added_for` beside the usual `_by`), and with the
  * copy check they came from. The full "on behalf of" uses the same `<verb>_for` beside each `<verb>_by`.
  */
-export async function stampFor(batchId: string, o: { bulk?: string; for?: string; user?: string }): Promise<void> {
+export async function stampFor(batchId: string, o: { bulk?: string; for?: string; user?: string; cards?: Array<{ text: string; field: string; card: number }> }): Promise<void> {
   await runLock(batchId, async () => {
     const b = await loadBatch(batchId);
+    // Pasted carousel cards keep their order: each gets its card number, and the pasted group is one sequence, so
+    // Build pre-fills the cards (and their subheads) in order.
+    for (const c of o.cards || []) {
+      const l = b.lines.find(x => x.model === 'human' && x.field === c.field && x.text === c.text && !x.card);
+      if (l) { l.card = c.card; l.sequence_id = `${batchId}-S${o.bulk ? o.bulk.replace(/\W+/g, '') : 'P'}`; }
+    }
     if (o.bulk) b.bulk = o.bulk;
     if (o.for) b.created_for = o.for;
     // In the brief too: Postgres keeps the run header in fixed columns, and reads these back from the brief.

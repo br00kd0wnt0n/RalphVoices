@@ -152,7 +152,12 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     const rounds = await Rounds.getRounds();
     // working: the round this person works in (theirs; the active round unless an admin picked a test round); choices: what they may pick.
     const working = await Rounds.workingRound(o.who(req), rounds);
-    res.json({ ...m, ...(o.rules ? {} : { studio_dir }), preflight: pf, rounds: { ...rounds, can_edit: isAdmin, working: working.id, choices: Rounds.workingChoices(rounds, isAdmin).map(x => x.id) }, can_set_compliance: o.canSetCompliance ? o.canSetCompliance(req) : true, can_override: o.canOverride ? o.canOverride(req) : true, can_sign_off: o.canSignOff ? o.canSignOff(req) : true, people: o.people ? o.people() : null, spend: await spent(), mock: o.mock, cap: o.cap, cap_window: o.capWindow, ask_over: o.askOver, ...(o.metaExtra?.(req) || {}) });
+    // Retired territories that still have runs or sign-offs in the round in view (a Demo round on pitch territories
+    // retired since): the board and the pickers keep showing them, marked retired; only new briefs are refused.
+    const view = await Rounds.roundView(rq(req), o.who(req));
+    const retired = new Set(Object.entries(m.territories).filter(([, t]: [string, any]) => t.status === 'retired').map(([k]) => k));
+    const retired_with_work = retired.size ? [...new Set([...(await S.listBatches(undefined, view)).map(b => b.territory), ...(await R.latestSignoffs({ view })).map(x => x.territory)].filter(t => retired.has(t)))] : [];
+    res.json({ ...m, retired_with_work, ...(o.rules ? {} : { studio_dir }), preflight: pf, rounds: { ...rounds, can_edit: isAdmin, working: working.id, choices: Rounds.workingChoices(rounds, isAdmin).map(x => x.id) }, can_set_compliance: o.canSetCompliance ? o.canSetCompliance(req) : true, can_override: o.canOverride ? o.canOverride(req) : true, can_sign_off: o.canSignOff ? o.canSignOff(req) : true, people: o.people ? o.people() : null, spend: await spent(), mock: o.mock, cap: o.cap, cap_window: o.capWindow, ask_over: o.askOver, ...(o.metaExtra?.(req) || {}) });
   }));
   r.post('/estimate', wrap(async (req, res) => {
     const b = S.makeBrief(req.body.brief || {});
@@ -241,6 +246,13 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     res.json({ bulk: id, estimate: est, job: startJob(`${id}~${Date.now()}`, emit => Bulk.runBulk(parsed, api, { user: who, for: forWhom, id }, emit).finally(held.release)) });   // each run records its own spend (generate)
   }));
   r.get('/bulk', wrap(async (_req, res) => res.json(await Bulk.listBulk())));
+  // Shared captions are written to sit under these: every persona's kept on-image headlines, in a region and the round in view.
+  r.get('/approved-headlines', wrap(async (req, res) => {
+    await S.refreshRules();
+    const view = await Rounds.roundView(rq(req), o.who(req));
+    const region = String(req.query.region || 'US').toUpperCase() as any;
+    res.json({ region, headlines: await S.approvedHeadlines(region, view.ids ? [...view.ids][0] : view.active.id) });
+  }));
   r.get('/bulk/:id', wrap(async (req, res) => { await S.refreshRules(); res.json(await Bulk.bulkReport(req.params.id === 'latest' ? undefined : req.params.id)); }));
   r.get('/bulk/:id/report.md', wrap(async (req, res) => { await S.refreshRules(); const rep = await Bulk.bulkReport(req.params.id === 'latest' ? undefined : req.params.id); download(res, 'text/markdown; charset=utf-8', `copy-check-${rep.id}.md`, Bulk.reportMd(rep)); }));
   r.get('/bulk/:id/report.csv', wrap(async (req, res) => { await S.refreshRules(); const rep = await Bulk.bulkReport(req.params.id === 'latest' ? undefined : req.params.id); download(res, 'text/csv; charset=utf-8', `copy-check-${rep.id}.csv`, Bulk.reportCsv(rep)); }));

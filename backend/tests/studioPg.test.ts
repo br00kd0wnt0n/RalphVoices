@@ -1497,3 +1497,35 @@ test('shared caption in 3 codes across 2 personas: one compliance decision appli
   await S.setDecision(cap.replace(/-L\d+$/, ''), cap, { decision: 'edit', edited_text: 'Trupanion is medical insurance for pets. See how it works.' }, 'nick');
   for (const c of [A1, A2, F1]) assert.equal((await pf.codeCompliance(c, null)).wording_edited, true, c);
 });
+
+// ---------- finding 36: a retired territory that still has work in the round in view ----------
+test('retired territories with runs or sign-offs in the round stay reachable: /meta names them; new briefs are still refused', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const rules = JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8'));
+  rules.territories.OWN_OLD = { ...rules.territories.OWN_CALM, name: 'Old pitch' };
+  rules.territories.OWN_EMPTY = { ...rules.territories.OWN_CALM, name: 'Never used' };
+  await store.putRules('example-retired', rules, { activate: true, by: 'test' });
+  await (store as any).db.query(`TRUNCATE studio_territory_edits`);
+  await S.refreshRules();
+  const run = await S.generate(S.makeBrief({ territory: 'OWN_OLD', name: 'old', own_lines: [{ text: 'Calm at the counter, with Trupanion.', field: 'meta_primary' }, HEAD] }), api, () => {}, { ownOnly: true, user: 'nick' });
+  for (const l of run.lines) await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+  await S.saveTerritory('OWN_OLD', { status: 'retired' } as any, 'Replaced by per-asset territories', 'brook');
+  await S.saveTerritory('OWN_EMPTY', { status: 'retired' } as any, 'Never used', 'brook');
+  const { createStudioRouter } = await import('../src/services/studio/router.js');
+  const express = (await import('express')).default;
+  const app = express();
+  app.use(express.json());
+  app.use('/s', createStudioRouter({ who: () => 'brook', api: () => api, mock: true, cap: 50, capWindow: 'month', askOver: 2, rules: { store, isAdmin: () => true } }));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(r => server.once('listening', r));
+  try {
+    const meta = await (await fetch(`http://127.0.0.1:${(server.address() as any).port}/s/meta`)).json() as any;
+    assert.deepEqual(meta.retired_with_work, ['OWN_OLD'], 'the one with a run; not the unused one');
+    assert.equal(meta.territories.OWN_OLD.status, 'retired');
+  } finally { server.close(); }
+  // Its kept lines still open at Build & sign off, and can be signed off; a new brief on it is refused.
+  const v = await R.readyView('OWN', 'OWN_OLD');
+  assert.equal(v.lines.length, 2);
+  assert.deepEqual(v.plan.issues, []);
+  assert.throws(() => S.makeBrief({ territory: 'OWN_OLD' }), /is retired/);
+});
