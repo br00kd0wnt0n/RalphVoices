@@ -33,7 +33,9 @@ function writer(sys: string, user: string) {
     // Every seventh cell repeats an earlier line almost word for word, to exercise dedupe.
     const base = `${OPENERS[k % OPENERS.length]} ${MIDDLES[(k >>> 3) % MIDDLES.length]}. ${ENDINGS[(k >>> 7) % ENDINGS.length]}`.trim();
     const text = i > 0 && i % 7 === 0 ? `${OPENERS[0]} ${MIDDLES[0]}.` : structure === 'question' ? `${MIDDLES[k % MIDDLES.length].replace(/^./, c => c.toUpperCase())}?` : base;
-    return { cell, text: field.includes('headline') || field.includes('hook') ? fit(text.split(/[.?]/)[0], visible[field]) : text };
+    // Primary text and captions name the product, as the prompt says (a line that doesn't is dropped).
+    const named = /meta_primary|tiktok_caption/.test(field) && /names Trupanion/.test(sys) && !/trupanion|insurance for pets/i.test(text) ? `${text} That is what Trupanion is for.` : text;
+    return { cell, text: field.includes('headline') || field.includes('hook') ? fit(text.split(/[.?]/)[0], visible[field]) : named };
   });
   return JSON.stringify({ lines });
 }

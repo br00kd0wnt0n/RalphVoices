@@ -47,7 +47,7 @@ function png(dir: string, name: string, color = 'blue'): Buffer {
   return fs.readFileSync(p);
 }
 
-test('copy match: normalised match, rewording (amber, both quoted), missing hook, headline is post copy (Brook, 30 Sep), missing caveat (red)', () => {
+test('copy match: normalised match, rewording (amber, both quoted), missing hook (red), headline is post copy (Brook, 30 Sep), missing caveat (red)', () => {
   assert.equal(normalise('Your vet, paid\nat CHECKOUT!'), 'your vet paid at checkout');
   const onAsset = [{ where: 'card 1', text: 'YOUR VET CAN BE PAID\ndirectly at checkout.' }, { where: 'card 2', text: 'Trupanion' }];
   const same = copyMatch({ on_image: 'Your vet can be paid directly at checkout' }, onAsset, rules);
@@ -61,7 +61,7 @@ test('copy match: normalised match, rewording (amber, both quoted), missing hook
   assert.equal(reworded.flags[0].where, 'card 1');
 
   const missing = copyMatch({ hook: 'Summer, sorted', headline: 'Do the maths' }, onAsset, rules);
-  assert.deepEqual(missing.flags.map(f => [f.rule, f.severity]), [['COPY_MATCH', 'amber']]);
+  assert.deepEqual(missing.flags.map(f => [f.rule, f.severity]), [['COPY_MATCH', 'red']], 'a must-be-on-the-asset field not found is red (1 Oct)');
   assert.equal(missing.rows.find(x => x.field === 'headline')!.status, 'not expected on asset', 'the headline runs below the image');
   // A caveat-carrying headline isn't looked for on the image either (the caveat is checked inside the ad at Ready).
   assert.deepEqual(copyMatch({ headline: 'Paid at checkout, at participating hospitals.' }, [{ where: 'card 1', text: 'Summer, sorted' }], rules).flags, []);

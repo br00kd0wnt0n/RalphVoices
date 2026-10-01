@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { studio, type CodeCompliance, type ComplianceAsset, type ComplianceStatus, type ComplianceView, type Meta, type PfFlag, type PfReport, type PfStub, type StudioEvent } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { groupOverrides, overrideWhere } from '@/lib/overrideGroups';
+import { keepSelection, uploadFor, uploadLabel } from '@/lib/uploadTarget';
 import { SIZES, detectFileSize } from '@/lib/studioSizes';
 import { personaEdge } from '@/lib/personaColors';
 import { personaColor, tint } from '@/lib/personaColors';
@@ -120,18 +121,21 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy }: { meta: Meta
   const formatOf = (s: PfStub) => String(meta.territories[s.territory]?.format || '').toUpperCase() || 'OTHER';
   const scoped = rows.filter(r => inViewFilter(r.s, view) && (format === 'all' || formatOf(r.s) === format));
   const shown = scoped.filter(r => inFilter(r, filter));
-  // Keep a selection in view: the first shown code when the current one isn't in the list.
+  // Keep a selection in view (keepSelection): the first shown code when the current one isn't in the list, but never
+  // off a code with files waiting or an upload or check running.
   useEffect(() => {
     if (!stubs) return;
-    if (!sel || !shown.some(r => r.s.stub === sel)) setSel(shown[0]?.s.stub ?? (sel && scoped.some(r => r.s.stub === sel) ? sel : null));
+    const next = keepSelection(sel, shown.map(r => r.s.stub), scoped.map(r => r.s.stub), [...Object.keys(picked), ...Object.keys(progressBy)]);
+    if (next !== sel) setSel(next);
   }, [stubs, comp, filter, format, view.persona, view.territory, view.region]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!enabled) return <div className="max-w-3xl rounded-xl border border-[#272B34] bg-[#16181D] p-6 text-base text-[#A3A8B1]">Assets need the database: in <code>backend/</code>, run <code>npx tsx scripts/studio.ts serve --store pg --database-url …</code> (hosted Studio has it on).</div>;
 
-  async function upload(also: string[], sizes: string[] = []) {
-    const stub = sel;
-    const files = stub ? picked[stub]?.files || [] : [];
-    if (!stub || !files.length) return;
+  /** Upload to the code whose button was pressed (never the current selection), with that code's own files. */
+  async function upload(code: string, also: string[], sizes: string[] = []) {
+    const plan = uploadFor(code, picked);
+    if (!plan) return;
+    const stub = plan.stub, files = plan.files;
     setError(''); setProgress(stub, 'Uploading…');
     try {
       const r = await studio.pfUpload(stub, files, also, sizes);
@@ -142,9 +146,7 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy }: { meta: Meta
       await refresh();
     } catch (e: any) { setProgress(stub, ''); setError(e.message); }
   }
-  async function runAudit(uploadId: string) {
-    const stub = sel;
-    if (!stub) return;
+  async function runAudit(stub: string, uploadId: string) {
     setError('');
     try {
       let r;
@@ -271,7 +273,7 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
   elsewhere: string[];
   fileSizes: string[]; setFileSizes: (z: string[] | ((cur: string[]) => string[])) => void;
   pending: { upload_id: string; estimate: { usd: number; seconds: number; sizes?: number } } | null;
-  files: File[]; setFiles: (f: File[]) => void; onUpload: (also: string[], sizes: string[]) => void; onAudit: (uploadId: string) => void;
+  files: File[]; setFiles: (f: File[]) => void; onUpload: (code: string, also: string[], sizes: string[]) => void; onAudit: (code: string, uploadId: string) => void;
   onChanged: () => Promise<void>; onError: (m: string) => void; onFixCopy?: (s: PfStub) => void;
 }) {
   report = { ...report, same_visual_as: report.same_visual_as ?? [], on_asset_copy: report.on_asset_copy ?? report.copy, post_copy: report.post_copy ?? [] };
@@ -376,7 +378,7 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
             ) : <p className="text-sm text-[#858B96]">Nothing uploaded yet.</p>}
             {report.format_note && <p className="mt-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">{report.format_note}</p>}
             <div className="mt-3 space-y-2 border-t border-[#272B34] pt-3">
-              <input key={up?.id || 'none'} type="file" multiple accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime" onChange={e => setFiles([...(e.target.files || [])])} className="max-w-full text-sm" />
+              <input key={`${report.stub}|${up?.id || 'none'}`} type="file" multiple accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime" onChange={e => setFiles([...(e.target.files || [])])} className="max-w-full text-sm" />
               <p className="text-xs text-[#646A75]">Every size at once: {expected.length ? expected.join(', ') : '1:1, 4:5, 9:16'} for this code. One image or video per size; a carousel's cards in order within each size. Sizes are read from the files; correct any below. A new upload replaces the asset and reopens it for review.</p>
               {files.length > 0 && (
                 <ul className="space-y-1 rounded-lg border border-[#272B34] px-3 py-2 text-sm">
@@ -404,29 +406,28 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
                 </fieldset>
               )}
               <div className="flex flex-wrap items-center gap-2">
-                <PinkButton className="px-4 py-1.5 text-base" disabled={!files.length || !!progress} onClick={() => onUpload(also, fileSizes)}>{up ? 'Upload a new version' : 'Upload'}</PinkButton>
-                {files.length > 0 && <span className="text-sm text-[#858B96]">{files.length} file{files.length === 1 ? '' : 's'}</span>}
+                <PinkButton className="px-4 py-1.5 text-base" disabled={!files.length || !!progress} onClick={() => onUpload(report.stub, also, fileSizes)}>{uploadLabel(report.stub, files.length, !!up)}</PinkButton>
               </div>
               {(pending || (up && !auditForLatest)) && !progress && (
                 <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[#343946] bg-[#101216] px-3 py-2 text-sm">
                   <span>{pending ? `About $${pending.estimate.usd.toFixed(2)} and ${secs(pending.estimate.seconds)} to check${(pending.estimate.sizes ?? 1) > 1 ? ` (${pending.estimate.sizes} sizes, one check each)` : ''}.` : 'Not checked yet.'}</span>
-                  <PinkButton className="ml-auto px-3 py-1 text-sm" onClick={() => onAudit(pending?.upload_id || up!.id)}>Run the checks</PinkButton>
+                  <PinkButton className="ml-auto px-3 py-1 text-sm" onClick={() => onAudit(report.stub, pending?.upload_id || up!.id)}>Run the checks</PinkButton>
                 </div>
               )}
               {a && up && auditForLatest && a.status === 'failed' && !progress && (
                 <div className="flex flex-wrap items-center gap-2 rounded-lg border border-red-500/45 bg-red-500/10 px-3 py-2 text-sm text-red-100">
                   <span className="min-w-0 flex-1">The checks failed: {a.error}</span>
-                  <PinkButton className="px-3 py-1 text-sm" onClick={() => onAudit(up.id)}>Run again</PinkButton>
+                  <PinkButton className="px-3 py-1 text-sm" onClick={() => onAudit(report.stub, up.id)}>Run again</PinkButton>
                 </div>
               )}
               {a?.stale && auditForLatest && up && (
                 <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
                   <span className="min-w-0 flex-1">{a.stale}</span>
-                  <PinkButton className="px-3 py-1 text-sm" disabled={!!progress} onClick={() => onAudit(up.id)}>Check again</PinkButton>
+                  <PinkButton className="px-3 py-1 text-sm" disabled={!!progress} onClick={() => onAudit(report.stub, up.id)}>Check again</PinkButton>
                 </div>
               )}
               {a && up && auditedLatest && !a.stale && !progress && (
-                <button className="text-xs text-[#858B96] underline-offset-2 hover:text-[#ECEDEF] hover:underline" onClick={() => onAudit(up.id)} title="Run the checks again on this upload (e.g. after a rules change)">Check again</button>
+                <button className="text-xs text-[#858B96] underline-offset-2 hover:text-[#ECEDEF] hover:underline" onClick={() => onAudit(report.stub, up.id)} title="Run the checks again on this upload (e.g. after a rules change)">Check again</button>
               )}
               {progress && <div className="flex items-center gap-2 text-sm font-medium" style={{ color: PINK }}><span className="animate-pulse">●</span> {progress}</div>}
               {!progress && elsewhere.length > 0 && <p className="text-xs text-[#858B96]">Checks running on {elsewhere.join(', ')}: you can upload and check this code meanwhile.</p>}

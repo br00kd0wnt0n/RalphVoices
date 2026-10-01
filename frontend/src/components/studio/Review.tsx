@@ -83,7 +83,7 @@ export function Review({ meta, ctx, batch, setBatch, status, running, onMore, on
                   ))}
                 </select>
               ) : <p className="text-base text-[#858B96]">No runs for {territoryName(meta.territories[ctx.territory]).replace(/\.$/, '')} yet: write lines on Write.</p>}
-              {b && <div className="mt-1 text-sm text-[#858B96]">{checked} of {lines.length} checked{yours ? ` · ${yours} yours` : ''} · writer {b.brief.model}{b.stats.near_duplicates_removed ? ` · ${b.stats.near_duplicates_removed} near-duplicates removed` : ''}</div>}
+              {b && <div className="mt-1 text-sm text-[#858B96]">{checked} of {lines.length} checked{yours ? ` · ${yours} yours` : ''} · writer {b.brief.model}{b.stats.generated ? ` · ${b.stats.generated} written` : ''}{b.stats.near_duplicates_removed ? ` · ${b.stats.near_duplicates_removed} near-duplicates removed` : ''}{b.stats.spare ? ` · ${b.stats.spare} spare (beyond the counts asked for)` : ''}</div>}
               {b && <DroppedNote meta={meta} batch={b} />}
             </div>
             {b && <GhostButton className="text-base" disabled={running} onClick={onMoreRun}>{yours ? 'Generate around your lines' : 'Generate more in this run'}</GhostButton>}
@@ -147,11 +147,12 @@ function DroppedNote({ meta, batch }: { meta: Meta; batch: Batch }) {
   const [open, setOpen] = useState(false);
   const gone = (batch.dropped || []).filter(d => d.reason);
   if (!gone.length) return null;
-  const long = gone.filter(d => d.rule === 'LIMIT_VISIBLE').length, cliche = gone.filter(d => d.rule === 'CA_CLICHE').length, rule = gone.length - long - cliche;
+  const long = gone.filter(d => d.rule === 'LIMIT_VISIBLE').length, cliche = gone.filter(d => d.rule === 'CA_CLICHE').length, product = gone.filter(d => d.rule === 'CL_PRODUCT').length;
+  const rule = gone.length - long - cliche - product;
   return (
     <div className="mt-1 text-sm text-[#858B96]">
       <button className="underline-offset-2 hover:text-[#ECEDEF] hover:underline" aria-expanded={open} onClick={() => setOpen(!open)}>
-        {gone.length} written line{gone.length === 1 ? '' : 's'} dropped before you saw {gone.length === 1 ? 'it' : 'them'}: {[rule ? `broke a client rule (${rule})` : '', long ? `too long for the field (${long})` : '', cliche ? `a Canadian cliché (${cliche})` : ''].filter(Boolean).join(', ')}
+        {gone.length} written line{gone.length === 1 ? '' : 's'} dropped before you saw {gone.length === 1 ? 'it' : 'them'}: {[rule ? `broke a client rule (${rule})` : '', product ? `didn’t say what’s sold (${product})` : '', long ? `too long for the field (${long})` : '', cliche ? `a Canadian cliché (${cliche})` : ''].filter(Boolean).join(', ')}
       </button>
       {open && (
         <ul className="mt-1 space-y-1 border-l-2 border-[#343946] pl-3">
