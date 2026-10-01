@@ -105,7 +105,10 @@ export interface Meta {
   /** Hosted: the signed-in person. */
   user?: { email: string; name: string | null; admin: boolean } | null;
   /** The rounds and the active one; can_edit: may this person create rounds and set the active one (admins). */
-  rounds?: RoundsState & { can_edit: boolean };
+  /** working: the round this person works in (theirs; the active round unless an admin picked a test round); choices: what they may pick. */
+  rounds?: RoundsState & { can_edit: boolean; working?: string; choices?: string[] };
+  /** Who to cast (rules v2.12, Trupanion's breed data): the same notes for every persona; null before v2.12. */
+  casting?: { notes: Array<{ text: string; source: string; caution: boolean }> } | null;
 }
 export interface ShortRow { stub: string; id: string; batch?: string; decision?: string; signed_off?: string; round?: string; persona: string; territory: string; region?: Region; field: string; platform: string; format: string; text: string; angle: string; structure: string; note: string; flags: string; compliance_flags: string[]; warn_flags: string[] }
 export interface CompareLine { id: string; label: string; field: string; text: string; chars: number; angle: string; structure: string; favourite?: boolean; note?: string; stars?: Record<string, boolean> }
@@ -426,6 +429,8 @@ export const studio = {
   /** Rounds (admin): create or rename one (optionally making it active), or set the active round. */
   saveRound: (round: { id: string; name: string; label?: string; from?: string; test?: boolean; activate?: boolean; assets_due?: string }) => req<RoundsState>('/rounds', { method: 'POST', body: JSON.stringify(round) }),
   activateRound: (id: string) => req<RoundsState>(`/rounds/${enc(id)}/activate`, { method: 'POST' }),
+  /** The round this person works in (the active round, or a test round for an admin). Never changes the active round. */
+  setWorkingRound: (id: string) => req<Round>('/rounds/working', { method: 'POST', body: JSON.stringify({ id }) }),
   uploadRules: (version: string, rules: unknown, notes: string, activate = false) => req<RulesVersion[]>('/rules', { method: 'POST', body: JSON.stringify({ version, rules, notes, activate }) }),
 
   download,

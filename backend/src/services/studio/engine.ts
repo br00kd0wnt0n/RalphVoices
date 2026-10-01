@@ -21,7 +21,7 @@ import { FileStore, mergeBatchHeader, type StudioStore } from './store.js';
 import { CURRENT_PATTERN, DEFAULT_REGION, REGIONS, type Region } from '../../utils/namingCode.js';
 import { CodeBook, regionOf } from './codes.js';
 import { signoffVersions } from './versions.js';
-import { activeRound, getRounds, inView, labelOf as monthOf, roundOf, roundView, type RoundView } from './rounds.js';
+import { getRounds, inView, labelOf as monthOf, roundOf, roundView, workingRound, type RoundView } from './rounds.js';
 
 // ---------- paths ----------
 
@@ -202,6 +202,8 @@ type Emit = (e: StudioEvent) => void;
 
 export interface Rules {
   version?: string;
+  /** Who to show in the creative (rules v2.12, from Trupanion's breed data): notes for every persona, and a line for the writer. */
+  casting?: { _note?: string; notes?: Array<{ text: string; source: string; caution?: boolean }>; writer_note?: string };
   sources: Record<string, any>;
   fields: Record<string, { platform: string; label: string; visible: number; max: number; source: string; note?: string; writer_note?: string; default_count?: number }>;
   tone_controls: Record<string, Record<string, string>>;
@@ -582,7 +584,7 @@ export class Api {
   async commit(label: string, user?: string) {
     if (this.mock || !this.runTotal()) return;
     // Labelled with the round (a test round's spend is real money and counts toward the cap).
-    const roundId = (await activeRound()).id;
+    const roundId = (await workingRound(this.user)).id;   // the round the person is working in
     await getStore().addSpend({ label: `${label} · ${roundId}`, usd: round(this.runTotal(), 4), by_stage: Object.fromEntries(Object.entries(this.runUsd).map(([k, v]) => [k, round(v, 4)])), calls: this.runCalls, at: new Date().toISOString(), user: user ?? this.user });
   }
 
@@ -802,7 +804,7 @@ ${pr.turn_offs.map(x => `- ${x.rule}`).join('\n')}
 Their language: ${pr.language.map(l => l.text).join(' · ')}
 Real owners' words, for inspiration only (never copy more than four words in a row):
 ${pr.verbatims.map(v => `- "${v.text}"`).join('\n')}
-
+${r.casting?.writer_note ? `PETS: ${r.casting.writer_note}\n` : ''}
 TERRITORY: ${t.name} ${t.premise}
 ${regionBlock(regionOf({}, b))}
 RULES THAT BIND EVERY LINE:
@@ -1182,7 +1184,8 @@ export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: 
   const r = loadRules();
   const existing = opts.batchId && (await batchExists(opts.batchId)) ? await loadBatch(opts.batchId) : null;
   // A new run belongs to the active round; lines added to a run keep the run's round.
-  b = existing ? { ...b, round: existing.brief.round } : { ...b, round: b.round || (await activeRound()).id };
+  // A new run belongs to the round the person is working in (an admin can work in a test round; everyone else in the active round).
+  b = existing ? { ...b, round: existing.brief.round } : { ...b, round: b.round || (await workingRound(opts.user)).id };
   if (!b.round) delete b.round;
   const id = existing?.id || opts.batchId || (await newBatchId(b.territory));
   const started = Date.now();
@@ -2060,6 +2063,8 @@ export async function meta() {
     regions: REGIONS,
     code_pattern: CURRENT_PATTERN,
     fields: r.fields,
+    // Who to cast (rules v2.12): the same notes for every persona's "Who this is" panel and the Rules view.
+    casting: r.casting?.notes?.length ? { notes: r.casting.notes.map(n => ({ text: n.text, source: n.source, caution: !!n.caution })) } : null,
     structures: r.structures,
     tone_controls: r.tone_controls,
     needs_review: r.needs_review.length,

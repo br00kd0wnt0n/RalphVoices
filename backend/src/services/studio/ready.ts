@@ -27,7 +27,7 @@ import {
   complianceFor, defaultDraft, fieldRole, planDraft, platformOf, signoffOnImage, signoffVersions, versionFields,
 } from './versions.js';
 import { type VersionCheck, checkVersions, estimateConflicts, seedConflicts, uncheckedAds } from './versionChecks.js';
-import { TEST_SUFFIX, inView, labelOf, roundOf, roundView, type RoundView } from './rounds.js';
+import { TEST_SUFFIX, inView, labelOf, roundOf, roundView, testOnly, type RoundView } from './rounds.js';
 
 /** Someone else changed what this request was based on (e.g. signed the same set off first): reload and try again. */
 export class ConflictError extends Error { status = 409; }
@@ -177,12 +177,12 @@ export async function recheckLine(batchId: string, lineId: string, api: Api, use
  * flags and edit wording), the versions being built (`draft`: what the screen sends, or by default the last
  * sign-off's versions or a first pairing of the lines) with their codes and what's missing (`plan`), and the history.
  */
-export async function readyView(persona: string, territory: string, region: Region = DEFAULT_REGION, draft?: Draft, opts: { round?: string } = {}) {
+export async function readyView(persona: string, territory: string, region: Region = DEFAULT_REGION, draft?: Draft, opts: { round?: string; user?: string } = {}) {
   const st = getStore();
   if (!REGION_NAMES[region]) throw new Error(`Region must be ${Object.keys(REGION_NAMES).join(' or ')}`);
   const r = loadRules();
   // Ready works in one round: the one asked for, else the active one ("all rounds" shows the active round here).
-  const rv = await roundView(opts.round);
+  const rv = await roundView(opts.round, opts.user);
   const round = { id: rv.ids ? [...rv.ids][0] : rv.active.id, test: false };
   round.test = rv.isTest(round.id);
   const lines = (await keptLines()).filter(l => l.persona === persona && l.territory === territory && l.region === region && l.round === round.id);
@@ -223,7 +223,7 @@ export async function readyView(persona: string, territory: string, region: Regi
 }
 
 /** Run the conflicts check (a model call per version whose wording hasn't been checked) on a draft, then show it. */
-export async function checkDraft(persona: string, territory: string, region: Region, draft: Draft, api: Api, opts: { round?: string } = {}) {
+export async function checkDraft(persona: string, territory: string, region: Region, draft: Draft, api: Api, opts: { round?: string; user?: string } = {}) {
   const view = await readyView(persona, territory, region, draft, opts);
   const lines = view.lines.map(x => x.line);
   await checkVersions(view.plan, lines, loadRules(), api);
@@ -237,7 +237,7 @@ export async function checkDraft(persona: string, territory: string, region: Reg
  * or a line in it has an unresolved red flag (GateError).
  */
 export async function signOff(input: { persona: string; territory: string; region?: string; round?: string; versions: Draft['versions']; on_image?: Draft['on_image']; expectation: { codes: string[]; reason: string }; expect_latest?: string | null }, user?: string, opts: { api?: Api } = {}): Promise<{ signoff: Signoff; expectation: Expectation }> {
-  const ro = { round: input.round };
+  const ro = { round: input.round, user };
   const { persona, territory } = input;
   const region = String(input.region || DEFAULT_REGION).toUpperCase() as Region;
   if (!REGION_NAMES[region]) throw new Error(`Region must be ${Object.keys(REGION_NAMES).join(' or ')}`);
@@ -368,7 +368,7 @@ export interface HandoffRow {
 export type TrafficOf = (stub: string) => Promise<{ ready: boolean; words: string }>;
 
 /** The latest sign-off per persona × territory × region, one row per code, with the signed-off wording. */
-export async function handoffRows(filter: { persona?: string; territory?: string; region?: string; round?: string } = {}, trafficOf?: TrafficOf): Promise<HandoffRow[]> {
+export async function handoffRows(filter: { persona?: string; territory?: string; region?: string; round?: string; user?: string } = {}, trafficOf?: TrafficOf): Promise<HandoffRow[]> {
   const r = loadRules();
   const rows: HandoffRow[] = [];
   const cache = new Map<string, Batch | null>();
@@ -376,10 +376,11 @@ export async function handoffRows(filter: { persona?: string; territory?: string
     if (!cache.has(x.batch_id)) { try { cache.set(x.batch_id, await loadBatch(x.batch_id)); } catch { cache.set(x.batch_id, null); /* run removed; keep the signed record */ } }
     return cache.get(x.batch_id)?.lines.find(l => l.id === x.line_id);
   };
-  // The active round by default ('all' for every round). Test rounds never reach Add3: always left out.
-  const view = await roundView(filter.round);
+  // The person's working round by default ('all' for every round). A test round is left out, except in a view of
+  // exactly that test round (a demo's exports, labelled TEST by handoffPack).
+  const view = await roundView(filter.round, filter.user);
   for (const s of await latestSignoffs({ ...filter, view })) {
-    if (view.isTest(roundOf(s))) continue;
+    if (view.isTest(roundOf(s)) && !testOnly(view)) continue;
     const onImage = signoffOnImage(s);
     for (const v of signoffVersions(s)) {
       const mine = onImage.filter(o => o.visual === v.visual && o.visual_key && (parseCode(v.code, null) as any).platform === platformOf(o.field, r));
@@ -422,8 +423,10 @@ export async function handoffRows(filter: { persona?: string; territory?: string
 
 const STATUS_WORDS: Record<string, string> = { pending: 'Pending', cleared: 'Cleared', changes_requested: 'Changes requested' };
 
-export async function handoffPack(filter: { persona?: string; territory?: string; region?: string; round?: string } = {}, trafficOf?: TrafficOf) {
+export async function handoffPack(filter: { persona?: string; territory?: string; region?: string; round?: string; user?: string } = {}, trafficOf?: TrafficOf) {
   const r = loadRules();
+  // A test round's own exports (a demo) say so on the first line, and the router names the files TEST_….
+  const test = testOnly(await roundView(filter.round, filter.user));
   const rows = await handoffRows(filter, trafficOf);
   // A column per field that appears in any version, in the rules' order; then the visual's on-image text.
   const present = new Set(rows.flatMap(x => Object.keys(x.fields)));
@@ -441,7 +444,7 @@ export async function handoffPack(filter: { persona?: string; territory?: string
     STATUS_WORDS[x.compliance] || x.compliance, x.compliance_note, x.traffic, x.overrides, x.ready_by, x.ready_at, x.changed_since])]);
 
   const expectations = (await getStore().listExpectations()) as Expectation[];
-  const md = ['# Ready for production: handoff', '', 'Creative sign-off, not compliance clearance. One naming code per ad (a live version: its fields together); compliance status per code.', ''];
+  const md = [...(test ? ['# TEST – not for trafficking', ''] : []), '# Ready for production: handoff', '', 'Creative sign-off, not compliance clearance. One naming code per ad (a live version: its fields together); compliance status per code.', ''];
   let last = '', lastVisual = '';
   for (const x of rows) {
     const g = `${x.persona} · ${x.territory} · ${REGION_NAMES[x.region]}`;
@@ -467,5 +470,6 @@ export async function handoffPack(filter: { persona?: string; territory?: string
   // flag says which rule to look at, in plain words; never the reason or who.
   const complianceCsv = toCsv([['Naming code', 'Region', 'Platform', ...fieldCols.map(label), ...(hasOnImage ? ['On-image text (the visual)'] : []), ...cardCols, 'Please check'],
     ...rows.map(x => [x.stub, REGION_NAMES[x.region], x.platform, ...fieldCols.map(f => x.fields[f]?.text || ''), ...(hasOnImage ? [x.on_image?.text || ''] : []), ...cardVals(x), x.check_specifically])]);
-  return { count: rows.length, csv, md: md.join('\n') + '\n', complianceCsv };
+  const mark = (c: string) => (test ? toCsv([['TEST – not for trafficking']]) + c : c);
+  return { count: rows.length, csv: mark(csv), md: md.join('\n') + '\n', complianceCsv: mark(complianceCsv), test };
 }

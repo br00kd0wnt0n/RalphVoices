@@ -670,7 +670,7 @@ async function keptRun(R: any, api: S.Api, texts: string[], opts: { region?: 'US
 }
 /** The code the first version of a set would get, for the expectation. */
 async function leadOf(R: any, versions: any[], region = 'US') {
-  return (await R.readyView('OWN', 'OWN_CALM', region, { versions, on_image: {} })).plan.versions[0].code;
+  return (await R.readyView('OWN', 'OWN_CALM', region, { versions, on_image: {} }, { user: 'nick' })).plan.versions[0].code;
 }
 /** Every history entry's `before` is the previous entry's `after` (for entries that carry the same keys). */
 async function chained(lineId: string, key: string) {
@@ -1035,11 +1035,14 @@ test('rounds on Postgres: Pre-flight lists the active round; a test round\'s cod
     return code;
   };
 
-  await Rounds.saveRound({ id: 'R0', name: 'Test run-through', test: true, activate: true }, 'brook');
-  assert.equal((await Rounds.getRounds()).active, 'R0', 'stored in studio_inputs');
+  await Rounds.saveRound({ id: 'R0', name: 'Test run-through', test: true }, 'brook');
+  // Nick works in the test round (stored per person in studio_inputs); the active round stays R1.
+  await Rounds.setWorkingRound('nick', 'R0', true);
+  assert.equal((await Rounds.workingRound('nick')).id, 'R0', 'stored in studio_inputs');
+  assert.equal((await Rounds.getRounds()).active, 'R1');
   const c0 = await signAndAudit('r0');
   assert.equal(c0, 'OWN_CALM_UGC_A1_US_META_TEST');
-  await Rounds.setActiveRound('R1');
+  await Rounds.setWorkingRound('nick', 'R1', true);
   const c1 = await signAndAudit('r1');
   assert.equal(c1, 'OWN_CALM_UGC_A1_US_META', 'R1 starts at A');
 
@@ -1051,7 +1054,11 @@ test('rounds on Postgres: Pre-flight lists the active round; a test round\'s cod
   const feats = S.parseCsv(await pf.featuresCsv());
   assert.equal(feats[0].at(-1), 'round');
   assert.deepEqual(feats.slice(1).map(r => [r[0], r.at(-1)]), [[c1, 'R1']], 'features for B3: every real round, never a test round');
-  await (store as any).db.query(`DELETE FROM studio_inputs WHERE key = 'rounds'`);
+  // The test round's own asset handoff (a demo): its codes, marked TEST; still never in the features.
+  const demo = await pf.handoffCsv('R0');
+  assert.match(demo, /^TEST – not for trafficking\r?\n/);
+  assert.ok(demo.includes(c0) && !demo.includes(`${c1},`));
+  await (store as any).db.query(`DELETE FROM studio_inputs WHERE key = 'rounds' OR key LIKE 'working_round:%'`);
 });
 
 // ---------- multi-size Pre-flight (Brook, 30 Sep; the client's WBS) ----------

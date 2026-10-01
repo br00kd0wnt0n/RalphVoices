@@ -44,18 +44,54 @@ export async function activeRound(): Promise<Round> {
 }
 export const roundOf = (x: { round?: string } | null | undefined, fallback?: { round?: string } | null): string => x?.round || fallback?.round || DEFAULT_ROUND;
 
+// ---------- each person's working round (Brook, 1 Oct) ----------
+// Brook runs an end-to-end test in production (a test round, kept as a demo) while Nick writes real Month 1 copy. So
+// the round a person works in is theirs, not global: it defaults to the active round, an admin may pick a test round,
+// and every stamp (new runs, lines, sign-offs, taste, spend labels) and every view follows the requesting person.
+// The global active round is what everyone else uses, and choosing a test round never changes it.
+const workingKey = (user: string) => `working_round:${user.trim().toLowerCase()}` as const;
+/** The rounds a person can work in: the active round, and (admins) the test rounds. */
+export function workingChoices(state: RoundsState, isAdmin: boolean): Round[] {
+  const active = state.rounds.find(r => r.id === state.active) || DEFAULT_STATE.rounds[0];
+  return [active, ...(isAdmin ? state.rounds.filter(r => r.test && r.id !== active.id) : [])];
+}
+/** The round a person is working in: their choice if it's still the active round or a test round, else the active round. */
+export async function workingRound(user?: string | null, state?: RoundsState): Promise<Round> {
+  const s = state || await getRounds();
+  const active = s.rounds.find(r => r.id === s.active) || DEFAULT_STATE.rounds[0];
+  if (!user) return active;
+  const id = (await getStore().getInput(workingKey(user)))?.id;
+  const r = id ? s.rounds.find(x => x.id === id) : undefined;
+  return r && (r.id === active.id || r.test) ? r : active;
+}
+/** Choose the round to work in. Only the active round, or a test round for an admin. */
+export async function setWorkingRound(user: string, id: string, isAdmin: boolean): Promise<Round> {
+  if (!user) throw new Error('Sign in to choose a round to work in');
+  const s = await getRounds();
+  const want = s.rounds.find(r => r.id === String(id || '').trim().toUpperCase());
+  if (!want) throw new Error(`No round ${id}`);
+  if (want.id !== s.active && !want.test) throw new Error(`${monthLabel(want)} isn't the active round: work in the active round, or (admins) a test round`);
+  if (want.test && !isAdmin) throw Object.assign(new Error('Only an admin can work in a test round'), { status: 403 });
+  // Following the active round is stored as no choice, so a later change of the active round carries everyone along.
+  await getStore().putInput(workingKey(user), want.id === s.active ? null : { id: want.id, at: new Date().toISOString() });
+  return want;
+}
+
 /**
- * Which rounds a view shows: 'all', or one round (the active one by default). Test rounds are hidden unless asked for
- * by name or with 'all'. `isTest` answers for any round id.
+ * Which rounds a view shows: 'all', or one round (by default the requesting person's working round). Test rounds are
+ * hidden unless asked for by name, worked in, or 'all'. `isTest` answers for any round id; `active` is the round the
+ * view defaults to (the person's working round).
  */
 export interface RoundView { ids: Set<string> | null; isTest(id: string): boolean; active: Round; state: RoundsState }
-export async function roundView(q?: string | null): Promise<RoundView> {
+export async function roundView(q?: string | null, user?: string | null): Promise<RoundView> {
   const state = await getRounds();
   const test = new Set(state.rounds.filter(r => r.test).map(r => r.id));
-  const active = state.rounds.find(r => r.id === state.active) || DEFAULT_STATE.rounds[0];
+  const active = await workingRound(user, state);
   const want = String(q || '').trim();
   return { ids: want === 'all' ? null : new Set([want && state.rounds.some(r => r.id === want) ? want : active.id]), isTest: id => test.has(id), active, state };
 }
+/** A view of exactly one test round (a demo's exports include its codes, labelled TEST). */
+export const testOnly = (v: RoundView) => !!v.ids && v.ids.size === 1 && v.isTest([...v.ids][0]);
 export const inView = (v: RoundView, round: string) => (v.ids ? v.ids.has(round) : true);
 
 /** Create or update a round (admin). An id is R followed by digits; a test round is marked so. */
@@ -74,13 +110,17 @@ export async function saveRound(input: Partial<Round> & { activate?: boolean }, 
   const round: Round = { ...(existing || {}), id, name, from: input.from ? String(input.from).slice(0, 10) : existing?.from || new Date().toISOString().slice(0, 10), test: !!input.test, created_by: existing?.created_by || user, created_at: existing?.created_at || new Date().toISOString() };
   if (due) round.assets_due = due; else delete round.assets_due;
   if (label) round.label = label; else delete round.label;
+  if (input.activate && input.test) throw new Error(TEST_NOT_ACTIVE);
   const next: RoundsState = { active: input.activate ? id : state.active, rounds: [...state.rounds.filter(r => r.id !== id), round].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true })) };
   await getStore().putInput('rounds', next);
   return next;
 }
+/** A test round is worked in by one person at a time; as the active round it would stamp everyone's work as test. */
+const TEST_NOT_ACTIVE = 'A test round is never the active round (everyone would be working in it): pick it in the header to work in it yourself';
 export async function setActiveRound(id: string): Promise<RoundsState> {
   const state = await getRounds();
   if (!state.rounds.some(r => r.id === id)) throw new Error(`No round ${id}`);
+  if (state.rounds.find(r => r.id === id)!.test) throw new Error(TEST_NOT_ACTIVE);
   const next = { ...state, active: id };
   await getStore().putInput('rounds', next);
   return next;

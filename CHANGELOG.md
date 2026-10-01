@@ -4,6 +4,28 @@ All notable changes to Ralph Voices are documented here.
 
 ## Unreleased
 
+- **Studio: each person's working round, test-round exports for demos, and who to cast.** Brook, 1 Oct; no migration.
+  - **Working round, per person.** Brook runs an end-to-end test in production (a test round, kept as a demo) while Nick writes real Month 1 copy. The round you work in is yours: a picker next to the header badge (the active round, plus test rounds for admins), stored per person in `studio_inputs` (`working_round:<email>`).
+    - **Stamps follow the requesting person:** new runs, lines, taste, sign-offs, and spend labels; uploads, audits and compliance follow their sign-off.
+    - **Views follow too:** runs, Review, Kept, Ready, Assets, Compliance and exports.
+    - **The active round never moves:** it's what everyone else works in, and a test round can never become it (refused on the server; Rules offers "Work in it (just you)" instead).
+    - **TEST bar:** while you work in a test round, an amber "TEST: Demo (test)" bar runs across the top (with "Back to Month 1"), and the header keeps an amber edge.
+  - **Test-round exports for demos.** Viewing exactly a test round, the handoff CSV/MD, asset handoff and compliance sheet include its codes, with "TEST – not for trafficking" on the first line and file names prefixed `TEST_`. The default exports and "All months" never include test codes, and B3's features export always excludes them.
+  - A round's label can be anything ("Demo (test)").
+  - **Who to cast** (rules v2.12's top-level `casting` block, from Trupanion's 60-day breed data):
+    - kept when rules load (unknown top-level keys are accepted, and v2.12 passes every check);
+    - on `/meta`;
+    - shown in every persona's "Who this is" panel after "Language to use" (caution notes amber, "use carefully") and on the Rules view;
+    - its `writer_note` goes into the writer prompt as a "PETS:" line.
+
+  Tests: `studioWorkingRound.test.ts`:
+  - Brook in the Demo test round and Nick in Month 1 at once, each stamping their own round;
+  - views per person;
+  - a non-admin refused a test round;
+  - `/meta` working and choices;
+  - `TEST_` exports for the demo, none for Month 1 or "All months".
+
+  Also `studioCasting.test.ts`, and the rounds tests moved to working rounds.
 - **Studio: Build & sign off redesigned** (Nick's screen before Tue 6 Oct's R1). Frontend only; no backend or data changes.
   - **Numbered steps per visual:** ① the text on the image (a carousel's cards; for TikTok the hook sits in each ad) → ② the ads → ③ which ad you expect to lead and why → ④ sign off. Steps ③ and ④ apply to the whole set, at the bottom, and a sticky bar shows "3 ads on 1 visual · no red flags · Lead: Visual A · Ad 1 · Sign off". There's no side panel any more.
   - **Each ad looks like a feed ad:**

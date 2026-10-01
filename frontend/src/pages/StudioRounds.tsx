@@ -2,30 +2,59 @@
 // the "this month / all months" view, the admin's month settings (in Rules), and the
 // Live explainer page. Self-contained, so the Studio page only wires them in.
 import { useState } from 'react';
-import { getRoundView, roundLabel, setRoundView, studio, type Meta, type RoundViewMode } from '@/lib/studioApi';
+import { getRoundView, roundLabel, setRoundView, studio, type Meta, type Round, type RoundViewMode } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 
 const PINK = '#D94D8F';
 const input = 'rounded-lg border-2 border-[#343946] bg-[#101216] px-3 py-1.5 text-base text-[#ECEDEF] placeholder:text-[#646A75]';
 
-/** The active month (a round underneath), and whether the views show only it or every month (Test marked). */
-export function RoundBadge({ meta, onViewChange }: { meta: Meta | null; onViewChange: (v: RoundViewMode) => void }) {
+/**
+ * The month this person works in (theirs: the active month, or a test round an admin picked) with a picker when there's
+ * a choice, and whether the views show only it or every month (Test marked). Picking a test round never changes the
+ * month everyone else works in.
+ */
+export function RoundBadge({ meta, onViewChange, onWorkingChange }: { meta: Meta | null; onViewChange: (v: RoundViewMode) => void; onWorkingChange: () => void }) {
   const [view, setView] = useState<RoundViewMode>(getRoundView());
+  const [err, setErr] = useState('');
   const rs = meta?.rounds;
   if (!rs) return null;
-  const active = rs.rounds.find(r => r.id === rs.active);
+  const working = rs.rounds.find(r => r.id === (rs.working || rs.active));
+  const choices = (rs.choices || [rs.active]).map(id => rs.rounds.find(r => r.id === id)).filter(Boolean) as Round[];
   return (
-    <span className="flex items-center gap-1.5 whitespace-nowrap">
-      <span title={`Active: ${roundLabel(active)}${active?.name && active.name !== roundLabel(active) ? ` (${active.name})` : ''}. New runs and sign-offs are stamped with it.${active?.test ? ' A test run is never handed to Add3 or B3.' : ''}`}
-        className={cn('rounded-full border px-2 py-0.5 text-xs font-semibold', active?.test ? 'border-amber-400 bg-amber-400/15 text-amber-100' : 'border-[#343946] text-[#C9CCD2]')}>
-        {roundLabel(active)}
-      </span>
+    <span className="flex items-center gap-1.5 whitespace-nowrap" title={err || undefined}>
+      {choices.length > 1 ? (
+        <select aria-label="The month you're working in" title="The month your new runs and sign-offs go into (only you; everyone else stays in the active month)"
+          className={cn('rounded-full border px-2 py-0.5 text-xs font-semibold', working?.test ? 'border-amber-400 bg-amber-400/15 text-amber-100' : 'border-[#343946] bg-[#101216] text-[#C9CCD2]')}
+          value={working?.id} onChange={e => { setErr(''); studio.setWorkingRound(e.target.value).then(onWorkingChange).catch(x => setErr(x.message)); }}>
+          {choices.map(r => <option key={r.id} value={r.id}>{roundLabel(r)}{r.id === rs.active || /test/i.test(roundLabel(r)) ? '' : ' (test)'}</option>)}
+        </select>
+      ) : (
+        <span title={`${roundLabel(working)}${working?.name && working.name !== roundLabel(working) ? ` (${working.name})` : ''}: new runs and sign-offs are stamped with it.`}
+          className={cn('rounded-full border px-2 py-0.5 text-xs font-semibold', working?.test ? 'border-amber-400 bg-amber-400/15 text-amber-100' : 'border-[#343946] text-[#C9CCD2]')}>
+          {roundLabel(working)}
+        </span>
+      )}
       <select aria-label="Which months to show" className="rounded border border-[#343946] bg-[#101216] px-1 py-0.5 text-xs text-[#C9CCD2]" value={view}
         onChange={e => { const v = e.target.value as RoundViewMode; setRoundView(v); setView(v); onViewChange(v); }}>
-        <option value="active">{active?.test ? 'This test' : 'This month'}</option>
+        <option value="active">{working?.test ? 'This test' : 'This month'}</option>
         <option value="all">All months</option>
       </select>
     </span>
+  );
+}
+
+/** Across the top while this person works in a test round: unmissable, with the way back. */
+export function TestBar({ meta, onWorkingChange }: { meta: Meta | null; onWorkingChange: () => void }) {
+  const rs = meta?.rounds;
+  const working = rs?.rounds.find(r => r.id === rs.working);
+  if (!rs || !working?.test) return null;
+  const active = rs.rounds.find(r => r.id === rs.active);
+  return (
+    <div role="status" className="flex flex-wrap items-center gap-x-3 gap-y-1 bg-amber-400 px-4 py-1.5 text-sm font-semibold text-[#1C1400] sm:px-6">
+      <span className="tracking-wide">TEST: {roundLabel(working)}</span>
+      <span className="font-normal">You're working in a test round. Its runs, sign-offs and codes (…_TEST) are never handed to Add3 or B3; everyone else is in {roundLabel(active)}.</span>
+      <button className="ml-auto rounded-md border border-[#1C1400]/40 px-2 py-0.5 text-xs font-semibold hover:bg-black/10" onClick={() => studio.setWorkingRound(rs.active).then(onWorkingChange).catch(() => {})}>Back to {roundLabel(active)}</button>
+    </div>
   );
 }
 
@@ -40,7 +69,7 @@ export function RoundsPanel({ meta, onSaved }: { meta: Meta; onSaved: () => void
   return (
     <section className="mb-5 max-w-4xl rounded-xl border border-[#272B34] bg-[#16181D] p-5">
       <h2 className="text-lg font-semibold">Months</h2>
-      <p className="mb-3 text-sm text-[#A3A8B1]">New runs and sign-offs are stamped with the active month, and every view shows it by default ("All months" in the header shows the rest). The client's schedule calls its review rounds R1/R2, so Studio shows months; each has an id underneath (R1 = Month 1). A <strong>test</strong> run-through (R0, shown as "Test") is hidden by default, its codes end in _TEST and are never handed to Add3 or B3, it doesn't use up codes (Month 1 starts at A) and its taste doesn't feed real months. Its spend is real and counts toward the budget.</p>
+      <p className="mb-3 text-sm text-[#A3A8B1]">New runs and sign-offs are stamped with the active month, and every view shows it by default ("All months" in the header shows the rest). The client's schedule calls its review rounds R1/R2, so Studio shows months; each has an id underneath (R1 = Month 1). A <strong>test</strong> round (R0, e.g. "Demo (test)") is for one person at a time: pick it in the header (admins), and only your runs and sign-offs go into it; everyone else stays in the active month. It's hidden from other views by default, its codes end in _TEST and are never handed to Add3 or B3, it doesn't use up codes (Month 1 starts at A) and its taste doesn't feed real months. Its spend is real and counts toward the budget.</p>
       <ul className="mb-3 space-y-1.5">
         {rs.rounds.map(r => (
           <li key={r.id} className="flex flex-wrap items-center gap-2 text-base">
@@ -55,7 +84,11 @@ export function RoundsPanel({ meta, onSaved }: { meta: Meta; onSaved: () => void
             }}>label</button>}
             {r.id === rs.active
               ? <span className="rounded-full border border-emerald-500 px-2 py-px text-xs text-emerald-300">active</span>
-              : rs.can_edit && <button className="rounded-lg border border-[#4A505D] px-2 py-0.5 text-sm hover:border-[#ECEDEF]" onClick={() => { if (window.confirm(`Make ${roundLabel(r)} (${r.id}) the active month? New runs and sign-offs are stamped with it, and views show it.`)) act(() => studio.activateRound(r.id)); }}>Make active</button>}
+              : !rs.can_edit ? null
+              // A test round is worked in by one person (the header's picker); making it active would move everyone into it.
+              : r.test ? (rs.working === r.id ? <span className="rounded-full border border-amber-400 px-2 py-px text-xs text-amber-100">you're working in it</span>
+                : <button className="rounded-lg border border-amber-400/60 px-2 py-0.5 text-sm text-amber-100 hover:border-amber-300" onClick={() => act(() => studio.setWorkingRound(r.id))} title="Only you: everyone else stays in the active month">Work in it (just you)</button>)
+              : <button className="rounded-lg border border-[#4A505D] px-2 py-0.5 text-sm hover:border-[#ECEDEF]" onClick={() => { if (window.confirm(`Make ${roundLabel(r)} (${r.id}) the active month for everyone? New runs and sign-offs are stamped with it, and views show it.`)) act(() => studio.activateRound(r.id)); }}>Make active</button>}
           </li>
         ))}
       </ul>

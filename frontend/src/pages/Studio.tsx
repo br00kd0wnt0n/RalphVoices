@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { HOSTED, getUser, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type Line, type Meta, type Region, type StudioEvent, REGION_NAMES } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { ArrowLeft, HelpCircle, Map as MapIcon, ScrollText, Shuffle } from 'lucide-react';
-import { LivePage, RoundBadge, RoundsPanel } from './StudioRounds';
+import { LivePage, RoundBadge, RoundsPanel, TestBar } from './StudioRounds';
 import { Board, type Step } from '@/components/studio/Board';
 import { ALL_VIEW, Chip, GhostButton, Lockup, PINK, PersonaDot, initials, params, personaKeys, regionOf, sameCtx, setTerritoryNames, setWhatToDo, territoryName, type Ctx, type ViewFilter } from '@/components/studio/ui';
 import { Home } from '@/components/studio/Home';
@@ -274,7 +274,9 @@ export function Studio() {
 
   return (
     <div className={cn(shell, 'bg-[#0E0F12]')} style={{ fontSize: 16 }}>
-      <header className="sticky top-0 z-20 flex min-h-16 flex-wrap items-center py-2 md:h-16 md:flex-nowrap md:py-0 gap-3 border-b border-[#272B34] bg-[#16181D] px-4 min-[1440px]:gap-4 min-[1440px]:px-6">
+      <TestBar meta={meta} onWorkingChange={() => { refreshMeta().catch(() => {}); setRoundKey(k => k + 1); }} />
+      {/* In a test round the header keeps an amber edge after the bar above scrolls away. */}
+      <header className={cn('sticky top-0 z-20 flex min-h-16 flex-wrap items-center py-2 md:h-16 md:flex-nowrap md:py-0 gap-3 border-b bg-[#16181D] px-4 min-[1440px]:gap-4 min-[1440px]:px-6', meta?.rounds?.rounds.find(r => r.id === meta.rounds?.working)?.test ? 'border-b-4 border-amber-400' : 'border-[#272B34]')}>
         {HOSTED && <a href="/" title="Back to Voices" className="-mr-2 hidden rounded-lg p-1.5 text-[#858B96] hover:bg-[#1C1F26] hover:text-[#ECEDEF] sm:block"><ArrowLeft className="h-4 w-4" aria-label="Back to Voices" /></a>}
         <span className="hidden min-[1440px]:block"><Lockup onHome={() => setTab('home')} /></span>
         <button onClick={() => setTab('home')} className="shrink-0 min-[1440px]:hidden" aria-label="VOICES Studio: this month" title="Voices Studio × Trupanion"><img src="/ralph-world.png" alt="Ralph" className="h-7 w-7 object-contain" /></button>
@@ -299,7 +301,7 @@ export function Studio() {
           <span className="mr-1 hidden h-5 w-px bg-[#343946] sm:block" aria-hidden />
           {utility('territories', 'Territories', <MapIcon className="h-4 w-4" aria-hidden />, 'Territories: edit, add or retire')}
           {utility('rules', 'Rules', <ScrollText className="h-4 w-4" aria-hidden />, 'Rules: what every line is checked against')}
-          <RoundBadge meta={meta} onViewChange={() => setRoundKey(k => k + 1)} />
+          <RoundBadge meta={meta} onViewChange={() => setRoundKey(k => k + 1)} onWorkingChange={() => { refreshMeta().catch(() => {}); setRoundKey(k => k + 1); }} />
           <ExportMenu meta={meta} ctx={ctx} view={view} batch={batch} onImported={m => { setNote(m); setRunsTick(t => t + 1); }} />
           <button onClick={() => setTab('compare')} title="Blind compare: a separate exercise, outside the writing flow" aria-label="Blind compare" className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-dashed border-[#4B55A8] bg-[#1B2150] px-2.5 py-1.5 text-sm font-medium text-white hover:bg-[#232A5C]">
             <Shuffle className="h-4 w-4" aria-hidden /><span className="hidden min-[1600px]:inline">Compare</span>
