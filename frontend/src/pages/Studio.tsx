@@ -10,12 +10,12 @@
 // (or the old &asset=<upload id>), ?tab=compare&compare=<name>.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { HOSTED, getUser, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type Line, type Meta, type Region, type StudioEvent, REGION_NAMES } from '@/lib/studioApi';
+import { HOSTED, getUser, setActingFor, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type Line, type Meta, type Region, type StudioEvent, REGION_NAMES } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { ArrowLeft, ClipboardCheck, HelpCircle, Map as MapIcon, ScrollText, Shuffle } from 'lucide-react';
 import { LivePage, RoundBadge, RoundsPanel, TestBar } from './StudioRounds';
 import { Board, type Step } from '@/components/studio/Board';
-import { ALL_VIEW, Chip, GhostButton, Lockup, PINK, PersonaDot, initials, params, personaKeys, regionOf, sameCtx, setTerritoryNames, setWhatToDo, territoryName, type Ctx, type ViewFilter } from '@/components/studio/ui';
+import { ALL_VIEW, Chip, GhostButton, Lockup, PINK, PersonaDot, initials, params, personaKeys, regionOf, sameCtx, setTerritoryNames, setWhatToDo, territoryName, useActingFor, type Ctx, type ViewFilter } from '@/components/studio/ui';
 import { Home } from '@/components/studio/Home';
 import { Write, countsFor } from '@/components/studio/Write';
 import { applyPlace } from '@/lib/studioFields';
@@ -56,6 +56,7 @@ function initialCtx(): Ctx {
 }
 
 export function Studio() {
+  const actingFor = useActingFor();
   const [meta, setMeta] = useState<Meta | null>(null);
   const [err, setErr] = useState('');
   // Hosted: why the first load failed (401 expired sign-in, 403 no access, 404 off), shown in place of Studio.
@@ -317,6 +318,13 @@ export function Studio() {
           <button onClick={() => setTab('compare')} title="Blind compare: a separate exercise, outside the writing flow" aria-label="Blind compare" className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-dashed border-[#4B55A8] bg-[#1B2150] px-2.5 py-1.5 text-sm font-medium text-white hover:bg-[#232A5C]">
             <Shuffle className="h-4 w-4" aria-hidden /><span className="hidden min-[1600px]:inline">Compare</span>
           </button>
+          {/* "On behalf of": while set, every decision is recorded as this person's, entered by you. */}
+          {actingFor && (
+            <span role="status" className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-amber-400/60 bg-amber-400/10 px-2 py-0.5 text-xs font-medium text-amber-100" title="Your decisions are being recorded as this person's (entered by you). Permissions stay yours.">
+              for {actingFor.split('@')[0]}
+              <button onClick={() => setActingFor('')} aria-label="Stop recording decisions for someone else" className="rounded px-0.5 hover:bg-black/20">×</button>
+            </span>
+          )}
           {HOSTED
             ? <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[#343946] text-xs font-semibold uppercase text-[#C9CCD2]" title={user ? `Signed in as ${user}` : 'Signing in…'}>{initials(user)}</span>
             : <UserBadge user={user} onChange={n => { setUser(n); setUserState(n); setRunsTick(t => t + 1); }} />}

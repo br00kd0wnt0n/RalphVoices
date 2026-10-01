@@ -15,6 +15,7 @@ import path from 'node:path';
 import OpenAI from 'openai';
 import { withRetry } from '../../utils/retry.js';
 import { figureKey, isSmallFigure, notInFacts } from '../../utils/figures.js';
+import { cleanFor, whoWords } from '../../utils/actor.js';
 import { probabilityYes } from '../../utils/probes.js';
 import { mockClient } from './mock.js';
 import { claudeWrite, isClaude } from './claude.js';
@@ -122,17 +123,19 @@ export interface Line {
   edited_text?: string;
   note?: string;
   decided_by?: string;
+  /** Whose decision it is, when someone entered it for them ("on behalf of"; utils/actor.ts). */
+  decided_for?: string;
   decided_at?: string;   // the last human change to the line (decision, override, compliance, sign-off)
   /** Red flags a person has overridden, with the written reason (Ready for production gate). */
   overrides?: Override[];
   /** Trupanion compliance review: pending (default), cleared or changes_requested. Doesn't block sign-off. */
-  compliance?: { status: ComplianceStatus; note?: string; by?: string; at?: string; sha256?: string;  // sha256: the wording it was reviewed on
+  compliance?: { status: ComplianceStatus; note?: string; by?: string; for?: string; at?: string; sha256?: string;  // sha256: the wording it was reviewed on
     /** Set when reviewed at the Compliance step (after Pre-flight): the asset it was reviewed with, and where changes go back to. */
     upload_id?: string; code?: string; send_back?: 'copy' | 'asset';
     /** Who at Trupanion made the decision. The producer (Vivan) coordinates and records it; she doesn't sign off compliance herself. */
     client_by?: string };
   /** The line's place in the latest Ready for production sign-off. `superseded_by`: a later sign-off of its set left it out (it keeps its code). */
-  ready?: { signoff_id: string; version: number; sha256: string; ready_by: string; ready_at: string; stub: string; changed_since?: boolean; superseded_by?: string;
+  ready?: { signoff_id: string; version: number; sha256: string; ready_by: string; ready_for?: string; ready_at: string; stub: string; changed_since?: boolean; superseded_by?: string;
     /** Every code (live version) the line is in; a shared headline serves several. stub is the first (or the visual key, for on-image text). */
     codes?: string[] };
   /** Trupanion's compliance decision per code (Compliance step): one line can be in several ads. */
@@ -150,10 +153,10 @@ export interface Line {
   round?: string;
 }
 /** `label` is the rule in plain words, from the rules file (shown to Trupanion's reviewers; the reason and name never are). */
-export interface Override { rule: string; label?: string; reason: string; by: string; at: string }
+export interface Override { rule: string; label?: string; reason: string; by: string; /** Whose call it is, when entered for them. */ for?: string; at: string }
 export type ComplianceStatus = 'pending' | 'cleared' | 'changes_requested';
 /** One wording of a line as it stood at a sign-off or after one. Never rewritten. */
-export interface LineVersion { line_id: string; batch_id: string; version: number; field: string; text: string; sha256: string; created_by: string; created_at: string; signoff_id?: string;
+export interface LineVersion { line_id: string; batch_id: string; version: number; field: string; text: string; sha256: string; created_by: string; created_for?: string; created_at: string; signoff_id?: string;
   /** The naming code the line was signed off under (B3b joins live results on it). */
   stub?: string }
 export const sha256 = (s: string) => crypto.createHash('sha256').update(s, 'utf8').digest('hex');
@@ -806,6 +809,8 @@ export interface TasteExample {
   text: string; original?: string; decision: 'keep' | 'edit' | 'cut'; note: string; batch: string; at: string;
   /** Who made the decision. */
   by?: string;
+  /** Whose decision it is, when it was entered for them. */
+  for?: string;
   /** The line's round: a test round's taste never feeds a real round's writer. */
   round?: string;
 }
@@ -1915,7 +1920,7 @@ async function putTaste(l: Line) {
   if (d === 'keep' || d === 'edit' || (d === 'cut' && l.note)) {
     await getStore().putTaste({
       id: l.id, persona: l.persona, territory: l.territory, field: l.field, angle: l.angle, structure: l.structure, tone_label: l.tone_label,
-      text: finalText(l), original: isEdited(l) ? l.text : undefined, decision: d, note: l.note || '', batch: l.batch, at: new Date().toISOString(), by: l.decided_by, round: roundOf(l),
+      text: finalText(l), original: isEdited(l) ? l.text : undefined, decision: d, note: l.note || '', batch: l.batch, at: new Date().toISOString(), by: l.decided_by, ...(l.decided_for ? { for: l.decided_for } : {}), round: roundOf(l),
     } satisfies TasteExample);
   } else await getStore().deleteTaste(l.id);
 }
@@ -1950,7 +1955,7 @@ export async function recheckEstimate(batchId: string, lineId: string): Promise<
   return estimate({ ...b.brief, own_lines: [{ text: finalText(l), field: l.field }] }, { ownOnly: true }).usd;
 }
 
-export async function setDecision(batchId: string, lineId: string, patch: { decision?: Line['decision']; edited_text?: string; note?: string; source?: string }, user?: string): Promise<Line> {
+export async function setDecision(batchId: string, lineId: string, patch: { decision?: Line['decision']; edited_text?: string; note?: string; source?: string }, user?: string, forWho?: string): Promise<Line> {
   return runLock(batchId, async () => {
     const batch = await loadBatch(batchId);
     const l = batch.lines.find(x => x.id === lineId);
@@ -1965,6 +1970,8 @@ export async function setDecision(batchId: string, lineId: string, patch: { deci
     if (patch.note !== undefined) l.note = patch.note;
     settleDecision(l);
     if (user) l.decided_by = user;
+    // Whose decision it is when it's entered for someone else; a later decision of the person's own clears it.
+    if (cleanFor(forWho, user)) l.decided_for = cleanFor(forWho, user); else if (user) delete l.decided_for;
     l.decided_at = new Date().toISOString();
     const ORIGINAL = ' (on the original wording)';
     if (patch.edited_text !== undefined) {
@@ -1986,13 +1993,13 @@ export async function setDecision(batchId: string, lineId: string, patch: { deci
       const versions = await st.listLineVersions(l.id);
       const h = lineHash(l);
       if (!versions.some(v => v.sha256 === h)) {
-        await st.saveLineVersion({ line_id: l.id, batch_id: batchId, version: Math.max(0, ...versions.map(v => v.version)) + 1, field: l.field, text: finalText(l), sha256: h, created_by: user || 'unknown', created_at: l.decided_at!, stub: (l.ready.codes || [l.ready.stub]).join(',') });
+        await st.saveLineVersion({ line_id: l.id, batch_id: batchId, version: Math.max(0, ...versions.map(v => v.version)) + 1, field: l.field, text: finalText(l), sha256: h, created_by: user || 'unknown', ...(l.decided_for ? { created_for: l.decided_for } : {}), created_at: l.decided_at!, stub: (l.ready.codes || [l.ready.stub]).join(',') });
       }
       l.ready.changed_since = true;
     } else if (l.ready) l.ready.changed_since = false;
     // Only this line is written, so decisions on other lines by other people stand.
     await st.saveLine(batchId, l);
-    await st.recordEdit({ line_id: l.id, batch_id: batchId, before, after: { decision: l.decision || '', edited_text: l.edited_text || '', note: l.note || '' }, by: user || 'unknown', at: l.decided_at });
+    await st.recordEdit({ line_id: l.id, batch_id: batchId, before, after: { decision: l.decision || '', edited_text: l.edited_text || '', note: l.note || '' }, by: whoWords(user || 'unknown', l.decided_for), at: l.decided_at });
     await putTaste(l);
     return l;
   });

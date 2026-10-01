@@ -1328,3 +1328,101 @@ test('audit heartbeat: a long engine call with no progress messages still keeps 
   assert.ok(mid && new Date(mid).getTime() > started + 50, 'the timer beat while the engine was silent');
   assert.equal((await pf.report(code)).audit!.status, 'done');
 });
+
+// ---------- "On behalf of" (Brook, 1 Oct): Brook runs Nick's creative through Studio; the call stays Nick's ----------
+test('on behalf of: by + for stored on sign-off, expectation, line versions, overrides, Pre-flight passed and compliance; exports say Decided by / Entered by; role checks stay on the signed-in person', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  await store.putRules('example-obo', JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8')), { activate: true, by: 'test' });
+  await S.refreshRules();
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const { createStudioRouter } = await import('../src/services/studio/router.js');
+  const express = (await import('express')).default;
+  const db = (store as any).db;
+  const pf = new Preflight(db, mockEngine, { storage: 'db' });
+  const me = (req: any) => String(req.headers['x-me'] || 'brook');
+  const lead = (req: any) => ['brook', 'nick'].includes(me(req));
+  const app = express();
+  app.use(express.json());
+  app.use('/s', createStudioRouter({
+    who: me, api: () => api, mock: true, cap: 50, capWindow: 'month', askOver: 2, rules: { store, isAdmin: req => me(req) === 'brook' },
+    preflight: { service: pf, canSetReady: lead }, canSignOff: lead, canOverride: lead, canSetCompliance: req => ['brook', 'vivan'].includes(me(req)),
+    people: () => ['brook', 'nick', 'vivan'],
+  }));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(r => server.once('listening', r));
+  const base = `http://127.0.0.1:${(server.address() as any).port}/s`;
+  const call = async (method: string, p: string, body: unknown, as = 'brook', forWho?: string) => {
+    const res = await fetch(base + p, { method, headers: { 'Content-Type': 'application/json', 'X-Me': as, ...(forWho ? { 'X-Studio-For': forWho } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    return { status: res.status, body: (await res.json().catch(() => null)) as any };
+  };
+  try {
+    // A red line (it "pays for itself") and a headline, kept by Brook for Nick.
+    const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'obo', own_lines: [{ text: 'Honestly, the policy pays for itself.', field: 'meta_primary' }, HEAD] }), api, () => {}, { ownOnly: true, user: 'brook' });
+    const [p, h] = run.lines.map(l => l.id);
+    for (const id of [p, h]) assert.equal((await call('PATCH', `/batches/${run.id}/lines/${id}`, { decision: 'keep' }, 'brook', 'nick')).status, 200);
+    const keptLine = (await S.loadBatch(run.id)).lines.find(l => l.id === p)!;
+    assert.deepEqual([keptLine.decided_by, keptLine.decided_for], ['brook', 'nick']);
+    assert.deepEqual((await S.loadTaste()).filter(t => t.id === p).map(t => [t.by, t.for]), [['brook', 'nick']], 'taste records whose decision it was');
+
+    // The override of its red flag, for Nick.
+    const red = R.unresolvedRed(keptLine)[0].rule;
+    assert.equal((await call('POST', `/batches/${run.id}/lines/${p}/override`, { rule: red, reason: 'Nick: legal cleared this wording' }, 'brook', 'nick')).status, 200);
+    const ov = (await S.loadBatch(run.id)).lines.find(l => l.id === p)!.overrides![0];
+    assert.deepEqual([ov.by, ov.for], ['brook', 'nick']);
+
+    // Sign-off for Nick. Someone not on the Studio list can't be named; a person who can't sign off doesn't gain it by naming Nick.
+    const versions = adsOf([p], h);
+    const code = await leadOf(R, versions);
+    const body = { persona: 'OWN', territory: 'OWN_CALM', versions, on_image: {}, expectation: { codes: [code], reason: 'Nick expects the plain one to lead.' }, expect_latest: null };
+    const stranger = await call('POST', '/ready', body, 'brook', 'someone@else');
+    assert.equal(stranger.status, 403);
+    assert.match(stranger.body.error, /isn't on the Studio list/);
+    assert.equal((await call('POST', '/ready', body, 'vivan', 'nick')).status, 403, 'role checks use the signed-in person, not the "for" person');
+    const so = await call('POST', '/ready', body, 'brook', 'nick');
+    assert.equal(so.status, 200);
+    assert.deepEqual([so.body.signoff.ready_by, so.body.signoff.ready_for], ['brook', 'nick']);
+    assert.deepEqual([so.body.expectation.created_by, so.body.expectation.created_for], ['brook', 'nick']);
+    // From the database (text columns: packed and unpacked by the store).
+    const exp = (await store.listExpectations()).at(-1)!;
+    assert.deepEqual([exp.created_by, exp.created_for], ['brook', 'nick'], 'the expectation belongs to Nick; Brook entered it');
+    assert.equal((await db.query(`SELECT created_by FROM studio_expectations ORDER BY created_at DESC LIMIT 1`)).rows[0].created_by, 'brook (for nick)');
+    const lv = (await store.listLineVersions(p)).at(-1)!;
+    assert.deepEqual([lv.created_by, lv.created_for], ['brook', 'nick']);
+    const signedLine = (await S.loadBatch(run.id)).lines.find(l => l.id === p)!;
+    assert.deepEqual([signedLine.ready!.ready_by, signedLine.ready!.ready_for], ['brook', 'nick']);
+
+    // Handoffs: Decided by Nick, Entered by Brook; the compliance sheet for Trupanion names neither.
+    const pack = await R.handoffPack();
+    const csv = S.parseCsv(pack.csv);
+    const col = (name: string) => csv[1][csv[0].indexOf(name)];
+    assert.deepEqual([col('Decided by'), col('Entered by'), col('Ready for production by')], ['nick', 'brook', 'brook']);
+    assert.match(pack.md, /Ready for production by brook for nick/);
+    assert.match(col('Red flag overridden'), /overridden by brook for nick/);
+    assert.equal(/nick|brook/i.test(pack.complianceCsv), false, 'no names on the sheet for Trupanion');
+
+    // Pre-flight: the override and "passed" for Nick; compliance recorded by Vivan for Nick's ad needs no "for".
+    const up = await pf.upload(code, [{ buffer: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from('fake VOICES_TEXT: it pays for itself')]), filename: 'a.png', contentType: 'image/png' }], 'brook');
+    await pf.runAudit(await pf.createAudit(up.upload_id));
+    for (const f of (await pf.report(code)).flags.filter((x: any) => x.severity === 'red')) assert.equal((await call('POST', `/preflight/flags/${f.id}/override`, { reason: 'Nick: same as at sign-off' }, 'brook', 'nick')).status, 200);
+    const flag = (await pf.report(code)).flags.find((x: any) => x.override)!;
+    assert.deepEqual([flag.override.by, flag.override.for], ['brook', 'nick']);
+    assert.equal((await call('POST', `/preflight/stubs/${code}/ready`, { ready: true }, 'vivan', 'nick')).status, 403, 'Vivan can\'t mark Pre-flight passed by naming Nick');
+    assert.equal((await call('POST', `/preflight/stubs/${code}/ready`, { ready: true }, 'brook', 'nick')).status, 200);
+    const st = (await pf.report(code)).status;
+    assert.deepEqual([st.status, st.ready_by, st.ready_for], ['ready', 'brook', 'nick']);
+    const hand = S.parseCsv(await pf.handoffCsv());
+    const hcol = (name: string) => hand[1][hand[0].indexOf(name)];
+    assert.deepEqual([hcol('Decided by'), hcol('Entered by'), hcol('Pre-flight passed by')], ['nick', 'brook', 'brook']);
+    const feats = S.parseCsv(await pf.featuresCsv());
+    assert.deepEqual([feats[1][feats[0].indexOf('decided_by')], feats[1][feats[0].indexOf('entered_by')]], ['nick', 'brook'], 'B3 credits Nick');
+    assert.equal((await call('POST', `/compliance/assets/${up.upload_id}`, { status: 'cleared', note: 'Trupanion accepted the wording', client_by: 'J. Doe' }, 'vivan', 'nick')).status, 200);
+    const rec = (await S.loadBatch(run.id)).lines.find(l => l.id === p)!.compliance_by_code![code];
+    assert.deepEqual([rec.by, rec.for, rec.client_by], ['vivan', 'nick', 'J. Doe']);
+
+    // Your own call: no "for" (naming yourself is the same as naming nobody).
+    assert.equal((await call('PATCH', `/batches/${run.id}/lines/${h}`, { note: 'mine' }, 'brook', 'brook')).status, 200);
+    assert.equal((await S.loadBatch(run.id)).lines.find(l => l.id === h)!.decided_for, undefined);
+    assert.deepEqual((await call('GET', '/meta', null)).body.people, ['brook', 'nick', 'vivan']);
+  } finally { server.close(); }
+});

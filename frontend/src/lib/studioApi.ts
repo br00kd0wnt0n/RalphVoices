@@ -19,19 +19,19 @@ export interface Flag { rule: string; severity: Severity; label: string; source:
 /** A model flag carried over from the wording before an edit (older lines say so only in `why`). */
 export const onOriginal = (f: Pick<Flag, 'original' | 'why'>) => !!f.original || (f.why || '').includes('on the original wording');
 export type ComplianceStatus = 'pending' | 'cleared' | 'changes_requested';
-export interface Override { rule: string; label?: string; reason: string; by: string; at: string }
+export interface Override { rule: string; label?: string; reason: string; by: string; for?: string; at: string }
 /** Where the ads run: US and Canada are separate ads. The naming code carries it. */
 export type Region = 'US' | 'CA';
 export const REGION_NAMES: Record<Region, string> = { US: 'US', CA: 'Canada' };
 /** Shown on Write & brief and in "Who this is" when Canada is chosen. */
 export const CANADA_NOTE = 'These personas are built on US research; check that they hold for Canadian audiences.';
 /** superseded_by: a later sign-off of its set left it out (it keeps its code). */
-export interface ReadyMark { signoff_id: string; version: number; sha256: string; ready_by: string; ready_at: string; stub: string; codes?: string[]; changed_since?: boolean; superseded_by?: string }
+export interface ReadyMark { signoff_id: string; version: number; sha256: string; ready_by: string; /** Whose call it was, when entered for them. */ ready_for?: string; ready_at: string; stub: string; codes?: string[]; changed_since?: boolean; superseded_by?: string }
 export interface Line {
   id: string; batch: string; persona: string; territory: string; region?: Region; field: string; text: string; chars: number;
   angle: string; angle_label: string; structure: string; tone: Tone; tone_label: string; features: string[]; flags: Flag[];
   objection?: string; status: 'generated' | 'checking' | 'checked'; model: string; parent?: string;
-  decision?: '' | 'keep' | 'cut' | 'edit'; edited_text?: string; note?: string; decided_by?: string; decided_at?: string;
+  decision?: '' | 'keep' | 'cut' | 'edit'; edited_text?: string; note?: string; decided_by?: string; decided_for?: string; decided_at?: string;
   overrides?: Override[];
   compliance?: { status: ComplianceStatus; note?: string; by?: string; at?: string; sha256?: string; upload_id?: string; code?: string; send_back?: 'copy' | 'asset'; client_by?: string };
   ready?: ReadyMark;
@@ -102,6 +102,8 @@ export interface PersonaContext {
   language: Array<{ text: string; caution: boolean; source: string }>;
 }
 export interface Meta {
+  /** "On behalf of": the Studio users a call can be recorded for (hosted); null locally (any name). */
+  people?: string[] | null;
   personas: Record<string, { name: string; default_fields: string[]; triggers: Array<{ id: string; label: string; detail?: string; source?: string }>; context?: PersonaContext }>;
   /** Source codes (TM, EP, CLB…) → titles, for plain-words sources. */
   sources?: Record<string, string>;
@@ -141,7 +143,7 @@ export interface SignedField { line_id: string; batch_id: string; version: numbe
 /** A live version: one code = one ad = a set of fields (Meta primary + headline; TikTok caption). */
 export interface SignedVersion { code: string; visual: string; number: number; platform: string; fields: Record<string, SignedField> }
 export interface Signoff {
-  id: string; persona: string; territory: string; region?: Region; version: number; ready_by: string; ready_at: string; sha256: string; expectation_id: string;
+  id: string; persona: string; territory: string; region?: Region; version: number; ready_by: string; ready_for?: string; ready_at: string; sha256: string; expectation_id: string;
   lines: Array<SignedField & { stub: string; codes?: string[] }>;
   /** Missing on sign-offs from before live versions (one code per line). */
   versions?: SignedVersion[];
@@ -184,7 +186,7 @@ export interface RulesVersion { version: string; status: 'draft' | 'active' | 'r
 // ---------- Pre-flight ----------
 export interface SignedCopy { line_id: string; field: string; label: string; text: string; version: number; card?: number }
 export interface PfUpload { id: string; kind: 'static' | 'carousel' | 'video'; files: Array<{ position: number; filename: string; content_type: string; size: number; aspect?: '1:1' | '4:5' | '9:16' | null }>; uploaded_by: string; uploaded_at: string; stubs: string[] }
-export interface PfStatus { status: 'open' | 'ready'; ready_by?: string; ready_at?: string; upload_id?: string }
+export interface PfStatus { status: 'open' | 'ready'; ready_by?: string; ready_for?: string; ready_at?: string; upload_id?: string }
 export interface PfStub {
   /** The round of its sign-off; test: a test round's code (never handed off). */
   round?: string; test?: boolean;
@@ -206,7 +208,7 @@ export interface PfFlag {
   /** The size the flag is about (1:1, 4:5, 9:16), on a code with several. */
   size?: string;
   frame?: { upload_id?: string; position?: number; label?: string; description?: string };
-  override: { reason: string; by: string; at: string } | null;
+  override: { reason: string; by: string; for?: string; at: string } | null;
   agreements: Array<{ by: string; agree: boolean; note?: string; at: string }>;
   mine: boolean | null;
 }
@@ -216,7 +218,7 @@ export interface PfReport {
   sizes?: PfSizes;
   same_visual_as: string[]; on_asset_copy: SignedCopy[]; post_copy: SignedCopy[];
   /** Red flags on the copy overridden at sign-off (a Pre-flight flag on the same rule can reuse the reason). */
-  copy_overrides?: Array<{ rule: string; label: string; field: string; reason: string; by: string; at: string }>;
+  copy_overrides?: Array<{ rule: string; label: string; field: string; reason: string; by: string; for?: string; at: string }>;
   /** Set when the upload's type doesn't fit the code's format (a note, never a block). */
   format_note?: string | null;
   history: Array<{ id: string; kind: string; uploaded_by: string; uploaded_at: string; files: number }>;
@@ -234,7 +236,7 @@ export interface Traffic { ready: boolean; preflight: 'passed' | 'open'; complia
 export interface CodeCompliance {
   status: ComplianceStatus; note?: string; at?: string; send_back?: 'copy' | 'asset';
   /** by: who recorded it in Studio (the producer); client_by: who at Trupanion made the decision. */
-  by?: string; client_by?: string; recorded?: boolean; wording_edited?: boolean;
+  by?: string; for?: string; client_by?: string; recorded?: boolean; wording_edited?: boolean;
   stale?: string; on_asset: boolean; overrides: string[];
   /** For Trupanion, one sentence per override (no internal rule text). */
   check_specifically?: string[];
@@ -243,7 +245,7 @@ export interface CodeCompliance {
 export interface ComplianceAsset {
   upload_id: string; persona: string; territory: string; region: Region; upload: PfUpload;
   audit: { id: string; status: string; finished_at: string | null; stale?: string | null } | null;
-  flags: Array<{ id: string; rule: string; severity: 'red' | 'amber' | 'grey'; for_stub: string | null; label: string; quote?: string; why?: string; where?: string; source?: string; cross_persona: boolean; override: { reason: string; by: string; at: string } | null }>;
+  flags: Array<{ id: string; rule: string; severity: 'red' | 'amber' | 'grey'; for_stub: string | null; label: string; quote?: string; why?: string; where?: string; source?: string; cross_persona: boolean; override: { reason: string; by: string; for?: string; at: string } | null }>;
   codes: Array<{ stub: string; copy: SignedCopy[]; ready: PfStatus; traffic: Traffic; compliance: CodeCompliance }>;
   status: ComplianceStatus;
 }
@@ -292,8 +294,24 @@ export function setUser(name: string) {
   try { localStorage.setItem(USER_KEY, name.trim()); } catch { /* private mode: name lasts for this page only */ }
 }
 
+// "On behalf of" (Brook, 1 Oct): whose call the next decisions record, when it isn't the person's own. Chosen with the
+// "for" picker, remembered for this browser session, and sent with every request (X-Studio-For); the server stores it
+// beside who entered it, and never uses it for a permission.
+const FOR_KEY = 'voices-studio-acting-for';
+let actingFor: string = (() => { try { return sessionStorage.getItem(FOR_KEY) || ''; } catch { return ''; } })();
+const forListeners = new Set<() => void>();
+export const getActingFor = () => actingFor;
+export function setActingFor(who: string) {
+  actingFor = who.trim();
+  try { if (actingFor) sessionStorage.setItem(FOR_KEY, actingFor); else sessionStorage.removeItem(FOR_KEY); } catch { /* private mode: lasts for this page */ }
+  forListeners.forEach(fn => fn());
+}
+export function onActingFor(fn: () => void) { forListeners.add(fn); return () => { forListeners.delete(fn); }; }
+/** "Brook for Nick", or just "Brook": who a call is shown as. */
+export const whoWords = (by?: string | null, forWho?: string | null) => (forWho && forWho !== by ? `${by || 'unknown'} for ${forWho}` : String(by || ''));
+
 function headers(extra?: HeadersInit): Record<string, string> {
-  return { ...(HOSTED ? authHeaders() : { 'X-Studio-User': getUser() }), ...((extra as Record<string, string>) || {}) };
+  return { ...(HOSTED ? authHeaders() : { 'X-Studio-User': getUser() }), ...(actingFor ? { 'X-Studio-For': actingFor } : {}), ...((extra as Record<string, string>) || {}) };
 }
 async function raw(path: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(`${STUDIO_API}${withRound(path)}`, { ...init, headers: headers(init?.headers) });

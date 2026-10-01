@@ -11,7 +11,7 @@ import { keepSelection, uploadFor, uploadLabel } from '@/lib/uploadTarget';
 import { SIZES, detectFileSize } from '@/lib/studioSizes';
 import { personaEdge } from '@/lib/personaColors';
 import { personaColor, tint } from '@/lib/personaColors';
-import { AuthMedia, PersonaChip, PersonaDot, inViewFilter, personaKeys, type ViewFilter, Chip, CodeChip, COMPLIANCE_TONE, COMPLIANCE_WORDS, COPY_STATUS, GhostButton, Intro, Label, NAMING_TIP, PINK, PinkButton, SEV_ORDER, chipName, codeState, inRegion, params, plainSource, regionOf, territoryName, when, whatToDo } from './ui';
+import { AuthMedia, ForPicker, whoWords, PersonaChip, PersonaDot, inViewFilter, personaKeys, type ViewFilter, Chip, CodeChip, COMPLIANCE_TONE, COMPLIANCE_WORDS, COPY_STATUS, GhostButton, Intro, Label, NAMING_TIP, PINK, PinkButton, SEV_ORDER, chipName, codeState, inRegion, params, plainSource, regionOf, territoryName, when, whatToDo } from './ui';
 
 type Filter = 'needs' | 'awaiting' | 'changes' | 'ready' | 'all';
 const FILTERS: Array<[Filter, string]> = [['needs', 'Needs upload or review'], ['awaiting', 'Awaiting Trupanion'], ['changes', 'Changes requested'], ['ready', 'Ready to traffic'], ['all', 'All']];
@@ -326,7 +326,7 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
             <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-[#858B96]"><PersonaChip meta={meta} persona={report.persona} short /><span>{territoryName(meta.territories[report.territory]) || report.territory}{inRegion(report.region)} · signed off in {report.signoff_id}</span></div>
           </div>
           {canReady && (ready
-            ? <GhostButton className="text-base" onClick={() => act(() => studio.pfReady(report.stub, false))} title={`Pre-flight passed by ${report.status.ready_by}, ${when(report.status.ready_at)}`}>Take back Pre-flight</GhostButton>
+            ? <GhostButton className="text-base" onClick={() => act(() => studio.pfReady(report.stub, false))} title={`Pre-flight passed by ${whoWords(report.status.ready_by, report.status.ready_for)}, ${when(report.status.ready_at)}`}>Take back Pre-flight</GhostButton>
             : report.same_visual_as.length > 0
               // A shared visual (one upload, one audit): every code on it by default, each passing on its own flags.
               ? <span className="flex flex-wrap items-center gap-2">
@@ -343,10 +343,12 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
                   <button className="text-sm text-[#858B96] underline-offset-2 hover:text-[#ECEDEF] hover:underline disabled:opacity-40" disabled={!!readyBlock} onClick={() => act(() => studio.pfReady(report.stub, true))}>just {report.stub}</button>
                 </span>
               : <PinkButton className="px-4 py-2 text-base" disabled={!!readyBlock} title={readyBlock || 'Ready to traffic once Trupanion has cleared it too'} onClick={() => act(() => studio.pfReady(report.stub, true))}>Mark Pre-flight passed</PinkButton>)}
+          {/* Whose call "passed" is, when it's marked for them (the creative lead's, entered by you). */}
+          {canReady && !ready && <ForPicker meta={meta} doing="Marking passed" />}
         </div>
         <Track r={row} />
         <p className="text-sm text-[#A3A8B1]">
-          {ready ? `Pre-flight passed by ${report.status.ready_by}, ${when(report.status.ready_at)}. ` : readyBlock ? `${readyBlock} ` : ''}
+          {ready ? `Pre-flight passed by ${whoWords(report.status.ready_by, report.status.ready_for)}, ${when(report.status.ready_at)}. ` : readyBlock ? `${readyBlock} ` : ''}
           {report.traffic && !report.traffic.ready && report.traffic.blocker ? report.traffic.blocker : report.traffic?.ready ? 'Ready to traffic.' : ''}
           {!canReady && !ready && <span className="text-[#646A75]"> Pre-flight is passed by the creative lead or an admin.</span>}
         </p>
@@ -504,7 +506,7 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
             <h2 className="mb-2 text-lg font-semibold">Flags <span className="text-sm font-normal text-[#858B96]">{auditedLatest ? `${main.filter(f => f.severity === 'red').length} red · ${main.filter(f => f.severity === 'amber').length} amber · ${main.filter(f => f.severity === 'grey').length} grey` : ''}</span></h2>
             {!auditedLatest && <p className="text-sm text-[#858B96]">No finished checks for this upload yet.</p>}
             {auditedLatest && !main.length && <p className="text-sm text-emerald-200">No flags.</p>}
-            <ul className="space-y-3">{main.map(f => <FlagRow key={f.id} flag={f} canOverride={canReady} copyOverrides={report.copy_overrides} onChanged={onChanged} onError={onError} />)}</ul>
+            <ul className="space-y-3">{main.map(f => <FlagRow key={f.id} meta={meta} flag={f} canOverride={canReady} copyOverrides={report.copy_overrides} onChanged={onChanged} onError={onError} />)}</ul>
             {cross.length > 0 && (
               <details className="mt-3 text-sm">
                 <summary className="cursor-pointer text-[#858B96]">How it travels: {cross.length} note{cross.length === 1 ? '' : 's'} from the other personas</summary>
@@ -523,7 +525,7 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
   );
 }
 
-function FlagRow({ flag, canOverride, copyOverrides = [], onChanged, onError }: { flag: PfFlag; canOverride: boolean; copyOverrides?: NonNullable<PfReport['copy_overrides']>; onChanged: () => Promise<void>; onError: (m: string) => void }) {
+function FlagRow({ flag, canOverride, copyOverrides = [], onChanged, onError, meta }: { meta?: Meta; flag: PfFlag; canOverride: boolean; copyOverrides?: NonNullable<PfReport['copy_overrides']>; onChanged: () => Promise<void>; onError: (m: string) => void }) {
   const [overriding, setOverriding] = useState(false);
   const [details, setDetails] = useState(false);
   const numeric = !!flag.why && /^\s*P\(yes\)/i.test(flag.why);
@@ -553,11 +555,11 @@ function FlagRow({ flag, canOverride, copyOverrides = [], onChanged, onError }: 
           {/* The same rule was overridden on the copy at sign-off: say so, and offer its reason here in one click. */}
           {flag.severity === 'red' && !flag.override && copyOverrides.filter(o => o.rule === flag.rule).map((o, k) => (
             <div key={k} className="mt-2 flex flex-wrap items-center gap-2 rounded border border-amber-400/40 bg-amber-400/10 px-2 py-1 text-sm text-amber-100">
-              <span className="min-w-0 flex-1">Overridden at sign-off ({o.field}) by {o.by}, {when(o.at)}: “{o.reason}”. The asset needs its own override.</span>
+              <span className="min-w-0 flex-1">Overridden at sign-off ({o.field}) by {whoWords(o.by, o.for)}, {when(o.at)}: “{o.reason}”. The asset needs its own override.</span>
               {canOverride && <GhostButton className="px-2 py-0.5 text-xs" onClick={() => act(() => studio.pfOverride(flag.id, `Same as at sign-off (${o.by}): ${o.reason}`))}>Override here with the same reason</GhostButton>}
             </div>
           ))}
-          {flag.override && <div className="mt-2 rounded border border-red-500/30 bg-red-500/5 px-2 py-1 text-sm text-red-100"><span className="font-semibold">Overridden</span> by {flag.override.by}, {when(flag.override.at)}: “{flag.override.reason}”</div>}
+          {flag.override && <div className="mt-2 rounded border border-red-500/30 bg-red-500/5 px-2 py-1 text-sm text-red-100"><span className="font-semibold">Overridden</span> by {whoWords(flag.override.by, flag.override.for)}, {when(flag.override.at)}: “{flag.override.reason}”</div>}
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <GhostButton active={flag.mine === true} className="px-2 py-0.5 text-xs" onClick={() => act(() => studio.pfAgree(flag.id, true))}>Agree</GhostButton>
             <GhostButton active={flag.mine === false} className="px-2 py-0.5 text-xs" onClick={() => {
@@ -570,9 +572,10 @@ function FlagRow({ flag, canOverride, copyOverrides = [], onChanged, onError }: 
           {overriding && (
             <div className="mt-2 space-y-2">
               <textarea rows={2} autoFocus className="w-full rounded-lg border-2 border-red-500/45 px-3 py-2 text-sm" placeholder="Why this asset can run as it is (recorded with your name, and shown here)" value={why} onChange={e => setWhy(e.target.value)} />
-              <div className="flex gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <PinkButton className="px-3 py-1 text-sm" disabled={why.trim().length < 5} onClick={() => act(async () => { await studio.pfOverride(flag.id, why); setOverriding(false); setWhy(''); })}>Save override</PinkButton>
                 <GhostButton className="text-sm" onClick={() => setOverriding(false)}>Cancel</GhostButton>
+                <ForPicker meta={meta || null} doing="Overriding" />
               </div>
             </div>
           )}
@@ -616,7 +619,7 @@ function Decision({ meta, asset, stub, can, onChanged, onError }: { meta: Meta; 
         <h2 className="mr-auto text-lg font-semibold">Trupanion’s decision</h2>
         {cur && <span className={cn('rounded-full border px-3 py-0.5 text-sm font-semibold', COMPLIANCE_TONE[cur.status])}>{COMPLIANCE_WORDS[cur.status]}</span>}
       </div>
-      {cur && cur.status !== 'pending' && <p className="text-sm text-[#A3A8B1]">{cur.client_by ? `Trupanion: ${cur.client_by} · ` : ''}recorded by {cur.by}, {when(cur.at)}{cur.note ? ` · “${cur.note}”` : ''}</p>}
+      {cur && cur.status !== 'pending' && <p className="text-sm text-[#A3A8B1]">{cur.client_by ? `Trupanion: ${cur.client_by} · ` : ''}recorded by {whoWords(cur.by, cur.for)}, {when(cur.at)}{cur.note ? ` · “${cur.note}”` : ''}</p>}
       {cur?.stale && <p className="rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">{cur.stale}: review it again.</p>}
       {(mine?.compliance.check_specifically?.length ?? 0) > 0 && (
         <div className="text-sm text-amber-200">Please check specifically:
@@ -653,10 +656,11 @@ function Decision({ meta, asset, stub, can, onChanged, onError }: { meta: Meta; 
             <legend className="mb-1 text-[#858B96]">If you request changes, what goes back?</legend>
             {(['asset', 'copy'] as const).map(k => <label key={k} className="mr-5 inline-flex cursor-pointer items-center gap-2"><input type="radio" name={`send-back-${stub}`} className="accent-[#D94D8F]" checked={sendBack === k} onChange={() => setSendBack(k)} />{SEND_BACK[k]}</label>)}
           </fieldset>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <PinkButton className="px-4 py-2 text-base" disabled={busy || !apply.size || !clientBy.trim() || needsNote} title={!clientBy.trim() ? 'Say who at Trupanion cleared it' : needsNote ? 'Say in the note what Trupanion accepted' : undefined} onClick={() => set('cleared')}>Cleared by Trupanion</PinkButton>
             <GhostButton className="px-4 py-2 text-base" disabled={busy || !apply.size || !note.trim() || !clientBy.trim()} title={!clientBy.trim() ? 'Say who at Trupanion asked for changes' : !note.trim() ? 'Say what needs changing first' : undefined} onClick={() => set('changes_requested')}>Changes requested</GhostButton>
             <GhostButton className="px-4 py-2 text-base" disabled={busy || !apply.size} onClick={() => set('pending')}>Back to pending</GhostButton>
+            <ForPicker meta={meta} doing="Recording" />
           </div>
         </>
       )}

@@ -379,7 +379,7 @@ async function serve() {
     if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Studio-User');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Studio-User, X-Studio-For');
     }
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     next();

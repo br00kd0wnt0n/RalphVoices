@@ -198,7 +198,8 @@ const corsOptions = {
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  // X-Studio-For: Copy Studio's "on behalf of" (whose call a request records; routes/studio.ts validates it).
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Studio-For'],
 };
 
 // Middleware
