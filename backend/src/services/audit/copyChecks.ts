@@ -3,7 +3,8 @@
 // and limits all come from the rules file; this file only applies them.
 // (Studio has its own version of these checks; B2 doesn't import Studio code.)
 import type { Flag, Pattern, RuleItem, Rules, Severity } from './types.js';
-import { figureKey } from '../../utils/figures.js';
+import { figureKey, isSmallFigure, notInFacts } from '../../utils/figures.js';
+import { withoutSmallPrint } from './smallPrint.js';
 
 export interface TextBlock {
   where: string;      // "Meta headline", "card 1", "1.5 s (hook)"
@@ -60,10 +61,14 @@ const clean = (s: string) => s.replace(/[’‘]/g, "'").replace(/[“”]/g, '"
  */
 export function copyFlags(blocks: TextBlock[], rules: Rules, persona: string | null): Flag[] {
   const flags: Flag[] = [];
-  const all = clean(blocks.map(b => b.text).join('\n'));
+  // The asset's legal small print (the disclaimer, an address, a licence line) isn't ad copy: the figure and rule checks
+  // skip it, and only the disclaimer check reads it (smallPrint.ts). Sidecar copy fields are all copy.
+  const disclaimer = (rules as any).disclaimer?.text as string | undefined;
+  const copyOf = (b: TextBlock) => (b.onImage ? withoutSmallPrint(b.text, disclaimer) : b.text);
+  const all = clean(blocks.map(copyOf).join('\n'));
 
   for (const b of blocks) {
-    const text = clean(b.text);
+    const text = clean(copyOf(b));
     if (!text.trim()) continue;
     const by = [b.ocrOnly ? 'ocr' : 'rule'];
     const cap = (s: Severity): Severity => (b.ocrOnly && s === 'red' ? 'amber' : s);
@@ -134,14 +139,13 @@ export function copyFlags(blocks: TextBlock[], rules: Rules, persona: string | n
     const facts = rules.facts.filter(x => !x.personas || !persona || x.personas.includes(persona));
     const allowed = new Set(facts.flatMap(x => x.numbers.map(figureKey)));
     const used = new Set<string>();
+    const failing: string[] = [];
     for (const raw of figuresIn(text)) {
       const key = figureKey(raw);
       used.add(key);
-      const small = /^\d+$/.test(key) && Number(key) <= 12 && !raw.includes('$');
-      if (!small && !allowed.has(key)) {
-        addFlag(flags, { severity: cap(sevOf(rules.figure_rule.severity, 'red')), rule: rules.figure_rule.id, label: rules.figure_rule.rule, source: rules.figure_rule.source, quote: raw, where: b.where, why: `"${raw}" isn't in the facts list${ocrWhy}`, by });
-      }
+      if (!isSmallFigure(raw) && !allowed.has(key) && !failing.includes(raw)) failing.push(raw);
     }
+    if (failing.length) addFlag(flags, { severity: cap(sevOf(rules.figure_rule.severity, 'red')), rule: rules.figure_rule.id, label: rules.figure_rule.rule, source: rules.figure_rule.source, quote: failing[0], where: b.where, why: `${notInFacts(failing)}${ocrWhy}`, by });
     for (const fact of facts) {
       const hit = fact.numbers.map(figureKey).find(k => used.has(k) && !(/^\d+$/.test(k) && Number(k) <= 12));
       if (!hit) continue;

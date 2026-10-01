@@ -112,7 +112,9 @@ export function copyMatch(copy: SignedOffCopy, assetText: Array<{ where: string;
       flags.push({ severity: 'amber', rule: 'COPY_MATCH', label: `${def.label} differs from the signed-off wording`, source: COPY_MATCH_SOURCE, quote: `signed off: "${v.trim()}" · on the asset: "${m.excerpt}"`, where: m.where, why: `${Math.round(m.similarity * 100)}% of the words match, in order`, by: ['rule'] });
     } else if (status === 'not on asset') {
       flags.push({
-        severity: def.onAsset === 'must' ? 'amber' : 'grey', rule: 'COPY_MATCH',
+        // Text that must be on the asset and isn't (below the reworded line) is wrong artwork or wrong copy: red, so it
+        // can't pass without an override (production test, 1 Oct: 17% of the words matching was only amber). Reworded stays amber.
+        severity: def.onAsset === 'must' ? 'red' : 'grey', rule: 'COPY_MATCH',
         label: def.onAsset === 'must' ? `${def.label} not found on the asset` : `${def.label} isn't on the image (fine if it runs in the headline field)`,
         source: COPY_MATCH_SOURCE, quote: `signed off: "${v.trim()}"${m.excerpt ? ` · closest on the asset: "${m.excerpt}"` : ''}`, why: `${Math.round(m.similarity * 100)}% of the words match`, by: ['rule'],
       });

@@ -1099,7 +1099,7 @@ test('sizes: a static in 3 sizes, one missing its on-image text → a flag on th
   assert.equal(up.estimate.seconds, 3 * (2 + 1), 'the estimate is the sum over sizes');
   await pf.runAudit(await pf.createAudit(up.upload_id));
   let rep = await report(still);
-  assert.deepEqual(copyFlags(rep), [['COPY_MATCH', 'amber', '9:16', '9:16: On-image text (signed off) not found on the asset']], 'a flag on 9:16 only');
+  assert.deepEqual(copyFlags(rep), [['COPY_MATCH', 'red', '9:16', '9:16: On-image text (signed off) not found on the asset']], 'a flag on 9:16 only (red: wrong artwork or copy)');
   assert.deepEqual(rep.flags.filter((f: any) => f.rule === 'CROSS_PERSONA').map((f: any) => [f.label, f.size]), [['How another persona might read it', undefined]], 'the same finding in every size is one flag');
   assert.deepEqual(rep.sizes, { expected: ['1:1', '4:5', '9:16'], uploaded: ['1:1', '4:5', '9:16'], missing: [] });
   assert.deepEqual(rep.audit!.result.copy_match.filter((r: any) => r.field === 'on_image').map((r: any) => [r.size, r.status]), [['1:1', 'match'], ['4:5', 'match'], ['9:16', 'not on asset']]);

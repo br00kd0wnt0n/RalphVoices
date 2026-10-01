@@ -57,6 +57,8 @@ export interface Brief {
 }
 export interface RunStats {
   generated: number; near_duplicates_removed: number; similar_flagged: number;
+  /** Written beyond a field's count and not kept (Studio writes a quarter extra). */
+  spare?: number;
   timings_ms: Record<string, number>; usd: Record<string, number>; usd_total: number;
 }
 /** A line Studio wrote but didn't show: a near-duplicate (dup_of), or one that broke a hard rule or ran past a headline's or hook's visible length (reason). */

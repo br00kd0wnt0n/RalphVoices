@@ -48,3 +48,15 @@ test('studio checks: $6k matches a $6,000 fact; an unlisted figure is still flag
 test('audit reads the same figures', () => {
   assert.deepEqual(auditFiguresIn('A $6k bill, $1.5k deductible, 2.1M pets').map(figureKey), ['6000', '1500', '2100000']);
 });
+
+test('28: the flag quotes the figure that fails, never a $0 or a small count, and names every failing one', () => {
+  const r = rules;
+  const flagOf = (text: string) => S.deterministicFlags({ text, field: 'meta_on_image', structure: 'plain_promise', persona: 'OWN' }, r).flags.find(f => f.rule === r.figure_rule.id);
+  const one = flagOf('New options to fit your budget: $0–$2,000 deductible');
+  assert.equal(one?.quote, '$2,000');
+  assert.equal(one?.why, '"$2,000" isn\'t in the facts list');
+  const two = flagOf('$0 down, $2,000 deductible, $3,500 limit');
+  assert.equal(two?.quote, '$2,000');
+  assert.equal(two?.why, '"$2,000" and "$3,500" aren\'t in the facts list');
+  assert.equal(flagOf('$0 deductible, 3 ways to pay'), undefined, 'zero and a small count are not claims');
+});

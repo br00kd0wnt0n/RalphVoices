@@ -13,3 +13,19 @@ export function figureKey(raw: string): string {
   const value = mult ? Number((Number(num) * MULTIPLIER[mult]).toFixed(6)) : Number(num);
   return `${value}${sign || ''}`;
 }
+
+/**
+ * Not a claim: zero ("$0 deductible"), and small counts (0–12) without a dollar sign ("3 ways", "the 2 of you").
+ * Production test, 1 Oct: "$0–$2,000 deductible" was flagged quoting "$0", not the unsourced "$2,000".
+ */
+export function isSmallFigure(raw: string): boolean {
+  const key = figureKey(raw);
+  if (/^0(\.0+)?$/.test(key)) return true;
+  return /^\d+$/.test(key) && Number(key) <= 12 && !raw.includes('$');
+}
+
+/** '"$2,000" isn't in the facts list' / '"$2,000" and "$3,500" aren't in the facts list'. */
+export function notInFacts(raws: string[]): string {
+  const q = raws.map(r => `"${r}"`);
+  return q.length === 1 ? `${q[0]} isn't in the facts list` : `${q.slice(0, -1).join(', ')} and ${q.at(-1)} aren't in the facts list`;
+}

@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import OpenAI from 'openai';
 import { withRetry } from '../../utils/retry.js';
-import { figureKey } from '../../utils/figures.js';
+import { figureKey, isSmallFigure, notInFacts } from '../../utils/figures.js';
 import { probabilityYes } from '../../utils/probes.js';
 import { mockClient } from './mock.js';
 import { claudeWrite, isClaude } from './claude.js';
@@ -185,6 +185,8 @@ export interface Batch {
 export interface RunStats {
   generated: number;
   near_duplicates_removed: number;
+  /** Written beyond a field's count and not kept (Studio writes a quarter extra so the counts survive the drops). */
+  spare?: number;
   similar_flagged: number;
   timings_ms: Record<string, number>;
   usd: Record<string, number>;
@@ -808,8 +810,14 @@ export function screenWritten(text: string, cell: Pick<Cell, 'field' | 'structur
   if (cliche) return { reason: `a Canadian cliché ("${cliche[0]}")`, rule: 'CA_CLICHE' };
   const f = r.fields[cell.field];
   if (f && isShortField(cell.field) && [...text].length > f.visible) return { reason: `over the ${f.visible} characters that show (${[...text].length})`, rule: 'LIMIT_VISIBLE' };
+  // Primary text and captions say what's sold (production test, 1 Oct: half a run's primaries didn't, despite the MUST).
+  if (PRODUCT_FIELDS.includes(cell.field) && !NAMES_PRODUCT.test(text)) return { reason: 'doesn’t say what’s sold (no "Trupanion" or "medical insurance for pets")', rule: 'CL_PRODUCT' };
   return null;
 }
+/** Fields that must say what's sold on their own: at generation there's no ad yet for a headline to cover it. */
+export const PRODUCT_FIELDS = ['meta_primary', 'tiktok_caption'];
+/** Trupanion, or the category: medical insurance for pets (cats and dogs), insurance for pets, pet insurance. */
+export const NAMES_PRODUCT = /\btrupanion\b|\b(medical )?insurance for (your )?(pets?|cats?(,| and| &) dogs?|dogs?(,| and| &) cats?)\b|\bpet (medical )?insurance\b/i;
 
 /** What a Canadian line must not reach for (production test, 1 Oct: "Peace of mind, eh?"). Studio's house rule, not the client's. */
 export const CA_CLICHE = /\beh\b|maple[- ]leaf|\bmaple\b|\bhockey\b|\btoque\b|\bloonie\b|\btoonie\b|double[- ]double|\bTim Hortons\b|\bsorry,? eh\b/i;
@@ -818,8 +826,9 @@ export const CA_CLICHE = /\beh\b|maple[- ]leaf|\bmaple\b|\bhockey\b|\btoque\b|\b
 export function droppedSummary(dropped: Batch['dropped']): string {
   const broke = dropped.filter(d => d.reason);
   if (!broke.length) return '';
-  const long = broke.filter(d => d.rule === 'LIMIT_VISIBLE').length, cliche = broke.filter(d => d.rule === 'CA_CLICHE').length, rule = broke.length - long - cliche;
-  const parts = [rule ? `broke a client rule (${rule})` : '', long ? `over the visible length (${long})` : '', cliche ? `a Canadian cliché (${cliche})` : ''].filter(Boolean);
+  const long = broke.filter(d => d.rule === 'LIMIT_VISIBLE').length, cliche = broke.filter(d => d.rule === 'CA_CLICHE').length, product = broke.filter(d => d.rule === 'CL_PRODUCT').length;
+  const rule = broke.length - long - cliche - product;
+  const parts = [rule ? `broke a client rule (${rule})` : '', product ? `didn’t say what’s sold (${product})` : '', long ? `over the visible length (${long})` : '', cliche ? `a Canadian cliché (${cliche})` : ''].filter(Boolean);
   return `${broke.length} line${broke.length === 1 ? '' : 's'} dropped before you saw ${broke.length === 1 ? 'it' : 'them'}: ${parts.join(', ')}`;
 }
 
@@ -1299,6 +1308,7 @@ export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: 
         if (broke) batch.dropped.push({ text: w.text, cell: w.cell.cell, field: w.cell.field, ...broke });
         else if (best >= DUP) batch.dropped.push({ text: w.text, cell: w.cell.cell, dup_of: bestId, similarity: round(best) });
         else if ((keptBy[w.cell.field] ?? 0) < (quota[w.cell.field] || 0)) { kept.push({ ...w, emb: embs[i] }); keptBy[w.cell.field]++; }
+        else batch.stats.spare = (batch.stats.spare || 0) + 1;
       });
     }
     const genLines = kept.map(k => {
@@ -1498,14 +1508,17 @@ export function deterministicFlags(l: { text: string; field: string; structure: 
   const allowed = new Set(facts.flatMap(x => x.numbers.map(figureKey)));
   const elsewhere = (key: string) => r.facts.find(x => (!x.personas || x.personas.includes(l.persona)) && !facts.includes(x) && x.numbers.some(n => figureKey(n) === key));
   const used = new Set<string>();
+  // Every figure that fails, quoting the first of them (never a zero or a small count; isSmallFigure).
+  const failing: string[] = [];
   for (const raw of figuresIn(text)) {
     const key = figureKey(raw);
     used.add(key);
-    const small = /^\d+$/.test(key) && Number(key) <= 12 && !raw.includes('$');
-    if (!small && !allowed.has(key) && !flags.some(f => f.rule === r.figure_rule.id)) {
-      const other = elsewhere(key);
-      addFlag(flags, { rule: r.figure_rule.id, severity: r.figure_rule.severity || 'compliance', label: r.figure_rule.rule, source: other ? `${r.figure_rule.source}; ${other.id} (${other.source})` : r.figure_rule.source, quote: raw, why: other ? `"${raw}" is from ${other.id}, which holds in ${(other.regions || []).join(' and ')} only, not ${region === 'CA' ? 'Canada' : region}` : `"${raw}" isn't in the facts list`, by: ['rule'] });
-    }
+    if (!isSmallFigure(raw) && !allowed.has(key) && !failing.includes(raw)) failing.push(raw);
+  }
+  if (failing.length) {
+    const other = elsewhere(figureKey(failing[0]));
+    addFlag(flags, { rule: r.figure_rule.id, severity: r.figure_rule.severity || 'compliance', label: r.figure_rule.rule, source: other ? `${r.figure_rule.source}; ${other.id} (${other.source})` : r.figure_rule.source, quote: failing[0],
+      why: other && failing.length === 1 ? `"${failing[0]}" is from ${other.id}, which holds in ${(other.regions || []).join(' and ')} only, not ${region === 'CA' ? 'Canada' : region}` : notInFacts(failing), by: ['rule'] });
   }
   for (const fact of facts) {
     const hit = fact.numbers.map(figureKey).find(k => used.has(k) && !(/^\d+$/.test(k) && Number(k) <= 12));

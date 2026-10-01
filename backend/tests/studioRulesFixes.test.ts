@@ -64,5 +64,5 @@ test('13. a US-only fact is not offered to a Canadian brief, and using its figur
   assert.match(caSys, /MUST: never write "eh"/);
   // A Canadian cliché is dropped before anyone sees it; the same words in a US line aren't.
   assert.equal(S.screenWritten('Peace of mind, eh?', { field: 'meta_primary', structure: 'question' }, r, { persona: 'OWN', banned_words: [], region: 'CA' })?.rule, 'CA_CLICHE');
-  assert.equal(S.screenWritten('Peace of mind for every vet visit.', { field: 'meta_primary', structure: 'plain_promise' }, r, { persona: 'OWN', banned_words: [], region: 'CA' }), null);
+  assert.equal(S.screenWritten('Peace of mind for every vet visit, with Trupanion.', { field: 'meta_primary', structure: 'plain_promise' }, r, { persona: 'OWN', banned_words: [], region: 'CA' }), null);
 });
