@@ -4,7 +4,7 @@
 // studioReady/studioVersionChecks/studioCarousel tests.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { addAd, adName, flagsAt, moveAd, nextVisual, placeLine, removeAd, setCard, setOnImage, useInAllAds, usesOf } from '../../frontend/src/lib/buildDraft.js';
+import { addAd, adName, flagsAt, moveAd, redPlaces, nextVisual, placeLine, removeAd, setCard, setOnImage, useInAllAds, usesOf } from '../../frontend/src/lib/buildDraft.js';
 
 const platformOf = (v: { platform?: string }) => v.platform || 'META';
 const base = () => ({
@@ -71,4 +71,13 @@ test('flags at a slot: once per rule, even when two ads on the visual word it di
   const rep = (other: string) => ({ rule: 'VERSION_REPEAT', severity: 'amber' as const, fields: ['meta_on_image'], other });
   assert.equal(flagsAt([rep('A1'), rep('A2'), rep('A1')], 'meta_on_image').length, 2);
   assert.equal(flagsAt([clash('x')], 'meta_primary').length, 0);
+});
+
+test('red places: the blocker names the flag and where it is, a carousel card included (production test, 1 Oct)', () => {
+  const d = { versions: [{ visual: 'A', platform: 'META', fields: { meta_primary: 'p1', meta_headline: 'h1' } }], on_image: { A: ['c1', 'c2', 'c3', 'c4'] } };
+  const pf = (v: { platform?: string }) => v.platform || 'META';
+  assert.deepEqual(redPlaces(d, { c2: ['unsourced figure', 'price lead'] }, pf), ['Visual A · card 2: unsourced figure, price lead']);
+  assert.deepEqual(redPlaces(d, { p1: ['direct pay'], c4: ['claim speed'] }, pf), ['Visual A · Ad 1: direct pay', 'Visual A · card 4: claim speed']);
+  assert.deepEqual(redPlaces({ ...d, on_image: { A: 'oi' } }, { oi: ['pays for itself'] }, pf), ['Visual A · on the image: pays for itself']);
+  assert.deepEqual(redPlaces(d, { zz: ['x'], c1: [] }, pf), [], 'a line not in the draft, or with no reds, is not named');
 });

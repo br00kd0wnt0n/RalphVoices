@@ -77,6 +77,8 @@ export interface Territory {
   persona: string; name: string; angle: string; format: string; premise: string; source: string;
   /** The pitched headline ("headline as sold"), from the concept cards (rules v2.4+). */
   headline?: string; headline_source?: string; headline_note?: string; pitched_name?: string; name_note?: string;
+  /** The pitched headline's wording is retired (e.g. the client dropped a word): kept on record, never shown as the territory's line (rules v2.13). */
+  headline_retired?: boolean;
   status?: string; origin?: 'pitch' | 'edited' | 'new'; note?: string; updated_by?: string; updated_at?: string;
   /** The fields a brief for it starts with, by its format (server's defaultFields). */
   default_fields?: string[];

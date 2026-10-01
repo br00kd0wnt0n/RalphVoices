@@ -147,11 +147,11 @@ function DroppedNote({ meta, batch }: { meta: Meta; batch: Batch }) {
   const [open, setOpen] = useState(false);
   const gone = (batch.dropped || []).filter(d => d.reason);
   if (!gone.length) return null;
-  const rule = gone.filter(d => d.rule !== 'LIMIT_VISIBLE').length, long = gone.length - rule;
+  const long = gone.filter(d => d.rule === 'LIMIT_VISIBLE').length, cliche = gone.filter(d => d.rule === 'CA_CLICHE').length, rule = gone.length - long - cliche;
   return (
     <div className="mt-1 text-sm text-[#858B96]">
       <button className="underline-offset-2 hover:text-[#ECEDEF] hover:underline" aria-expanded={open} onClick={() => setOpen(!open)}>
-        {gone.length} written line{gone.length === 1 ? '' : 's'} dropped before you saw {gone.length === 1 ? 'it' : 'them'}: {[rule ? `broke a client rule (${rule})` : '', long ? `too long for the field (${long})` : ''].filter(Boolean).join(', ')}
+        {gone.length} written line{gone.length === 1 ? '' : 's'} dropped before you saw {gone.length === 1 ? 'it' : 'them'}: {[rule ? `broke a client rule (${rule})` : '', long ? `too long for the field (${long})` : '', cliche ? `a Canadian cliché (${cliche})` : ''].filter(Boolean).join(', ')}
       </button>
       {open && (
         <ul className="mt-1 space-y-1 border-l-2 border-[#343946] pl-3">

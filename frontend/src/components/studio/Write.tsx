@@ -110,7 +110,8 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
               style={code === ctx.territory ? { borderColor: pc.edge, background: tint(pc.base, 0.1) } : personaEdge(ctx.persona)}>
               <div className="flex items-center gap-2"><span className="font-semibold" style={code === ctx.territory ? { color: pc.light } : undefined}>{territoryName(x)}</span>{x.origin && x.origin !== 'pitch' && <Chip tone="outline" className="text-xs">{x.origin}</Chip>}</div>
               <div className="text-sm text-[#858B96]">{x.format} · {angleLabel(meta, x.persona, x.angle)}</div>
-              {x.headline && <div className="mt-1 truncate text-sm text-[#C9CCD2]" title={x.headline}>“{x.headline}”</div>}
+              {/* The premise, not the pitched headline: a pitched line can carry retired wording (DINK_IDIOT's "idiot"); it's on record in Territories. */}
+              {x.premise && <div className="mt-1 line-clamp-2 text-sm text-[#C9CCD2]" title={x.premise}>{x.premise}</div>}
             </button>
           ))}
           <button onClick={() => onEditTerritory(null)} className="rounded-xl border-2 border-dashed border-[#343946] px-4 py-3 text-left text-[#858B96] transition hover:border-[#6B7280] hover:text-[#ECEDEF]">

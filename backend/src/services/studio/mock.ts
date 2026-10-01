@@ -63,6 +63,8 @@ function checker(sys: string, user: string) {
   const hits: any[] = [];
   if (/pays? for itself/i.test(line)) hits.push({ rule: 'COMP_PAYS_FOR_ITSELF', quote: /pays? for itself/i.exec(line)![0], why: 'Claims the policy pays for itself' });
   else if (costLine(line) && !listedAsNo(sys, line)) hits.push({ rule: 'COMP_PAYS_FOR_ITSELF', quote: /\$[\d,.]+k?/.exec(line)![0], why: 'Implies it saves more than it costs' });
+  // The other live false positive: a speed that isn't about claims ("Build your plan in 60 seconds!") read as claim speed.
+  if (/\d+ seconds/i.test(line) && !/claim/i.test(line) && !listedAsNo(sys, line)) hits.push({ rule: 'COMP_CLAIM_SPEED', quote: /\d+ seconds/i.exec(line)![0], why: 'Overclaims speed' });
   if (/whole bill/i.test(line)) hits.push({ rule: 'COMP_PAID_SHARE', quote: 'whole bill', why: 'Implies the whole bill is paid' });
   if (/fancy bed/i.test(line)) hits.push({ rule: 'DINK_T_INDULGE', quote: 'fancy bed', why: 'Frames spend as indulgence' });
   const k = h(line);
@@ -88,6 +90,7 @@ function probe(user: string) {
   const q = user.split('\n').pop() || '';
   let p = 0.05 + (h(user) % 10) / 100;
   if (/pays for itself/i.test(q) && /pays? for itself/i.test(line)) p = 0.97;
+  if (/within seconds/i.test(q) && /\d+ seconds/i.test(line) && !listedAsNo(user.split('\n').find(l => l.startsWith('Lines like these are a No')) || '', line)) p = 0.85;
   if (/more (money )?than it costs/i.test(q) && costLine(line) && !listedAsNo(user.split('\n').find(l => l.startsWith('Lines like these are a No')) || '', line)) p = 0.8;
   if (/participating hospitals/i.test(q) && /directly|checkout/i.test(line) && !/participating/i.test(line)) p = 0.9;
   if (/whole vet bill|pay nothing/i.test(q) && /whole bill/i.test(line)) p = 0.93;

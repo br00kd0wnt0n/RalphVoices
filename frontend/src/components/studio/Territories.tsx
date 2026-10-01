@@ -59,7 +59,7 @@ function TerritoryCard({ meta, code, t, onEdit, onBrief, onSaved }: { meta: Meta
 
       </div>
       <div className="mb-2 text-sm text-[#858B96]">{t.format} · Angle: {angle}</div>
-      {t.headline && <p className="mb-2 text-base font-semibold text-[#F2F3F5]" title={t.headline_source ? `Pitched headline · ${plainSource(t.headline_source)}` : 'Pitched headline'}><span className="mr-1 text-xs font-normal uppercase tracking-wider text-[#858B96]">Pitched as</span>“{t.headline}”</p>}
+      {t.headline && <p className={cn('mb-2 text-base font-semibold', t.headline_retired ? 'text-[#858B96]' : 'text-[#F2F3F5]')} title={t.headline_source ? `Pitched headline · ${plainSource(t.headline_source)}` : 'Pitched headline'}><span className="mr-1 text-xs font-normal uppercase tracking-wider text-[#858B96]">{t.headline_retired ? 'As pitched (retired wording)' : 'Pitched as'}</span><span className={t.headline_retired ? 'line-through decoration-[#646A75]' : ''}>“{t.headline}”</span></p>}
       {(t.name_note || t.headline_note) && <p className="mb-2 text-sm text-amber-200">{[t.pitched_name && t.pitched_name !== t.name ? `Pitched as “${t.pitched_name.replace(/\.$/, '')}”.` : '', t.name_note, t.headline_note].filter(Boolean).join(' ')}</p>}
       <p className="mb-3 text-base leading-snug text-[#C9CCD2]">{t.premise}</p>
       {t.updated_by && <p className="mb-3 text-sm text-[#858B96]">Changed by {t.updated_by}, {t.updated_at?.slice(0, 10)}{t.note ? `: ${t.note}` : ''}</p>}

@@ -162,7 +162,10 @@
       "misattribution_patterns": [
         "81%[^.!?]{0,40}(pawsure|our) (members|customers)"
       ],
-      "source": "GUIDE p.3"
+      "source": "GUIDE p.3",
+      "regions": [
+        "US"
+      ]
     }
   ],
   "figure_rule": {
@@ -263,6 +266,46 @@
       "check": "verbatim",
       "min_words": 6,
       "source": "LEGAL §8"
+    },
+    {
+      "id": "COMP_CLAIM_SPEED",
+      "rule": "No overclaiming how fast claims are paid. Only about claims, payments or reimbursement: a speed about anything else (building a plan, getting a quote) isn't covered.",
+      "severity": "compliance",
+      "check": "banned",
+      "patterns": [
+        "(every|all|each|any) (single )?claims?[^.!?]{0,30}(seconds|instant|minute)",
+        "(claims?|vet|bill)s? (are |is |gets? )?paid (in )?(seconds|instantly)"
+      ],
+      "wordings": [
+        "Does this line claim that every claim is paid instantly or within seconds?",
+        "Would a reader take this line to mean their claim is guaranteed to be paid within seconds?"
+      ],
+      "not_examples": [
+        "Build your plan in 60 seconds!"
+      ],
+      "source": "LEGAL §5"
+    },
+    {
+      "id": "COMP_NOT_INVESTMENT",
+      "rule": "Insurance is protection, not an investment: never 'worth every cent', 'the math adds up', 'worth the money', pays you back or breaks even.",
+      "severity": "compliance",
+      "check": "banned",
+      "patterns": [
+        "\\bworth (every|each) (cent|penny|dollar)\\b",
+        "\\b(math|maths|numbers|sums?) (adds?|add|added) up\\b",
+        "\\bworth the (money|cost|price|premiums?)\\b",
+        {
+          "re": "\\bworth it\\b",
+          "severity": "warn",
+          "why": "Check it isn't saying the insurance is worth the money"
+        },
+        "\\bpays? (you )?back\\b",
+        "\\bbreak(s|ing)? even\\b"
+      ],
+      "not_examples": [
+        "Vet bills add up fast."
+      ],
+      "source": "LEGAL §6"
     }
   ],
   "brand": [

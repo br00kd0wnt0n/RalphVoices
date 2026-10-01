@@ -237,7 +237,12 @@ export interface RuleItem {
 export interface Fact {
   id: string; text: string; numbers: string[]; personas?: string[]; source: string;
   own?: boolean; category?: boolean; illustrative?: boolean; check_hint?: string; misattribution_patterns?: string[];
+  /** Where the fact holds (rules v2.13): a US survey is ['US']; none means both. A Canadian line can't use a US-only figure. */
+  regions?: Region[];
 }
+/** The facts a line or brief for this persona and region may use. */
+export const factsFor = (r: Pick<Rules, 'facts'>, persona: string, region: Region = DEFAULT_REGION) =>
+  r.facts.filter(f => (!f.personas || f.personas.includes(persona)) && (!f.regions?.length || f.regions.includes(region)));
 const pat = (p: Pat) => (typeof p === 'string' ? { re: p } : p);
 export interface Territory {
   persona: string; name: string; angle: string; format: string; premise: string; source: string;
@@ -796,20 +801,25 @@ export const isShortField = (f: string) => /headline|hook/.test(f);
  * participating caveat, "pays for itself", a figure not in the facts…), or a headline or hook past its visible length.
  * The writer is told both (writerSystem); this is the backstop. The creative director's own lines are never screened.
  */
-export function screenWritten(text: string, cell: Pick<Cell, 'field' | 'structure'>, r: Rules, b: Pick<Brief, 'persona' | 'banned_words'>): { reason: string; rule?: string } | null {
+export function screenWritten(text: string, cell: Pick<Cell, 'field' | 'structure'>, r: Rules, b: Pick<Brief, 'persona' | 'banned_words' | 'region'>): { reason: string; rule?: string } | null {
   const red = deterministicFlags({ text, field: cell.field, structure: cell.structure, persona: b.persona }, r, b).flags.find(f => f.severity === 'compliance');
   if (red) return { reason: `broke a client rule: ${red.label}`, rule: red.rule };
+  const cliche = regionOf({}, b) === 'CA' ? CA_CLICHE.exec(text) : null;
+  if (cliche) return { reason: `a Canadian cliché ("${cliche[0]}")`, rule: 'CA_CLICHE' };
   const f = r.fields[cell.field];
   if (f && isShortField(cell.field) && [...text].length > f.visible) return { reason: `over the ${f.visible} characters that show (${[...text].length})`, rule: 'LIMIT_VISIBLE' };
   return null;
 }
 
+/** What a Canadian line must not reach for (production test, 1 Oct: "Peace of mind, eh?"). Studio's house rule, not the client's. */
+export const CA_CLICHE = /\beh\b|maple[- ]leaf|\bmaple\b|\bhockey\b|\btoque\b|\bloonie\b|\btoonie\b|double[- ]double|\bTim Hortons\b|\bsorry,? eh\b/i;
+
 /** "2 lines dropped: broke a client rule (1), over the visible length (1)", or '' when none were. */
 export function droppedSummary(dropped: Batch['dropped']): string {
   const broke = dropped.filter(d => d.reason);
   if (!broke.length) return '';
-  const rule = broke.filter(d => d.rule !== 'LIMIT_VISIBLE').length, long = broke.length - rule;
-  const parts = [rule ? `broke a client rule (${rule})` : '', long ? `over the visible length (${long})` : ''].filter(Boolean);
+  const long = broke.filter(d => d.rule === 'LIMIT_VISIBLE').length, cliche = broke.filter(d => d.rule === 'CA_CLICHE').length, rule = broke.length - long - cliche;
+  const parts = [rule ? `broke a client rule (${rule})` : '', long ? `over the visible length (${long})` : '', cliche ? `a Canadian cliché (${cliche})` : ''].filter(Boolean);
   return `${broke.length} line${broke.length === 1 ? '' : 's'} dropped before you saw ${broke.length === 1 ? 'it' : 'them'}: ${parts.join(', ')}`;
 }
 
@@ -820,7 +830,7 @@ export function writerSystem(b: Brief, r: Rules, own: string[] = [], allTaste: T
   const pr = r.personas[b.persona];
   const t = r.territories[b.territory];
   const seed = personaSeed(b.persona);
-  const facts = r.facts.filter(f => !f.personas || f.personas.includes(b.persona));
+  const facts = factsFor(r, b.persona, regionOf({}, b));
   const modelRules = [...r.compliance.filter(c => c.check !== 'structure'), ...r.brand.filter(c => !c.status)];
   const taste = allTaste.filter(x => x.persona === b.persona);
   const keeps = taste.filter(x => x.decision !== 'cut').sort((x, y) => Number(y.territory === b.territory) - Number(x.territory === b.territory)).slice(0, 8);
@@ -974,9 +984,11 @@ export function regionBlock(region: Region): string {
   return `
 REGION: CANADA. These ads run in Canada, as separate ads from the US ones.
 - Use Canadian English spelling: colour, favourite, centre, neighbour, cheque.
-- Make each line feel distinctly Canadian in its voice and everyday detail, not a US ad with a maple leaf added. Don't reach for flags, maple leaves, "eh", hockey or other clichés.
+- Make each line feel distinctly Canadian in its voice and everyday detail, not a US ad with a maple leaf added.
+- MUST: never write "eh", maple leaves, flags, hockey, toques, loonies, Tim Hortons or other Canadian clichés. A line that does is thrown away.
+- The facts list below holds in Canada; US-only surveys have been left out of it. Don't bring in a US figure.
 - Avoid US-only references: US states or cities, the Fourth of July, US-only brands or chains, "ZIP code".
-- Don't state anything about Canada (prices, laws, coverage, statistics, where Trupanion is available) unless it's in the facts list above.
+- Don't state anything about Canada (prices, laws, coverage, statistics, where Trupanion is available) unless it's in the facts list below.
 `;
 }
 
@@ -1420,7 +1432,7 @@ function truncTail(text: string, visible: number): string {
   return cs.slice(i).join('');
 }
 
-export function deterministicFlags(l: { text: string; field: string; structure: string; persona: string }, r: Rules, brief?: Pick<Brief, 'banned_words'>): { flags: Flag[]; features: string[] } {
+export function deterministicFlags(l: { text: string; field: string; structure: string; persona: string; region?: Region }, r: Rules, brief?: Pick<Brief, 'banned_words' | 'region'>): { flags: Flag[]; features: string[] } {
   const flags: Flag[] = [];
   const text = l.text;
   const f = r.fields[l.field];
@@ -1480,16 +1492,19 @@ export function deterministicFlags(l: { text: string; field: string; structure: 
     const m = re.exec(text);
     if (m) addFlag(flags, { rule: `BRIEF_BANNED:${w}`, severity: 'warn', label: `Banned in the brief: "${w}"`, source: 'Brief (creative director)', quote: m[0], by: ['rule'] });
   }
-  // Figures must come from the facts list.
-  const facts = r.facts.filter(x => !x.personas || x.personas.includes(l.persona));
+  // Figures must come from the facts list, for this persona and region (a US survey's figure isn't one a Canadian ad can use).
+  const region = regionOf(l, brief);
+  const facts = factsFor(r, l.persona, region);
   const allowed = new Set(facts.flatMap(x => x.numbers.map(figureKey)));
+  const elsewhere = (key: string) => r.facts.find(x => (!x.personas || x.personas.includes(l.persona)) && !facts.includes(x) && x.numbers.some(n => figureKey(n) === key));
   const used = new Set<string>();
   for (const raw of figuresIn(text)) {
     const key = figureKey(raw);
     used.add(key);
     const small = /^\d+$/.test(key) && Number(key) <= 12 && !raw.includes('$');
     if (!small && !allowed.has(key) && !flags.some(f => f.rule === r.figure_rule.id)) {
-      addFlag(flags, { rule: r.figure_rule.id, severity: r.figure_rule.severity || 'compliance', label: r.figure_rule.rule, source: r.figure_rule.source, quote: raw, why: `"${raw}" isn't in the facts list`, by: ['rule'] });
+      const other = elsewhere(key);
+      addFlag(flags, { rule: r.figure_rule.id, severity: r.figure_rule.severity || 'compliance', label: r.figure_rule.rule, source: other ? `${r.figure_rule.source}; ${other.id} (${other.source})` : r.figure_rule.source, quote: raw, why: other ? `"${raw}" is from ${other.id}, which holds in ${(other.regions || []).join(' and ')} only, not ${region === 'CA' ? 'Canada' : region}` : `"${raw}" isn't in the facts list`, by: ['rule'] });
     }
   }
   for (const fact of facts) {

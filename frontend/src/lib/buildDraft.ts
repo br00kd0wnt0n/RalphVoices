@@ -88,3 +88,13 @@ export function flagsAt<F extends { rule: string; fields: string[]; other?: stri
     .sort((a, b) => Number(b.severity === 'red') - Number(a.severity === 'red')) // red in one ad wins over amber in another
     .filter(f => { const k = `${f.rule}|${f.other || ''}`; if (seen.has(k)) return false; seen.add(k); return true; });
 }
+
+/**
+ * Where each red flag that blocks sign-off is: "Visual B · card 2: unsourced figure, price lead" (production test,
+ * 1 Oct: a carousel card's red said only "1 red flag to fix or override first", with nothing on the card).
+ * `reds` maps a line id to its unresolved red flags' names; a line used in several places is named at its first.
+ */
+export function redPlaces(d: DraftLike, reds: Record<string, string[]>, platformOf: (v: DraftVersionLike) => string): string[] {
+  const ids = [...new Set([...d.versions.flatMap(v => Object.values(v.fields)), ...Object.values(d.on_image).flat()].filter(Boolean))];
+  return ids.filter(id => reds[id]?.length).map(id => `${usesOf(d, id, platformOf)[0] || 'A line'}: ${reds[id].join(', ')}`);
+}
