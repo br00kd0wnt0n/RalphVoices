@@ -15,7 +15,9 @@ export const STUDIO_API: string = HOSTED
 
 export type Severity = 'compliance' | 'warn' | 'note';
 export interface Tone { dry_warm: number; playful_plain: number; short_long: number }
-export interface Flag { rule: string; severity: Severity; label: string; source: string; quote: string; why?: string; by: string[]; p?: number }
+export interface Flag { rule: string; severity: Severity; label: string; source: string; quote: string; why?: string; by: string[]; p?: number; /** Found on the wording before an edit; cleared by the re-check. */ original?: boolean }
+/** A model flag carried over from the wording before an edit (older lines say so only in `why`). */
+export const onOriginal = (f: Pick<Flag, 'original' | 'why'>) => !!f.original || (f.why || '').includes('on the original wording');
 export type ComplianceStatus = 'pending' | 'cleared' | 'changes_requested';
 export interface Override { rule: string; label?: string; reason: string; by: string; at: string }
 /** Where the ads run: US and Canada are separate ads. The naming code carries it. */
@@ -57,7 +59,11 @@ export interface RunStats {
   generated: number; near_duplicates_removed: number; similar_flagged: number;
   timings_ms: Record<string, number>; usd: Record<string, number>; usd_total: number;
 }
-export interface Batch { id: string; brief: Brief; created: string; created_by?: string; updated?: string; rules_version?: string; lines: Line[]; stats: RunStats }
+/** A line Studio wrote but didn't show: a near-duplicate (dup_of), or one that broke a hard rule or ran past a headline's or hook's visible length (reason). */
+export interface DroppedLine { text: string; cell: string; dup_of?: string; similarity?: number; reason?: string; rule?: string; field?: string }
+export interface StorageCheck { ok: boolean; bucket?: string; error?: string; at: string }
+export interface OrphanUpload { id: string; stub: string; uploaded_by: string | null; uploaded_at: string }
+export interface Batch { id: string; brief: Brief; created: string; created_by?: string; updated?: string; rules_version?: string; lines: Line[]; stats: RunStats; dropped?: DroppedLine[] }
 export interface RunSummary {
   id: string; name: string; persona: string; territory: string; region?: Region; created: string; updated: string; created_by: string;
   lines: number; yours: number; kept: number; undecided: number; usd: number;
@@ -101,7 +107,8 @@ export interface Meta {
   needs_review: number; spend: number; cap: number; cap_window?: 'all' | 'month'; mock: boolean; ask_over: number; studio_dir?: string;
   store?: 'file' | 'pg';
   /** Pre-flight needs the database; can_set_ready: may this person mark assets Ready to traffic. */
-  preflight?: { enabled: boolean; storage?: string; engine?: string; can_set_ready?: boolean };
+  /** storage_check (admins): can the server write to the asset bucket? The boot check, or the last refused upload. */
+  preflight?: { enabled: boolean; storage?: string; engine?: string; can_set_ready?: boolean; storage_check?: StorageCheck | null };
   /** Hosted: the signed-in person. */
   user?: { email: string; name: string | null; admin: boolean } | null;
   /** The rounds and the active one; can_edit: may this person create rounds and set the active one (admins). */
@@ -396,7 +403,14 @@ export const studio = {
     req<Line>(`${lineUrl(batch, line)}/override`, { method: 'POST', body: JSON.stringify({ rule, reason }) }),
   compliance: (batch: string, line: string, status: ComplianceStatus, note?: string) =>
     req<Line>(`${lineUrl(batch, line)}/compliance`, { method: 'PATCH', body: JSON.stringify({ status, note }) }),
-  recheck: (batch: string, line: string) => req<Line>(`${lineUrl(batch, line)}/recheck`, { method: 'POST' }),
+  recheck: (batch: string, line: string) => req<Line & { recheck_usd?: number }>(`${lineUrl(batch, line)}/recheck`, { method: 'POST' }),
+  /** Save an edit, then re-check the new wording straight away (the model flags were found on the old one). */
+  editAndRecheck: async (batch: string, line: string, edited_text: string, onSaved?: (l: Line) => void): Promise<Line> => {
+    const saved = await studio.decide(batch, line, { decision: 'edit', edited_text });
+    onSaved?.(saved);
+    if (!saved.flags.some(onOriginal)) return saved;
+    return studio.recheck(batch, line);
+  },
 
   // Pre-flight
   pfStubs: () => req<PfStub[]>('/preflight/stubs'),
@@ -419,6 +433,8 @@ export const studio = {
   pfAgree: (flagId: string, agree: boolean, note?: string) => req<unknown>(`/preflight/flags/${enc(flagId)}/agree`, { method: 'POST', body: JSON.stringify({ agree, note }) }),
   pfOverride: (flagId: string, reason: string) => req<unknown>(`/preflight/flags/${enc(flagId)}/override`, { method: 'POST', body: JSON.stringify({ reason }) }),
   pfReady: (stub: string, ready: boolean) => req<PfStatus>(`/preflight/stubs/${enc(stub)}/ready`, { method: 'POST', body: JSON.stringify({ ready }) }),
+  pfOrphans: () => req<{ orphans: OrphanUpload[]; storage_check: StorageCheck | null }>('/preflight/orphans'),
+  removePfOrphans: () => req<{ removed: string[] }>('/preflight/orphans', { method: 'DELETE' }),
   pfAgreement: () => req<{ marked: number; agree: number; rate: number | null; by_severity: Record<string, { marked: number; agree: number }> }>('/preflight/agreement'),
 
   /** The live rules, read-only and in plain words (everyone). */

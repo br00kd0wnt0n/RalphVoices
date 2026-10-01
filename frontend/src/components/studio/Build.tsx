@@ -5,11 +5,11 @@
 // Draft, Signed off, Edited since sign-off. Behaviour and endpoints are unchanged: versions, checks, expect_latest,
 // overrides, carousel cards and TikTok versions. The draft rules are in lib/buildDraft.ts.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { studio, REGION_NAMES, type DraftVersion, type Meta, type ReadyDraft, type ReadyView, type VersionFlag } from '@/lib/studioApi';
-import { addAd, adName, moveAd, nextVisual, placeLine, removeAd, setCard, setOnImage, useInAllAds, usesOf } from '@/lib/buildDraft';
+import { onOriginal, studio, REGION_NAMES, type DraftVersion, type Meta, type ReadyDraft, type ReadyView, type VersionFlag } from '@/lib/studioApi';
+import { addAd, adName, flagsAt, moveAd, nextVisual, placeLine, removeAd, setCard, setOnImage, useInAllAds, usesOf } from '@/lib/buildDraft';
 import { cn } from '@/lib/utils';
 import { personaColor, personaEdge, tint } from '@/lib/personaColors';
-import { PersonaChip, Chip, GhostButton, Intro, Label, LineHistory, NAMING_TIP, Overrides, PINK, PinkButton, Src, chipName, sevTone, territoryName, when, type Ctx } from './ui';
+import { PersonaChip, Chip, GhostButton, Intro, Label, LineHistory, NAMING_TIP, Overrides, PINK, PinkButton, Src, chipName, flagName, sevTone, territoryName, when, type Ctx } from './ui';
 
 type RL = ReadyView['lines'][number];
 /** Where the tray places a line: a field of one ad, or the visual's image (a carousel card, 1-based). */
@@ -288,10 +288,6 @@ function Step({ n, title, hint, children }: { n: number; title: string; hint?: s
 // ---------- flags: plain labels at the slot they concern ----------
 
 /** The ads' version flags that concern a field (or a carousel card, `field#k`). */
-function flagsAt(flags: VersionFlag[], field: string): VersionFlag[] {
-  const seen = new Set<string>();
-  return flags.filter(f => f.fields[f.fields.length - 1] === field || (f.fields.length === 1 && f.fields[0] === field)).filter(f => { const k = `${f.rule}|${f.why}`; if (seen.has(k)) return false; seen.add(k); return true; });
-}
 function versionFlagWords(meta: Meta, f: VersionFlag, nameOfCode: (c?: string) => string): string {
   const fl = (id: string) => { const [base, card] = id.split('#'); return `${(meta.fields[base]?.label || base).replace(/^(Meta|TikTok) /, '').replace(/ text$/, '').toLowerCase()}${card ? ` card ${card}` : ''}`; };
   const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -320,7 +316,16 @@ function SlotBox({ meta, x, field, placeholder, active, onOpen, flags = [], name
   const [text, setText] = useState('');
   const f = meta.fields[field];
   const chars = x ? [...x.final_text].length : 0;
-  const save = async () => { try { await studio.decide(x!.line.batch, x!.line.id, { decision: 'edit', edited_text: text }); setEditing(false); onChanged(); } catch (e: any) { onError(e.message); } };
+  // Save, then re-check the new wording straight away (the model's flags were found on the old one).
+  const [rechecking, setRechecking] = useState(false);
+  const save = async () => {
+    let saved = false;
+    try {
+      setRechecking(true);
+      await studio.editAndRecheck(x!.line.batch, x!.line.id, text, () => { saved = true; setEditing(false); onChanged(); });
+      onChanged();
+    } catch (e: any) { onError(saved ? `Saved, but not re-checked: ${e.message}. Flags marked "original wording" are from the old wording.` : e.message); } finally { setRechecking(false); }
+  };
   return (
     <div className="group">
       {editing && x ? (
@@ -342,11 +347,12 @@ function SlotBox({ meta, x, field, placeholder, active, onOpen, flags = [], name
           {x && <button onClick={() => { setText(x.final_text); setEditing(true); }} className="shrink-0 rounded px-1 text-sm text-[#646A75] opacity-60 hover:text-[#ECEDEF] group-hover:opacity-100" aria-label={`Edit the wording of ${f?.label || field}`} title="Edit the wording">✎</button>}
         </div>
       )}
+      {rechecking && <div className="animate-pulse px-1.5 text-xs" style={{ color: '#D94D8F' }}>Re-checking the new wording…</div>}
       {x && f && chars > f.visible && <div className="px-1.5 text-xs text-amber-300">{chars}/{f.visible}: cut off on screen</div>}
       {(flags.length > 0 || (x && x.line.flags.some(fl => fl.severity !== 'compliance'))) && (
         <div className="px-1">
           {flags.map((fl, k) => <FlagNote key={k} meta={meta} f={fl} nameOfCode={nameOfCode} />)}
-          {x?.line.flags.filter(fl => fl.severity !== 'compliance').map(fl => <span key={fl.rule} className={cn('mr-1.5 mt-1 inline-flex rounded-full border px-2 py-0.5 text-xs', sevTone(fl.severity) === 'amber' ? 'border-amber-400/40 text-amber-200' : 'border-[#343946] text-[#A3A8B1]')} title={`${fl.label}\n${fl.rule} · ${fl.source}`}>{chipName(fl.rule)}</span>)}
+          {x?.line.flags.filter(fl => fl.severity !== 'compliance').map(fl => <span key={fl.rule} className={cn('mr-1.5 mt-1 inline-flex rounded-full border px-2 py-0.5 text-xs', sevTone(fl.severity) === 'amber' ? 'border-amber-400/40 text-amber-200' : 'border-[#343946] text-[#A3A8B1]')} title={`${fl.label}\n${fl.rule} · ${fl.source}`}>{flagName(fl)}</span>)}
         </div>
       )}
       {x && x.red.length > 0 && <RedFix meta={meta} x={x} onEdit={() => { setText(x.final_text); setEditing(true); }} onChanged={onChanged} onError={onError} />}
@@ -361,12 +367,12 @@ function RedFix({ meta, x, onEdit, onChanged, onError }: { meta: Meta; x: RL; on
   const [checking, setChecking] = useState(false);
   const canOverride = meta.can_override !== false;
   const act = async (fn: () => Promise<unknown>) => { try { await fn(); onChanged(); } catch (e: any) { onError(e.message); } };
-  const onOriginal = x.line.flags.some(f => (f.why || '').includes('on the original wording'));
+  const fromOriginal = x.line.flags.some(onOriginal);
   return (
     <div className="mt-1.5 space-y-2 rounded-lg border border-red-500/45 bg-red-500/10 p-2.5 text-sm">
       {x.red.map(fl => (
         <div key={fl.rule}>
-          <div className="flex flex-wrap items-center gap-1.5"><Chip tone="red" className="text-xs">{chipName(fl.rule)}</Chip><span className="text-[#ECEDEF]">{fl.label}</span>{fl.quote && <mark className="bg-amber-400/30 px-1 text-amber-50">{fl.quote}</mark>}</div>
+          <div className="flex flex-wrap items-center gap-1.5"><Chip tone="red" className="text-xs">{flagName(fl)}</Chip><span className="text-[#ECEDEF]">{fl.label}</span>{fl.quote && <mark className="bg-amber-400/30 px-1 text-amber-50">{fl.quote}</mark>}</div>
           <details className="text-xs text-[#A3A8B1]"><summary className="cursor-pointer">details</summary>{fl.rule} · <Src s={fl.source} />{fl.why ? ` · ${fl.why}` : ''}</details>
           {overriding === fl.rule ? (
             <div className="mt-1.5 space-y-1.5">
@@ -385,7 +391,7 @@ function RedFix({ meta, x, onEdit, onChanged, onError }: { meta: Meta; x: RL; on
           )}
         </div>
       ))}
-      {onOriginal && (
+      {fromOriginal && (
         <div className="flex flex-wrap items-center gap-2 border-t border-red-500/30 pt-2 text-red-100">
           Some flags were found on the original wording.
           <GhostButton className="px-2 py-0.5 text-sm" disabled={checking} onClick={() => act(async () => { setChecking(true); try { await studio.recheck(x.line.batch, x.line.id); } finally { setChecking(false); } })}>{checking ? 'Re-checking…' : 'Re-check this wording'}</GhostButton>
@@ -576,8 +582,8 @@ function Tray({ meta, title, lines, draft, platformOf, current, optional, onPlac
         <button className="w-full text-left text-base leading-snug text-[#F2F3F5] hover:text-white" onClick={() => onPlace(x.line.id)}>{x.final_text}</button>
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
           <span className={cn('font-mono', f && chars > f.visible ? 'text-amber-300' : 'text-[#858B96]')}>{chars}/{f?.visible}</span>
-          {x.red.map(fl => <Chip key={fl.rule} tone="red" className="text-xs" title={fl.label}>{chipName(fl.rule)}</Chip>)}
-          {x.line.flags.filter(fl => fl.severity !== 'compliance').map(fl => <Chip key={fl.rule} tone={sevTone(fl.severity)} className="text-xs" title={fl.label}>{chipName(fl.rule)}</Chip>)}
+          {x.red.map(fl => <Chip key={fl.rule} tone="red" className="text-xs" title={fl.label}>{flagName(fl)}</Chip>)}
+          {x.line.flags.filter(fl => fl.severity !== 'compliance').map(fl => <Chip key={fl.rule} tone={sevTone(fl.severity)} className="text-xs" title={fl.label}>{flagName(fl)}</Chip>)}
           {x.line.card && <span className="text-[#858B96]">sequence card {x.line.card}</span>}
           {uses.length > 0 && <span className="text-[#A3A8B1]">In: {uses.join(', ')}</span>}
         </div>

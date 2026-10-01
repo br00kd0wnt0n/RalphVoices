@@ -74,3 +74,17 @@ export function usesOf(d: DraftLike, lineId: string, platformOf: (v: DraftVersio
   }
   return out;
 }
+
+/**
+ * The version checks' flags shown at one slot (a field, or a carousel card `field#k`): the flags that end on it, once
+ * per rule. A per-visual slot (on-image text) collects flags from every ad on the visual, and the same clash found in
+ * two ads, worded differently by the model, used to show twice (production test, 1 Oct). A flag about another
+ * field or code (`other`) stays separate per target; where one ad's is red and another's amber, the red one shows.
+ */
+export function flagsAt<F extends { rule: string; fields: string[]; other?: string; severity?: string }>(flags: F[], field: string): F[] {
+  const seen = new Set<string>();
+  return flags
+    .filter(f => f.fields[f.fields.length - 1] === field || (f.fields.length === 1 && f.fields[0] === field))
+    .sort((a, b) => Number(b.severity === 'red') - Number(a.severity === 'red')) // red in one ad wins over amber in another
+    .filter(f => { const k = `${f.rule}|${f.other || ''}`; if (seen.has(k)) return false; seen.add(k); return true; });
+}

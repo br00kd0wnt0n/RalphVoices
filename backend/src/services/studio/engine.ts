@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import OpenAI from 'openai';
 import { withRetry } from '../../utils/retry.js';
+import { figureKey } from '../../utils/figures.js';
 import { probabilityYes } from '../../utils/probes.js';
 import { mockClient } from './mock.js';
 import { claudeWrite, isClaude } from './claude.js';
@@ -90,6 +91,7 @@ export interface Flag {
   by: Array<'rule' | 'model' | 'logprob'>;
   p?: number;             // mean P(Yes) over the two wordings, for logprob checks
   base?: Severity;        // severity from a deterministic rule match, if any
+  original?: boolean;     // a model flag found on the wording before an edit, until the edit is re-checked
 }
 export interface Line {
   id: string;
@@ -176,7 +178,8 @@ export interface Batch {
   created_by?: string;   // who started the run (local: the name the page asks for; hosted: the signed-in user)
   updated?: string;
   lines: Line[];
-  dropped: Array<{ text: string; cell: string; dup_of: string; similarity: number }>;
+  /** Lines Studio wrote but never showed: near-duplicates (dup_of, similarity), or ones that broke a hard rule or ran past a short field's visible length (reason). */
+  dropped: Array<{ text: string; cell: string; dup_of?: string; similarity?: number; reason?: string; rule?: string; field?: string }>;
   stats: RunStats;
 }
 export interface RunStats {
@@ -228,6 +231,8 @@ export interface RuleItem {
   what_to_do?: string;     // the fix in plain words, shown with the flag (rules v2.7+)
   /** What the rule is checked on: copy ('text', the default), images and frames only ('visual', B2's audit), or 'both'. */
   applies_to?: 'text' | 'visual' | 'both';
+  /** Lines that don't break the rule, given to the model check and the yes/no wordings as examples (rules v2.13+). */
+  not_examples?: string[];
 }
 export interface Fact {
   id: string; text: string; numbers: string[]; personas?: string[]; source: string;
@@ -782,7 +787,36 @@ export async function tasteFor(b: Pick<Brief, 'round'>): Promise<TasteExample[]>
 
 // ---------- writer prompt ----------
 
-function writerSystem(b: Brief, r: Rules, own: string[] = [], allTaste: TasteExample[] = []): string {
+/** Short fields whose visible length is a hard limit for written lines: a headline or hook cut off in the feed doesn't work. */
+export const isShortField = (f: string) => /headline|hook/.test(f);
+
+/**
+ * A written line Studio throws away before showing it (production test, 1 Oct: a red direct-pay line and 33-character
+ * headlines reached Review): one that breaks a hard rule outright (a deterministic red: direct pay without the
+ * participating caveat, "pays for itself", a figure not in the facts…), or a headline or hook past its visible length.
+ * The writer is told both (writerSystem); this is the backstop. The creative director's own lines are never screened.
+ */
+export function screenWritten(text: string, cell: Pick<Cell, 'field' | 'structure'>, r: Rules, b: Pick<Brief, 'persona' | 'banned_words'>): { reason: string; rule?: string } | null {
+  const red = deterministicFlags({ text, field: cell.field, structure: cell.structure, persona: b.persona }, r, b).flags.find(f => f.severity === 'compliance');
+  if (red) return { reason: `broke a client rule: ${red.label}`, rule: red.rule };
+  const f = r.fields[cell.field];
+  if (f && isShortField(cell.field) && [...text].length > f.visible) return { reason: `over the ${f.visible} characters that show (${[...text].length})`, rule: 'LIMIT_VISIBLE' };
+  return null;
+}
+
+/** "2 lines dropped: broke a client rule (1), over the visible length (1)", or '' when none were. */
+export function droppedSummary(dropped: Batch['dropped']): string {
+  const broke = dropped.filter(d => d.reason);
+  if (!broke.length) return '';
+  const rule = broke.filter(d => d.rule !== 'LIMIT_VISIBLE').length, long = broke.length - rule;
+  const parts = [rule ? `broke a client rule (${rule})` : '', long ? `over the visible length (${long})` : ''].filter(Boolean);
+  return `${broke.length} line${broke.length === 1 ? '' : 's'} dropped before you saw ${broke.length === 1 ? 'it' : 'them'}: ${parts.join(', ')}`;
+}
+
+/** The client's hard rules, given to the writer as MUST: the compliance items a line can break outright (red), not structure checks. */
+const mustRules = (r: Rules) => r.compliance.filter(c => (c.severity || 'compliance') === 'compliance' && c.check !== 'structure' && c.check !== 'verbatim' && !c.status);
+
+export function writerSystem(b: Brief, r: Rules, own: string[] = [], allTaste: TasteExample[] = []): string {
   const pr = r.personas[b.persona];
   const t = r.territories[b.territory];
   const seed = personaSeed(b.persona);
@@ -807,9 +841,14 @@ ${pr.verbatims.map(v => `- "${v.text}"`).join('\n')}
 ${r.casting?.writer_note ? `PETS: ${r.casting.writer_note}\n` : ''}
 TERRITORY: ${t.name} ${t.premise}
 ${regionBlock(regionOf({}, b))}
+MUST (a line that breaks one of these is thrown away before anyone sees it):
+${mustRules(r).map(c => `- ${c.rule}${c.what_to_do ? ` ${c.what_to_do}` : ''}`).join('\n')}
+- Every primary text and caption names Trupanion or says medical insurance for pets (or for cats and dogs). The headline or on-image text doesn't count for this.
+- ${b.fields.filter(isShortField).length ? `Headlines and hooks fit in what shows on screen: ${b.fields.filter(isShortField).map(f => `${r.fields[f].label} ${r.fields[f].visible} characters`).join(', ')}, counting spaces and punctuation. Longer ones are thrown away.` : 'Every line fits in what shows on screen for its field.'}
+- Figures only from the facts list below, exactly as written; never invent or round one.
+
 RULES THAT BIND EVERY LINE:
-${modelRules.map(c => `- ${c.rule}`).join('\n')}
-- Primary text and captions must make clear what is being sold: Trupanion, medical insurance for cats and dogs. Headlines and hooks can lean on the primary text.
+${modelRules.filter(c => !mustRules(r).includes(c)).map(c => `- ${c.rule}`).join('\n')}
 - Only use a number if it is in this facts list, exactly as written; never invent a figure. For the stat structure, prefer Trupanion's own facts:
 ${facts.map(f => `  - ${f.own ? '[Trupanion] ' : f.category ? '[category survey, needs citation] ' : f.illustrative ? '[illustrative] ' : ''}${f.text}${f.check_hint ? ` (${f.check_hint})` : ''}`).join('\n')}
 
@@ -1244,7 +1283,9 @@ export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: 
         let best = 0, bestId = '';
         for (const p of pool) { const s = cosine(embs[i], p.emb); if (s > best) { best = s; bestId = p.id; } }
         kept.forEach(k => { const s = cosine(embs[i], k.emb); if (s > best) { best = s; bestId = k.cell.cell; } });
-        if (best >= DUP) batch.dropped.push({ text: w.text, cell: w.cell.cell, dup_of: bestId, similarity: round(best) });
+        const broke = screenWritten(w.text, w.cell, r, b);
+        if (broke) batch.dropped.push({ text: w.text, cell: w.cell.cell, field: w.cell.field, ...broke });
+        else if (best >= DUP) batch.dropped.push({ text: w.text, cell: w.cell.cell, dup_of: bestId, similarity: round(best) });
         else if ((keptBy[w.cell.field] ?? 0) < (quota[w.cell.field] || 0)) { kept.push({ ...w, emb: embs[i] }); keptBy[w.cell.field]++; }
       });
     }
@@ -1256,7 +1297,7 @@ export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: 
     });
     await claimLines(batch, genLines, embStore, opts.user);
     mine.push(...genLines);
-    batch.stats.near_duplicates_removed = batch.dropped.length;
+    batch.stats.near_duplicates_removed = batch.dropped.filter(d => d.dup_of).length;
   }
   // 2b. Carousel card sequences: one call; each card a line with its card number and sequence.
   if (!opts.ownOnly && seqField) {
@@ -1286,7 +1327,8 @@ export async function generate(b: Brief, api: Api, emit: Emit = () => {}, opts: 
   await getStore().saveEmbeddings(id, embStore); // after the lines exist (the database links embeddings to lines)
   const fresh = mine;
   for (const l of fresh.filter(x => x.model !== 'human')) emit({ type: 'line', line: l });
-  emit({ type: 'status', message: `${fresh.length} lines ready${batch.dropped.length ? ` (${batch.dropped.length} near-duplicates removed)` : ''}. Checking…` });
+  const dups = batch.dropped.filter(d => d.dup_of).length, broke = droppedSummary(batch.dropped);
+  emit({ type: 'status', message: `${fresh.length} lines ready${dups ? ` (${dups} near-duplicates removed)` : ''}${broke ? `. ${broke}` : ''}. Checking…` });
 
   if (opts.check !== false) await checkBatch(batch, api, emit, fresh.map(l => l.id));
   const prevTotal = existing ? (batch.stats.timings_ms.total || 0) : 0;
@@ -1327,6 +1369,8 @@ export async function moreLikeThis(batchId: string, lineId: string, guidance: st
   const embStore = await getStore().getEmbeddings(batchId);
   const added: Line[] = [];
   written.forEach((w, i) => {
+    const broke = screenWritten(w.text, w.cell, r, batch.brief);
+    if (broke) { batch.dropped.push({ text: w.text, cell: w.cell.cell, field: w.cell.field, ...broke }); return; }
     const best = Math.max(0, ...Object.values(embStore).map(e => cosine(e, embs[i])));
     if (best >= DUP) { batch.dropped.push({ text: w.text, cell: w.cell.cell, dup_of: lineId, similarity: round(best) }); return; }
     const l: Line = { ...newLine(batch.brief, r, batchId, 0, w.cell, w.text, batch.brief.model), id: tmpId(batchId), parent: lineId, guidance };
@@ -1351,11 +1395,6 @@ export async function moreLikeThis(batchId: string, lineId: string, guidance: st
 const norm = (s: string) => s.toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9$%'. ]+/g, ' ').replace(/\s+/g, ' ').trim();
 function words(s: string) { return s.toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9' ]+/g, ' ').split(/\s+/).filter(Boolean); }
 
-function figureKey(raw: string): string {
-  let s = raw.toLowerCase().replace(/\s+/g, '').replace(/million/, 'm').replace(/billion/, 'b');
-  s = s.replace(/^\$/, '').replace(/,/g, '');
-  return s;
-}
 export function figuresIn(text: string): string[] {
   const t = text.replace(/24\/7/g, ' ');
   return [...t.matchAll(/\$?\d[\d,]*(?:\.\d+)?\s?(?:%|x\b|k\b|m\b|million\b|billion\b|b\b)?/gi)].map(m => m[0].trim()).filter(Boolean);
@@ -1471,6 +1510,11 @@ export function deterministicFlags(l: { text: string; field: string; structure: 
 
 // ---------- checks: model ----------
 
+// A line that says what vet care can cost isn't claiming anything about the insurance's value: a live check flagged
+// "Healthy today. $5,000 emergency surgery tomorrow." as "pays for itself" (production test, 1 Oct).
+const COST_IS_NOT_VALUE = 'Saying what vet care can cost (a bill, the price of a surgery) is not, on its own, a claim that the insurance pays for itself, pays you back or saves more than it costs.';
+const notExamples = (i: RuleItem) => (i.not_examples?.length ? ` Not a breach, for example: ${i.not_examples.map(x => `"${x}"`).join('; ')}.` : '');
+
 function checkerSystem(r: Rules, persona: string): { system: string; ids: Set<string> } {
   const pr = r.personas[persona];
   const items = [
@@ -1480,8 +1524,10 @@ function checkerSystem(r: Rules, persona: string): { system: string; ids: Set<st
   ];
   const system = `You check one line of social ad copy for Trupanion (medical insurance for cats and dogs) against fixed rules for one audience: ${pr.name}. Judge only the words of the line as written, in the field it will appear in. A rule is hit only when the line itself does what the rule forbids; don't flag a line for touching a topic. For every hit, quote the exact words from the line it rests on.
 
+${COST_IS_NOT_VALUE}
+
 RULES (id: rule):
-${items.map(i => `${i.id}: ${i.rule}`).join('\n')}
+${items.map(i => `${i.id}: ${i.rule}${notExamples(i)}`).join('\n')}
 
 CLARITY:
 glance: ${r.clarity.find(c => c.id === 'CL_GLANCE')?.rule}
@@ -1541,8 +1587,8 @@ async function probeCheck(line: Line, r: Rules, api: Api, model: string) {
     const ps = await Promise.all(it.wordings!.map(async w => {
       const res = await api.chat({
         stage: 'probe', model, max_tokens: 1, logprobs: true,
-        system: 'You check ad copy for Trupanion, a medical insurance for cats and dogs, against one compliance question. Judge only the words of the line. Answer with exactly one word: Yes or No.',
-        user: `LINE (${f.label}): "${line.text}"\n\n${w} Answer Yes or No.`,
+        system: `You check ad copy for Trupanion, a medical insurance for cats and dogs, against one compliance question. Judge only the words of the line. ${COST_IS_NOT_VALUE} Answer with exactly one word: Yes or No.`,
+        user: `LINE (${f.label}): "${line.text}"\n\n${it.not_examples?.length ? `Lines like these are a No: ${it.not_examples.map(x => `"${x}"`).join('; ')}.\n` : ''}${w} Answer Yes or No.`,
       });
       return probabilityYes(res.top);
     }));
@@ -1826,6 +1872,14 @@ async function putTaste(l: Line) {
  * deciding on the same line are applied one after the other and the history chains (each `before` is the previous
  * `after`). Updates the line's taste example.
  */
+/** What re-checking one line's final wording costs (the model check, the yes/no wordings and the objection). */
+export async function recheckEstimate(batchId: string, lineId: string): Promise<number> {
+  const b = await loadBatch(batchId);
+  const l = b.lines.find(x => x.id === lineId);
+  if (!l) throw new Error(`No line ${lineId}`);
+  return estimate({ ...b.brief, own_lines: [{ text: finalText(l), field: l.field }] }, { ownOnly: true }).usd;
+}
+
 export async function setDecision(batchId: string, lineId: string, patch: { decision?: Line['decision']; edited_text?: string; note?: string; source?: string }, user?: string): Promise<Line> {
   return runLock(batchId, async () => {
     const batch = await loadBatch(batchId);
@@ -1852,7 +1906,7 @@ export async function setDecision(batchId: string, lineId: string, patch: { deci
       const edited = isEdited(l);
       for (const f of modelFlags) {
         const why = (f.why || '').replace(ORIGINAL, '');
-        addFlag(l.flags, { ...f, why: edited ? `${why}${ORIGINAL}`.trim() : why || undefined });
+        addFlag(l.flags, { ...f, why: edited ? `${why}${ORIGINAL}`.trim() : why || undefined, original: edited || undefined });
       }
       sortFlags(l);
     }

@@ -24,13 +24,27 @@ import { complianceFor, platformOf, signoffOnImage, signoffVersions, type Signed
 import { getRounds, labelOf, roundOf, roundView, testOnly } from './rounds.js';
 import { SIZES, detectSize, expectedSizes, parseSize, roleOf, sizeOfRole, slotOf, type Size } from './sizes.js';
 import { DEFAULT_REGION, parseCode, visualKey, type Region } from '../../utils/namingCode.js';
-import { downloadPrivateObject, getPrivateObject, getPrivateObjectStream, isR2Enabled, putPrivateObject } from '../r2.js';
+import { deletePrivateObject, downloadPrivateObject, getPrivateObject, getPrivateObjectStream, isR2Enabled, putPrivateObject } from '../r2.js';
 import { FatalError } from '../audit/api.js';
 import type { AssetKind, AuditEngine, AuditFlag, AuditResult, SignedCopy } from './preflightEngine.js';
 import { COPY_MATCH_SOURCE, REWORD_MIN, bestMatch, copyMatch, normalise } from '../audit/copyMatch.js';
 import { signedOffCopy } from './preflightB2.js';
 
 type Queryable = Pick<pg.Pool, 'query'>;
+
+/** Where Pre-flight files go when storage is R2: the private bucket (r2.ts), or a test's stand-in. */
+export interface ObjectStore {
+  put(key: string, body: Buffer | { path: string; size: number }, contentType: string): Promise<void>;
+  del(key: string): Promise<void>;
+}
+export interface StorageCheck { ok: boolean; bucket?: string; error?: string; at: string }
+/** Storage refused a file: nothing of the upload is kept. 503: it's the server's storage, not the person's files. */
+export class StorageError extends Error {
+  status = 503;
+  constructor(public detail: string, bucket?: string) {
+    super(`Couldn't store the files (storage refused: ${detail}${/denied|forbidden|403/i.test(detail) ? `; check the R2 token can write to ${bucket || 'the Pre-flight bucket'}` : ''}). Nothing was saved.`);
+  }
+}
 
 export const DB_FILE_CAP = 25 * 1024 * 1024;     // local/dev only (R2 off)
 /** Bump when the audit or copy-match logic changes what a stored audit would say (2: on-asset copy match per stub; 3: the disclaimer on the last screen). */
@@ -239,7 +253,11 @@ export function staleness(a: { status: string; rules_version?: string | null; re
 }
 
 export class Preflight {
-  constructor(private db: Queryable, private engine: AuditEngine, private opts: { storage?: 'r2' | 'db' } = {}) {}
+  /** `objects`: where files go when storage is R2 (the private bucket; a test passes its own). */
+  constructor(private db: Queryable, private engine: AuditEngine, private opts: { storage?: 'r2' | 'db'; objects?: ObjectStore } = {}) {}
+  private get objects(): ObjectStore { return this.opts.objects || { put: putPrivateObject, del: deletePrivateObject }; }
+  /** The last storage check (a put and delete at boot, or after a refused upload), for admins on the Rules page. */
+  storageCheck: StorageCheck | null = null;
   get storage(): 'r2' | 'db' {
     if (this.opts.storage) return this.opts.storage;
     const s = preflightStorage();
@@ -344,10 +362,19 @@ export class Preflight {
     const big = files.find(f => sizeOf(f) > cap);
     if (big) throw new Error(`${big.filename} is ${fmtMb(sizeOf(big))}; the limit is ${fmtMb(cap)} per file${this.storage === 'db' ? ' when files are kept in the database (local; production uses R2)' : ''}`);
     const uploadId = id('up');
-    await this.db.query(
-      `INSERT INTO studio_asset_uploads (id, stub, persona, territory, signoff_id, kind, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [uploadId, stub, signoff.persona, signoff.territory, signoff.id, kind, user ?? null]);
-    for (const g of groups) for (let i = 0; i < g.files.length; i++) await this.putFile(uploadId, stub, slotOf(g.size) * 100 + i, g.files[i], roleOf(g.size));
+    // Files first, then the rows: an upload that storage refused used to leave a row with no files (production, 1 Oct).
+    // If storing any file fails, the ones already stored are removed and nothing is written.
+    const placed = groups.flatMap(g => g.files.map((f, i) => ({ f, position: slotOf(g.size) * 100 + i, role: roleOf(g.size) })));
+    const keys = await this.storeObjects(uploadId, stub, placed);
+    try {
+      await this.db.query(
+        `INSERT INTO studio_asset_uploads (id, stub, persona, territory, signoff_id, kind, uploaded_by) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [uploadId, stub, signoff.persona, signoff.territory, signoff.id, kind, user ?? null]);
+      for (const p of placed) await this.putFileRow(uploadId, p.position, p.f, p.role, keys.get(p.position) ?? null);
+    } catch (err) {
+      await this.discardUpload(uploadId, [...keys.values()]);
+      throw err;
+    }
     for (const x of stubs) {
       await this.db.query(`INSERT INTO studio_upload_stubs (upload_id, stub) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [uploadId, x]);
       // A new upload replaces what was ready: each stub it serves is open until it's reviewed again.
@@ -363,10 +390,68 @@ export class Preflight {
     return { upload_id: uploadId, kind, storage: this.storage, stubs, format_notes: [...stubs.map(x => formatNote(x, kind)).filter(Boolean) as string[], ...notes], sizes: groups.map(g => ({ size: g.size, files: g.files.map(f => f.filename) })), estimate };
   }
 
+  private objectKey(uploadId: string, stub: string, position: number, f: UploadFile, role: string) {
+    return `studio/preflight/${safe(stub)}/${uploadId}/${role === 'frame' ? 'frames/' : ''}${position}-${safe(f.filename)}`;
+  }
+
+  /** Store an upload's files in R2 (nothing to do when they're kept in Postgres); all or none. Position → key. */
+  private async storeObjects(uploadId: string, stub: string, placed: Array<{ f: UploadFile; position: number; role: string }>): Promise<Map<number, string>> {
+    const keys = new Map<number, string>();
+    if (this.storage !== 'r2') return keys;
+    try {
+      for (const p of placed) {
+        const key = this.objectKey(uploadId, stub, p.position, p.f, p.role);
+        await this.objects.put(key, p.f.buffer ?? { path: p.f.path!, size: sizeOf(p.f) }, p.f.contentType);
+        keys.set(p.position, key);
+      }
+    } catch (err: any) {
+      await this.discardUpload(null, [...keys.values()]);
+      const detail = String(err?.message || err?.name || err);
+      this.storageCheck = { ok: false, bucket: process.env.STUDIO_R2_BUCKET, error: detail, at: new Date().toISOString() };
+      throw new StorageError(detail, process.env.STUDIO_R2_BUCKET);
+    }
+    return keys;
+  }
+
+  /** Undo a half-made upload: its stored objects (best effort) and any rows. */
+  private async discardUpload(uploadId: string | null, keys: string[]) {
+    for (const k of keys) await this.objects.del(k).catch(e => console.warn(`[studio] couldn't remove ${k} after a failed upload: ${e?.message || e}`));
+    if (!uploadId) return;
+    await this.db.query(`DELETE FROM studio_upload_files WHERE upload_id = $1`, [uploadId]).catch(() => {});
+    await this.db.query(`DELETE FROM studio_asset_uploads WHERE id = $1`, [uploadId]).catch(() => {});
+  }
+
+  /**
+   * Uploads with no files (left by a refused upload before uploads stored files first), older than ten minutes and
+   * never audited. Admins see the count on Rules and can remove them; every view already ignores them.
+   */
+  async orphanUploads(): Promise<Array<{ id: string; stub: string; uploaded_by: string | null; uploaded_at: string }>> {
+    return (await this.db.query(
+      `SELECT u.id, u.stub, u.uploaded_by, u.uploaded_at FROM studio_asset_uploads u
+        WHERE NOT EXISTS (SELECT 1 FROM studio_upload_files f WHERE f.upload_id = u.id)
+          AND NOT EXISTS (SELECT 1 FROM studio_audits a WHERE a.upload_id = u.id)
+          AND u.uploaded_at < now() - interval '10 minutes'
+        ORDER BY u.uploaded_at`)).rows.map(r => ({ ...r, uploaded_at: new Date(r.uploaded_at).toISOString() }));
+  }
+  async removeOrphanUploads(user?: string): Promise<{ removed: string[] }> {
+    const ids = (await this.orphanUploads()).map(o => o.id);
+    for (const x of ids) {
+      await this.db.query(`DELETE FROM studio_upload_stubs WHERE upload_id = $1`, [x]);
+      await this.db.query(`DELETE FROM studio_asset_uploads WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM studio_upload_files f WHERE f.upload_id = $1)`, [x]);
+    }
+    if (ids.length) await S.getStore().recordEdit({ line_id: 'preflight:orphans', batch_id: 'preflight', before: { uploads: ids }, after: { removed: ids }, by: user || 'unknown', at: new Date().toISOString() });
+    return { removed: ids };
+  }
+
+  /** A frame or other file added to an existing upload (the audit's thumbnails): stored, then its row. */
   private async putFile(uploadId: string, stub: string, position: number, f: UploadFile, role: string) {
-    const storage = this.storage;
-    const key = storage === 'r2' ? `studio/preflight/${safe(stub)}/${uploadId}/${role === 'frame' ? 'frames/' : ''}${position}-${safe(f.filename)}` : null;
-    if (storage === 'r2') await putPrivateObject(key!, f.buffer ?? { path: f.path!, size: sizeOf(f) }, f.contentType);
+    const key = this.storage === 'r2' ? this.objectKey(uploadId, stub, position, f, role) : null;
+    if (key) await this.objects.put(key, f.buffer ?? { path: f.path!, size: sizeOf(f) }, f.contentType);
+    await this.putFileRow(uploadId, position, f, role, key);
+  }
+
+  private async putFileRow(uploadId: string, position: number, f: UploadFile, role: string, key: string | null) {
+    const storage = key ? 'r2' : 'db';
     await this.db.query(
       `INSERT INTO studio_upload_files (upload_id, position, filename, content_type, size, storage, r2_key, data, role)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -412,7 +497,9 @@ export class Preflight {
   /** The latest upload serving a stub (its own, or a shared visual). */
   private async latestUpload(stub: string): Promise<StubRow['upload']> {
     const u = (await this.db.query(
-      `SELECT u.* FROM studio_asset_uploads u JOIN studio_upload_stubs us ON us.upload_id = u.id WHERE us.stub = $1 ORDER BY u.uploaded_at DESC LIMIT 1`, [stub])).rows[0];
+      // An upload with no files (storage refused it) is never the current one.
+      `SELECT u.* FROM studio_asset_uploads u JOIN studio_upload_stubs us ON us.upload_id = u.id WHERE us.stub = $1
+         AND EXISTS (SELECT 1 FROM studio_upload_files f WHERE f.upload_id = u.id) ORDER BY u.uploaded_at DESC LIMIT 1`, [stub])).rows[0];
     if (!u) return null;
     const files = (await this.db.query(`SELECT position, filename, content_type, size, role FROM studio_upload_files WHERE upload_id = $1 AND role LIKE 'asset%' ORDER BY position`, [u.id])).rows
       .map(({ role, ...f }) => ({ ...f, size: Number(f.size), aspect: sizeOfRole(role) }));
@@ -631,7 +718,8 @@ export class Preflight {
     flags.sort((x, y) => (x.check === 'copy_match' ? -1 : 0) - (y.check === 'copy_match' ? -1 : 0) || sevRank[x.severity] - sevRank[y.severity] || x.position - y.position);
     const history = (await this.db.query(
       `SELECT u.id, u.kind, u.uploaded_by, u.uploaded_at, (SELECT count(*) FROM studio_upload_files f WHERE f.upload_id = u.id AND f.role = 'asset') AS files
-         FROM studio_asset_uploads u JOIN studio_upload_stubs us ON us.upload_id = u.id WHERE us.stub = $1 ORDER BY u.uploaded_at DESC`, [stub])).rows.map(x => ({ ...x, files: Number(x.files), uploaded_at: new Date(x.uploaded_at).toISOString() }));
+         FROM studio_asset_uploads u JOIN studio_upload_stubs us ON us.upload_id = u.id WHERE us.stub = $1
+          AND EXISTS (SELECT 1 FROM studio_upload_files f WHERE f.upload_id = u.id) ORDER BY u.uploaded_at DESC`, [stub])).rows.map(x => ({ ...x, files: Number(x.files), uploaded_at: new Date(x.uploaded_at).toISOString() }));
     const result = a?.result ? { ...a.result, copy_match: a.result.copy_match_by_stub?.[stub] ?? a.result.report?.copy_match } : null;
     return {
       stub, persona: signoff.persona, territory: signoff.territory, region: signoff.region || DEFAULT_REGION, visual_key: visualKey(stub), signoff_id: signoff.id, copy, upload, history,

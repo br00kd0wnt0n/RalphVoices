@@ -178,7 +178,7 @@ export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: Vie
       <div className="space-y-2">
         <div className="flex flex-wrap items-center gap-2">
           <span className="w-16 text-xs font-semibold uppercase tracking-wider text-[#646A75]">Status</span>
-          {FILTERS.map(([k, l]) => <GhostButton key={k} active={filter === k} onClick={() => setFilter(k)} className="text-base">{l} ({count(k)})</GhostButton>)}
+          {FILTERS.map(([k, l]) => <GhostButton key={k} active={filter === k} onClick={() => setFilter(k)} className="text-base">{l} ({stubs ? count(k) : '…'})</GhostButton>)}
           {filter === (producer ? 'awaiting' : 'needs') && <span className="text-xs text-[#646A75]">your default</span>}
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -196,6 +196,7 @@ export function Assets({ meta, view, setView, onBuild }: { meta: Meta; view: Vie
         </div>
       </div>
 
+      {!stubs && !error && <div className="text-base text-[#858B96]">Loading the month’s codes…</div>}
       {stubs && !scoped.length && (
         <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#272B34] bg-[#16181D] p-5 text-base text-[#A3A8B1]">
           <span className="mr-auto">{view.persona !== 'all' || view.territory !== 'all' || view.region !== 'all' || format !== 'all' ? 'Nothing signed off for this filter.' : 'Nothing signed off yet this month.'} Each code gets its asset here once it’s signed off.</span>

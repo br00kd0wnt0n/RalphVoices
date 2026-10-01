@@ -212,7 +212,10 @@
         "Does the line say it pays for itself?",
         "Does the line say it saves more than it costs?"
       ],
-      "source": "LEGAL §4"
+      "source": "LEGAL §4",
+      "not_examples": [
+        "Healthy today. $5,000 emergency surgery tomorrow."
+      ]
     },
     {
       "id": "COMP_CHEAP",

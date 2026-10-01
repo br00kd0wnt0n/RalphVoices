@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { randomUUID } from 'crypto';
 
 const R2_ENABLED = process.env.ENABLE_R2_STORAGE === 'true';
@@ -108,16 +108,29 @@ function privateBucket(): string {
   return bucket;
 }
 
-/** Can the R2 keys reach the private bucket? For a startup warning; never throws. */
-export async function checkPrivateBucket(): Promise<{ ok: boolean; error?: string }> {
+/**
+ * Can the R2 keys write to the private bucket? A tiny put and delete: HeadBucket alone passed in production while
+ * every PutObject was refused (a token scoped to another bucket, 1 Oct). For the boot log and the admins' Rules page.
+ */
+export async function probePrivateBucket(): Promise<{ ok: boolean; bucket?: string; error?: string }> {
+  const bucket = process.env.STUDIO_R2_BUCKET;
   try {
     const s3 = getClient();
-    if (!s3) return { ok: false, error: 'R2 is not configured' };
-    await s3.send(new HeadBucketCommand({ Bucket: privateBucket() }));
-    return { ok: true };
+    if (!s3) return { ok: false, bucket, error: 'R2 is not configured' };
+    const key = `studio/_probe/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`;
+    await s3.send(new PutObjectCommand({ Bucket: privateBucket(), Key: key, Body: 'ok', ContentType: 'text/plain' }));
+    await s3.send(new DeleteObjectCommand({ Bucket: privateBucket(), Key: key }));
+    return { ok: true, bucket };
   } catch (err: any) {
-    return { ok: false, error: String(err?.name || err?.message || err) };
+    return { ok: false, bucket, error: String(err?.message || err?.name || err) };
   }
+}
+
+/** Remove a Pre-flight file (an upload that couldn't be completed). */
+export async function deletePrivateObject(key: string): Promise<void> {
+  const s3 = getClient();
+  if (!s3) throw new Error('R2 storage not configured.');
+  await s3.send(new DeleteObjectCommand({ Bucket: privateBucket(), Key: key }));
 }
 
 /** Store a Pre-flight file: a Buffer, or a file on disk (streamed, never read into memory). */

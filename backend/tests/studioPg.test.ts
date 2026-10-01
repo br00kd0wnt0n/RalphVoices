@@ -1133,3 +1133,55 @@ test('sizes: a static in 3 sizes, one missing its on-image text → a flag on th
   assert.ok(rep.flags.filter((f: any) => f.rule === 'COPY_CARD_ORDER').every((f: any) => f.frame?.position >= 100 && f.frame?.position < 200), 'the flags point at the 4:5 cards');
   await store.putRules('example-1', JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8')), { activate: true, by: 'test' }).catch(() => {});
 });
+
+// ---------- storage refused an upload (production, 1 Oct: "Access Denied" left an upload row with no files) ----------
+test('upload: storage refusing a file keeps nothing (rows or objects) and says why (503); orphans are ignored and an admin can remove them', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const run = await keptRun(R, api, ['Calm at the counter.']);
+  const ads = adsOf([run.prims[0]], run.head);
+  const { signoff } = await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: ads, expectation: { codes: [await leadOf(R, ads)], reason: 'x' } }, 'nick');
+  const code = signoff.versions[0].code;
+  const { Preflight, StorageError } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const db = (store as any).db;
+  const png = (name: string) => ({ buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]), filename: name, contentType: 'image/png' });
+  const count = async (sql: string) => Number((await db.query(sql)).rows[0].n);
+
+  // A bucket that takes the first file, then refuses: the first is removed again, and no row is written.
+  const objects = new Map<string, number>();
+  const refusing = {
+    put: async (key: string) => { if (objects.size >= 1) throw Object.assign(new Error('Access Denied'), { name: 'AccessDenied' }); objects.set(key, 1); },
+    del: async (key: string) => { objects.delete(key); },
+  };
+  process.env.STUDIO_R2_BUCKET = 'voices-private';
+  try {
+    const pf = new Preflight(db, mockEngine, { storage: 'r2', objects: refusing });
+    await assert.rejects(pf.upload(code, [png('a-1x1.png'), png('a-4x5.png'), png('a-9x16.png')], 'brook', [], ['1:1', '4:5', '9:16']), (e: any) => {
+      assert.ok(e instanceof StorageError);
+      assert.equal(e.status, 503);
+      assert.match(e.message, /Couldn't store the files \(storage refused: Access Denied; check the R2 token can write to voices-private\)\. Nothing was saved\./);
+      return true;
+    });
+    assert.equal(objects.size, 0, 'the file already stored was removed');
+    assert.equal(await count(`SELECT count(*) n FROM studio_asset_uploads`), 0, 'no upload row');
+    assert.equal(pf.storageCheck?.ok, false, 'admins see the refusal on Rules');
+    assert.match(pf.storageCheck!.error!, /Access Denied/);
+
+    // With a bucket that takes them: three objects, three file rows, one upload.
+    const ok = new Map<string, number>();
+    const pf2 = new Preflight(db, mockEngine, { storage: 'r2', objects: { put: async k => { ok.set(k, 1); }, del: async k => { ok.delete(k); } } });
+    const up = await pf2.upload(code, [png('a-1x1.png'), png('a-4x5.png'), png('a-9x16.png')], 'brook', [], ['1:1', '4:5', '9:16']);
+    assert.equal(ok.size, 3);
+    assert.equal(await count(`SELECT count(*) n FROM studio_upload_files WHERE upload_id = '${up.upload_id}' AND storage = 'r2' AND r2_key IS NOT NULL`), 3);
+
+    // An orphan left by the old order (a row, no files, an hour old) is never the code's current upload, and an admin can remove it.
+    await db.query(`INSERT INTO studio_asset_uploads (id, stub, persona, territory, signoff_id, kind, uploaded_by, uploaded_at) VALUES ('up_orphan', $1, 'OWN', 'OWN_CALM', $2, 'static', 'brook', now() - interval '1 hour')`, [code, signoff.id]);
+    await db.query(`INSERT INTO studio_upload_stubs (upload_id, stub) VALUES ('up_orphan', $1)`, [code]);
+    await db.query(`UPDATE studio_asset_uploads SET uploaded_at = now() - interval '2 hours' WHERE id = $1`, [up.upload_id]);
+    assert.equal((await pf2.report(code)).upload?.id, up.upload_id, 'the newer, empty upload is ignored');
+    assert.deepEqual((await pf2.orphanUploads()).map(o => o.id), ['up_orphan']);
+    assert.deepEqual((await pf2.removeOrphanUploads('brook')).removed, ['up_orphan']);
+    assert.equal(await count(`SELECT count(*) n FROM studio_asset_uploads WHERE id = 'up_orphan'`), 0);
+    assert.equal(await count(`SELECT count(*) n FROM studio_asset_uploads WHERE id = '${up.upload_id}'`), 1, 'a real upload is never an orphan');
+  } finally { delete process.env.STUDIO_R2_BUCKET; }
+});
