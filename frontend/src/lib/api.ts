@@ -1,3 +1,5 @@
+import { getToken } from '@/lib/tokenStore';
+
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
 class ApiError extends Error {
@@ -8,7 +10,7 @@ class ApiError extends Error {
 }
 
 /**
- * Returns auth headers for a request. If a JWT is present in localStorage,
+ * Returns auth headers for a request. If a JWT is stored (tokenStore.ts),
  * adds `Authorization: Bearer <token>`. Otherwise returns an empty object so
  * unauthenticated endpoints (login, register) still work.
  *
@@ -17,7 +19,7 @@ class ApiError extends Error {
  * call `fetch` directly — they need the same auth treatment.
  */
 export function authHeaders(): Record<string, string> {
-  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('token') : null;
+  const token = getToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 

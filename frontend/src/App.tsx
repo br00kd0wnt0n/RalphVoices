@@ -13,6 +13,8 @@ import { Login } from '@/pages/Login';
 import { useAuth } from '@/hooks/useAuth';
 import { Studio } from '@/pages/Studio';
 import { HOSTED } from '@/lib/studioApi';
+import { inFrame, studioGate } from '@/lib/studioGate';
+import { GatePanel, StudioErrorBoundary } from '@/components/studio/Gate';
 
 // Route guard — redirects unauthenticated users to /login while preserving
 // the original destination so we can return there post-login.
@@ -24,6 +26,17 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+// Hosted /studio: the same gate, but never blank. It says it's signing in, and inside the Narrativ shell (where
+// /login can't help) it says how to sign in again; Studio makes no API call until sign-in has finished.
+function StudioRoute() {
+  const { user, loading } = useAuth();
+  const location = useLocation();
+  const gate = studioGate({ loading, signedIn: !!user, inFrame: inFrame() });
+  if (gate === 'login') return <Navigate to="/login" replace state={{ from: location }} />;
+  if (gate) return <GatePanel message={gate} />;
+  return <StudioErrorBoundary><Studio /></StudioErrorBoundary>;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -31,7 +44,7 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         {/* Copy Studio: full-width, outside the Layout. Hosted it needs sign-in (and the server's STUDIO_EMAILS);
             locally it talks to `scripts/studio.ts serve` with no sign-in. */}
-        <Route path="/studio" element={HOSTED ? <RequireAuth><Studio /></RequireAuth> : <Studio />} />
+        <Route path="/studio" element={HOSTED ? <StudioRoute /> : <StudioErrorBoundary><Studio /></StudioErrorBoundary>} />
         <Route
           path="/"
           element={

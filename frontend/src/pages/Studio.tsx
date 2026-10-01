@@ -27,6 +27,8 @@ import { personaColor, tint } from '@/lib/personaColors';
 import { Rules } from '@/components/studio/Rules';
 import { Compare } from '@/components/studio/Compare';
 import { ExportMenu } from '@/components/studio/ExportMenu';
+import { GatePanel } from '@/components/studio/Gate';
+import { inFrame, studioGate, type GateError } from '@/lib/studioGate';
 
 type Tab = 'home' | 'howto' | 'write' | 'review' | 'build' | 'assets' | 'live' | 'territories' | 'rules' | 'compare';
 const TABS: Tab[] = ['home', 'howto', 'write', 'review', 'build', 'assets', 'live', 'territories', 'rules', 'compare'];
@@ -55,6 +57,8 @@ function initialCtx(): Ctx {
 export function Studio() {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [err, setErr] = useState('');
+  // Hosted: why the first load failed (401 expired sign-in, 403 no access, 404 off), shown in place of Studio.
+  const [loadErr, setLoadErr] = useState<GateError | null>(null);
   const [note, setNote] = useState('');
   const [tab, setTabState] = useState<Tab>(tabFrom(window.location.href));
   // Every step opens at the top; the step bar, the screen and the address all follow this one value.
@@ -146,6 +150,7 @@ export function Studio() {
         else setErr('Voices Studio is still being set up: no rules are active yet.');
         return;
       }
+      if (HOSTED) setLoadErr({ status: e.status, body: e.body, message: e.message });
       setErr(HOSTED ? (e.status === 403 ? e.message : e.status === 404 ? 'Voices Studio isn’t switched on here yet.' : `Couldn’t reach Voices Studio: ${e.message}`) : 'Studio API not running. In backend/: npx tsx scripts/studio.ts serve');
     });
     // A deep link to a run opens it (and sets the context to it).
@@ -237,6 +242,10 @@ export function Studio() {
   }
 
   const shell = 'min-h-screen text-[#ECEDEF] [&_input:not([type=range]):not([type=file]):not([type=checkbox]):not([type=radio])]:bg-[#101216] [&_input]:text-[#ECEDEF] [&_textarea]:bg-[#101216] [&_textarea]:text-[#ECEDEF] [&_select]:bg-[#101216] [&_select]:text-[#ECEDEF] [&_input::placeholder]:text-[#646A75] [&_textarea::placeholder]:text-[#646A75]';
+
+  // Hosted, Studio couldn't open (expired sign-in, no access, switched off): say so on the whole page.
+  const blocked = HOSTED && !meta ? studioGate({ loading: false, signedIn: true, error: loadErr, inFrame: inFrame() }) : null;
+  if (blocked && blocked !== 'login') return <GatePanel message={blocked} />;
 
   if (tab === 'compare') {
     // A separate exercise, deliberately outside the writing flow.
