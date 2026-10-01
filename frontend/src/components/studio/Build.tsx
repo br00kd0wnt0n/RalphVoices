@@ -9,7 +9,7 @@ import { onOriginal, studio, REGION_NAMES, type DraftVersion, type PlannedVersio
 import { addAd, adName, flagsAt, moveAd, redPlaces, nextVisual, placeLine, removeAd, setCard, setCardSub, setOnImage, setOnImageSub, useInAllAds, usesOf } from '@/lib/buildDraft';
 import { cn } from '@/lib/utils';
 import { personaColor, personaEdge, tint } from '@/lib/personaColors';
-import { PersonaChip, Chip, GhostButton, Intro, Label, LineHistory, NAMING_TIP, Overrides, PINK, PinkButton, Src, chipName, flagName, sevTone, territoryName, when, type Ctx } from './ui';
+import { PersonaChip, Chip, GhostButton, Intro, Label, LineHistory, NAMING_TIP, Overrides, PINK, PinkButton, Src, chipName, flagName, sevTone, territoryName, when, ForPicker, useActingFor, whoWords, type Ctx } from './ui';
 
 type RL = ReadyView['lines'][number];
 /** Where the tray places a line: a field of one ad, or the visual's image (a carousel card, 1-based). */
@@ -27,6 +27,8 @@ const DEFAULT_CARDS = 4, MAX_CARDS = 10;
 
 export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: Ctx; user: string; onNext: () => void; onReview: () => void }) {
   const pt = ctx;
+  // "On behalf of": whose call the sign-off, expectation and overrides here are recorded as (the picker; '' = yours).
+  const actingFor = useActingFor();
   const [view, setView] = useState<ReadyView | null>(null);
   // The ads being built (sent as is to preview and sign-off): visual letter + field → line id; on-image per visual.
   const [draft, setDraft] = useState<ReadyDraft | null>(null);
@@ -236,18 +238,23 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
           {/* ③ and ④ apply to the whole persona × territory set. */}
           <section className="rounded-xl border-2 bg-[#16181D] p-5" style={{ borderColor: PINK }}>
             <Step n={3} title="Which ad do you expect to lead, and why?" hint="Dated and locked with the sign-off, so it can be checked against what actually happens.">
-              <div className="mb-3 flex flex-wrap gap-1.5">
+              <div className="mb-3 flex flex-wrap items-center gap-1.5">
                 {plan.versions.map((v, i) => v.code && !v.issues.length ? (
                   <button key={v.code} onClick={() => setLead(cur => { const n = new Set(cur); if (n.has(v.code)) n.delete(v.code); else n.add(v.code); return n; })}
                     className={cn('rounded-full border px-3 py-1 text-sm', lead.has(v.code) ? 'border-[#D94D8F] bg-[#D94D8F] text-white' : 'border-[#4A505D] text-[#C9CCD2] hover:border-[#D94D8F]')}>
                     {lead.has(v.code) ? '★ ' : ''}{nameOf(i)}
                   </button>
                 ) : null)}
+                {/* Whose expectation it is, when it's entered for them (it's recorded as theirs). */}
+                <ForPicker meta={meta} doing="This expectation is" className="ml-auto" />
               </div>
               <textarea rows={3} aria-label="Why you expect them to lead" className="w-full rounded-lg border-2 border-[#343946] px-3 py-2 text-base" placeholder="e.g. Ad 2's primary answers the ‘what happens at the counter?’ question before the fold." value={reason} onChange={e => setReason(e.target.value)} />
             </Step>
-            <Step n={4} title="Sign off" hint={blockedBy || `Signed off as ${user || 'you'}: the ads, their checks and your expectations are locked together.`}>
-              <PinkButton disabled={!!blockedBy || busy} onClick={signOff}>{busy ? 'Checking and signing off…' : `Sign off ${plan.versions.length} ad${plan.versions.length === 1 ? '' : 's'}`}</PinkButton>
+            <Step n={4} title="Sign off" hint={blockedBy || `Signed off as ${whoWords(user || 'you', actingFor)}: the ads, their checks and your expectations are locked together.`}>
+              <div className="flex flex-wrap items-center gap-3">
+                <PinkButton disabled={!!blockedBy || busy} onClick={signOff}>{busy ? 'Checking and signing off…' : `Sign off ${plan.versions.length} ad${plan.versions.length === 1 ? '' : 's'}${actingFor ? ` for ${actingFor}` : ''}`}</PinkButton>
+                <ForPicker meta={meta} doing="Signing off" />
+              </div>
             </Step>
             {view.signoffs.length > 0 && (
               <div className="mt-2 border-t border-[#272B34] pt-3 text-sm">
@@ -259,7 +266,7 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
                       const n = so.versions?.length ?? so.lines.length;
                       return (
                         <li key={so.id} className="border-l-2 border-[#343946] pl-3 text-[#A3A8B1]">
-                          <span className="font-semibold text-[#ECEDEF]">Set v{so.version}</span> · {n} ad{n === 1 ? '' : 's'} · {so.ready_by}, {when(so.ready_at)}
+                          <span className="font-semibold text-[#ECEDEF]">Set v{so.version}</span> · {n} ad{n === 1 ? '' : 's'} · {whoWords(so.ready_by, so.ready_for)}, {when(so.ready_at)}
                           {e && <div>Expected to lead: {(e.stubs || []).map(nameOfCode).join(', ') || '–'}. “{e.reason}”</div>}
                         </li>
                       );
@@ -277,6 +284,7 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
               <span className={reds || plan.issues.length ? 'text-red-200' : 'text-emerald-200'}>{plan.issues.length ? `${plan.issues.length} to finish` : reds ? `${reds} red flag${reds === 1 ? '' : 's'}` : 'no red flags'}</span>
               <span className="text-[#A3A8B1]">Lead: {leads.length ? leads.map(nameOfCode).join(', ') : 'not chosen'}</span>
               <span className="ml-auto hidden max-w-md truncate text-xs text-[#858B96] md:inline" title={blockedBy}>{blockedBy}</span>
+              <ForPicker meta={meta} doing="Signing off" />
               <PinkButton className="px-4 py-1.5 text-base" disabled={!!blockedBy || busy} onClick={signOff} title={blockedBy || undefined}>{busy ? 'Signing off…' : 'Sign off'}</PinkButton>
             </div>
           </div>
@@ -422,9 +430,10 @@ function RedFix({ meta, x, onEdit, onChanged, onError }: { meta: Meta; x: RL; on
           {overriding === fl.rule ? (
             <div className="mt-1.5 space-y-1.5">
               <textarea rows={2} autoFocus aria-label="Why this is OK to run" className="w-full rounded-lg border-2 border-red-500/45 px-2 py-1.5 text-sm" placeholder="Why this is OK to run (recorded with your name)" value={why} onChange={e => setWhy(e.target.value)} />
-              <div className="flex gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <PinkButton className="px-3 py-1 text-sm" disabled={why.trim().length < 5} onClick={() => act(async () => { await studio.override(x.line.batch, x.line.id, fl.rule, why); setOverriding(null); setWhy(''); })}>Save override</PinkButton>
                 <GhostButton className="px-2 py-0.5 text-sm" onClick={() => setOverriding(null)}>Cancel</GhostButton>
+                <ForPicker meta={meta} doing="Overriding" />
               </div>
             </div>
           ) : (

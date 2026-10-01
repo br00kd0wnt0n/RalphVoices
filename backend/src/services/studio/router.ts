@@ -41,6 +41,11 @@ export interface StudioRouterOptions {
   canOverride?(req: Request): boolean;
   /** Who may sign lines off at Ready for production (hosted: STUDIO_READY_EMAILS + admins). Unset = anyone (local). */
   canSignOff?(req: Request): boolean;
+  /**
+   * "On behalf of": the people a call can be recorded for (hosted: the Studio users). Unset (local) = any name. Role
+   * checks always use the signed-in person (who), never the person a call is recorded for.
+   */
+  people?(): string[];
 }
 
 // Top-level keys every rules version needs (scripts/studio/rules.schema.json `required`).
@@ -128,6 +133,17 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     }
   });
 
+  /**
+   * Whose call this request records, when it isn't the person's own: the X-Studio-For header (the page's "for" picker).
+   * Hosted, it must be a Studio user; anyone else is refused rather than recorded.
+   */
+  const forOf = (req: Request): string | undefined => {
+    const f = String(req.get('x-studio-for') || '').trim();
+    if (!f || f.toLowerCase() === String(o.who(req) || '').toLowerCase()) return undefined;
+    if (o.people && !o.people().some(p => p.toLowerCase() === f.toLowerCase())) throw Object.assign(new Error(`${f} isn't on the Studio list: a call can only be recorded for a Studio user`), { status: 403 });
+    return o.people ? o.people().find(p => p.toLowerCase() === f.toLowerCase()) : f;
+  };
+
   r.get('/meta', wrap(async (req, res) => {
     const { studio_dir, ...m } = await S.meta();
     const isAdmin = o.rules ? o.rules.isAdmin(req) : true;
@@ -136,7 +152,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     const rounds = await Rounds.getRounds();
     // working: the round this person works in (theirs; the active round unless an admin picked a test round); choices: what they may pick.
     const working = await Rounds.workingRound(o.who(req), rounds);
-    res.json({ ...m, ...(o.rules ? {} : { studio_dir }), preflight: pf, rounds: { ...rounds, can_edit: isAdmin, working: working.id, choices: Rounds.workingChoices(rounds, isAdmin).map(x => x.id) }, can_set_compliance: o.canSetCompliance ? o.canSetCompliance(req) : true, can_override: o.canOverride ? o.canOverride(req) : true, can_sign_off: o.canSignOff ? o.canSignOff(req) : true, spend: await spent(), mock: o.mock, cap: o.cap, cap_window: o.capWindow, ask_over: o.askOver, ...(o.metaExtra?.(req) || {}) });
+    res.json({ ...m, ...(o.rules ? {} : { studio_dir }), preflight: pf, rounds: { ...rounds, can_edit: isAdmin, working: working.id, choices: Rounds.workingChoices(rounds, isAdmin).map(x => x.id) }, can_set_compliance: o.canSetCompliance ? o.canSetCompliance(req) : true, can_override: o.canOverride ? o.canOverride(req) : true, can_sign_off: o.canSignOff ? o.canSignOff(req) : true, people: o.people ? o.people() : null, spend: await spent(), mock: o.mock, cap: o.cap, cap_window: o.capWindow, ask_over: o.askOver, ...(o.metaExtra?.(req) || {}) });
   }));
   r.post('/estimate', wrap(async (req, res) => {
     const b = S.makeBrief(req.body.brief || {});
@@ -192,7 +208,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     job.clients.add(res);
     req.on('close', () => job.clients.delete(res));
   });
-  r.patch('/batches/:id/lines/:line', wrap(async (req, res) => res.json(await S.setDecision(req.params.id, req.params.line, req.body || {}, o.who(req)))));
+  r.patch('/batches/:id/lines/:line', wrap(async (req, res) => res.json(await S.setDecision(req.params.id, req.params.line, req.body || {}, o.who(req), forOf(req)))));
   r.get('/lines/:line/history', wrap(async (req, res) => res.json(await S.lineHistory(req.params.line))));
   r.post('/batches/:id/lines/:line/more', wrap(async (req, res) => {
     const api = o.api(req);
@@ -279,14 +295,14 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     const api = est.calls ? o.api(req) : undefined;
     const held = api ? await reserve(`version-check ${persona} ${territory}`, est.usd, api, o.who(req)) : { release: async () => {} };
     if ('error' in held) return res.status(402).json({ error: held.error });
-    try { res.json(await R.signOff({ ...(req.body || {}), round: rq(req) }, o.who(req), { api })); }
+    try { res.json(await R.signOff({ ...(req.body || {}), round: rq(req) }, o.who(req), { api, for: forOf(req) })); }
     catch (err: any) {
       if (err instanceof R.GateError) return res.status(409).json({ error: err.message, blocking: err.blocking });
       if (err instanceof R.DraftError) return res.status(400).json({ error: err.message, issues: err.issues });
       throw err;
     } finally { await held.release(); }
   }));
-  r.post('/batches/:id/lines/:line/override', wrap(async (req, res) => (o.canOverride && !o.canOverride(req)) ? res.status(403).json({ error: 'Only the people who mark assets Ready to traffic (the creative lead) or an admin can override a red flag' }) : res.json(await R.overrideFlag(req.params.id, req.params.line, String(req.body?.rule || ''), String(req.body?.reason || ''), o.who(req)))));
+  r.post('/batches/:id/lines/:line/override', wrap(async (req, res) => (o.canOverride && !o.canOverride(req)) ? res.status(403).json({ error: 'Only the people who mark assets Ready to traffic (the creative lead) or an admin can override a red flag' }) : res.json(await R.overrideFlag(req.params.id, req.params.line, String(req.body?.rule || ''), String(req.body?.reason || ''), o.who(req), forOf(req)))));
   r.patch('/batches/:id/lines/:line/compliance', wrap(async (req, res) => {
     if (o.canSetCompliance && !o.canSetCompliance(req)) return res.status(403).json({ error: 'Compliance status is updated by the producer (Vivan) or an admin' });
     res.json(await R.setCompliance(req.params.id, req.params.line, String(req.body?.status || ''), req.body?.note, o.who(req)));
@@ -363,13 +379,13 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     r.post('/preflight/flags/:id/agree', wrap(async (req, res) => res.json(await pf.agree(req.params.id, !!req.body?.agree, req.body?.note, o.who(req)))));
     r.post('/preflight/flags/:id/override', wrap(async (req, res) => {
       if (!o.preflight!.canSetReady(req)) return res.status(403).json({ error: 'Only the people who mark Pre-flight passed (the creative lead) can override a red flag' });
-      res.json(await pf.override(req.params.id, String(req.body?.reason || ''), o.who(req)));
+      res.json(await pf.override(req.params.id, String(req.body?.reason || ''), o.who(req), forOf(req)));
     }));
     r.post('/preflight/stubs/:stub/ready', wrap(async (req, res) => {
       if (!o.preflight!.canSetReady(req)) return res.status(403).json({ error: 'Pre-flight is marked passed by the creative lead or an admin (Ready to traffic also needs Trupanion’s compliance cleared)' });
       // all_on_visual: every code on this code's visual (the default on a shared visual), each passing on its own flags.
-      if (req.body?.all_on_visual && req.body?.ready !== false) return res.json(await pf.setReadyVisual(req.params.stub, o.who(req)));
-      try { res.json(await pf.setReady(req.params.stub, req.body?.ready !== false, o.who(req))); }
+      if (req.body?.all_on_visual && req.body?.ready !== false) return res.json(await pf.setReadyVisual(req.params.stub, o.who(req), forOf(req)));
+      try { res.json(await pf.setReady(req.params.stub, req.body?.ready !== false, o.who(req), forOf(req))); }
       catch (err: any) { if (err.blocking) return res.status(409).json({ error: err.message, blocking: err.blocking }); throw err; }
     }));
     r.get('/preflight/agreement', wrap(async (req, res) => res.json(await pf.agreement({ ...pt(req.query), user: o.who(req) } as any))));
@@ -383,7 +399,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     r.get('/compliance', wrap(async (req, res) => res.json(await pf.complianceAssets({ ...pt(req.query), user: o.who(req) }))));
     r.post('/compliance/assets/:upload', wrap(async (req, res) => {
       if (o.canSetCompliance && !o.canSetCompliance(req)) return res.status(403).json({ error: 'Trupanion’s compliance decisions are recorded by the producer (Vivan) or an admin' });
-      try { res.json(await pf.setAssetCompliance(req.params.upload, req.body || {}, o.who(req))); }
+      try { res.json(await pf.setAssetCompliance(req.params.upload, { ...(req.body || {}), for: forOf(req) }, o.who(req))); }
       catch (err: any) { if (err.overridden) return res.status(409).json({ error: err.message, overridden: err.overridden }); throw err; }
     }));
   }

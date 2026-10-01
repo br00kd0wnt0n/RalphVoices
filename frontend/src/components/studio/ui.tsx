@@ -3,7 +3,7 @@
 // flags as neutral chips (red = compliance, amber = warning). Nothing here is a score.
 
 import { useEffect, useState } from 'react';
-import { onOriginal, studio, type Flag, type Meta, type Territory, type Tone, type Line, type EditRecord, type LineVersion, type ComplianceStatus, type Region, REGION_NAMES, CANADA_NOTE } from '@/lib/studioApi';
+import { getActingFor, onActingFor, onOriginal, setActingFor, studio, whoWords, type Flag, type Meta, type Territory, type Tone, type Line, type EditRecord, type LineVersion, type ComplianceStatus, type Region, REGION_NAMES, CANADA_NOTE } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { personaColor, personaEdge, tint } from '@/lib/personaColors';
 import { HelpCircle } from 'lucide-react';
@@ -295,7 +295,7 @@ export function Overrides({ line }: { line: Line }) {
     <ul className="mt-3 space-y-1">
       {line.overrides.map(o => (
         <li key={o.rule} className="rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-1.5 text-sm text-red-100">
-          <span className="font-semibold">Override: {chipName(o.rule)}</span> · {o.by}, {when(o.at)}<div className="text-[#C9CCD2]">“{o.reason}”</div>
+          <span className="font-semibold">Override: {chipName(o.rule)}</span> · {whoWords(o.by, o.for)}, {when(o.at)}<div className="text-[#C9CCD2]">“{o.reason}”</div>
         </li>
       ))}
     </ul>
@@ -401,3 +401,40 @@ export const inViewFilter = (x: { persona: string; territory: string; region?: R
   (v.persona === 'all' || x.persona === v.persona) && (v.territory === 'all' || x.territory === v.territory) && (v.region === 'all' || regionOf(x) === v.region);
 export const ctxKey = (x: Ctx) => `${x.persona}|${x.territory}|${x.region}`;
 export const sameCtx = (a: { persona: string; territory: string; region?: Region }, b: Ctx) => a.persona === b.persona && a.territory === b.territory && regionOf(a) === b.region;
+
+// ---------- "on behalf of": whose call a decision records ----------
+
+/** The person the next calls are recorded for ('' = yourself), kept in step across every picker on the page. */
+export function useActingFor(): string {
+  const [who, setWho] = useState(getActingFor());
+  useEffect(() => onActingFor(() => setWho(getActingFor())), []);
+  return who;
+}
+
+/**
+ * The "for" picker (Brook, 1 Oct): beside sign-off, an override's reason, the expectation, Pre-flight passed and the
+ * Trupanion decision. Brook may enter Nick's call for him; it's stored as Nick's, entered by Brook. Chosen from the
+ * Studio users (hosted) or typed (local); remembered for the session; a chip says so while it's set. Permissions are
+ * always the signed-in person's.
+ */
+export function ForPicker({ meta, doing, className }: { meta: Meta | null; doing: string; className?: string }) {
+  const who = useActingFor();
+  const me = (meta?.user?.email || '').toLowerCase();
+  const people = (meta?.people || []).filter(p => p.toLowerCase() !== me);
+  return (
+    <span className={cn('inline-flex flex-wrap items-center gap-1.5 text-xs text-[#858B96]', className)}>
+      {who && <span className="rounded-full border border-amber-400/60 bg-amber-400/10 px-2 py-0.5 font-medium text-amber-100" role="status">{doing} for {who}</span>}
+      <label className="inline-flex items-center gap-1">
+        <span>{who ? 'change' : 'for'}</span>
+        {meta?.people
+          ? <select aria-label="On behalf of" title="Whose call this is, when you're entering it for them (it's recorded as theirs, entered by you)" className="rounded border border-[#343946] bg-[#101216] px-1 py-0.5 text-xs text-[#C9CCD2]" value={who} onChange={e => setActingFor(e.target.value)}>
+              <option value="">yourself</option>
+              {who && !people.includes(who) && <option value={who}>{who}</option>}
+              {people.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+          : <input aria-label="On behalf of" title="Whose call this is, when you're entering it for them" className="w-32 rounded border border-[#343946] px-1.5 py-0.5 text-xs" placeholder="yourself" defaultValue={who} key={who} onBlur={e => setActingFor(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />}
+      </label>
+    </span>
+  );
+}
+export { whoWords };

@@ -162,7 +162,7 @@ export async function runBulk(parse: BulkParse, api: Api, opts: { user?: string;
     (brief as any).bulk = { id, for: opts.for || undefined };
     const batch = await S.generate(brief, api, () => {}, { ownOnly: true, user: opts.user });
     await S.stampFor(batch.id, { bulk: id, for: opts.for, user: opts.user });
-    for (const l of batch.lines) await S.setDecision(batch.id, l.id, { decision: 'keep' }, opts.user);
+    for (const l of batch.lines) await S.setDecision(batch.id, l.id, { decision: 'keep' }, opts.user, opts.for);
     runs.push(batch.id);
     done += g.rows.length;
   }

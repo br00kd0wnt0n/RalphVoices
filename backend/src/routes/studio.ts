@@ -22,7 +22,7 @@ import { authMiddleware, type AuthRequest } from '../middleware/auth.js';
 import * as S from '../services/studio/engine.js';
 import { PgStore } from '../services/studio/pgStore.js';
 import { createStudioRouter } from '../services/studio/router.js';
-import { canSetCompliance, canSetReady, studioAccess } from '../utils/studioAccess.js';
+import { canSetCompliance, canSetReady, studioPeople, studioAccess } from '../utils/studioAccess.js';
 import { STALE_SECONDS, Preflight } from '../services/studio/preflight.js';
 import { mockEngine, type AuditEngine } from '../services/studio/preflightEngine.js';
 import { b2Engine } from '../services/studio/preflightB2.js';
@@ -91,6 +91,8 @@ router.use(createStudioRouter({
   canSetCompliance: req => canSetCompliance((req as AuthRequest).user?.email),
   canOverride: req => canSetReady((req as AuthRequest).user?.email),
   canSignOff: req => canSetReady((req as AuthRequest).user?.email),
+  // "On behalf of": a call can be recorded for anyone on the Studio lists; role checks stay on the signed-in person.
+  people: () => studioPeople(),
   metaExtra: req => {
     const u = (req as AuthRequest).user;
     return { user: u ? { email: u.email, name: u.name, admin: studioAccess(u.email).admin } : null };

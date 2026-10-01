@@ -22,3 +22,8 @@ export function studioAccess(email: string | undefined, env: NodeJS.ProcessEnv =
   const admin = emails(env.ADMIN_EMAILS).includes(e);
   return { allowed: admin || emails(env.STUDIO_EMAILS).includes(e), admin };
 }
+
+/** Everyone on a Studio list (users, admins, the creative lead, the producer): who a call can be recorded "for". */
+export function studioPeople(env: NodeJS.ProcessEnv = process.env): string[] {
+  return [...new Set([...emails(env.STUDIO_EMAILS), ...emails(env.ADMIN_EMAILS), ...emails(env.STUDIO_READY_EMAILS), ...emails(env.STUDIO_COMPLIANCE_EMAILS)])].sort();
+}

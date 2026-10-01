@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { roundName, studio, finalText, isEdited, type Batch, type Line, type Meta, type RunSummary, type ShortRow } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { personaEdge } from '@/lib/personaColors';
-import { Chip, GhostButton, Intro, Label, LineHistory, Overrides, PINK, PersonaChip, PinkButton, Src, chipName, fieldOrder, flagName, params, plainSource, regionOf, sameCtx, sevTone, territoryName, toneWords, when, whatToDo, type Ctx } from './ui';
+import { Chip, GhostButton, Intro, Label, LineHistory, Overrides, PINK, PersonaChip, PinkButton, Src, chipName, fieldOrder, flagName, params, plainSource, regionOf, sameCtx, sevTone, territoryName, toneWords, when, whatToDo, whoWords, type Ctx } from './ui';
 
 type Filter = 'all' | 'compliance' | 'open' | 'kept';
 const shortField = (meta: Meta, f: string) => (meta.fields[f]?.label || f).replace(/^(Meta|TikTok) /, '').replace(/\s*\(.*\)$/, '').replace(/^./, c => c.toUpperCase());
@@ -78,8 +78,8 @@ export function Review({ meta, ctx, batch, setBatch, status, running, onMore, on
                 <select aria-label="Run" className="max-w-full rounded-lg border-2 border-[#343946] bg-[#101216] px-3 py-1.5 text-base" value={b?.id || ''} onChange={e => studio.batch(e.target.value).then(setBatch)}>
                   {!b && <option value="">Choose a run…</option>}
                   {/* The open run is described from the run itself (its lines arrive live), never from the list fetched earlier. */}
-                  {[...here.map(r => (b && r.id === b.id ? { ...r, lines: b.lines.length, updated: b.updated || r.updated } : r)), ...(b && !here.some(r => r.id === b.id) ? [{ id: b.id, updated: b.updated || b.created, created_by: b.created_by || '', lines: b.lines.length } as RunSummary] : [])].map(r => (
-                    <option key={r.id} value={r.id} title={r.id}>{when(r.updated)}{r.created_by ? ` · ${r.created_by.split('@')[0]}` : ''} · {r.lines} lines{r.round && r.round !== (meta.rounds?.working || meta.rounds?.active) ? ` · ${roundName(meta.rounds, r.round)}` : ''}</option>
+                  {[...here.map(r => (b && r.id === b.id ? { ...r, lines: b.lines.length, updated: b.updated || r.updated } : r)), ...(b && !here.some(r => r.id === b.id) ? [{ id: b.id, updated: b.updated || b.created, created_by: b.created_by || '', created_for: b.created_for, lines: b.lines.length } as RunSummary] : [])].map(r => (
+                    <option key={r.id} value={r.id} title={r.id}>{when(r.updated)}{r.created_by ? ` · ${r.created_by.split('@')[0]}${r.created_for ? ` for ${r.created_for}` : ''}` : ''} · {r.lines} lines{r.round && r.round !== (meta.rounds?.working || meta.rounds?.active) ? ` · ${roundName(meta.rounds, r.round)}` : ''}</option>
                   ))}
                 </select>
               ) : <p className="text-base text-[#858B96]">No runs for {territoryName(meta.territories[ctx.territory]).replace(/\.$/, '')} yet: write lines on Write.</p>}
@@ -196,14 +196,15 @@ function LineCard({ meta, line, sequence, onChange, onMore }: { meta: Meta; line
   return (
     <div className={cn('rounded-xl border-2 border-l-4 bg-[#16181D] p-5', border)} style={personaEdge(line.persona)}>
       <div className="mb-2 flex flex-wrap items-center gap-2 text-sm text-[#858B96]">
-        {line.model === 'human' && <Chip tone="outline" className="border-[#D94D8F] font-semibold text-[#D94D8F]">yours</Chip>}
+        {/* A person's own line: "yours", or whose it is when it was entered for them (a copy check of Nick's lines). */}
+        {line.model === 'human' && <Chip tone="outline" className="border-[#D94D8F] font-semibold text-[#D94D8F]" title={line.added_for ? `Entered by ${line.added_by || 'someone'} for ${line.added_for}` : undefined}>{line.added_for ? `${line.added_for}’s` : 'yours'}</Chip>}
         <span>{shortField(meta, line.field)}</span>
         {over && <span className="font-mono font-bold text-amber-300" title={`${f!.visible} characters show on screen`}>{chars}/{f!.visible}</span>}
         {line.parent && <Chip tone="outline">more like {line.parent.split('-').pop()}</Chip>}
         {line.sequence_id && <Chip tone="outline" title="A carousel card sequence: keep it whole or card by card; the cards are placed at Build & sign off">card {line.card} of {sequence?.length || '?'} · sequence S{line.sequence_id.split('-S').pop()}</Chip>}
         {checking && <span className="animate-pulse" style={{ color: PINK }}>flags still arriving…</span>}
         {recheck && <span className={cn(/^Re-checking/.test(recheck) && 'animate-pulse')} style={{ color: /^Re-checking/.test(recheck) ? PINK : undefined }}>{recheck}</span>}
-        {line.ready && !line.ready.superseded_by && <Chip tone="outline" className="border-[#D94D8F]/60 text-[#F2C4DA]" title={`Signed off by ${line.ready.ready_by}, ${when(line.ready.ready_at)}`}>signed off{line.ready.changed_since ? ' · edited since' : ''}</Chip>}
+        {line.ready && !line.ready.superseded_by && <Chip tone="outline" className="border-[#D94D8F]/60 text-[#F2C4DA]" title={`Signed off by ${whoWords(line.ready.ready_by, line.ready.ready_for)}, ${when(line.ready.ready_at)}`}>signed off{line.ready.changed_since ? ' · edited since' : ''}</Chip>}
         <button onClick={() => setDetails(!details)} aria-expanded={details} className="ml-auto text-xs text-[#646A75] underline-offset-2 hover:text-[#ECEDEF] hover:underline">{details ? 'hide details' : 'details'}</button>
       </div>
 
@@ -254,7 +255,7 @@ function LineCard({ meta, line, sequence, onChange, onMore }: { meta: Meta; line
             <span>Structure: {line.structure.replace('_', ' ')}</span>
             <span>Tone: {toneWords(line.tone, meta) || line.tone_label}</span>
             <span>Angle: {line.angle_label}</span>
-            {line.decided_by && line.decision && <span>{line.decision} · {line.decided_by}{line.decided_at ? ` · ${when(line.decided_at)}` : ''}</span>}
+            {line.decided_by && line.decision && <span>{line.decision} · {whoWords(line.decided_by, line.decided_for)}{line.decided_at ? ` · ${when(line.decided_at)}` : ''}</span>}
           </div>
           {line.features.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5">

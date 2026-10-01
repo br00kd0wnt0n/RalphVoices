@@ -2,6 +2,7 @@
 // the app's pool; the CLI builds one from an explicit URL. This file never
 // imports src/db (which loads .env), so it can't reach a database by accident.
 
+import { packActor, unpackActor } from '../../utils/actor.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import pg from 'pg';
 import { mergeBatchHeader, type Asset, type EditRecord, type InputKey, type SaveBatchOptions, type SpendEntry, type StudioStore } from './store.js';
@@ -136,6 +137,8 @@ export class PgStore implements StudioStore {
     return {
       id: row.id, brief: row.brief, created: new Date(row.created_at).toISOString(), created_by: row.created_by ?? undefined, rules_version: row.rules_version ?? undefined,
       updated: new Date(row.updated_at).toISOString(), lines: lines.rows.map(x => x.body), dropped: row.dropped, stats: row.stats,
+      // A run entered for someone (a copy check): the header has no column for it, so it's read from the brief (bulk: { id, for }).
+      ...(row.brief?.bulk?.for ? { created_for: row.brief.bulk.for } : {}), ...(row.brief?.bulk?.id ? { bulk: row.brief.bulk.id } : {}),
     };
   }
 
@@ -289,20 +292,21 @@ export class PgStore implements StudioStore {
     await this.q.query(
       `INSERT INTO studio_line_versions (line_id, batch_id, version, field, text, sha256, created_by, created_at, signoff_id, stub)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (line_id, version) DO NOTHING`,
-      [v.line_id, v.batch_id, v.version, v.field, v.text, v.sha256, v.created_by, v.created_at, v.signoff_id ?? null, v.stub ?? null]);
+      // created_by is a text column: "by (for X)" when the wording was entered for someone (utils/actor.ts; no migration).
+      [v.line_id, v.batch_id, v.version, v.field, v.text, v.sha256, packActor(v.created_by, v.created_for), v.created_at, v.signoff_id ?? null, v.stub ?? null]);
   }
   async listLineVersions(lineId: string) {
     const r = await this.q.query(`SELECT * FROM studio_line_versions WHERE line_id = $1 ORDER BY version`, [lineId]);
-    return r.rows.map(x => ({ ...x, created_at: new Date(x.created_at).toISOString(), signoff_id: x.signoff_id ?? undefined, stub: x.stub ?? undefined }));
+    return r.rows.map(x => { const a = unpackActor(x.created_by); return { ...x, created_by: a.by, ...(a.for ? { created_for: a.for } : {}), created_at: new Date(x.created_at).toISOString(), signoff_id: x.signoff_id ?? undefined, stub: x.stub ?? undefined }; });
   }
   async saveExpectation(e: any) {
     await this.q.query(
       `INSERT INTO studio_expectations (id, persona, territory, signoff_id, line_ids, stubs, reason, created_by, created_at, sha256) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [e.id, e.persona, e.territory, e.signoff_id, JSON.stringify(e.line_ids), JSON.stringify(e.stubs ?? []), e.reason, e.created_by, e.created_at, e.sha256]);
+      [e.id, e.persona, e.territory, e.signoff_id, JSON.stringify(e.line_ids), JSON.stringify(e.stubs ?? []), e.reason, packActor(e.created_by, e.created_for), e.created_at, e.sha256]);
   }
   async listExpectations() {
     const r = await this.q.query(`SELECT * FROM studio_expectations ORDER BY created_at`);
-    return r.rows.map(x => ({ ...x, created_at: new Date(x.created_at).toISOString() }));
+    return r.rows.map(x => { const a = unpackActor(x.created_by); return { ...x, created_by: a.by, ...(a.for ? { created_for: a.for } : {}), created_at: new Date(x.created_at).toISOString() }; });
   }
 
   async getAsset(name: string): Promise<Asset | null> {

@@ -26,6 +26,7 @@ import { SIZES, detectSize, expectedSizes, parseSize, roleOf, sizeOfRole, slotOf
 import { DEFAULT_REGION, parseCode, visualKey, type Region } from '../../utils/namingCode.js';
 import { deletePrivateObject, downloadPrivateObject, getPrivateObject, getPrivateObjectStream, isR2Enabled, putPrivateObject } from '../r2.js';
 import { FatalError } from '../audit/api.js';
+import { cleanFor, decidedBy, packActor, unpackActor, whoWords } from '../../utils/actor.js';
 import type { AssetKind, AuditEngine, AuditFlag, AuditResult, SignedCopy } from './preflightEngine.js';
 import { COPY_MATCH_SOURCE, REWORD_MIN, bestMatch, copyMatch, normalise } from '../audit/copyMatch.js';
 import { signedOffCopy } from './preflightB2.js';
@@ -114,7 +115,7 @@ export interface StubRow {
   sizes: { expected: Size[]; uploaded: Size[]; missing: Size[] };
   audit: { id: string; status: string; usd: number; red: number; amber: number; grey: number; open_red: number; finished_at: string | null; error: string | null; stale: string | null } | null;
   /** Pre-flight passed (the creative lead's mark on the latest upload). Not the same as Ready to traffic: see `traffic`. */
-  status: { status: 'open' | 'ready'; ready_by?: string; ready_at?: string; upload_id?: string };
+  status: { status: 'open' | 'ready'; ready_by?: string; ready_for?: string; ready_at?: string; upload_id?: string };
   traffic: Traffic;
   /** The round of its sign-off; `test`: a test round's code (never handed to Add3 or B3). */
   round: string; test: boolean;
@@ -786,7 +787,7 @@ export class Preflight {
       format_note: upload ? formatNote(stub, upload.kind) : null,
       // Red flags on the copy overridden at sign-off: a Pre-flight flag on the same rule shows the earlier override and
       // can reuse its reason in one click (production test, 1 Oct: the same $5,000 rule had to be justified twice).
-      copy_overrides: this.partsOf(signoff, stub).flatMap(l => (l.overrides || []).map(o => ({ rule: o.rule, label: (o.label || o.rule).replace(/\.$/, ''), field: copy.find(c => c.line_id === l.line_id)?.label || l.field, reason: o.reason, by: o.by, at: o.at }))),
+      copy_overrides: this.partsOf(signoff, stub).flatMap(l => (l.overrides || []).map(o => ({ rule: o.rule, label: (o.label || o.rule).replace(/\.$/, ''), field: copy.find(c => c.line_id === l.line_id)?.label || l.field, reason: o.reason, by: o.by, ...(o.for ? { for: o.for } : {}), at: o.at }))),
       on_asset_copy: copy.filter(c => !POST_COPY_FIELDS.has(c.field)), post_copy: copy.filter(c => POST_COPY_FIELDS.has(c.field)),
       audit: a ? { id: a.id, upload_id: a.upload_id, status: a.status, engine: a.engine, rules_version: a.rules_version, usd: Number(a.usd), error: a.error, started_by: a.started_by, started_at: new Date(a.started_at).toISOString(), finished_at: a.finished_at ? new Date(a.finished_at).toISOString() : null, result, stale: staleness(a) } : null,
       flags, status: await this.status(stub),
@@ -809,21 +810,23 @@ export class Preflight {
   }
 
   /** Let a red flag through with a written reason (who and when are recorded; shown on the report). */
-  async override(flagId: string, reason: string, user?: string) {
+  async override(flagId: string, reason: string, user?: string, forWho?: string) {
     const why = String(reason || '').trim();
     if (why.length < 5) throw new Error('An override needs a written reason');
     const f = (await this.db.query(`SELECT * FROM studio_audit_flags WHERE id = $1`, [flagId])).rows[0];
     if (!f) throw new Error('No such flag');
     if (f.severity !== 'red') throw new Error('Only red flags block Ready to traffic; amber and grey need no override');
-    const override = { reason: why, by: user || 'unknown', at: new Date().toISOString() };
+    const override = { reason: why, by: user || 'unknown', ...(cleanFor(forWho, user) ? { for: cleanFor(forWho, user) } : {}), at: new Date().toISOString() };
     await this.db.query(`UPDATE studio_audit_flags SET override = $2 WHERE id = $1`, [flagId, override]);
-    await S.getStore().recordEdit({ line_id: `asset:${f.stub}`, batch_id: 'preflight', before: null, after: { override: f.rule, flag: flagId, reason: why }, by: override.by, at: override.at });
+    await S.getStore().recordEdit({ line_id: `asset:${f.stub}`, batch_id: 'preflight', before: null, after: { override: f.rule, flag: flagId, reason: why }, by: whoWords(override.by, (override as any).for), at: override.at });
     return { flag_id: flagId, override };
   }
 
   private async status(stub: string): Promise<StubRow['status']> {
     const r = (await this.db.query(`SELECT * FROM studio_asset_status WHERE stub = $1`, [stub])).rows[0];
-    return r ? { status: r.status, ready_by: r.ready_by ?? undefined, ready_at: r.ready_at ? new Date(r.ready_at).toISOString() : undefined, upload_id: r.upload_id ?? undefined } : { status: 'open' };
+    // ready_by is a text column: "by (for X)" when it was marked for someone (utils/actor.ts).
+    const who = unpackActor(r?.ready_by);
+    return r ? { status: r.status, ready_by: who.by || undefined, ...(who.for ? { ready_for: who.for } : {}), ready_at: r.ready_at ? new Date(r.ready_at).toISOString() : undefined, upload_id: r.upload_id ?? undefined } : { status: 'open' };
   }
   private async setStatusRow(stub: string, status: 'open' | 'ready', uploadId: string | null, auditId: string | null, user: string | null) {
     await this.db.query(
@@ -838,7 +841,7 @@ export class Preflight {
    * Mark the latest upload of a stub as passing Pre-flight (or take it back). Needs a finished audit and no unresolved red
    * flag. It's Ready to traffic once Trupanion's compliance is cleared too (traffic()).
    */
-  async setReady(stub: string, ready: boolean, user?: string) {
+  async setReady(stub: string, ready: boolean, user?: string, forWho?: string) {
     await this.findStub(stub);
     const before = await this.status(stub);
     if (!ready) {
@@ -852,10 +855,10 @@ export class Preflight {
       if (a.status !== 'done') throw new Error(a.status === 'failed' ? `The audit failed: ${a.error}. Run it again.` : 'The audit is still running');
       const open = (await this.flagsFor(a.id, stub)).filter(x => x.severity === 'red' && !x.override);
       if (open.length) throw Object.assign(new Error(`${open.length} red flag${open.length === 1 ? '' : 's'} to fix (a new upload) or override first`), { blocking: open.map(o => ({ flag_id: o.id, rule: o.rule, label: o.body.label })) });
-      await this.setStatusRow(stub, 'ready', upload.id, a.id, user ?? null);
+      await this.setStatusRow(stub, 'ready', upload.id, a.id, user ? packActor(user, forWho) : null);
     }
     const after = await this.status(stub);
-    await S.getStore().recordEdit({ line_id: `asset:${stub}`, batch_id: 'preflight', before, after, by: user || 'unknown', at: new Date().toISOString() });
+    await S.getStore().recordEdit({ line_id: `asset:${stub}`, batch_id: 'preflight', before, after, by: whoWords(user || 'unknown', cleanFor(forWho, user)), at: new Date().toISOString() });
     return after;
   }
 
@@ -864,14 +867,14 @@ export class Preflight {
    * flags dealt with (copy match is per code), so the ones that can't pass say why and the rest pass (production test,
    * 1 Oct: on A1–A3 sharing a visual, "Mark Pre-flight passed" only marked the selected code).
    */
-  async setReadyVisual(stub: string, user?: string): Promise<{ passed: string[]; blocked: Array<{ code: string; error: string }> }> {
+  async setReadyVisual(stub: string, user?: string, forWho?: string): Promise<{ passed: string[]; blocked: Array<{ code: string; error: string }> }> {
     const upload = await this.latestUpload(stub);
     if (!upload) throw new Error('Upload the asset first');
     const codes = [];
     for (const x of upload.stubs) if ((await this.latestUpload(x))?.id === upload.id) codes.push(x);
     const passed: string[] = [], blocked: Array<{ code: string; error: string }> = [];
     for (const code of codes) {
-      try { await this.setReady(code, true, user); passed.push(code); } catch (e: any) { blocked.push({ code, error: String(e?.message || e) }); }
+      try { await this.setReady(code, true, user, forWho); passed.push(code); } catch (e: any) { blocked.push({ code, error: String(e?.message || e) }); }
     }
     return { passed, blocked };
   }
@@ -905,21 +908,24 @@ export class Preflight {
     const keys = Object.keys(r.features?.items || {});
     // B2's own row when the audit came from B2 (same columns either way).
     // Every real round (B3 keys round close and expected-vs-actual on the round column); never a test round.
-    const head = ['stub', 'features', 'angle', 'persona', 'kind', 'red', 'amber', 'grey', ...keys.map(k => `p_${k}`), 'round'];
+    // decided_by: whose creative call the sign-off was (the "for" person, else who entered it); entered_by: who entered it.
+    const head = ['stub', 'features', 'angle', 'persona', 'kind', 'red', 'amber', 'grey', ...keys.map(k => `p_${k}`), 'decided_by', 'entered_by', 'round'];
     const rows = [head];
     const { b2FeaturesRow } = await import('./preflightB2.js');
     for (const s of await this.stubs({ round: 'all' })) {
       if (s.test || s.audit?.status !== 'done') continue;
       const a = (await this.db.query(`SELECT result FROM studio_audits WHERE id = $1`, [s.audit.id])).rows[0];
+      const so = (await this.findStub(s.stub)).signoff;
+      const who = { decided_by: decidedBy(so.ready_by, so.ready_for), entered_by: so.ready_by };
       if (a?.result?.report) {
-        const row: Record<string, string | number> = { ...b2FeaturesRow({ ...a.result.report, stub: s.stub }, keys), red: s.audit.red, amber: s.audit.amber, grey: s.audit.grey, round: s.round };
+        const row: Record<string, string | number> = { ...b2FeaturesRow({ ...a.result.report, stub: s.stub }, keys), red: s.audit.red, amber: s.audit.amber, grey: s.audit.grey, round: s.round, ...who };
         rows.push(head.map(h => String(row[h] ?? '')));
         continue;
       }
       const feats: Record<string, number> = a?.result?.features || {};
       rows.push([s.stub, keys.filter(k => (feats[k] ?? 0) >= threshold).join('; '), r.territories[s.territory]?.angle || '', s.persona,
         s.upload?.kind || '', String(s.audit.red), String(s.audit.amber), String(s.audit.grey),
-        ...keys.map(k => (feats[k] === undefined ? '' : Number(feats[k]).toFixed(3))), s.round]);
+        ...keys.map(k => (feats[k] === undefined ? '' : Number(feats[k]).toFixed(3))), who.decided_by, who.entered_by, s.round]);
     }
     return S.toCsv(rows);
   }
@@ -930,7 +936,7 @@ export class Preflight {
     const rounds = await getRounds();
     // A view of exactly one test round (a demo) includes its codes, marked TEST on the first line.
     const test = testOnly(await roundView(round, user));
-    const rows = [['Naming code', 'Region', 'Month', 'Persona', 'Territory', 'Kind', 'File', 'Sizes missing', 'Same visual as', 'Status', 'Ready to traffic', 'Pre-flight passed by', 'Pre-flight passed at', 'Open red flags', 'Amber flags', 'Overridden red flags', 'Compliance', 'Compliance note', 'Cleared at Trupanion by', 'Compliance recorded by']];
+    const rows = [['Naming code', 'Region', 'Month', 'Persona', 'Territory', 'Kind', 'File', 'Sizes missing', 'Same visual as', 'Status', 'Ready to traffic', 'Pre-flight passed by', 'Pre-flight passed at', 'Open red flags', 'Amber flags', 'Overridden red flags', 'Compliance', 'Compliance note', 'Cleared at Trupanion by', 'Compliance recorded by', 'Decided by', 'Entered by']];
     for (const s of await this.stubs({ round, user })) {
       if (s.test && !test) continue;
       let open = '', amber = '', overridden = '';
@@ -938,7 +944,7 @@ export class Preflight {
         const f = await this.flagsFor(s.audit.id, s.stub);
         open = f.filter(x => x.severity === 'red' && !x.override).map(x => x.body.label || x.rule).join('; ');
         amber = f.filter(x => x.severity === 'amber').map(x => x.body.label || x.rule).join('; ');
-        overridden = f.filter(x => x.severity === 'red' && x.override).map(x => `${x.body.label || x.rule} (overridden by ${x.override.by}: “${x.override.reason}”)`).join('; ');
+        overridden = f.filter(x => x.severity === 'red' && x.override).map(x => `${x.body.label || x.rule} (overridden by ${whoWords(x.override.by, x.override.for)}: “${x.override.reason}”)`).join('; ');
       }
       // Add3 only ever sees "Ready to traffic" on a code Trupanion has cleared (or one marked ready before the gate, which says so).
       const status = s.traffic.ready || s.status.status === 'ready' ? s.traffic.words : !s.upload ? 'Not uploaded' : s.audit?.status === 'done' ? 'Needs review' : s.audit ? `Audit ${s.audit.status}` : 'Not audited';
@@ -948,7 +954,9 @@ export class Preflight {
       const files = s.upload ? SIZES.map(z => ({ z, fs: s.upload!.files.filter(f => (f.aspect || first) === z) })).filter(x => x.fs.length).map(x => `${x.z}: ${x.fs.map(f => f.filename).join(', ')}`).join(' | ') : '';
       rows.push([s.stub, s.region, labelOf(rounds, s.round), s.persona, s.territory, s.upload?.kind || '', files, s.sizes.missing.join(', '), s.upload?.stubs.filter(x => x !== s.stub).join(' | ') || '', status, s.traffic.ready ? 'yes' : 'no',
         s.status.status === 'ready' ? s.status.ready_by || '' : '', s.status.status === 'ready' ? s.status.ready_at || '' : '', open, amber, overridden,
-        COMPLIANCE_WORDS[c.status], c.note || '', c.client_by || '', c.by ? `${c.by}, ${c.at?.slice(0, 16).replace('T', ' ')}` : '']);
+        COMPLIANCE_WORDS[c.status], c.note || '', c.client_by || '', c.by ? `${c.by}, ${c.at?.slice(0, 16).replace('T', ' ')}` : '',
+        // Pre-flight passed: whose call it was (the "for" person, else who marked it) and who entered it.
+        s.status.status === 'ready' ? decidedBy(s.status.ready_by, s.status.ready_for) : '', s.status.status === 'ready' ? s.status.ready_by || '' : '']);
     }
     return (test ? S.toCsv([['TEST – not for trafficking']]) : '') + S.toCsv(rows);
   }
@@ -1021,7 +1029,7 @@ export class Preflight {
     const checkSpecifically = [...new Set(lines.flatMap(({ signed, line }) => (signed.overrides || []).map(o =>
       clientOverrideLine(`${rules.fields[signed.field]?.label || signed.field}`, line?.flags.find(f => f.rule === o.rule)?.quote, ruleName(rules, o.rule, (o.label || o.rule).replace(/\.$/, ''))))))];
     return {
-      status, note: latest?.note, by: latest?.by, at: latest?.at, client_by: status === 'pending' ? undefined : latest?.client_by, send_back: status === 'changes_requested' ? latest?.send_back : undefined,
+      status, note: latest?.note, by: latest?.by, for: (latest as any)?.for, at: latest?.at, client_by: status === 'pending' ? undefined : latest?.client_by, send_back: status === 'changes_requested' ? latest?.send_back : undefined,
       stale: edited ? 'Wording edited since sign-off' : each.find(e => e.stale)?.stale, on_asset: !!latest?.upload_id, recorded: each.some(e => !!e.c), wording_edited: edited,
       overrides: overrideDetails.map(o => o.label), override_details: overrideDetails, check_specifically: checkSpecifically,
     };
@@ -1101,7 +1109,7 @@ export class Preflight {
    * (Ready for production, to edit and sign off again) or 'asset' (Pre-flight,
    * for a new upload). Anything but cleared keeps a code out of Ready to traffic.
    */
-  async setAssetCompliance(uploadId: string, input: { status: string; note?: string; send_back?: string; codes?: string[]; client_by?: string }, user?: string) {
+  async setAssetCompliance(uploadId: string, input: { status: string; note?: string; send_back?: string; codes?: string[]; client_by?: string; for?: string }, user?: string) {
     const status = String(input.status || '');
     if (!['pending', 'cleared', 'changes_requested'].includes(status)) throw new Error('Compliance status must be one of pending, cleared, changes_requested');
     const note = String(input.note || '').trim();
@@ -1131,7 +1139,7 @@ export class Preflight {
     }
     for (const code of codes) {
       for (const { signed } of await this.codeLines(code)) {
-        await setCompliance(signed.batch_id, signed.line_id, status, note || undefined, user, { upload_id: uploadId, code, sha256: signed.sha256, send_back: sendBack, client_by: clientBy || undefined });
+        await setCompliance(signed.batch_id, signed.line_id, status, note || undefined, user, { upload_id: uploadId, code, sha256: signed.sha256, send_back: sendBack, client_by: clientBy || undefined, for: input.for });
       }
       // The visual goes back to Pre-flight: it's no longer Ready to traffic until a new upload is reviewed.
       if (status === 'changes_requested' && sendBack === 'asset') await this.setStatusRow(code, 'open', null, null, null);
@@ -1145,6 +1153,8 @@ export interface CodeCompliance {
   status: S.ComplianceStatus; note?: string; at?: string; send_back?: 'copy' | 'asset';
   /** Who recorded it in Studio (the producer), and who at Trupanion made the decision. */
   by?: string; client_by?: string;
+  /** Whose recording it is, when it was entered for them. */
+  for?: string;
   /** Any decision recorded on the code's lines at all (codes marked ready before the gate have none). */
   recorded: boolean;
   /** A line's wording was edited after sign-off: not Ready to traffic until it's signed off (and reviewed) again. */
