@@ -30,3 +30,17 @@ Nick's Round 1 worksheet was made by hand before the export existed: no `Row id`
 - **"Carousel card" / "Card"** with no number is on-image text for a carousel.
 - **Asset names** resolve within the row's persona, and to a live territory before a retired one of the same name.
 - **Workbooks whose comments trip the reader** (saved by other tools) are read again without their comment and drawing parts. `jszip` is now a direct backend dependency (it was already installed through `exceljs`).
+
+## PR 2: the worksheet screen, steps 1 to 3 (preview)
+
+`frontend/src/components/studio/Worksheet.tsx`, at `/studio?tab=worksheet` and behind the table icon top right ("Worksheet (preview)"). It is not the default screen; nothing else changed. It reads `GET /worksheet` and writes through the calls Review uses.
+
+- Tabs are the steps: 1 On-image copy (by persona, then asset), 2 Captions, 3 Headlines, each with kept and to-decide counts; 4 Build ads and 5 Assets open the existing screens.
+- One row per line: where it sits, the wording, flags as plain-word chips (or "clear"), the count against the guide that applies (red when over), and Keep / Cut / Edit. Keep and Cut toggle. Edit opens the wording in place; saving keeps the new wording and re-checks it straight away.
+- "details" (closed by default) loads the line from its run: the skeptic's line, who wrote it, angle and structure, each flag in full with its source, and the history.
+- Counts at the top: decided of total, kept, cut, to decide. One sentence under the table says what red and amber mean.
+- Region is a switch (it follows the context's region). "Working for" is the existing picker. "Download as a sheet" gives the PR 1 workbook.
+- A signed-off line can't be changed here ("Change it in Build").
+- A persona's own post copy is not shown; the count of such lines is, with where they are.
+
+Not in this PR: targets and due dates (nothing stores them yet), paste / add a line / write more inside the worksheet (PR 3), the lock (PR 4), card order by dragging (open question 2), the default screen (PR 5).

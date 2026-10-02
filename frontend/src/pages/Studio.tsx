@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { HOSTED, getUser, setActingFor, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type Line, type Meta, type Region, type StudioEvent, REGION_NAMES } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
-import { ArrowLeft, ClipboardCheck, HelpCircle, Map as MapIcon, ScrollText, Shuffle } from 'lucide-react';
+import { ArrowLeft, ClipboardCheck, HelpCircle, Map as MapIcon, ScrollText, Shuffle, Table2 } from 'lucide-react';
 import { LivePage, RoundBadge, RoundsPanel, TestBar } from './StudioRounds';
 import { Board, type Step } from '@/components/studio/Board';
 import { ALL_VIEW, Chip, GhostButton, Lockup, PINK, PersonaDot, initials, params, personaKeys, regionOf, sameCtx, setTerritoryNames, setWhatToDo, territoryName, useActingFor, isOpenTerritory, isSharedCtx, type Ctx, type ViewFilter } from '@/components/studio/ui';
@@ -29,10 +29,11 @@ import { Compare } from '@/components/studio/Compare';
 import { ExportMenu } from '@/components/studio/ExportMenu';
 import { GatePanel } from '@/components/studio/Gate';
 import { CopyCheck } from '@/components/studio/CopyCheck';
+import { Worksheet } from '@/components/studio/Worksheet';
 import { inFrame, studioGate, type GateError } from '@/lib/studioGate';
 
-type Tab = 'home' | 'howto' | 'write' | 'review' | 'build' | 'assets' | 'live' | 'territories' | 'rules' | 'check' | 'compare';
-const TABS: Tab[] = ['home', 'howto', 'write', 'review', 'build', 'assets', 'live', 'territories', 'rules', 'check', 'compare'];
+type Tab = 'home' | 'howto' | 'write' | 'review' | 'build' | 'assets' | 'live' | 'territories' | 'rules' | 'check' | 'compare' | 'worksheet';
+const TABS: Tab[] = ['home', 'howto', 'write', 'review', 'build', 'assets', 'live', 'territories', 'rules', 'check', 'compare', 'worksheet'];
 /** Screens that show everything in the round (the bar filters the view there, never the writing context). */
 const VIEW_TABS: Tab[] = ['assets', 'live'];
 // The four steps, in order, with their full names (never shortened).
@@ -313,6 +314,7 @@ export function Studio() {
           <span className="mr-1 hidden h-5 w-px bg-[#343946] sm:block" aria-hidden />
           {utility('territories', 'Territories', <MapIcon className="h-4 w-4" aria-hidden />, 'Territories: edit, add or retire')}
           {utility('rules', 'Rules', <ScrollText className="h-4 w-4" aria-hidden />, 'Rules: what every line is checked against')}
+          {utility('worksheet', 'Worksheet (preview)', <Table2 className="h-4 w-4" aria-hidden />, 'Worksheet (preview): the month’s copy on one page, one decision per line')}
           {utility('check', 'Check copy', <ClipboardCheck className="h-4 w-4" aria-hidden />, 'Check copy: paste copy written elsewhere, check every line, share the report')}
           <RoundBadge meta={meta} onViewChange={() => setRoundKey(k => k + 1)} onWorkingChange={() => { refreshMeta().catch(() => {}); setRoundKey(k => k + 1); }} />
           <ExportMenu meta={meta} ctx={ctx} view={view} batch={batch} onImported={m => { setNote(m); setRunsTick(t => t + 1); }} />
@@ -362,6 +364,8 @@ export function Studio() {
         {meta && tab === 'assets' && <Assets meta={meta} view={view} setView={setView} onBuild={() => setTab('build')} onFixCopy={st => { setCtx({ persona: st.persona, territory: st.territory, region: regionOf(st) }); setTab('build'); }} />}
         {meta && tab === 'territories' && <Territories meta={meta} onSaved={() => refreshMeta()} onBrief={code => { const t = meta.territories[code]; setCtx({ persona: t.persona, territory: code, region: ctx.region }); setTab('write'); }} />}
         {tab === 'rules' && meta?.rounds && <RoundsPanel meta={meta} onSaved={() => refreshMeta().catch(() => {})} />}
+        {/* The worksheet (Round 2), in preview: everything on one page; it becomes the default screen on Brook's word. */}
+        {meta && tab === 'worksheet' && <Worksheet meta={meta} region={ctx.region} setRegion={r => setCtx({ ...ctx, region: r })} onStep={setTab} onChanged={() => setRunsTick(t => t + 1)} />}
         {meta && tab === 'check' && <CopyCheck meta={meta} onOpenRun={id => { continueRun(id).catch(e => setErr(e.message)); }} />}
         {tab === 'rules' && (meta || admin) && <Rules meta={meta} admin={HOSTED && (!!meta?.user?.admin || admin)} onActivated={() => refreshMeta().then(() => setErr('')).catch(() => {})} />}
       </main>

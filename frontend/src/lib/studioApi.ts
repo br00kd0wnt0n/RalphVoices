@@ -262,6 +262,18 @@ export interface ComplianceAsset {
 }
 export interface ComplianceView { assets: ComplianceAsset[]; waiting: Array<{ stub: string; persona: string; territory: string; region: Region; copy: SignedCopy[] }> }
 
+export type WsStep = 'on_image' | 'primary' | 'headline';
+/** One line on the worksheet. `id` is the line id; `n` (O1, P3) is only for reading. */
+export interface WsRow {
+  n: string; id: string; run: string; step: WsStep; persona: string; persona_name: string; territory: string; asset: string; region: Region;
+  field: string; where: string; card?: number; text: string; chars: number; visible: number; max: number;
+  status: 'red' | 'amber' | 'clear'; flags: Array<{ level: 'red' | 'amber' | 'grey'; name: string; rule: string; detail?: string }>;
+  call: 'keep' | 'cut' | ''; edited: boolean; sha256: string; decided_by?: string; decided_for?: string; signed_off?: boolean;
+}
+export interface WorksheetData {
+  round: string; round_label: string; region: Region | 'all'; rules?: string; steps: Record<WsStep, WsRow[]>;
+  counts: Record<WsStep, { total: number; kept: number; cut: number; undecided: number; red: number; amber: number; clear: number }>; other: number;
+}
 export type SheetAction = 'keep' | 'cut' | 'rewrite' | 'new' | 'none' | 'conflict' | 'error';
 /** One row of a filled-in worksheet against Studio as it is now: what importing it would do. */
 export interface SheetPreviewRow { tab: string; row: number; n: string; action: SheetAction; id?: string; matched?: boolean; now?: string; text?: string; chars?: number; visible?: number; note?: string; where?: string; territory?: string }
@@ -478,6 +490,7 @@ export const studio = {
   },
 
   // The worksheet: the month's copy as a workbook, and the filled-in workbook read back.
+  worksheet: (region: Region | 'all' = 'US') => req<WorksheetData>(`/worksheet?region=${region}`),
   worksheetXlsx: (region: Region | 'all' = 'US') => download(`/worksheet.xlsx?region=${region}`, 'copy-worksheet.xlsx'),
   worksheetPreview: async (file: File, accept: string[] = []) => {
     const form = new FormData();
