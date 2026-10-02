@@ -209,7 +209,7 @@ export type StudioEvent =
   | { type: 'status'; message: string }
   | { type: 'line'; line: Line }
   | { type: 'stats'; stats: RunStats }
-  | { type: 'done'; batch: string }
+  | { type: 'done'; batch: string; result?: unknown }
   | { type: 'error'; message: string };
 type Emit = (e: StudioEvent) => void;
 

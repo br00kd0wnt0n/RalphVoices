@@ -6,10 +6,12 @@ import { Download } from 'lucide-react';
 import { studio, type Batch, type Meta } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { PersonaDot, territoryName, type Ctx, type ViewFilter } from './ui';
+import { SheetImport } from './SheetImport';
 
 export function ExportMenu({ meta, ctx, view, batch, onImported }: { meta: Meta | null; ctx: Ctx; view: ViewFilter; batch: Batch | null; onImported: (msg: string) => void }) {
   const [open, setOpen] = useState(false);
   const [narrow, setNarrow] = useState(false);
+  const [sheet, setSheet] = useState<File | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -70,7 +72,13 @@ export function ExportMenu({ meta, ctx, view, batch, onImported }: { meta: Meta 
           {narrow && <Item onClick={() => dl(`/handoff.md${q}`, 'ready-for-production.md')}>Handoff pack (Markdown)</Item>}
           {meta?.preflight?.enabled && <Item onClick={() => dl('/preflight/handoff.csv', 'asset-handoff.csv')} title="Per code: the asset, Ready to traffic and compliance status">Asset handoff, every code</Item>}
           <Item onClick={() => dl('/compliance-sheet.csv', 'trupanion-compliance-sheet.csv')} title="The final words only: no internal flags, objections or names">Compliance sheet for Trupanion</Item>
-          <Head>Review in Google Sheets</Head>
+          <Head>Copy worksheet (the month, one tab per step)</Head>
+          <Item onClick={() => { setOpen(false); studio.worksheetXlsx(ctx.region).catch(e => onImported(`Download failed: ${e.message}`)); }} title="On-image copy, shared primary texts and shared headlines, with Keep / Cut / Rewrite cells. Opens in Excel or Google Sheets.">Download the worksheet (.xlsx)</Item>
+          <label role="menuitem" className="block cursor-pointer rounded-md px-3 py-1.5 text-sm text-[#ECEDEF] hover:bg-[#272B34]" title="Shows what would change before anything is written">
+            Import a filled-in worksheet…
+            <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) { setOpen(false); setSheet(f); } }} />
+          </label>
+          <Head>Review in Google Sheets (one run)</Head>
           <Item disabled={!run} title={run ? undefined : 'Open a run for this territory in Review first'} onClick={() => run && dl(`/batches/${encodeURIComponent(run.id)}/export.csv`, `${run.id}.csv`)}>Download this run’s sheet</Item>
           <label role="menuitem" className="block cursor-pointer rounded-md px-3 py-1.5 text-sm text-[#ECEDEF] hover:bg-[#272B34]">
             Import the curated sheet…
@@ -90,6 +98,7 @@ export function ExportMenu({ meta, ctx, view, batch, onImported }: { meta: Meta 
           )}
         </div>
       )}
+      {sheet && <SheetImport meta={meta} file={sheet} onClose={() => setSheet(null)} onDone={onImported} />}
     </div>
   );
 }
