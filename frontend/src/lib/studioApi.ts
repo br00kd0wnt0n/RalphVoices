@@ -262,11 +262,19 @@ export interface ComplianceAsset {
 }
 export interface ComplianceView { assets: ComplianceAsset[]; waiting: Array<{ stub: string; persona: string; territory: string; region: Region; copy: SignedCopy[] }> }
 
+export type SheetAction = 'keep' | 'cut' | 'rewrite' | 'new' | 'none' | 'conflict' | 'error';
+/** One row of a filled-in worksheet against Studio as it is now: what importing it would do. */
+export interface SheetPreviewRow { tab: string; row: number; n: string; action: SheetAction; id?: string; now?: string; text?: string; chars?: number; visible?: number; note?: string; where?: string; territory?: string }
+export interface SheetPreview {
+  round: string; region: string; exported_at: string; problems: string[]; rows: SheetPreviewRow[]; counts: Record<SheetAction, number>;
+  estimate: { usd: number; seconds: number; checks: number };
+}
+export interface SheetResult { applied: Record<'keep' | 'cut' | 'rewrite' | 'new', number>; skipped: number; failed: Array<{ n: string; tab: string; error: string }>; runs: string[]; bulk?: string }
 export type StudioEvent =
   | { type: 'status'; message: string }
   | { type: 'line'; line: Line }
   | { type: 'stats'; stats: RunStats }
-  | { type: 'done'; batch: string }
+  | { type: 'done'; batch: string; result?: unknown }
   | { type: 'error'; message: string };
 
 // Who is working. Locally there's no sign-in, so the page asks once and
@@ -467,6 +475,18 @@ export const studio = {
     return studio.recheck(batch, line);
   },
 
+  // The worksheet: the month's copy as a workbook, and the filled-in workbook read back.
+  worksheetXlsx: (region: Region | 'all' = 'US') => download(`/worksheet.xlsx?region=${region}`, 'copy-worksheet.xlsx'),
+  worksheetPreview: async (file: File, accept: string[] = []) => {
+    const form = new FormData();
+    form.append('file', file, file.name); form.append('accept', JSON.stringify(accept));
+    return (await (await raw('/worksheet/import/preview', { method: 'POST', body: form })).json()) as SheetPreview;
+  },
+  worksheetApply: async (file: File, accept: string[] = [], confirm = false) => {
+    const form = new FormData();
+    form.append('file', file, file.name); form.append('accept', JSON.stringify(accept)); if (confirm) form.append('confirm', 'true');
+    return (await (await raw('/worksheet/import/apply', { method: 'POST', body: form })).json()) as { job: string; estimate: SheetPreview['estimate'] };
+  },
   // Pre-flight
   pfStubs: () => req<PfStub[]>('/preflight/stubs'),
   /** Upload the visual for a stub; `also`: other signed-off stubs that run on the same visual. */

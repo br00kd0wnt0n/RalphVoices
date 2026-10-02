@@ -211,9 +211,9 @@ export interface ReportRow {
 }
 export interface BulkReport { id: string; at: string; by: string; for?: string; rows: ReportRow[]; errors: BulkParse['errors']; summary: string; counts: { checked: number; red: number; amber: number; clear: number } }
 
-const SEV: Record<string, 'red' | 'amber' | 'grey'> = { compliance: 'red', warn: 'amber', note: 'grey' };
+export const SEV: Record<string, 'red' | 'amber' | 'grey'> = { compliance: 'red', warn: 'amber', note: 'grey' };
 /** A flag's short name in plain words: the rule's first clause (never the internal notes after it). */
-const flagName = (f: Flag) => f.label.split(/(?<=[a-z0-9’'”)])[.:;]\s|\s\(/)[0].replace(/[.:;]$/, '').trim();
+export const flagName = (f: Flag) => f.label.split(/(?<=[a-z0-9’'”)])[.:;]\s|\s\(/)[0].replace(/[.:;]$/, '').trim();
 
 export async function bulkReport(id?: string): Promise<BulkReport> {
   const list = await listBulk();

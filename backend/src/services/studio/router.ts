@@ -10,6 +10,7 @@ import type { PgStore } from './pgStore.js';
 import * as R from './ready.js';
 import * as Rounds from './rounds.js';
 import * as Bulk from './bulk.js';
+import * as Ws from './worksheet.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -256,6 +257,44 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     res.json({ bulk: id, estimate: est, job: startJob(`${id}~${Date.now()}`, emit => Bulk.runBulk(parsed, api, { user: who, for: forWhom, id }, emit).finally(held.release)) });   // each run records its own spend (generate)
   }));
   r.get('/bulk', wrap(async (_req, res) => res.json(await Bulk.listBulk())));
+
+  // ----- The worksheet: the month's copy as one table per step, as a sheet, and the sheet read back -----
+  const wsRegion = (req: Request) => { const q = String(req.query.region || req.body?.region || 'US').toUpperCase(); return (q === 'ALL' ? 'all' : q === 'CA' ? 'CA' : 'US') as 'US' | 'CA' | 'all'; };
+  r.get('/worksheet', wrap(async (req, res) => { await S.refreshRules(); res.json(await Ws.worksheet(await Rounds.roundView(rq(req), o.who(req)), wsRegion(req))); }));
+  r.get('/worksheet.xlsx', wrap(async (req, res) => {
+    await S.refreshRules();
+    const view = await Rounds.roundView(rq(req), o.who(req));
+    const ws = await Ws.worksheet(view, wsRegion(req));
+    download(res, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', `${Rounds.testOnly(view) ? 'TEST_' : ''}copy-worksheet-${ws.round}-${new Date().toISOString().slice(0, 10)}.xlsx`, await Ws.exportXlsx(ws, { by: o.who(req) }));
+  }));
+  // The filled-in sheet comes back as a file. Preview says what would change and writes nothing; apply works the
+  // preview out again on the file it is sent, so what is written is what Studio holds at that moment.
+  const sheetFile = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } }).single('file');
+  const sheetOf = async (req: Request) => {
+    const f = (req as any).file as { buffer: Buffer } | undefined;
+    if (!f) throw Object.assign(new Error('Choose the filled-in worksheet (.xlsx)'), { status: 400 });
+    await S.refreshRules();
+    let accept: string[] = [];
+    try { accept = JSON.parse(String(req.body?.accept || '[]')); } catch { /* none */ }
+    return { sheet: await Ws.parseXlsx(f.buffer), accept: Array.isArray(accept) ? accept.map(String) : [] };
+  };
+  r.post('/worksheet/import/preview', sheetFile, wrap(async (req, res) => {
+    const { sheet, accept } = await sheetOf(req);
+    res.json(await Ws.previewImport(sheet, await Rounds.roundView(rq(req), o.who(req)), { accept }));
+  }));
+  r.post('/worksheet/import/apply', sheetFile, wrap(async (req, res) => {
+    const { sheet, accept } = await sheetOf(req);
+    const view = await Rounds.roundView(rq(req), o.who(req));
+    const p = await Ws.previewImport(sheet, view, { accept });
+    if (!(p.counts.keep + p.counts.cut + p.counts.rewrite + p.counts.new)) return res.status(400).json({ error: 'Nothing in this sheet would change anything' });
+    if (!o.mock && p.estimate.usd > o.askOver && String(req.body?.confirm) !== 'true') return res.status(409).json({ needs_confirm: true, estimate: p.estimate.usd });
+    const who = o.who(req), forWho = forOf(req);
+    const api = o.api(req);
+    const id = `worksheet-import-${Date.now()}`;
+    const held = await reserve(`worksheet import`, p.estimate.usd, api, who);
+    if ('error' in held) return res.status(402).json({ error: held.error });
+    res.json({ job: startJob(id, emit => Ws.applyImport(sheet, view, api, { user: who, for: forWho, accept }, emit).finally(held.release)), estimate: p.estimate, counts: p.counts });
+  }));
   // Shared captions are written to sit under these: every persona's kept on-image headlines, in a region and the round in view.
   r.get('/approved-headlines', wrap(async (req, res) => {
     await S.refreshRules();

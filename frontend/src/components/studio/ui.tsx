@@ -28,15 +28,8 @@ export function Chip({ children, tone = 'grey', className, ...p }: React.HTMLAtt
   const t = { grey: 'bg-[#1C1F26] text-[#A3A8B1] border-[#343946]', amber: 'bg-amber-400/10 text-amber-200 border-amber-400/40', red: 'bg-red-500/10 text-red-200 border-red-500/45', outline: 'bg-transparent text-[#A3A8B1] border-[#343946]' }[tone];
   return <span {...p} className={cn('inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[13px] font-medium', t, className)}>{children}</span>;
 }
-// Plain names for the chips; the full rule, quote and source open on click.
-export const CHIP: Record<string, string> = {
-  LIMIT_VISIBLE: 'cut off on screen', LIMIT_MAX: 'too long for the field', LIMIT_ON_ASSET: 'long for the image', SHARED_CTA: 'no call to action', NEAR_DUP: 'similar line', CL_GLANCE: 'not a glance read', CL_PRODUCT: 'product unclear',
-  COMP_UGC_MEMBER: 'cast a member', COMP_VERBATIM: 'verbatim quote', FIG_UNSOURCED: 'unsourced figure', FIG_CITATION: 'needs citation', FIG_ATTRIBUTION: 'misattributed figure',
-  COMP_DIRECT_PAY: 'direct pay caveat', COMP_PAYS_FOR_ITSELF: 'pays for itself', COMP_PAID_SHARE: 'whole bill', COMP_PREEXISTING: 'pre-existing', COMP_ROUTINE: 'routine care',
-  COMP_CLAIM_SPEED: 'claim speed', COMP_CHEAP_LOCKED: 'cheap / locked price', COMP_PRICE_LEAD: 'price lead', COMP_COVERAGE_CAVEAT: 'coverage caveat', COMP_SUPERLATIVE: 'superlative',
-  COMP_FACT_FRAMING: 'figure framing', BR_NAMING: '"pet insurance"', BR_CASE: 'all caps', BR_BOAST: 'boastful', BR_PLAIN: 'not plain', BR_SAD_PET: 'sad pet', CHECK_FAILED: 'check failed',
-};
-export const chipName = (rule: string) => CHIP[rule] || (rule.startsWith('BRIEF_BANNED:') ? `banned: ${rule.slice(13)}` : /^[A-Z]+_T_/.test(rule) ? `turn-off: ${rule.replace(/^[A-Z]+_T_/, '').replace(/_/g, ' ').toLowerCase()}` : rule.replace(/_/g, ' ').toLowerCase());
+export { CHIP, chipName } from '@/lib/studioChips';
+import { chipName } from '@/lib/studioChips';
 /** A flag's chip name, saying when it was found on the wording before an edit (until the re-check replaces it). */
 export const flagName = (f: Pick<Flag, 'rule' | 'original' | 'why'>) => `${chipName(f.rule)}${onOriginal(f) ? ' (original wording)' : ''}`;
 export const sevTone = (s: Flag['severity']) => (s === 'compliance' ? 'red' : s === 'warn' ? 'amber' : 'grey') as 'red' | 'amber' | 'grey';
