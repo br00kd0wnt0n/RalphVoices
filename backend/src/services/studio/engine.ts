@@ -220,7 +220,9 @@ export interface Rules {
   /** Who to show in the creative (rules v2.12, from Trupanion's breed data): notes for every persona, and a line for the writer. */
   casting?: { _note?: string; notes?: Array<{ text: string; source: string; caution?: boolean }>; writer_note?: string };
   sources: Record<string, any>;
-  fields: Record<string, { platform: string; label: string; visible: number; max: number; source: string; note?: string; writer_note?: string; default_count?: number }>;
+  fields: Record<string, { platform: string; label: string; visible: number; max: number; source: string; note?: string; writer_note?: string; default_count?: number;
+    /** A looser length guide when the line is a carousel card (rules v2.15+): a card is read, not glanced. */
+    card?: { visible: number; max: number; source?: string } }>;
   tone_controls: Record<string, Record<string, string>>;
   structures: Record<Structure, string>;
   facts: Fact[];
@@ -829,6 +831,17 @@ export async function tasteFor(b: Pick<Brief, 'round'>): Promise<TasteExample[]>
 export const onAsset = (field: string, r: Pick<Rules, 'fields'>) => ((r.fields[field] as any)?.on_asset ?? isOnImageField(field, r)) === true;
 const onAssetWords = (field: string, r: Pick<Rules, 'fields'>) => (isSubField(field, r) ? 'an on-image subhead' : 'on-image text');
 
+/**
+ * The length guide for a line: the field's own, or its `card` guide (rules v2.15+) when the line is a carousel card
+ * (it has a card number, or its territory's format is a carousel). Rules without `card` behave as before.
+ */
+export function fieldLimits(field: string, r: Pick<Rules, 'fields' | 'territories'>, ctx: { card?: number; territory?: string } = {}): { visible: number; max: number; source: string; card: boolean } | undefined {
+  const f = r.fields[field];
+  if (!f) return undefined;
+  const isCard = !!ctx.card || /^CAR/i.test(r.territories?.[ctx.territory || '']?.format || '');
+  return isCard && f.card ? { visible: f.card.visible, max: f.card.max, source: f.card.source || f.source, card: true } : { visible: f.visible, max: f.max, source: f.source, card: false };
+}
+
 /** Short fields whose visible length is a hard limit for written lines: a headline or hook cut off in the feed doesn't work. */
 export const isShortField = (f: string) => /headline|hook/.test(f);
 
@@ -938,7 +951,7 @@ STRUCTURES:
 ${Object.entries(r.structures).map(([k, v]) => `- ${k}: ${v}`).join('\n')}
 
 FIELDS: aim for the target, well inside what shows on screen. A line that runs past the visible length is cut off in the feed.
-${b.fields.map(f => `- ${f}: ${r.fields[f].label}, aim for ${targetChars(r.fields[f].visible)} characters or fewer (${r.fields[f].visible} visible)${fieldGuidance(f, r) ? `. ${fieldGuidance(f, r)}` : ''}`).join('\n')}
+${b.fields.map(f => `- ${f}: ${r.fields[f].label}, aim for ${targetChars(fieldLimits(f, r, b)!.visible)} characters or fewer (${fieldLimits(f, r, b)!.visible} ${fieldLimits(f, r, b)!.card ? 'at most, per card' : 'visible'})${fieldGuidance(f, r) ? `. ${fieldGuidance(f, r)}` : ''}`).join('\n')}
 
 LENGTH AND RHYTHM: short and punchy. One idea per line. Fragments are welcome ("Vet bill? Covered." beats a full sentence). Cut throat-clearing openers ("Honestly,", "Picture this:", "Here's the thing:", "Real talk:") and any word that isn't doing work. When in doubt, cut.
 ${b.banned_words.length ? `\nBANNED WORDS (the creative director's): ${b.banned_words.join(', ')}` : ''}${b.banned_ideas.length ? `\nIDEAS THAT ARE OFF LIMITS: ${b.banned_ideas.join('; ')}` : ''}${own.length ? `\nTHE CREATIVE DIRECTOR'S OWN LINES for this brief. This is the voice to match most closely. Build around them: never repeat or paraphrase them, and take the angles and structures they haven't used:\n${own.map(x => `- ${x}`).join('\n')}` : ''}${b.reference_lines.length ? `\nREFERENCE LINES in the voice the creative director wants (match the voice, don't copy):\n${b.reference_lines.map(x => `- ${x}`).join('\n')}` : ''}${keeps.length ? `\nTHE CREATIVE DIRECTOR'S TASTE: lines they kept or rewrote, with their notes. Learn from the edits and notes:\n${keeps.map(x => `- [${x.field}, ${x.structure}] ${x.original && x.original !== x.text ? `"${x.original}" → rewritten as "${x.text}"` : `"${x.text}"`}${x.note ? ` (note: ${x.note})` : ''}`).join('\n')}` : ''}${cuts.length ? `\nLINES THEY CUT, and why (avoid these moves):\n${cuts.map(x => `- "${x.text}" (note: ${x.note})`).join('\n')}` : ''}
@@ -1023,7 +1036,7 @@ function sequencesUser(r: Rules, b: Brief, field: string, sequences: number, car
   const angles = [...new Set([...(home ? [home] : []), ...pr.triggers.map(t => t.id)])].slice(0, Math.max(sequences, 2));
   return `CAROUSEL SEQUENCES. For this request, ignore the cell format above: write ${sequences} carousel card sequence${sequences === 1 ? '' : 's'} of ${cards} cards each, for ${f.label} (the text on each card's image).
 A sequence is ONE idea told across the cards: card 1 is the hook that stops the scroll, the middle cards build it, card ${cards} pays it off (the end card: short, it may share the card with the disclaimer). Each card must read on its own at a glance and follow from the card before. Don't repeat a card's words on the next card.
-Each card: aim for ${targetChars(f.visible)} characters or fewer (${f.visible} visible). Sentence case.
+Each card: aim for ${targetChars(fieldLimits(field, r, { card: 1 })!.visible)} characters or fewer (${fieldLimits(field, r, { card: 1 })!.visible} at most). Sentence case.
 Give each sequence a different angle, in this order: ${angles.map(a => `${a} "${pr.triggers.find(t => t.id === a)?.label || a}"`).join('; ')}.
 ${guidance ? `Creative director's guidance: ${guidance}
 ` : ''}Return JSON: {"sequences":[{"angle":"<angle id>","cards":["<card 1>", "…", "<card ${cards}>"]}]}`;
@@ -1069,7 +1082,7 @@ function writerUser(r: Rules, b: Brief, cells: Cell[], guidance?: string, siblin
   const pr = r.personas[b.persona];
   const label = (id: string) => pr.triggers.find(t => t.id === id)?.label || id;
   return `${sibling ? `Write siblings of this line: "${sibling}". Keep what works about it but make each one a genuinely different line.\n` : ''}${guidance ? `Creative director's guidance for these: ${guidance}\n` : ''}Cells:
-${cells.map(c => `- ${c.cell}: angle ${c.angle} "${label(c.angle)}"; structure ${c.structure}; tone ${toneWords(r, c.tone)}; field ${c.field} (aim ≤${targetChars(r.fields[c.field].visible)} chars; ${r.fields[c.field].visible} visible)`).join('\n')}`;
+${cells.map(c => `- ${c.cell}: angle ${c.angle} "${label(c.angle)}"; structure ${c.structure}; tone ${toneWords(r, c.tone)}; field ${c.field} (aim ≤${targetChars(fieldLimits(c.field, r, b)!.visible)} chars; ${fieldLimits(c.field, r, b)!.visible} ${fieldLimits(c.field, r, b)!.card ? 'at most' : 'visible'})`).join('\n')}`;
 }
 
 function parseLines(text: string): Array<{ cell: string; text: string }> {
@@ -1514,19 +1527,20 @@ function truncTail(text: string, visible: number): string {
   return cs.slice(i).join('');
 }
 
-export function deterministicFlags(l: { text: string; field: string; structure: string; persona: string; region?: Region }, r: Rules, brief?: Pick<Brief, 'banned_words' | 'region'>): { flags: Flag[]; features: string[] } {
+export function deterministicFlags(l: { text: string; field: string; structure: string; persona: string; region?: Region; card?: number; territory?: string }, r: Rules, brief?: Pick<Brief, 'banned_words' | 'region'> & { territory?: string }): { flags: Flag[]; features: string[] } {
   const flags: Flag[] = [];
   const text = l.text;
   const f = r.fields[l.field];
+  const lim = fieldLimits(l.field, r, { card: l.card, territory: l.territory || brief?.territory });
   const chars = [...text].length;
   // On-asset text (in the artwork: on-image headline, subhead, cards) is never cut off: its length is a text-load
   // guideline. It gets its own flag in its own words, with no "truncated" and no quoted cut word (Nick's copy check,
   // 1 Oct: 11 of 19 ambers read "Truncated ('eater.')" on on-image headlines).
   // Shared captions run under any persona's artwork, so the primary text or caption has to carry the call to action itself.
   if (l.persona === SHARED_PERSONA && PRODUCT_FIELDS.includes(l.field) && !endsOnCta(l.text)) addFlag(flags, { rule: 'SHARED_CTA', severity: 'warn', label: 'No call to action at the end', source: 'HOUSE: Brook, 1 Oct 2026 (shared captions)', quote: '', by: ['rule'], why: 'Shared primary text ends on what to do next (e.g. get a quote, see how it works).' });
-  if (f && onAsset(l.field, r) && chars > f.visible) addFlag(flags, { rule: 'LIMIT_ON_ASSET', severity: 'warn', label: `Long for ${onAssetWords(l.field, r)}: ${chars} characters (aim for ${f.visible} or fewer)`, source: f.source, quote: '', why: chars > f.max ? `Well over: the most that reads at a glance is about ${f.max}` : undefined, by: ['rule'] });
-  else if (f && chars > f.max) addFlag(flags, { rule: 'LIMIT_MAX', severity: 'warn', label: `Over the ${f.label} limit (${chars}/${f.max})`, source: f.source, quote: '', why: `${chars} characters; limit ${f.max}`, by: ['rule'] });
-  else if (f && chars > f.visible) addFlag(flags, { rule: 'LIMIT_VISIBLE', severity: 'warn', label: `Truncated: ${chars} characters, ${f.visible} visible in ${f.label}`, source: f.source, quote: truncTail(text, f.visible), why: `${chars} characters; ${f.visible} visible`, by: ['rule'] });
+  if (f && lim && onAsset(l.field, r) && chars > lim.visible) addFlag(flags, { rule: 'LIMIT_ON_ASSET', severity: 'warn', label: `Long for ${lim.card ? (isSubField(l.field, r) ? 'a carousel card subhead' : 'a carousel card') : onAssetWords(l.field, r)}: ${chars} characters (aim for ${lim.visible} or fewer)`, source: lim.source, quote: '', why: chars > lim.max ? (lim.card ? `Well over: a card reads comfortably up to about ${lim.max}` : `Well over: the most that reads at a glance is about ${lim.max}`) : undefined, by: ['rule'] });
+  else if (f && lim && chars > lim.max) addFlag(flags, { rule: 'LIMIT_MAX', severity: 'warn', label: `Over the ${f.label} limit (${chars}/${lim.max})`, source: lim.source, quote: '', why: `${chars} characters; limit ${lim.max}`, by: ['rule'] });
+  else if (f && lim && chars > lim.visible) addFlag(flags, { rule: 'LIMIT_VISIBLE', severity: 'warn', label: `Truncated: ${chars} characters, ${lim.visible} visible in ${f.label}`, source: lim.source, quote: truncTail(text, lim.visible), why: `${chars} characters; ${lim.visible} visible`, by: ['rule'] });
 
   const pr = r.personas[l.persona];
   const items: RuleItem[] = [...r.compliance, ...r.brand, ...(pr?.turn_offs || [])];

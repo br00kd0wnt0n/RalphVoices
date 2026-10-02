@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { roundName, studio, finalText, isEdited, type Batch, type Line, type Meta, type RunSummary, type ShortRow } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { personaEdge } from '@/lib/personaColors';
-import { Chip, ForPicker, GhostButton, Intro, Label, LineHistory, Overrides, PINK, PersonaChip, PinkButton, Src, chipName, fieldOrder, flagName, params, plainSource, regionOf, sameCtx, sevTone, territoryName, toneWords, when, whatToDo, whoWords, type Ctx } from './ui';
+import { Chip, ForPicker, GhostButton, Intro, Label, LineHistory, Overrides, PINK, PersonaChip, PinkButton, Src, chipName, fieldOrder, flagName, params, plainSource, regionOf, sameCtx, sevTone, specFor, territoryName, toneWords, when, whatToDo, whoWords, type Ctx } from './ui';
 
 type Filter = 'all' | 'compliance' | 'open' | 'kept';
 const shortField = (meta: Meta, f: string) => (meta.fields[f]?.label || f).replace(/^(Meta|TikTok) /, '').replace(/\s*\(.*\)$/, '').replace(/^./, c => c.toUpperCase());
@@ -36,7 +36,7 @@ export function Review({ meta, ctx, batch, setBatch, status, running, onMore, on
   const lines = b?.lines || [];
   const yours = lines.filter(l => l.model === 'human').length;
   const checked = lines.filter(l => l.status === 'checked').length;
-  const overBy = (l: Line) => Math.max(0, [...finalText(l)].length - (meta.fields[l.field]?.visible ?? Infinity));
+  const overBy = (l: Line) => Math.max(0, [...finalText(l)].length - (specFor(meta, l.field, l)?.visible ?? Infinity));
   const shown = lines.filter(l => stay.has(l.id) || (filter === 'all' ? true : filter === 'compliance' ? l.flags.some(f => f.severity === 'compliance') : filter === 'open' ? !l.decision : true));
   const ranked = shown.map((l, i) => ({ l, i })).sort((a, c) => Number(overBy(a.l) > 0) - Number(overBy(c.l) > 0) || overBy(a.l) - overBy(c.l) || a.i - c.i).map(x => x.l);
   const groups = new Map<string, Line[]>();
@@ -138,7 +138,7 @@ function AddLine({ meta, batch, running, onAdd }: { meta: Meta; batch: Batch; ru
   const [text, setText] = useState('');
   const [field, setField] = useState(fields[0]);
   const [busy, setBusy] = useState(false);
-  const f = meta.fields[field];
+  const f = specFor(meta, field, { territory: batch.brief.territory });
   const n = [...text.trim()].length;
   async function add() {
     if (!text.trim()) return;
@@ -189,7 +189,7 @@ function LineCard({ meta, line, sequence, onChange, onMore }: { meta: Meta; line
   const [noteOpen, setNoteOpen] = useState(false);
   const [details, setDetails] = useState(false);
   useEffect(() => { setNote(line.note || ''); }, [line.note]);
-  const f = meta.fields[line.field];
+  const f = specFor(meta, line.field, line);
   // Decisions wait for the checks: keeping a line before its flags arrive is how a red line got kept by accident.
   const checking = line.status !== 'checked';
   const text = finalText(line);

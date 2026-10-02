@@ -9,7 +9,7 @@ import { onOriginal, studio, REGION_NAMES, type DraftVersion, type PlannedVersio
 import { addAd, adName, flagsAt, moveAd, redPlaces, nextVisual, placeLine, removeAd, setCard, setCardSub, setOnImage, setOnImageSub, useInAllAds, usesOf } from '@/lib/buildDraft';
 import { cn } from '@/lib/utils';
 import { personaColor, personaEdge, tint } from '@/lib/personaColors';
-import { PersonaChip, Chip, GhostButton, Intro, Label, LineHistory, NAMING_TIP, Overrides, PINK, PinkButton, Src, chipName, flagName, sevTone, territoryName, when, ForPicker, useActingFor, whoWords, type Ctx } from './ui';
+import { PersonaChip, Chip, GhostButton, Intro, Label, LineHistory, NAMING_TIP, Overrides, PINK, PinkButton, Src, chipName, flagName, sevTone, specFor, territoryName, when, ForPicker, useActingFor, whoWords, type Ctx } from './ui';
 
 type RL = ReadyView['lines'][number];
 /** Where the tray places a line: a field of one ad, or the visual's image (a carousel card, 1-based). */
@@ -348,7 +348,7 @@ function SlotBox({ meta, x, field, placeholder, active, onOpen, flags = [], name
 }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState('');
-  const f = meta.fields[field];
+  const f = specFor(meta, field, x?.line);
   const chars = x ? [...x.final_text].length : 0;
   // Save, then re-check the new wording straight away (the model's flags were found on the old one).
   const [rechecking, setRechecking] = useState(false);
@@ -647,7 +647,7 @@ function Tray({ meta, title, lines, draft, platformOf, current, optional, onPlac
   const inUse = withUses.filter(y => y.uses.length), free = withUses.filter(y => !y.uses.length);
   const pool = withUses.filter(y => y.x.shared), mine = withUses.filter(y => !y.x.shared), anyShared = pool.length > 0;
   const Item = ({ x, uses }: { x: RL; uses: string[] }) => {
-    const f = meta.fields[x.line.field];
+    const f = specFor(meta, x.line.field, x.line);
     const chars = [...x.final_text].length;
     return (
       <li className={cn('rounded-lg border p-3', x.line.id === current ? 'border-[#D94D8F] bg-[#D94D8F]/10' : 'border-[#272B34] bg-[#16181D]')}>

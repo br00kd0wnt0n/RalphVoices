@@ -86,3 +86,11 @@ In `Claude outputs/voices-r1/studio/screens/carousel-cards-30sep/`:
   - Compliance lists the three codes on one asset; the handoff has the four cards on every code's row.
 - `tests/auditLibrary.test.ts`: the headline is post copy; a caveat headline raises nothing against the image.
 - Type checks: frontend clean; backend has only the existing non-Studio errors.
+
+## A looser length guide for cards (2 Oct, rules v2.15)
+
+- A field may carry `card: { visible, max, source }` (rules v2.15 puts 90 / 125 on `meta_on_image`). It applies when the line is a carousel card: it has a `card` number, or its territory's format is a carousel. One definition: `fieldLimits` in engine.ts, mirrored by `limitsOf` / `specFor` in `components/studio/ui.tsx`.
+- Used by the length flags (`LIMIT_ON_ASSET` says "Long for a carousel card … (aim for 90 or fewer)" and quotes the card guide's source), the writer prompts (field list, cells, card sequences), Check copy's report, and the counters on Write, Review and Build.
+- Statics and video end cards keep the field's own guide. The subhead keeps its own unless the rules give it a `card` block. Rules without `card` behave as before.
+- Pre-flight doesn't quote the 40/60 guide for on-image text (its length check is for sidecar post copy only), so nothing changed there.
+- Stored flags don't change until a line is re-checked or edited.

@@ -233,7 +233,7 @@ export async function bulkReport(id?: string): Promise<BulkReport> {
       }));
       rows.push({
         persona: r.personas[l.persona]?.name || l.persona, territory: (r.territories[l.territory]?.name || l.territory).replace(/\.$/, ''), region: S.regionOfLine(l, b.brief),
-        field: f?.label || l.field, text, chars: [...text].length, visible: f?.visible ?? 0, over: !!f && [...text].length > f.visible,
+        field: f?.label || l.field, text, chars: [...text].length, visible: S.fieldLimits(l.field, r, l)?.visible ?? 0, over: !!f && [...text].length > S.fieldLimits(l.field, r, l)!.visible,
         status: flags.some(x => x.severity === 'red') ? 'red' : flags.some(x => x.severity === 'amber') ? 'amber' : 'clear',
         flags, objection: l.objection || '', run, line_id: l.id, on_asset: S.onAsset(l.field, r), shared: l.persona === SHARED_PERSONA,
       });

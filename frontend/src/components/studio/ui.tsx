@@ -118,6 +118,21 @@ export function personaKeys(personas: Record<string, unknown>): string[] {
 export const isOpenTerritory = (meta: Pick<Meta, 'retired_with_work'>, code: string, t: { status?: string }) => t.status !== 'retired' || !!meta.retired_with_work?.includes(code);
 /** The context is the shared captions pool (post copy reused across personas). */
 export const isSharedCtx = (meta: Meta | null, c: { persona: string }) => !!meta?.personas[c.persona]?.shared;
+/**
+ * The length guide for a line: the field's own, or its `card` guide (rules v2.15+) when the line is a carousel card
+ * (a card number, or a carousel territory). Mirrors `fieldLimits` in the engine.
+ */
+export function limitsOf(meta: Pick<Meta, 'fields' | 'territories'>, field: string, ctx: { card?: number; territory?: string } = {}): { visible: number; max: number; card: boolean } | undefined {
+  const f = meta.fields[field];
+  if (!f) return undefined;
+  const isCard = !!ctx.card || /^CAR/i.test(meta.territories[ctx.territory || '']?.format || '');
+  return isCard && f.card ? { visible: f.card.visible, max: f.card.max, card: true } : { visible: f.visible, max: f.max, card: false };
+}
+/** The field's spec with the length guide that applies to this line (the card guide for a carousel card). */
+export function specFor(meta: Pick<Meta, 'fields' | 'territories'>, field: string, ctx: { card?: number; territory?: string } = {}) {
+  const f = meta.fields[field], lim = limitsOf(meta, field, ctx);
+  return f && lim ? { ...f, visible: lim.visible, max: lim.max } : f;
+}
 export const angleLabel = (meta: Meta, persona: string, id: string) => meta.personas[persona]?.triggers.find(x => x.id === id)?.label || id;
 export const NAMING_TIP = 'Naming code: Add3 reports results by this';
 export const regionOf = (x?: { region?: Region } | null): Region => x?.region || 'US';

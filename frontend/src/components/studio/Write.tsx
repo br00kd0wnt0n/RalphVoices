@@ -5,7 +5,7 @@ import { toggleField as toggleFieldIn } from '@/lib/studioFields';
 import { roundName, studio, type Batch, type Brief, type Meta, type OwnLine, type RunSummary, type Tone, REGION_NAMES } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { personaColor, personaEdge, tint } from '@/lib/personaColors';
-import { CanadaNote, Chip, GhostButton, Intro, Label, PersonaChip, PersonaPanel, PinkButton, angleLabel, fieldOrder, regionOf, territoryName, when, ForPicker, isOpenTerritory, isSharedCtx, type Ctx } from './ui';
+import { CanadaNote, Chip, GhostButton, Intro, Label, PersonaChip, PersonaPanel, PinkButton, angleLabel, fieldOrder, regionOf, specFor, territoryName, when, ForPicker, isOpenTerritory, isSharedCtx, type Ctx } from './ui';
 
 /** A field's starting count: the rules' default_count, else an even split of n over the ticked fields. */
 export function defaultCount(meta: Meta, f: string, fields: string[], n: number): number {
@@ -178,7 +178,7 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
             </div>
             <div className="space-y-2">
               {own.map((o, i) => {
-                const f = meta.fields[o.field];
+                const f = specFor(meta, o.field, { territory: ctx.territory });
                 const n = [...o.text].length;
                 return (
                   <div key={i} className="flex flex-wrap items-start gap-2 sm:flex-nowrap">
@@ -211,7 +211,7 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
                 <div key={pl}>
                   <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-[#646A75]">{pl}</div>
                   {Object.keys(meta.fields).filter(k => (String(meta.fields[k].platform).toUpperCase().startsWith('META') ? 'Meta' : 'TikTok') === pl).filter(usable).sort((a, b) => fieldOrder(meta, a) - fieldOrder(meta, b)).map(k => {
-                    const f = meta.fields[k];
+                    const f = specFor(meta, k, { territory: ctx.territory })!;
                     const on = brief.fields.includes(k);
                     // On a carousel territory, on-image text is written as card sequences: sequences × cards, not a count.
                     const cards = on && carousel && /on_image/.test(k);
