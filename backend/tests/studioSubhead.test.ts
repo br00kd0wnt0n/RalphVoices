@@ -120,3 +120,26 @@ test('33: on-asset text that runs long is "long for on-image text", never "trunc
   assert.equal(flags('meta_headline', 'A headline that runs well past what shows')[0].rule, 'LIMIT_MAX');
   assert.equal(flags('meta_headline', 'A headline just a bit too long')[0].rule, 'LIMIT_VISIBLE');
 });
+
+test('carousel cards get the looser card guide when the rules have one (v2.15); statics keep 40/60; older rules behave as before', async () => {
+  const old = await fresh();
+  const text = 'Ask your vet which pet insurance they would choose for their own dog, then ask them why.';
+  const eightyFive = text.slice(0, 85);
+  assert.equal([...eightyFive].length, 85);
+  const limits = (r: any, l: { card?: number; territory?: string }, t = eightyFive) => S.deterministicFlags({ text: t, field: 'meta_on_image', structure: 'plain_promise', persona: 'OWN', ...l }, r).flags.filter(f => /^LIMIT/.test(f.rule));
+  // v2.14-style rules (no card guide): a card and a static line are both long.
+  assert.match(limits(old, { card: 2, territory: 'OWN_CARDS' })[0].label, /^Long for on-image text: 85 characters \(aim for 40 or fewer\)$/);
+  assert.equal(limits(old, { territory: 'OWN_STILL' }).length, 1);
+  // v2.15-style rules: the card guide applies to a line with a card number, or on a carousel territory.
+  const r = JSON.parse(JSON.stringify(old));
+  r.fields.meta_on_image.card = { visible: 90, max: 125, source: 'HOUSE: Brook, 2 Oct 2026 (a card is read, not glanced)' };
+  assert.deepEqual(limits(r, { card: 2, territory: 'OWN_CARDS' }), []);
+  assert.deepEqual(limits(r, { territory: 'OWN_CARDS' }), [], 'no card number: the carousel territory is the signal');
+  assert.deepEqual(limits(r, { card: 1, territory: 'OWN_STILL' }), [], 'a card number alone is enough');
+  assert.match(limits(r, { territory: 'OWN_STILL' })[0].label, /aim for 40 or fewer/, 'a static stays 40/60');
+  const long = limits(r, { card: 2, territory: 'OWN_CARDS' }, 'x'.repeat(95))[0];
+  assert.deepEqual([long.rule, long.label, long.source], ['LIMIT_ON_ASSET', 'Long for a carousel card: 95 characters (aim for 90 or fewer)', 'HOUSE: Brook, 2 Oct 2026 (a card is read, not glanced)']);
+  // The subhead has no card guide of its own, so it keeps 60/90 on a card.
+  assert.match(S.deterministicFlags({ text: 'x'.repeat(70), field: 'meta_on_image_sub', structure: 'plain_promise', persona: 'OWN', card: 2, territory: 'OWN_CARDS' }, r).flags.find(f => /^LIMIT/.test(f.rule))!.label, /aim for 60 or fewer/);
+  assert.deepEqual(S.fieldLimits('meta_on_image', r, { card: 3 }), { visible: 90, max: 125, source: 'HOUSE: Brook, 2 Oct 2026 (a card is read, not glanced)', card: true });
+});

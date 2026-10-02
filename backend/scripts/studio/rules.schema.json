@@ -38,7 +38,7 @@
     "version": { "type": "string" },
     "updated": { "type": "string" },
     "sources": { "type": "object", "additionalProperties": { "type": "object", "required": ["title"], "properties": { "title": { "type": "string" }, "path": { "type": "string" }, "url": { "type": "string" } } } },
-    "fields": { "type": "object", "additionalProperties": { "type": "object", "required": ["platform", "label", "visible", "max", "source"], "properties": { "platform": { "enum": ["META", "TIKTOK"] }, "label": { "type": "string" }, "visible": { "type": "integer" }, "max": { "type": "integer" }, "source": { "type": "string" } } } },
+    "fields": { "type": "object", "additionalProperties": { "type": "object", "required": ["platform", "label", "visible", "max", "source"], "properties": { "platform": { "enum": ["META", "TIKTOK"] }, "label": { "type": "string" }, "visible": { "type": "integer" }, "max": { "type": "integer" }, "source": { "type": "string" }, "card": { "type": "object", "description": "A looser length guide when the line is a carousel card (v2.15+).", "required": ["visible", "max"], "properties": { "visible": { "type": "integer" }, "max": { "type": "integer" }, "source": { "type": "string" } } } } } },
     "tone_controls": { "type": "object" },
     "structures": { "type": "object", "required": ["question", "stat", "testimony", "scenario", "joke", "plain_promise"], "additionalProperties": { "type": "string" } },
     "facts": { "type": "array", "items": { "type": "object", "required": ["id", "text", "numbers", "source"], "properties": {
