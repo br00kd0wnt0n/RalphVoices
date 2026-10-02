@@ -47,19 +47,19 @@ async function fill(buf: Buffer, edit: (tab: (name: string) => { set: (n: string
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
-test('the worksheet: on-image copy by persona and asset, then the shared pools; pasted lines count as kept; card guide applied', async () => {
+test('the worksheet: on-image copy by persona and asset, then the shared pools; a line with no decision is undecided, whoever wrote it; card guide applied', async () => {
   await fresh();
   const ws = await Ws.worksheet(await roundView(), 'US');
-  assert.deepEqual(ws.steps.on_image.map(x => [x.n, x.asset, x.where, x.visible, x.call, !!x.implied, x.flags.some(f => f.rule === 'LIMIT_ON_ASSET')]), [
-    ['O1', 'Sock Eater (dog)', 'Headline', 40, 'keep', true, true],
-    ['O2', 'Sock Eater (dog)', 'Subhead', 60, 'keep', true, false],
-    ['O3', 'Ask Your Vet', 'Headline', 90, 'keep', true, false],
+  assert.deepEqual(ws.steps.on_image.map(x => [x.n, x.asset, x.where, x.visible, x.call, x.flags.some(f => f.rule === 'LIMIT_ON_ASSET')]), [
+    ['O1', 'Sock Eater (dog)', 'Headline', 40, '', true],
+    ['O2', 'Sock Eater (dog)', 'Subhead', 60, '', false],
+    ['O3', 'Ask Your Vet', 'Headline', 90, '', false],
   ], 'headline before subhead; a carousel territory uses the card guide');
   assert.equal(ws.steps.on_image[0].status, 'amber');
   assert.deepEqual(ws.steps.primary.map(x => x.n), ['P1', 'P2', 'P3']);
   assert.deepEqual(ws.steps.headline.map(x => [x.n, x.text]), [['H1', 'Vet bills? No sweat.']]);
   assert.equal(ws.other, 1, "the persona's own primary text is counted, not shown");
-  assert.deepEqual(ws.counts.primary, { total: 3, kept: 3, cut: 0, undecided: 0, red: ws.counts.primary.red, amber: ws.counts.primary.amber, clear: ws.counts.primary.clear });
+  assert.deepEqual(ws.counts.primary, { total: 3, kept: 0, cut: 0, undecided: 3, red: ws.counts.primary.red, amber: ws.counts.primary.amber, clear: ws.counts.primary.clear });
   assert.ok(ws.steps.primary[1].flags.some(f => f.rule === 'SHARED_CTA' && f.level === 'amber'));
 });
 
@@ -97,22 +97,22 @@ test('import: keep, cut, rewrite and new lines are previewed, then written for t
     o.set('O2', 'Your call', 'Maybe');
     o.set('N1', 'Asset', 'ask your vet'); o.set('N1', 'Where', 'Card 2'); o.set('N1', 'Line', 'Then ask them why.');
     o.set('N2', 'Asset', 'No such asset'); o.set('N2', 'Line', 'Lost line');
-    tab('3 Headlines').set('H1', 'Your call', 'Keep');     // already counts as kept: no change
+    tab('3 Headlines').set('H1', 'Your call', 'Keep');     // undecided until now: a keep
   });
   const sheet = await Ws.parseXlsx(filled);
   const p = await Ws.previewImport(sheet, view);
-  assert.deepEqual(p.rows.map(x => [x.tab[0], x.n, x.action]), [['1', 'O1', 'rewrite'], ['1', 'O2', 'error'], ['1', 'N1', 'new'], ['1', 'N2', 'error'], ['2', 'P1', 'cut'], ['2', 'P2', 'rewrite'], ['2', 'N1', 'new']]);
+  assert.deepEqual(p.rows.map(x => [x.tab[0], x.n, x.action]), [['1', 'O1', 'rewrite'], ['1', 'O2', 'error'], ['1', 'N1', 'new'], ['1', 'N2', 'error'], ['2', 'P1', 'cut'], ['2', 'P2', 'rewrite'], ['2', 'N1', 'new'], ['3', 'H1', 'keep']]);
   assert.match(p.rows[1].note!, /"Maybe" isn't Keep, Cut or Rewrite/);
   assert.match(p.rows[3].note!, /No asset called "No such asset"/);
   assert.deepEqual([p.rows[2].territory, p.rows[2].field, p.rows[2].card, p.rows[2].where], ['OWN_CARDS', 'meta_on_image', 2, 'Card 2']);
-  assert.deepEqual(p.counts, { keep: 0, cut: 1, rewrite: 2, new: 2, none: 0, conflict: 0, error: 2 });
+  assert.deepEqual(p.counts, { keep: 1, cut: 1, rewrite: 2, new: 2, none: 0, conflict: 0, error: 2 });
   assert.equal(p.estimate.checks, 4);
   // Nothing was written by the preview.
   assert.equal((await S.loadBatch(shared.id)).lines[0].decision || '', '');
 
   const events: S.StudioEvent[] = [];
   const res = await Ws.applyImport(sheet, view, api(), { user: 'brook', for: 'nick' }, e => events.push(e));
-  assert.deepEqual([res.applied, res.failed], [{ keep: 0, cut: 1, rewrite: 2, new: 2 }, []]);
+  assert.deepEqual([res.applied, res.failed], [{ keep: 1, cut: 1, rewrite: 2, new: 2 }, []]);
   assert.deepEqual(events.filter(e => e.type === 'done').length, 1, 'one "done", at the end');
   const pool = (await S.loadBatch(shared.id)).lines;
   assert.deepEqual([pool[0].decision, pool[0].decided_by, pool[0].decided_for], ['cut', 'brook', 'nick']);
