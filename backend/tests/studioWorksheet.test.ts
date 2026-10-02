@@ -127,7 +127,7 @@ test('import: keep, cut, rewrite and new lines are previewed, then written for t
   assert.deepEqual([added.added_by, added.added_for, added.text], ['brook', 'nick', 'Medical insurance for pets from Trupanion. See how it works.']);
   // The same sheet again: everything is already as the sheet says.
   const again = await Ws.previewImport(sheet, view);
-  assert.deepEqual(again.rows.filter(x => x.action !== 'error').map(x => [x.n, x.action]), [['N1', 'none'], ['N1', 'none']]);
+  assert.deepEqual([again.rows.filter(x => x.action !== 'error'), again.matched], [[], 2], 'the two typed rows are now lines in Studio, matched by their wording');
 });
 
 test('import: a line changed in Studio after the export is a conflict, left alone unless chosen', async () => {
@@ -154,4 +154,59 @@ test('import: a workbook that is not the worksheet is refused in plain words', a
   await assert.rejects(Ws.parseXlsx(Buffer.from('not a workbook')), /isn't an Excel workbook/);
   const wb = new ExcelJS.Workbook(); wb.addWorksheet('Sheet1').addRow(['hello']);
   await assert.rejects(Ws.parseXlsx(Buffer.from(await wb.xlsx.writeBuffer())), /none of the worksheet tabs/);
+});
+
+test('a hand-made sheet (no row ids): rows are matched by wording, cut lines included; the totals row is ignored; "Carousel card" is read; a live asset wins over a retired one of the same name', async () => {
+  const { shared, cards } = await fresh();
+  // A retired pitch territory with the same name as the live asset, listed first in the rules.
+  const rules = JSON.parse(fs.readFileSync((S.getStore() as any).opts.rulesPath, 'utf8'));
+  rules.territories = { OWN_VET_OLD: { ...rules.territories.OWN_CARDS, status: 'retired' }, ...rules.territories };
+  fs.writeFileSync((S.getStore() as any).opts.rulesPath, JSON.stringify(rules));
+  await S.refreshRules();
+  const view = await roundView();
+  await S.setDecision(shared.id, shared.lines[0].id, { decision: 'cut' }, 'brook', 'nick');
+  await S.setDecision(cards.id, cards.lines[0].id, { decision: 'keep', edited_text: 'Ask your vet which insurance they would choose.' }, 'brook', 'nick');
+  const exported = await Ws.exportXlsx(await Ws.worksheet(view, 'US'));
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(exported as any);
+  for (const name of ['1 On-image copy', '2 Primary text', '3 Headlines']) {
+    const sh = wb.getWorksheet(name)!;
+    const head = (sh.getRow(5).values as any[]);
+    sh.spliceColumns(head.indexOf('Row id'), 2);                     // no Row id, no Hash: the Round 1 sheet
+    sh.addRow([]); sh.addRow([null, name[0] === '1' ? null : 'Kept so far', 3]);
+  }
+  const one = wb.getWorksheet('1 On-image copy')!, two = wb.getWorksheet('2 Primary text')!;
+  const rowOf = (sh: ExcelJS.Worksheet, n: string) => { let hit = 0; sh.eachRow((row, i) => { if (String(row.getCell(1).value) === n) hit = i; }); return sh.getRow(hit); };
+  // The card as the deck had it (the wording before the edit, in capitals), called a "Carousel card".
+  rowOf(one, 'O3').getCell(4).value = 'Carousel card';
+  rowOf(one, 'O3').getCell(5).value = cards.lines[0].text.toUpperCase();
+  rowOf(one, 'O3').getCell(10).value = 'Keep';
+  // A new card for the live asset, by its name.
+  const n1 = rowOf(one, 'N1'); n1.getCell(3).value = 'Ask Your Vet'; n1.getCell(4).value = 'Carousel card'; n1.getCell(5).value = 'Then ask them why.';
+  rowOf(two, 'P1').getCell(6).value = '';                           // the cut line, with no call on this copy of the sheet
+  rowOf(two, 'P2').getCell(6).value = 'Keep';
+  const sheet = await Ws.parseXlsx(Buffer.from(await wb.xlsx.writeBuffer()));
+  assert.equal(sheet.no_ids, true);
+  assert.equal(sheet.rows.some(x => /Kept so far/.test(x.line)), false, 'the totals row is not a line');
+  const p = await Ws.previewImport(sheet, view);
+  assert.deepEqual(p.rows.map(x => [x.tab[0], x.n, x.action, !!x.matched]), [['1', 'N1', 'new', false], ['2', 'P2', 'keep', true]], 'the cut line and the already-kept card are no change; nothing is "new" but the new card');
+  assert.equal(p.rows[0].territory, 'OWN_CARDS', 'the live asset, not the retired territory of the same name');
+  assert.ok(p.matched >= 6);
+  assert.match(p.problems.join(' '), /matched to Studio's lines by their wording/);
+  // Unmatched rows are only added when the person says so.
+  const res = await Ws.applyImport(sheet, view, api(), { user: 'brook', for: 'nick' });
+  assert.deepEqual([res.applied.keep, res.applied.new], [1, 0]);
+  const added = await Ws.applyImport(sheet, view, api(), { user: 'brook', for: 'nick', addUnmatched: true });
+  assert.equal(added.applied.new, 1);
+  assert.equal((await S.loadBatch(shared.id)).lines[0].decision, 'cut', 'the cut line stays cut');
+});
+
+test('a workbook whose comments trip the reader (saved by another tool) is still read', async () => {
+  await fresh();
+  const JSZip = (await import('jszip')).default;
+  const zip = await JSZip.loadAsync(await Ws.exportXlsx(await Ws.worksheet(await roundView(), 'US')));
+  // A comments relationship the reader can't resolve, as openpyxl writes them.
+  zip.file('xl/worksheets/_rels/sheet2.xml.rels', '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="/xl/comments/comment1.xml" Id="comments"/></Relationships>');
+  const sheet = await Ws.parseXlsx(await zip.generateAsync({ type: 'nodebuffer' }));
+  assert.equal(sheet.rows.filter(x => x.step === 'on_image').length, 3);
 });

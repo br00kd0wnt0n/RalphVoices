@@ -19,3 +19,14 @@ Nothing new is stored. `services/studio/worksheet.ts` is a view over the runs.
 Not in this PR: the worksheet screen, paste / add / write more inside it, the lock, the default screen.
 
 Not checked: a sheet round-tripped through Google Sheets itself (tested through exceljs and openpyxl, which drop cached formula values as Sheets can).
+
+## Import fixes from the first real sheet (2 Oct)
+
+Nick's Round 1 worksheet was made by hand before the export existed: no `Row id` / `Hash` columns, a totals row, "Carousel card" in Where, and it went through Google Sheets.
+
+- **Wording first.** A row with no row id is matched to a line by its wording, across the month and step: kept, cut or undecided, as the line reads now or as it was first written; case, curly quotes and spacing don't matter. The row's asset decides between two lines with the same wording. A matched row with no call is no change (so a cut line never comes back as new); with a call it is that call on the existing line. Only a row that matches nothing is a new line.
+- **New lines from a sheet with no row ids need a tick.** The preview says how many rows were matched by wording and how many matched nothing; those are added only when the person ticks "add them as new lines" (`add_unmatched`).
+- **Only numbered rows are lines.** A row is read when it has Studio's id or a number in `#` (O1, P3, N2). Totals and notes under the table are ignored.
+- **"Carousel card" / "Card"** with no number is on-image text for a carousel.
+- **Asset names** resolve within the row's persona, and to a live territory before a retired one of the same name.
+- **Workbooks whose comments trip the reader** (saved by other tools) are read again without their comment and drawing parts. `jszip` is now a direct backend dependency (it was already installed through `exceljs`).

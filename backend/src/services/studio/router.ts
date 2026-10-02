@@ -286,14 +286,15 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     const { sheet, accept } = await sheetOf(req);
     const view = await Rounds.roundView(rq(req), o.who(req));
     const p = await Ws.previewImport(sheet, view, { accept });
-    if (!(p.counts.keep + p.counts.cut + p.counts.rewrite + p.counts.new)) return res.status(400).json({ error: 'Nothing in this sheet would change anything' });
+    const addUnmatched = String(req.body?.add_unmatched) === 'true';
+    if (!(p.counts.keep + p.counts.cut + p.counts.rewrite + (p.no_ids && !addUnmatched ? 0 : p.counts.new))) return res.status(400).json({ error: 'Nothing in this sheet would change anything' });
     if (!o.mock && p.estimate.usd > o.askOver && String(req.body?.confirm) !== 'true') return res.status(409).json({ needs_confirm: true, estimate: p.estimate.usd });
     const who = o.who(req), forWho = forOf(req);
     const api = o.api(req);
     const id = `worksheet-import-${Date.now()}`;
     const held = await reserve(`worksheet import`, p.estimate.usd, api, who);
     if ('error' in held) return res.status(402).json({ error: held.error });
-    res.json({ job: startJob(id, emit => Ws.applyImport(sheet, view, api, { user: who, for: forWho, accept }, emit).finally(held.release)), estimate: p.estimate, counts: p.counts });
+    res.json({ job: startJob(id, emit => Ws.applyImport(sheet, view, api, { user: who, for: forWho, accept, addUnmatched }, emit).finally(held.release)), estimate: p.estimate, counts: p.counts });
   }));
   // Shared captions are written to sit under these: every persona's kept on-image headlines, in a region and the round in view.
   r.get('/approved-headlines', wrap(async (req, res) => {

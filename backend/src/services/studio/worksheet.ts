@@ -7,6 +7,7 @@
 // (`parseXlsx` → `previewImport` → `applyImport`: Keep / Cut / Rewrite and new lines, shown before anything is
 // written, recorded for the person named, rewrites re-checked).
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import * as S from './engine.js';
 import type { Api, Line, Rules, StudioEvent } from './engine.js';
 import type { Region } from '../../utils/namingCode.js';
@@ -214,7 +215,7 @@ export interface SheetRow {
   line: string; call: 'keep' | 'cut' | 'rewrite' | ''; call_raw: string; rewrite: string;
   persona: string; asset: string; where: string; region: string;
 }
-export interface SheetParse { round: string; region: string; exported_at: string; rows: SheetRow[]; problems: string[] }
+export interface SheetParse { round: string; region: string; exported_at: string; rows: SheetRow[]; problems: string[]; /** A tab has no Row id column. */ no_ids: boolean }
 
 /** A cell's text: formulas give their cached value, rich text its words; smart whitespace is trimmed. */
 function cellText(v: ExcelJS.CellValue): string {
@@ -231,12 +232,32 @@ function cellText(v: ExcelJS.CellValue): string {
 }
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9#]+/g, ' ').trim();
 
+/** The workbook with its sheets' comment and drawing references removed (the cells are untouched). */
+async function withoutDrawings(buf: Buffer): Promise<Buffer> {
+  const zip = await JSZip.loadAsync(buf);
+  for (const name of Object.keys(zip.files).filter(n => /^xl\/worksheets\/[^/]+\.xml$/.test(n))) {
+    const xml = await zip.file(name)!.async('string');
+    zip.file(name, xml.replace(/<(legacyDrawing|legacyDrawingHF|drawing)\b[^>]*\/>/g, ''));
+  }
+  for (const name of Object.keys(zip.files).filter(n => /^xl\/worksheets\/_rels\/[^/]+\.rels$/.test(n))) {
+    const xml = await zip.file(name)!.async('string');
+    zip.file(name, xml.replace(/<Relationship\b[^>]*Type="[^"]*\/(comments|vmlDrawing|drawing)"[^>]*\/>/g, ''));
+  }
+  return zip.generateAsync({ type: 'nodebuffer' });
+}
+
 export async function parseXlsx(buf: Buffer): Promise<SheetParse> {
   const wb = new ExcelJS.Workbook();
-  try { await wb.xlsx.load(buf as any); } catch { throw Object.assign(new Error("That file isn't an Excel workbook (.xlsx). From Google Sheets: File → Download → Microsoft Excel."), { status: 400 }); }
+  try { await wb.xlsx.load(buf as any); }
+  catch {
+    // Some workbooks (cell comments or drawings saved by other tools) trip the reader: try again without those parts,
+    // which the import never reads.
+    try { await wb.xlsx.load((await withoutDrawings(buf)) as any); }
+    catch { throw Object.assign(new Error("That file isn't an Excel workbook (.xlsx). From Google Sheets: File → Download → Microsoft Excel."), { status: 400 }); }
+  }
   const meta: Record<string, string> = {};
   wb.getWorksheet(META_SHEET)?.eachRow(row => { meta[cellText(row.getCell(1).value)] = cellText(row.getCell(2).value); });
-  const out: SheetParse = { round: meta.round || '', region: meta.region || '', exported_at: meta.exported_at || '', rows: [], problems: [] };
+  const out: SheetParse = { round: meta.round || '', region: meta.region || '', exported_at: meta.exported_at || '', rows: [], problems: [], no_ids: false };
   let found = 0;
   for (const s of STEPS) {
     // The tab by name, or by its number ("1 …") if it was renamed.
@@ -250,7 +271,7 @@ export async function parseXlsx(buf: Buffer): Promise<SheetParse> {
       if (cells.includes('#') && cells.includes('your call')) { headRow = i; cells.forEach((h, c) => { if (h && !(h in col)) col[h] = c; }); }
     });
     if (!headRow) { out.problems.push(`"${sh.name}": no header row with "#" and "Your call": its rows weren't read.`); continue; }
-    if (!col['row id']) out.problems.push(`"${sh.name}": the hidden "Row id" column is missing, so its existing lines can't be matched. Export a fresh sheet and copy your calls into it.`);
+    if (!col['row id']) { out.no_ids = true; out.problems.push(`"${sh.name}" has no hidden "Row id" column (a sheet made by hand, or the column was lost): its rows are matched to Studio's lines by their wording. A row whose wording isn't in Studio is read as a new line.`); }
     const get = (row: ExcelJS.Row, name: string) => (col[name] ? cellText(row.getCell(col[name]).value) : '');
     sh.eachRow((row, i) => {
       if (i <= headRow) return;
@@ -260,7 +281,9 @@ export async function parseXlsx(buf: Buffer): Promise<SheetParse> {
         tab: sh.name, step: s.key, row: i, n: get(row, '#'), id: get(row, 'row id'), hash: get(row, 'hash'), line: get(row, 'line'), call, call_raw: raw, rewrite: get(row, 'your rewrite'),
         persona: get(row, 'persona'), asset: get(row, 'asset'), where: get(row, 'where'), region: get(row, 'region'),
       };
-      if (x.id || x.line || x.rewrite || raw) out.rows.push(x);
+      // A row is a line when it has Studio's id or a number in the # column (O1, P3, N2). Anything else on the tab
+      // (a totals row, notes under the table) isn't read.
+      if (x.id || (/^[A-Za-z]{1,2}\s?\d+$/.test(x.n) && (x.line || x.rewrite || raw))) out.rows.push(x);
     });
   }
   if (!found) throw Object.assign(new Error('This workbook has none of the worksheet tabs (1 On-image copy, 2 Primary text, 3 Headlines). Export the sheet from Studio and fill that one in.'), { status: 400 });
@@ -272,6 +295,8 @@ export interface PreviewRow {
   tab: string; row: number; n: string; step: Step; action: Action; id?: string; run?: string;
   /** The wording now in Studio (existing lines), and the wording that will be written (a rewrite or a new line). */
   now?: string; text?: string; chars?: number; visible?: number;
+  /** Matched to its line by wording (the sheet had no row id for it). */
+  matched?: boolean;
   /** Why nothing happens, what clashes, or what's wrong. */
   note?: string;
   /** New lines: where they go. */
@@ -279,6 +304,10 @@ export interface PreviewRow {
 }
 export interface ImportPreview {
   round: string; region: string; exported_at: string; problems: string[]; rows: PreviewRow[];
+  /** Rows with no row id that were matched to an existing line by their wording. */
+  matched: number;
+  /** The sheet has no row ids (or lost them): every "new" row is a row whose wording matched nothing in Studio. */
+  no_ids: boolean;
   counts: Record<Action, number>;
   /** The checks this import runs (each rewrite and each new line is checked in full). */
   estimate: { usd: number; seconds: number; checks: number };
@@ -286,11 +315,17 @@ export interface ImportPreview {
 
 /** Where a new on-image row goes: persona and asset by name or code, the field and card from "Where". */
 function placeNew(x: SheetRow, r: Rules): { persona: string; territory: string; field: string; card?: number } | { error: string } {
-  const find = <T extends { name: string }>(o: Record<string, T>, w: string) => Object.keys(o).find(k => k.toLowerCase() === w.toLowerCase() || norm(o[k].name) === norm(w) || norm(o[k].name.replace(/\s*\(.*\)$/, '')) === norm(w));
+  const named = <T extends { name: string }>(o: Record<string, T>, w: string) => Object.keys(o).filter(k => k.toLowerCase() === w.toLowerCase() || norm(o[k].name) === norm(w) || norm(o[k].name.replace(/\s*\(.*\)$/, '')) === norm(w));
+  const find = <T extends { name: string }>(o: Record<string, T>, w: string) => named(o, w)[0];
   if (x.step !== 'on_image') return { persona: S.SHARED_PERSONA, territory: S.SHARED_TERRITORY, field: x.step === 'primary' ? 'meta_primary' : 'meta_headline' };
   if (!x.asset) return { error: 'A new on-image line needs its asset (the Asset column)' };
-  const territory = find(r.territories, x.asset);
-  if (!territory || territory === S.SHARED_TERRITORY) return { error: `No asset called "${x.asset}" in Studio` };
+  // Two territories can share a name (a retired pitch territory and the live asset): the row's persona first, a live one before a retired one.
+  const wantPersona = x.persona ? find(r.personas, x.persona) : undefined;
+  const cands = named(r.territories, x.asset).filter(k => k !== S.SHARED_TERRITORY);
+  const mine = cands.filter(k => !wantPersona || r.territories[k].persona === wantPersona);
+  const pool = mine.length ? mine : cands;
+  const territory = pool.find(k => r.territories[k].status !== 'retired') || pool[0];
+  if (!territory) return { error: `No asset called "${x.asset}" in Studio` };
   if (r.territories[territory].status === 'retired') return { error: `"${x.asset}" is retired: it takes no new lines` };
   const persona = r.territories[territory].persona;
   if (x.persona && find(r.personas, x.persona) !== persona) return { error: `"${x.asset}" belongs to ${r.personas[persona]?.name || persona}, not "${x.persona}"` };
@@ -299,7 +334,7 @@ function placeNew(x: SheetRow, r: Rules): { persona: string; territory: string; 
   const sub = /sub/.test(w);
   const field = Object.keys(r.fields).find(f => S.isOnImageField(f, r) && String(r.fields[f].platform).toUpperCase().startsWith('META') && isSubField(f, r) === sub);
   if (!field) return { error: sub ? 'These rules have no on-image subhead field' : 'These rules have no on-image field' };
-  if (!card && !/^(headline|subhead|sub|on image.*)$/.test(w)) return { error: `"${x.where}" isn't Headline, Subhead or Card N` };
+  if (!card && !/^(headline|subhead|sub|on image.*|(carousel )?(card|slide)( subhead| sub)?)$/.test(w)) return { error: `"${x.where}" isn't Headline, Subhead or Card N` };
   return { persona, territory, field, ...(card ? { card: Number(card[2]) } : {}) };
 }
 
@@ -315,20 +350,36 @@ export async function previewImport(sheet: SheetParse, view: RoundView, opts: { 
   const accept = new Set(opts.accept || []);
   const lines = new Map<string, { l: Line; run: string; brief: S.Brief }>();
   const wording = new Set<string>();
+  // Without row ids (a sheet made by hand, or with the hidden columns lost), a row is matched to a line by its wording:
+  // any line in the month and step with that wording (kept, cut or undecided; as it reads now or as first written).
+  const byWording = new Map<string, Array<{ l: Line; run: string; brief: S.Brief }>>();
+  const wkey = (step: Step, text: string) => `${step}|${text.normalize('NFKC').replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"').replace(/\s+/g, ' ').trim().toLowerCase()}`;
   for (const run of await S.listBatches(undefined, undefined)) {
     const b = await S.loadBatch(run.id);
     for (const l of b.lines) {
       lines.set(l.id, { l, run: b.id, brief: b.brief });
+      const st = stepOf(l, r);
+      if (st && inView(view, roundOf(l, b.brief))) for (const k of new Set([wkey(st, S.finalText(l)), wkey(st, l.text)])) byWording.set(k, [...(byWording.get(k) || []), { l, run: b.id, brief: b.brief }]);
       if (inView(view, roundOf(l, b.brief)) && l.decision !== 'cut') wording.add(`${l.persona}|${l.territory}|${l.field}|${S.regionOfLine(l, b.brief)}|${S.finalText(l).trim()}`);
     }
   }
   const rows: PreviewRow[] = [];
   let usd = 0, checks = 0;
   const seenIds = new Set<string>();
+  let matched = 0;
   const defaultRegion = (sheet.region === 'CA' ? 'CA' : 'US') as Region;
   for (const x of sheet.rows) {
     const base = { tab: x.tab, row: x.row, n: x.n, step: x.step };
     if (x.call_raw && !x.call) { rows.push({ ...base, action: 'error', id: x.id || undefined, note: `"${x.call_raw}" isn't Keep, Cut or Rewrite` }); continue; }
+    let byText = false;
+    if (!x.id && x.line.trim()) {
+      const region = /^ca/i.test(x.region) ? 'CA' : /^us/i.test(x.region) ? 'US' : defaultRegion;
+      const found = (byWording.get(wkey(x.step, x.line)) || []).filter(h => S.regionOfLine(h.l, h.brief) === region && !seenIds.has(h.l.id));
+      // The same wording on two assets: the row's asset decides; then a line that isn't cut before one that is.
+      const onAsset = found.filter(h => !x.asset || norm((r.territories[h.l.territory]?.name || '').replace(/\s*\(.*\)$/, '')) === norm(x.asset.replace(/\s*\(.*\)$/, '')) || h.l.territory.toLowerCase() === x.asset.toLowerCase());
+      const pick = (onAsset.length ? onAsset : found).sort((a, b) => Number(a.l.decision === 'cut') - Number(b.l.decision === 'cut'))[0];
+      if (pick) { x.id = pick.l.id; x.hash = ''; byText = true; matched++; }
+    }
     if (!x.id) {
       // A new line: typed in the Line cell of a blank row (or in "Your rewrite", if that's where it was typed).
       const text = (x.line || x.rewrite).trim();
@@ -349,7 +400,7 @@ export async function previewImport(sheet: SheetParse, view: RoundView, opts: { 
     seenIds.add(x.id);
     const { l, run } = hit;
     const now = S.finalText(l);
-    const self = { ...base, id: l.id, run, now, visible: S.fieldLimits(l.field, r, l)?.visible };
+    const self = { ...base, id: l.id, run, now, visible: S.fieldLimits(l.field, r, l)?.visible, ...(byText ? { matched: true } : {}) };
     const rewrite = x.rewrite.trim();
     const wants: 'keep' | 'cut' | 'rewrite' | '' = x.call === 'cut' ? 'cut' : (x.call === 'rewrite' || (rewrite && x.call !== 'keep')) ? 'rewrite' : x.call === 'keep' && rewrite ? 'rewrite' : x.call;
     if (!wants) continue;
@@ -369,7 +420,7 @@ export async function previewImport(sheet: SheetParse, view: RoundView, opts: { 
   if (fresh.length) { const e = Bulk.estimateBulk(fresh); usd += e.usd; checks += fresh.length; }
   const counts = { keep: 0, cut: 0, rewrite: 0, new: 0, none: 0, conflict: 0, error: 0 } as Record<Action, number>;
   for (const x of rows) counts[x.action]++;
-  return { round: sheet.round, region: sheet.region, exported_at: sheet.exported_at, problems, rows, counts, estimate: { usd: Math.round(usd * 1000) / 1000, seconds: checks * 8, checks } };
+  return { round: sheet.round, region: sheet.region, exported_at: sheet.exported_at, problems, rows, matched, no_ids: sheet.no_ids, counts, estimate: { usd: Math.round(usd * 1000) / 1000, seconds: checks * 8, checks } };
 }
 const newRows = (rows: PreviewRow[]): Bulk.BulkRow[] => rows.filter(x => x.action === 'new').map((x, i) => ({ n: i + 1, persona: x.persona!, territory: x.territory!, field: x.field!, text: x.text!, region: x.region!, notes: [], ...(x.card ? { card: x.card } : {}) }));
 
@@ -380,7 +431,7 @@ export interface ImportResult { applied: Record<'keep' | 'cut' | 'rewrite' | 'ne
  * through the same calls the screens use (so locks, history and "for" are the same). Rewrites are re-checked; new
  * lines are filed and checked as a copy check.
  */
-export async function applyImport(sheet: SheetParse, view: RoundView, api: Api, opts: { user?: string; for?: string; accept?: string[] }, out: (e: StudioEvent) => void = () => {}): Promise<ImportResult> {
+export async function applyImport(sheet: SheetParse, view: RoundView, api: Api, opts: { user?: string; for?: string; accept?: string[]; addUnmatched?: boolean }, out: (e: StudioEvent) => void = () => {}): Promise<ImportResult> {
   // The copy check inside reports its own "done"; this job has one, at the end, with the result.
   const emit = (e: StudioEvent) => { if (e.type !== 'done') out(e); };
   const p = await previewImport(sheet, view, { accept: opts.accept });
@@ -398,7 +449,9 @@ export async function applyImport(sheet: SheetParse, view: RoundView, api: Api, 
     } catch (e: any) { res.failed.push({ n: x.n, tab: x.tab, error: e.message }); }
     done++;
   }
-  const fresh = newRows(p.rows);
+  // A sheet with no row ids: its "new" rows are rows whose wording matched nothing. They are only added when the person said so.
+  const fresh = sheet.no_ids && !opts.addUnmatched ? [] : newRows(p.rows);
+  if (sheet.no_ids && !opts.addUnmatched) res.skipped += p.counts.new;
   if (fresh.length) {
     const rec = await Bulk.runBulk({ rows: fresh, errors: [], header: true }, api, { user: opts.user, for: opts.for }, emit);
     res.applied.new = rec.lines; res.runs = rec.runs; res.bulk = rec.id;
