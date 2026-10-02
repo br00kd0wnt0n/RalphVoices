@@ -264,9 +264,11 @@ export interface ComplianceView { assets: ComplianceAsset[]; waiting: Array<{ st
 
 export type SheetAction = 'keep' | 'cut' | 'rewrite' | 'new' | 'none' | 'conflict' | 'error';
 /** One row of a filled-in worksheet against Studio as it is now: what importing it would do. */
-export interface SheetPreviewRow { tab: string; row: number; n: string; action: SheetAction; id?: string; now?: string; text?: string; chars?: number; visible?: number; note?: string; where?: string; territory?: string }
+export interface SheetPreviewRow { tab: string; row: number; n: string; action: SheetAction; id?: string; matched?: boolean; now?: string; text?: string; chars?: number; visible?: number; note?: string; where?: string; territory?: string }
 export interface SheetPreview {
   round: string; region: string; exported_at: string; problems: string[]; rows: SheetPreviewRow[]; counts: Record<SheetAction, number>;
+  /** matched: rows matched to a line by wording; no_ids: the sheet has no row ids, so its "new" rows are rows that matched nothing. */
+  matched: number; no_ids: boolean;
   estimate: { usd: number; seconds: number; checks: number };
 }
 export interface SheetResult { applied: Record<'keep' | 'cut' | 'rewrite' | 'new', number>; skipped: number; failed: Array<{ n: string; tab: string; error: string }>; runs: string[]; bulk?: string }
@@ -482,8 +484,9 @@ export const studio = {
     form.append('file', file, file.name); form.append('accept', JSON.stringify(accept));
     return (await (await raw('/worksheet/import/preview', { method: 'POST', body: form })).json()) as SheetPreview;
   },
-  worksheetApply: async (file: File, accept: string[] = [], confirm = false) => {
+  worksheetApply: async (file: File, accept: string[] = [], confirm = false, addUnmatched = false) => {
     const form = new FormData();
+    if (addUnmatched) form.append('add_unmatched', 'true');
     form.append('file', file, file.name); form.append('accept', JSON.stringify(accept)); if (confirm) form.append('confirm', 'true');
     return (await (await raw('/worksheet/import/apply', { method: 'POST', body: form })).json()) as { job: string; estimate: SheetPreview['estimate'] };
   },

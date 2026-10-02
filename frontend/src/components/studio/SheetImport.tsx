@@ -24,18 +24,21 @@ export function SheetImport({ meta, file, onClose, onDone }: { meta: Meta | null
     studio.worksheetPreview(file, accept).then(p => { if (live) { setPreview(p); setError(''); } }).catch(e => { if (live) setError(e.message); });
     return () => { live = false; };
   }, [file, accept]);
-  const changes = preview ? preview.counts.keep + preview.counts.cut + preview.counts.rewrite + preview.counts.new : 0;
+  // A sheet with no row ids: rows that matched nothing by wording are only added as new lines when ticked.
+  const [addNew, setAddNew] = useState(false);
+  const unmatched = preview?.no_ids ? preview.counts.new : 0;
+  const changes = preview ? preview.counts.keep + preview.counts.cut + preview.counts.rewrite + (unmatched && !addNew ? 0 : preview.counts.new) : 0;
 
   async function apply() {
     if (!preview) return;
     setError(''); setStatus('Starting…');
     try {
       let r;
-      try { r = await studio.worksheetApply(file, accept); }
+      try { r = await studio.worksheetApply(file, accept, false, addNew); }
       catch (e: any) {
         if (e.status !== 409 || !e.body?.needs_confirm) throw e;
         if (!window.confirm(`Checking the rewrites and new lines is estimated at $${e.body.estimate.toFixed(2)}, over the $${meta?.ask_over ?? 2} ask-first line. Run it?`)) { setStatus(''); return; }
-        r = await studio.worksheetApply(file, accept, true);
+        r = await studio.worksheetApply(file, accept, true, addNew);
       }
       es.current?.close();
       es.current = studio.events(r.job, (e: StudioEvent) => {
@@ -71,6 +74,13 @@ export function SheetImport({ meta, file, onClose, onDone }: { meta: Meta | null
               {preview.counts.error > 0 && <> · <span className="text-red-200">{preview.counts.error} not read</span></>}.
               {' '}Rows the sheet leaves as they are aren’t listed.
             </p>
+            {preview.matched > 0 && <p className="text-sm text-[#A3A8B1]">{preview.matched} row{preview.matched === 1 ? ' was' : 's were'} matched to {preview.matched === 1 ? 'its line' : 'their lines'} in Studio by wording (the sheet has no row ids).</p>}
+            {unmatched > 0 && (
+              <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">
+                <input type="checkbox" className="mt-1 accent-[#D94D8F]" checked={addNew} onChange={e => setAddNew(e.target.checked)} />
+                <span>{unmatched} row{unmatched === 1 ? '' : 's'} on the sheet matched nothing in Studio by wording (“New line” below). Tick to add {unmatched === 1 ? 'it' : 'them'} as new lines; left unticked, {unmatched === 1 ? 'it is' : 'they are'} skipped.</span>
+              </label>
+            )}
             {preview.problems.map(x => <p key={x} className="rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">{x}</p>)}
             {preview.rows.length > 0 && (
               <div className="max-h-[50vh] overflow-auto rounded-lg border border-[#272B34]">
