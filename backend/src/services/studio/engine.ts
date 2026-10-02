@@ -1749,7 +1749,13 @@ export async function similarFlag(batch: Batch, lineId: string, text: string, ap
   return mine ? nearest(mine, lineId, batch, await getStore().getEmbeddings(batch.id)) : null;
 }
 
-export async function checkBatch(batch: Batch, api: Api, emit: Emit = () => {}, onlyIds?: string[]) {
+/**
+ * `opts.save: false` checks without writing anything: for a scratch copy of a line (a re-check). The store keys lines
+ * by line id, so saving a scratch run would overwrite the real line with the scratch copy (its decision and original
+ * wording were lost on Postgres until 2 Oct).
+ */
+export async function checkBatch(batch: Batch, api: Api, emit: Emit = () => {}, onlyIds?: string[], opts: { save?: boolean } = {}) {
+  const save = opts.save !== false;
   const r = loadRules();
   const b = batch.brief;
   const idx = ruleIndex(r, b.persona);
@@ -1776,7 +1782,7 @@ export async function checkBatch(batch: Batch, api: Api, emit: Emit = () => {}, 
   batch.stats.similar_flagged = batch.lines.filter(l => l.flags.some(f => f.rule === 'NEAR_DUP')).length;
   batch.stats.timings_ms.check_deterministic = Date.now() - started;
   const ids = lines.map(l => l.id);
-  await saveBatch(batch, ids);
+  if (save) await saveBatch(batch, ids);
 
   let saving = false;
   await pool(lines, 6, async l => {
@@ -1795,10 +1801,10 @@ export async function checkBatch(batch: Batch, api: Api, emit: Emit = () => {}, 
     }
     sortFlags(l);
     emit({ type: 'line', line: l });
-    if (!saving) { saving = true; await saveBatch(batch, ids); saving = false; }
+    if (save && !saving) { saving = true; await saveBatch(batch, ids); saving = false; }
   });
   batch.stats.timings_ms.check = Date.now() - started;
-  await saveBatch(batch, ids);
+  if (save) await saveBatch(batch, ids);
 }
 
 /**

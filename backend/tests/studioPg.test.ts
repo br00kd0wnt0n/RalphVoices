@@ -1540,3 +1540,26 @@ test('retired territories with runs or sign-offs in the round stay reachable: /m
   assert.deepEqual(v.plan.issues, []);
   assert.throws(() => S.makeBrief({ territory: 'OWN_OLD' }), /is retired/);
 });
+
+test('a re-check on Postgres leaves the line as it was: its decision, its original wording and its edit (only the flags change)', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  await store.putRules('example-recheck', JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8')), { activate: true, by: 'test' });
+  await S.refreshRules();
+  const original = 'Trupanion pays the vet at partner clinics.';
+  const run = await keptRun(R, api, [original, 'Trupanion is medical insurance for pets.']);
+  const [a, b] = run.prims;
+  const at = async (id: string) => (await S.loadBatch(run.id)).lines.find(l => l.id === id)!;
+  // A kept line, re-checked as it is: still kept, by the same person.
+  await R.recheckLine(run.id, b, api, 'brook');
+  const kept = await at(b);
+  assert.deepEqual([kept.decision, kept.decided_by, kept.text, !!kept.rechecked_at], ['keep', 'nick', 'Trupanion is medical insurance for pets.', true]);
+  // An edited line, re-checked: still an edit of the original wording.
+  await S.setDecision(run.id, a, { decision: 'edit', edited_text: 'Trupanion pays your vet at partner clinics. Get a quote.' }, 'nick');
+  await R.recheckLine(run.id, a, api, 'brook');
+  const edited = await at(a);
+  assert.deepEqual([edited.decision, edited.text, edited.edited_text, S.finalText(edited)], ['edit', original, 'Trupanion pays your vet at partner clinics. Get a quote.', 'Trupanion pays your vet at partner clinics. Get a quote.']);
+  // Nothing was written for the scratch copy.
+  assert.equal((await (store as any).db.query(`SELECT count(*)::int AS n FROM studio_batches WHERE id LIKE 'adhoc-recheck-%'`)).rows[0].n, 0);
+  // The kept set is what it was.
+  assert.deepEqual((await S.keptLines()).filter(l => l.batch === run.id || l.id.startsWith(run.id)).length, 3);
+});

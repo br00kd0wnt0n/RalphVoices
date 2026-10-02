@@ -31,8 +31,8 @@ export interface WsRow {
   status: 'red' | 'amber' | 'clear';
   /** name: the chip's plain words; detail: what it found (the lengths, the line it resembles), when that helps. */
   flags: Array<{ level: 'red' | 'amber' | 'grey'; name: string; rule: string; detail?: string }>;
-  /** keep (kept or edited), cut, or '' (undecided). `implied`: typed or pasted by a person and not decided since, which counts as kept. */
-  call: 'keep' | 'cut' | ''; implied?: boolean; edited: boolean;
+  /** keep (kept or edited), cut, or '' (undecided: not in the kept set, the board's count or Build, whoever wrote it). */
+  call: 'keep' | 'cut' | ''; edited: boolean;
   sha256: string; decided_by?: string; decided_for?: string; signed_off?: boolean;
 }
 export interface Worksheet {
@@ -53,8 +53,6 @@ const whereOf = (l: Pick<Line, 'field' | 'card'>, r: Rules) => {
   return l.card ? `Card ${l.card}${sub ? ' subhead' : ''}` : sub ? 'Subhead' : S.isOnImageField(l.field, r) ? 'Headline' : r.fields[l.field]?.label || l.field;
 };
 const isKept = (l: Line) => l.decision === 'keep' || l.decision === 'edit';
-/** A person's own line with no decision yet counts as kept (it's how the board counts pasted copy). */
-const impliedKeep = (l: Line) => !l.decision && l.model === 'human';
 
 export async function worksheet(view: RoundView, region: Region | 'all' = 'US'): Promise<Worksheet> {
   const r = S.loadRules();
@@ -80,7 +78,7 @@ export async function worksheet(view: RoundView, region: Region | 'all' = 'US'):
         asset: (r.territories[l.territory]?.name || l.territory).replace(/\.$/, ''), region: lineRegion, field: l.field, where: whereOf(l, r), ...(l.card ? { card: l.card } : {}),
         text, chars: [...text].length, visible: lim?.visible ?? 0, max: lim?.max ?? 0,
         status: flags.some(x => x.level === 'red') ? 'red' : flags.some(x => x.level === 'amber') ? 'amber' : 'clear', flags,
-        call: l.decision === 'cut' ? 'cut' : isKept(l) || impliedKeep(l) ? 'keep' : '', ...(impliedKeep(l) ? { implied: true } : {}), edited: S.isEdited(l),
+        call: l.decision === 'cut' ? 'cut' : isKept(l) ? 'keep' : '', edited: S.isEdited(l),
         sha256: S.lineHash(l), ...(l.decided_by ? { decided_by: l.decided_by } : {}), ...(l.decided_for ? { decided_for: l.decided_for } : {}),
         ...(l.ready && !l.ready.superseded_by ? { signed_off: true } : {}),
       });
@@ -356,8 +354,7 @@ export async function previewImport(sheet: SheetParse, view: RoundView, opts: { 
     const wants: 'keep' | 'cut' | 'rewrite' | '' = x.call === 'cut' ? 'cut' : (x.call === 'rewrite' || (rewrite && x.call !== 'keep')) ? 'rewrite' : x.call === 'keep' && rewrite ? 'rewrite' : x.call;
     if (!wants) continue;
     if (x.call === 'rewrite' && !rewrite) { rows.push({ ...self, action: 'error', note: 'Rewrite chosen, but the rewrite cell is empty' }); continue; }
-    // A person's own undecided line already counts as kept, so "Keep" on it is no change.
-    const current = l.decision === 'cut' ? 'cut' : isKept(l) || impliedKeep(l) ? 'keep' : '';
+    const current = l.decision === 'cut' ? 'cut' : isKept(l) ? 'keep' : '';
     const same = wants === 'cut' ? current === 'cut' : wants === 'keep' ? current === 'keep' : rewrite === now && current === 'keep';
     if (same) continue;
     const changed = !!x.hash && !`h${S.lineHash(l)}`.startsWith(x.hash);
