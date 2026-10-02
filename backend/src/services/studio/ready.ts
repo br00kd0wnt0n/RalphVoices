@@ -180,7 +180,8 @@ export async function recheckLine(batchId: string, lineId: string, api: Api, use
     lines: [{ ...line, text: finalText(line), decision: '', edited_text: '', flags: [], status: 'generated' }],
   };
   await api.resetRun();
-  await checkBatch(scratch, api);
+  // Never saved: the scratch line has the real line's id, and saving it would overwrite the real line (see checkBatch).
+  await checkBatch(scratch, api, () => {}, undefined, { save: false });
   const checked = scratch.lines[0];
   // The scratch run holds only this line, so "similar line" is worked out against the real run, on the current wording.
   const near = await similarFlag(batch, lineId, finalText(line), api);

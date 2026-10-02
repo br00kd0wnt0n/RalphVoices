@@ -114,3 +114,10 @@ Screenshots are in `Claude outputs/voices-r1/studio/screens/nick-fixes-30sep/`:
 
 1. Should **Ready to traffic** require compliance to be cleared? At the moment they're independent: the creative lead's Pre-flight check and Trupanion's review, both shown in the asset handoff.
 2. Compliance is set per asset for all its codes. If Trupanion wants to clear one copy line on a shared visual and not another, the backend already accepts `codes: [...]`, but the page doesn't offer it yet.
+
+## A re-check overwrote the line on Postgres (found and fixed 2 Oct)
+
+- `recheckLine` checks a scratch copy of the line (decision and edit blanked, the current wording as its text). `checkBatch` saved that scratch run, and Postgres keys lines by line id, so the save overwrote the real line: its decision was cleared, and for an edited line the edit became the "original" text and `edited_text` was emptied. The file store writes a scratch run to its own file, so the tests (file store) never saw it.
+- Since the re-check shipped (edit + re-check in Review and Build, `POST …/recheck`, and the worksheet import), every re-checked line on Postgres was affected: a kept line became undecided (a generated line then drops out of the kept set and out of Build's tray; a person's own line still counts as kept), and an edited line lost its original wording from the line itself (the edit history still has it).
+- Fix: `checkBatch(…, { save: false })` for the scratch copy; nothing is written for it. Test: "a re-check on Postgres leaves the line as it was" in `studioPg.test.ts` (fails without the fix).
+- Not repaired by the fix: lines already re-checked in production. They can be found by `rechecked_at` on the line and the "re-checked" entries in the edit log; the decision before each re-check is in the edit log.
