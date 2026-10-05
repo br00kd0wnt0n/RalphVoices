@@ -121,3 +121,12 @@ Screenshots are in `Claude outputs/voices-r1/studio/screens/nick-fixes-30sep/`:
 - Since the re-check shipped (edit + re-check in Review and Build, `POST …/recheck`, and the worksheet import), every re-checked line on Postgres was affected: a kept line became undecided (a generated line then drops out of the kept set and out of Build's tray; a person's own line still counts as kept), and an edited line lost its original wording from the line itself (the edit history still has it).
 - Fix: `checkBatch(…, { save: false })` for the scratch copy; nothing is written for it. Test: "a re-check on Postgres leaves the line as it was" in `studioPg.test.ts` (fails without the fix).
 - Not repaired by the fix: lines already re-checked in production. They can be found by `rechecked_at` on the line and the "re-checked" entries in the edit log; the decision before each re-check is in the edit log.
+
+## Build crashed on removing an ad (production, 5 Oct)
+
+- "Cannot read properties of undefined (reading 'visual')": after an ad was removed, the screen still held the plan worked out before the removal (until the server answered). Flags that name another ad ("Too alike: Visual A · Ad 3") looked the ad up by its place in that old plan, and `adName` read an ad that was no longer in the draft. An open tray on the removed ad had the same problem, and a tray on a later ad pointed at the wrong ad after the indexes shifted.
+- Fix: `adName` / `adNumber` return nothing for a place with no ad; the old plan is not paired with the draft by position once it has more ads than the draft (`planFits`); the open slot follows its ad or closes (`slotAfter` in `lib/buildDraft.ts`); the tray never renders for an ad that isn't there. `change` no longer runs side effects inside a state updater.
+- The draft lives only on the screen until sign-off, so the crash left nothing half-saved.
+- "Remove this visual" on each visual: its ads and its on-image text, subhead and cards (`removeVisual`); the kept lines are untouched and the letter is free again. Removing a visual's last ad did this already, but the crash hid it.
+- An empty tray now says which field has no kept lines and where to write them.
+- Tests: "removing an ad or a visual" in `studioBuildDraft.test.ts`. There is no component-test harness in the frontend; the steps were run in the browser (add an ad, open a tray on it, remove it; add a visual, remove it).

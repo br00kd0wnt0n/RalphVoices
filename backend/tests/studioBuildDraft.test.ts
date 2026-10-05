@@ -94,3 +94,33 @@ test('subheads (rules v2.14): per visual or per card, optional, named in uses, g
   assert.deepEqual(removeAd(d2, 0).on_image_sub, {}, 'no ads left on the visual: no subhead either');
   assert.deepEqual(redPlaces(d2, { sub: ['figure'] }, pf), ['Visual A · subhead: figure']);
 });
+
+test('removing an ad or a visual: the open slot follows its ad or closes, names never read an ad that is gone, and the letter is free again', async () => {
+  const { removeVisual, slotAfter, adNumber } = await import('../../frontend/src/lib/buildDraft.js');
+  const platformOf = (v: { platform?: string }) => v.platform || 'META';
+  const ad = (visual: string, id: string) => ({ visual, platform: 'META', fields: { meta_primary: id } });
+  const d = { versions: [ad('A', 'p1'), ad('A', 'p2'), ad('B', 'p3')], on_image: { A: 'o1', B: ['c1', 'c2'] }, on_image_sub: { B: ['', 's2'] } };
+  // The crash (production, 5 Oct): the screen named an ad by its place in a plan worked out before the removal.
+  const one = removeAd(d, 2);
+  assert.equal(adName(one, 2, platformOf), '', 'no ad at that place: no name, no crash');
+  assert.equal(adNumber(one, 2, platformOf), 0);
+  // A tray open on the removed ad closes; one open on a later ad follows it down; an earlier one stays.
+  const mid = removeAd(d, 1);
+  assert.equal(slotAfter({ kind: 'ad', index: 1, field: 'meta_primary' }, d, mid), null);
+  assert.deepEqual(slotAfter({ kind: 'ad', index: 2, field: 'meta_primary' }, d, mid), { kind: 'ad', index: 1, field: 'meta_primary' });
+  assert.deepEqual(slotAfter({ kind: 'ad', index: 0, field: 'meta_primary' }, d, mid), { kind: 'ad', index: 0, field: 'meta_primary' });
+  // Placing a line or moving an ad keeps the tray on the same ad.
+  assert.deepEqual(slotAfter({ kind: 'ad', index: 1, field: 'meta_headline' }, d, placeLine(d, 1, 'meta_headline', 'h1')), { kind: 'ad', index: 1, field: 'meta_headline' });
+  assert.deepEqual(slotAfter({ kind: 'ad', index: 1, field: 'meta_primary' }, d, moveAd(d, 1, 'B')), { kind: 'ad', index: 1, field: 'meta_primary' });
+  // An on-image slot closes when its visual has no ads left (the only ad on B removed).
+  assert.equal(slotAfter({ kind: 'image', visual: 'B', field: 'meta_on_image', card: 2 }, d, one), null);
+  assert.deepEqual(slotAfter({ kind: 'image', visual: 'A', field: 'meta_on_image' }, d, one), { kind: 'image', visual: 'A', field: 'meta_on_image' });
+  // Removing a visual's last ad removes the visual: its cards and subheads go, and the letter is the next free one.
+  assert.deepEqual([one.on_image, one.on_image_sub, nextVisual(one)], [{ A: 'o1' }, {}, 'B']);
+  // "Remove this visual": every ad on it and its on-image text, in one go.
+  const noA = removeVisual(d, 'A', 'META', platformOf);
+  assert.deepEqual([noA.versions.map(v => v.visual), noA.on_image, nextVisual(noA)], [['B'], { B: ['c1', 'c2'] }, 'A']);
+  // A letter shared by a Meta and a TikTok visual keeps its on-image text while the other platform's ads are still on it.
+  const both = { ...d, versions: [...d.versions, { visual: 'A', platform: 'TT', fields: { tiktok_caption: 't1' } }] };
+  assert.deepEqual(removeVisual(both, 'A', 'META', platformOf).on_image.A, 'o1');
+});
