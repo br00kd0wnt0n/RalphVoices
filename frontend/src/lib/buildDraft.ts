@@ -64,6 +64,28 @@ export function removeAd<D extends DraftLike>(d: D, index: number): D {
   if (gone && !versions.some(v => v.visual === gone.visual)) { delete on_image[gone.visual]; delete on_image_sub[gone.visual]; }
   return { ...d, versions, on_image, ...(d.on_image_sub ? { on_image_sub } : {}) };
 }
+/** Remove a visual: its ads (on that platform) and, when no ad is left on the letter, its on-image text, subhead and cards. The letter is then free again. */
+export function removeVisual<D extends DraftLike>(d: D, visual: string, platform: string, platformOf: (v: DraftVersionLike) => string): D {
+  const versions = d.versions.filter(v => !(v.visual === visual && platformOf(v) === platform));
+  const on_image = { ...d.on_image };
+  const on_image_sub = { ...(d.on_image_sub || {}) };
+  if (!versions.some(v => v.visual === visual)) { delete on_image[visual]; delete on_image_sub[visual]; }
+  return { ...d, versions, on_image, ...(d.on_image_sub ? { on_image_sub } : {}) };
+}
+/**
+ * The open slot after the draft changed: an ad's slot follows its ad when an earlier one was removed (indexes shift
+ * down), and closes when its own ad, or its visual, is gone. Nothing may point at an ad that isn't there.
+ */
+export type SlotLike = { kind: 'ad'; index: number; field: string } | { kind: 'image'; visual: string; field: string; card?: number };
+export function slotAfter<S extends SlotLike>(slot: S | null, before: DraftLike, after: DraftLike): S | null {
+  if (!slot) return null;
+  if (slot.kind === 'image') return after.versions.some(v => v.visual === slot.visual) ? slot : null;
+  const ad = before.versions[slot.index];
+  const index = ad ? after.versions.indexOf(ad) : -1;   // the same ad object survives a removal elsewhere
+  if (index >= 0) return { ...slot, index };
+  // Changed in place (moved to another visual, a line placed): the same position is the same ad when no ad was removed.
+  return after.versions.length === before.versions.length && after.versions[slot.index] ? slot : null;
+}
 /** A new ad on a visual, starting from the visual's last ad (so a shared headline carries over), else the first kept lines. */
 export function addAd<D extends DraftLike>(d: D, visual: string, platform: string, required: string[], firstLine: (field: string) => string | undefined): D {
   const prev = [...d.versions].reverse().find(v => v.visual === visual && (v.platform || platform) === platform);
@@ -78,9 +100,11 @@ export const nextVisual = (d: DraftLike) => LETTERS.find(l => !d.versions.some(v
 /** "Ad 1", "Ad 2"… within a visual (and platform), in the draft's order. */
 export function adNumber(d: DraftLike, index: number, platformOf: (v: DraftVersionLike) => string): number {
   const v = d.versions[index];
+  if (!v) return 0;
   return d.versions.slice(0, index + 1).filter(x => x.visual === v.visual && platformOf(x) === platformOf(v)).length;
 }
-export const adName = (d: DraftLike, index: number, platformOf: (v: DraftVersionLike) => string) => `Visual ${d.versions[index].visual} · Ad ${adNumber(d, index, platformOf)}`;
+/** '' for an index with no ad (an ad just removed, while the screen still holds the plan from before). */
+export const adName = (d: DraftLike, index: number, platformOf: (v: DraftVersionLike) => string) => (d.versions[index] ? `Visual ${d.versions[index].visual} · Ad ${adNumber(d, index, platformOf)}` : '');
 
 /** Where a line is used: "Visual A · Ad 1", "Visual A · on the image", "Visual B · card 2". */
 export function usesOf(d: DraftLike, lineId: string, platformOf: (v: DraftVersionLike) => string): string[] {

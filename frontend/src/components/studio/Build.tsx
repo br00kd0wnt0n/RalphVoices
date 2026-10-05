@@ -6,7 +6,7 @@
 // overrides, carousel cards and TikTok versions. The draft rules are in lib/buildDraft.ts.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { onOriginal, studio, REGION_NAMES, type DraftVersion, type PlannedVersion, type Meta, type ReadyDraft, type ReadyView, type VersionFlag } from '@/lib/studioApi';
-import { addAd, adName, flagsAt, moveAd, redPlaces, nextVisual, placeLine, removeAd, setCard, setCardSub, setOnImage, setOnImageSub, useInAllAds, usesOf } from '@/lib/buildDraft';
+import { addAd, adName, flagsAt, moveAd, redPlaces, nextVisual, placeLine, removeAd, removeVisual, slotAfter, setCard, setCardSub, setOnImage, setOnImageSub, useInAllAds, usesOf } from '@/lib/buildDraft';
 import { cn } from '@/lib/utils';
 import { personaColor, personaEdge, tint } from '@/lib/personaColors';
 import { PersonaChip, Chip, GhostButton, Intro, Label, LineHistory, NAMING_TIP, Overrides, PINK, PinkButton, Src, chipName, flagName, sevTone, specFor, territoryName, when, ForPicker, useActingFor, whoWords, type Ctx } from './ui';
@@ -58,12 +58,19 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
     const v = await studio.readyPreview(pt.persona, pt.territory, pt.region, d);
     if (n === seq.current) setView(v);
   }, [pt.persona, pt.territory, pt.region]); // eslint-disable-line react-hooks/exhaustive-deps
-  const change = (fn: (d: ReadyDraft) => ReadyDraft) => setDraft(cur => {
-    if (!cur) return cur;
+  // The latest draft, so two changes in a row build on each other without side effects inside a state updater.
+  const draftRef = useRef<ReadyDraft | null>(null);
+  draftRef.current = draft;
+  const change = (fn: (d: ReadyDraft) => ReadyDraft) => {
+    const cur = draftRef.current;
+    if (!cur) return;
     const next = fn(cur);
+    draftRef.current = next;
+    setDraft(next);
+    // The open tray follows its ad, or closes when the ad or visual it was for is gone.
+    setSlot(s => slotAfter(s, cur, next));
     preview(next).catch(e => setError(e.message));
-    return next;
-  });
+  };
   const refresh = () => (draft ? preview(draft) : load()).catch(e => setError(e.message));
   // The conflicts check (a model call per ad not yet checked on this wording) runs by itself a moment after a change.
   const est = view?.plan.check_estimate;
@@ -118,17 +125,21 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
   // Ads by platform, then visual letter (the draft's order is kept inside a visual).
   const fieldPlatform = (f: string) => (/tiktok/i.test(meta.fields[f]?.platform || '') ? 'TT' : 'META');
   const platforms = view ? Object.keys(view.fields).filter(p => view.fields[p].required.length || view.fields[p].optional.length) : [];
-  const indexed = (draft?.versions || []).map((d, i) => ({ d, i, p: plan?.versions[i] }));
+  // The plan describes the draft it was worked out for. Between a change and the server's answer it is the old one:
+  // with a different number of ads it can't be paired by position (an ad would show the removed ad's code and checks).
+  // (A new ad is added at the end, so a shorter plan still lines up; a longer one is from before a removal.)
+  const planFits = !!plan && !!draft && plan.versions.length <= draft.versions.length;
+  const indexed = (draft?.versions || []).map((d, i) => ({ d, i, p: planFits ? plan!.versions[i] : undefined }));
   const visualsOf = (p: string) => [...new Set(indexed.filter(x => (x.p?.platform || platformOf(x.d)) === p).map(x => x.d.visual))].sort();
   const linesFor = (f: string) => (view?.lines || []).filter(x => x.line.field === f);
   const nameOf = (i: number) => (draft ? adName(draft, i, platformOf) : '');
-  const nameOfCode = (code?: string) => { const i = plan?.versions.findIndex(v => v.code === code) ?? -1; return i >= 0 ? nameOf(i) : code || ''; };
+  const nameOfCode = (code?: string) => { const i = planFits ? plan!.versions.findIndex(v => v.code === code) : -1; return (i >= 0 && nameOf(i)) || code || ''; };
   const newAd = (p: string, visual: string) => change(d => addAd(d, visual, p, view!.fields[p].required, f => linesFor(f)[0]?.line.id));
   const visualCount = new Set(draft?.versions.map(v => `${platformOf(v)}|${v.visual}`)).size;
 
   // Each ad's status on this screen only: Draft, Signed off, or Edited since sign-off.
   const statusOf = (i: number): 'draft' | 'signed' | 'edited' => {
-    const pv = plan?.versions[i];
+    const pv = planFits ? plan?.versions[i] : undefined;
     const sv = pv?.code ? latest?.versions?.find(v => v.code === pv.code) : undefined;
     if (!sv || !pv) return 'draft';
     const same = JSON.stringify(Object.entries(sv.fields).map(([f, x]) => [f, x.line_id]).sort()) === JSON.stringify(Object.entries(pv.fields).sort());
@@ -185,6 +196,9 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
                     <div className="mb-4 flex flex-wrap items-center gap-3">
                       <h2 className="text-xl font-semibold" style={{ color: color.light }}>Visual {letter}</h2>
                       <span className="text-sm text-[#858B96]">{p === 'TT' ? 'TikTok' : 'Meta'} · {vs.length} ad{vs.length === 1 ? '' : 's'}</span>
+                      {/* The whole visual: its ads and its on-image text. Nothing is deleted from the kept lines; the letter is free again. */}
+                      <button className="ml-auto text-xs text-[#858B96] underline-offset-2 hover:text-red-200 hover:underline" title="Takes this visual, its ads and its on-image text out of the set. The lines stay kept." aria-label={`Remove visual ${letter}`}
+                        onClick={() => { if (vs.length + cards.filter(Boolean).length <= 1 || window.confirm(`Remove visual ${letter}: its ${vs.length} ad${vs.length === 1 ? '' : 's'}${cards.some(Boolean) ? ' and its on-image text' : ''}? The lines stay kept.`)) change(d => removeVisual(d, letter, p, platformOf)); }}>Remove this visual</button>
                     </div>
 
                     {oiFields.length > 0 && (
@@ -289,11 +303,12 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
             </div>
           </div>
 
-          {slot && (
+          {slot && (slot.kind === 'image' || !!draft.versions[slot.index]) && (
             <Tray meta={meta} title={slot.kind === 'ad' ? `${short(trayField)} for ${nameOf(slot.index)}` : slot.card ? `Card ${slot.card}${isSubField(trayField) ? ' subhead' : ''}, visual ${slot.visual}` : `${short(trayField)}, visual ${slot.visual}`}
               lines={linesFor(trayField)} draft={draft} platformOf={platformOf}
               current={currentIn(draft, slot)}
               optional={slot.kind === 'image' || !view.fields[platformOf(draft.versions[slot.index])]?.required.includes(trayField)}
+              field={label(trayField)} shared={view.lines.some(x => x.shared) || !/on_image/.test(trayField)}
               onPlace={id => { place(id); setSlot(null); }}
               onAll={slot.kind === 'ad' && /headline|description/.test(trayField) ? (id => { const v = draft.versions[slot.index]; change(d => useInAllAds(d, v.visual, platformOf(v), trayField, id)); setSlot(null); }) : undefined}
               allLabel={slot.kind === 'ad' ? `Use in all ads on visual ${draft.versions[slot.index]?.visual}` : ''}
@@ -638,7 +653,9 @@ function AdPreview({ meta, view, draft, version, index, planned, platform, name,
 
 // ---------- the tray: kept lines for a slot ----------
 
-function Tray({ meta, title, lines, draft, platformOf, current, optional, onPlace, onAll, allLabel, onClose }: {
+function Tray({ meta, title, lines, draft, platformOf, current, optional, field, shared, onPlace, onAll, allLabel, onClose }: {
+  /** field: the field's name, for the empty tray; shared: post copy, which can also come from the shared captions pool. */
+  field: string; shared: boolean;
   meta: Meta; title: string; lines: RL[]; draft: ReadyDraft; platformOf: (v: DraftVersion) => string; current: string; optional: boolean;
   onPlace: (id: string) => void; onAll?: (id: string) => void; allLabel: string; onClose: () => void;
 }) {
@@ -677,7 +694,12 @@ function Tray({ meta, title, lines, draft, platformOf, current, optional, onPlac
         <button onClick={onClose} className="rounded px-2 text-lg text-[#858B96] hover:text-[#ECEDEF]" aria-label="Close">✕</button>
       </div>
       <div className="flex-1 space-y-4 overflow-y-auto p-4">
-        {!lines.length && <p className="text-sm text-[#858B96]">No kept lines for this field yet: keep some in Review.</p>}
+        {!lines.length && (
+          <div className="space-y-2 rounded-lg border border-dashed border-[#343946] p-3 text-sm text-[#A3A8B1]">
+            <p className="font-semibold text-[#C9CCD2]">No kept lines for {field} yet.</p>
+            <p>{optional ? 'This slot is optional: leave it empty, or ' : 'To fill this slot, '}write or paste {field.toLowerCase()} lines in Write (tick the field){shared ? ', for this territory or in Shared captions for copy used across personas' : ' for this territory'}, then keep them in Review. Kept lines appear here.</p>
+          </div>
+        )}
         {/* Post copy: the shared captions pool first, then this territory's own lines. */}
         {anyShared ? <>
           <div><Label>Shared captions ({pool.length})</Label><p className="mb-2 text-xs text-[#858B96]">Reused across personas: Trupanion’s decision on the wording can be recorded once for every code using it.</p><ul className="space-y-2">{pool.map(y => <Item key={y.x.line.id} {...y} />)}</ul></div>
