@@ -1563,3 +1563,85 @@ test('a re-check on Postgres leaves the line as it was: its decision, its origin
   // The kept set is what it was.
   assert.deepEqual((await S.keptLines()).filter(l => l.batch === run.id || l.id.startsWith(run.id)).length, 3);
 });
+
+test('removing a territory\'s sign-offs (unsign): three sign-offs with changing ads and shared captions go, the lines are as they were, the codes start again at A1, and another territory\'s sign-off of a shared caption is untouched', { skip }, async () => {
+  const { R, api } = await freshStudio();
+  const { planUnsign, applyUnsign, describePlan } = await import('../src/services/studio/unsign.js');
+  const rules = JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8'));
+  rules.territories.OWN_OTHER = { ...rules.territories.OWN_CALM, name: 'Other asset' };
+  await store.putRules('example-unsign', rules, { activate: true, by: 'test' });
+  await S.refreshRules();
+  const db = (store as any).db;
+  const own = await keptRun(R, api, ['Trupanion pays the vet at partner clinics.', 'Trupanion is medical insurance for pets.', 'Medical insurance for pets, for life.']);
+  const other = await S.generate(S.makeBrief({ territory: 'OWN_OTHER', name: 'other', own_lines: [{ text: 'Trupanion is medical insurance for your pet.', field: 'meta_primary' }, { text: 'Calm, sorted.', field: 'meta_headline' }] }), api, () => {}, { ownOnly: true, user: 'nick' });
+  const shared = await S.generate(S.makeBrief({ persona: S.SHARED_PERSONA, territory: S.SHARED_TERRITORY, name: 'shared', own_lines: [{ text: 'Trupanion is medical insurance for pets. Get a quote.', field: 'meta_primary' }, { text: 'Medical insurance for pets from Trupanion. See how it works.', field: 'meta_primary' }, { text: 'Get a quote today', field: 'meta_headline' }] }), api, () => {}, { ownOnly: true, user: 'brook', for: 'nick' });
+  for (const run of [other, shared]) for (const l of run.lines) {
+    await S.setDecision(run.id, l.id, { decision: 'keep' }, 'brook', 'nick');
+    for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find((x: any) => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'Test line', 'nick');
+  }
+  const [sp1, sp2, sh] = shared.lines.map(l => l.id);
+  const [p1, p2, p3] = own.prims, head = own.head;
+  const snapshot = async () => (await db.query(`SELECT id, body, decided_at, decision FROM studio_lines WHERE batch_id = ANY($1) ORDER BY id`, [[own.id, shared.id, other.id]])).rows;
+  const sign = async (territory: string, versions: any[], by = 'brook') => {
+    const lead = (await R.readyView('OWN', territory, 'US', { versions, on_image: {} }, { user: by })).plan.versions[0].code;
+    return (await R.signOff({ persona: 'OWN', territory, versions, on_image: {}, expectation: { codes: [lead], reason: 'best copy' } }, by)).signoff;
+  };
+  const v = (primary: string, headline: string, visual = 'A') => ({ visual, fields: { meta_primary: primary, meta_headline: headline } });
+  const before = await snapshot();
+  const firstCodes = (await R.readyView('OWN', 'OWN_CALM', 'US', { versions: [v(p1, head), v(p2, head), v(p3, head)], on_image: {} })).plan.versions.map((x: any) => x.code);
+
+  // Three test sign-offs on OWN_CALM, the ads changing each time, with shared captions in them.
+  const s1 = await sign('OWN_CALM', [v(p1, head)]);
+  const s2 = await sign('OWN_CALM', [v(p1, sh), v(sp1, head)]);
+  // Meanwhile another territory signs off the same shared caption: that one is a real decision and must stay.
+  const afterS2 = await snapshot();
+  const keep = await sign('OWN_OTHER', [v(sp1, other.lines[1].id)], 'nick');
+  const s3 = await sign('OWN_CALM', [v(sp2, sh), v(p2, head), v(p3, head)]);
+  assert.deepEqual([s1.version, s2.version, s3.version], [1, 2, 3]);
+  assert.notDeepEqual((await R.readyView('OWN', 'OWN_CALM', 'US', { versions: [v(p1, head)], on_image: {} })).plan.versions.map((x: any) => x.code), [firstCodes[0]], 'while signed off, a new ad gets a later code');
+  void afterS2;
+
+  const plan = await planUnsign(db, 'OWN_CALM', 'US');
+  assert.deepEqual([plan.blockers, plan.signoffs.map((s: any) => s.id), plan.expectations.length], [[], [s1.id, s2.id, s3.id], 3]);
+  assert.match(describePlan(plan), /DELETE studio_signoffs +OWN_CALM-ready-v1/);
+  // sp1's version was made by OWN_CALM's second sign-off and is used by the other territory's: kept, not deleted.
+  assert.deepEqual(plan.line_versions.filter((x: any) => x.line_id === sp1).map((x: any) => [x.action, x.used_by]), [['keep', keep.id]]);
+  // The plan writes nothing.
+  assert.equal((await db.query(`SELECT count(*)::int AS n FROM studio_signoffs`)).rows[0].n, 4);
+
+  // It refuses a different list of sign-offs, and anything acted on downstream.
+  await assert.rejects(applyUnsign(db, 'OWN_CALM', 'US', { expect: [s1.id, s2.id], by: 'brook' }), /not the ones named/);
+  const code = plan.codes.find((c: string) => /A\d/.test(c))!;
+  await db.query(`INSERT INTO studio_asset_status (stub, status) VALUES ($1, 'open')`, [code]);
+  assert.match((await planUnsign(db, 'OWN_CALM', 'US')).blockers.join(), /asset status/);
+  await assert.rejects(applyUnsign(db, 'OWN_CALM', 'US', { expect: [s1.id, s2.id, s3.id], by: 'brook' }), /Refusing/);
+  await db.query(`DELETE FROM studio_asset_status WHERE stub = $1`, [code]);
+  assert.equal((await db.query(`SELECT count(*)::int AS n FROM studio_signoffs`)).rows[0].n, 4, 'a refusal writes nothing');
+
+  const res = await applyUnsign(db, 'OWN_CALM', 'US', { expect: [s1.id, s2.id, s3.id], by: 'brook', reason: 'Test sign-offs' });
+  assert.deepEqual(res.deleted, { signoffs: 3, expectations: 3, line_versions: res.deleted.line_versions });
+  assert.deepEqual((await db.query(`SELECT id FROM studio_signoffs ORDER BY id`)).rows.map((r: any) => r.id), [keep.id]);
+  assert.deepEqual((await db.query(`SELECT signoff_id FROM studio_expectations`)).rows.map((r: any) => r.signoff_id), [keep.id]);
+  assert.deepEqual((await db.query(`SELECT DISTINCT signoff_id FROM studio_line_versions ORDER BY 1`)).rows.map((r: any) => r.signoff_id), [keep.id], 'no line version points at a sign-off that is gone');
+
+  // The lines are as they were before any sign-off: decision, wording, flags, who, when. Only the two lines in the
+  // other territory's sign-off carry its mark.
+  const after = await snapshot();
+  const strip = (rows: any[]) => rows.map(r => ({ id: r.id, decision: r.decision, decided_at: r.decided_at && new Date(r.decided_at).toISOString(), body: (({ ready, ...b }) => b)(r.body) }));
+  const stillSigned = [sp1, other.lines[1].id];
+  assert.deepEqual(strip(after).filter(r => !stillSigned.includes(r.id)), strip(before).filter(r => !stillSigned.includes(r.id)));
+  assert.deepEqual(after.filter((r: any) => r.body.ready).map((r: any) => [r.id, r.body.ready.signoff_id]).sort(), stillSigned.map(id => [id, keep.id]).sort());
+  assert.deepEqual((await S.keptLines()).length, before.filter((r: any) => ['keep', 'edit'].includes(r.decision)).length);
+  // The history keeps what happened and says the sign-offs were removed.
+  const hist = (await db.query(`SELECT after, by_user FROM studio_edits WHERE line_id = $1 ORDER BY at, id`, [p1])).rows;
+  assert.deepEqual([hist.at(-1).after.ready, hist.at(-1).after.signoffs_removed, hist.at(-1).by_user], [null, [s1.id, s2.id, s3.id], 'brook']);
+  assert.ok(hist.some((h: any) => h.after?.ready?.signoff_id === s1.id), 'the sign-off entries stay');
+
+  // Build plans the same codes as before the first sign-off, and the next sign-off is v1 with A1.
+  assert.deepEqual((await R.readyView('OWN', 'OWN_CALM', 'US', { versions: [v(p1, head), v(p2, head), v(p3, head)], on_image: {} })).plan.versions.map((x: any) => x.code), firstCodes);
+  assert.equal((await R.readyView('OWN', 'OWN_CALM')).latest, null);
+  const again = await sign('OWN_CALM', [v(p1, head)]);
+  assert.deepEqual([again.version, again.versions[0].code], [1, firstCodes[0]]);
+  // Nothing left to remove for a territory with no sign-offs.
+  assert.match((await planUnsign(db, 'OWN_NOPE', 'US')).blockers.join(), /No sign-offs/);
+});
