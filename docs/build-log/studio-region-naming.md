@@ -207,3 +207,7 @@ Add3 will not run three copies of an ad that differ only by caption: Meta treats
 - Ready to traffic says "Ready to traffic" only when every copy option on the ad is ready; otherwise what is outstanding, per option. Compliance is the least advanced option's.
 - The per-option pack (`/handoff.csv`) is unchanged: it is the internal record.
 - Not in it: the asset files per ad (still in the asset handoff, per code, until Assets is grouped by ad).
+
+### Trupanion's compliance sheet, one row per ad (6 Oct)
+
+Trupanion's compliance team review each finished ad once, at the end. `GET /compliance-sheet-ads.csv` (Export → "Compliance sheet for Trupanion (one row per ad)"; `adHandoff().complianceCsv`): Audience and Asset by name (the persona and the territory, since Trupanion's readers don't read the code), then Ad name, Region, Platform, Format, on-image text, subhead, cards, every primary text and headline option, and "Please check" (which rule to look at for an ad that went through with an overridden red flag, in plain words). The final words only: no internal flags, objections, ids, copy-option codes, names or reasons. The earlier sheet (one row per copy option) stays in the menu as the internal record.

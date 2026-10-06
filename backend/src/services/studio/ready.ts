@@ -623,7 +623,11 @@ export async function adHandoffRows(filter: { persona?: string; territory?: stri
     row.traffic = uniq([...row.traffic.split(' | '), isReady ? '' : `${x.stub.replace(/^.*?_([A-Z]\d+)_.*$/, '$1')}: ${x.traffic || 'not ready'}`]).join(' | ');
   }
   for (const row of out.values()) if (row.ready) row.traffic = trafficOf ? 'Ready to traffic' : '';
-  return [...out.values()];
+  // By audience (the rules' order), then asset, then ad: the same order in every per-ad export.
+  const r = loadRules();
+  const at = (list: string[], k: string) => { const i = list.indexOf(k); return i < 0 ? list.length : i; };
+  const personas = Object.keys(r.personas), territories = Object.keys(r.territories);
+  return [...out.values()].sort((a, b) => at(personas, a.persona) - at(personas, b.persona) || at(territories, a.territory) - at(territories, b.territory) || a.territory.localeCompare(b.territory) || a.ad.localeCompare(b.ad));
 }
 
 /** The sheet for Add3: one row per ad. Text options as columns (Primary text 1..n, Headline 1..n), then where each came from. */
@@ -654,6 +658,21 @@ export async function adHandoff(filter: { persona?: string; territory?: string; 
     ...fields.map(f => (x.options[f] || []).map((o, i) => `${i + 1}: ${o.line_id}${o.shared ? ' (shared)' : ''} [${o.codes.map(short).join(', ')}]`).join('\n')),
     x.codes.join(', '), x.traffic, STATUS_WORDS[x.compliance] || x.compliance, x.compliance_note, x.overrides, x.changed_since, decidedBy(x.ready_by, x.ready_for), x.ready_by, x.ready_at]);
   const csv = toCsv([head, ...body]);
-  return { count: rows.length, rows, csv: test ? toCsv([['TEST – not for trafficking']]) + csv : csv, test };
+  // For Trupanion's compliance team, who review each finished ad once: the words only. No internal flags, objections,
+  // ids, codes or names; an ad that went through with an overridden red flag says which rule to look at, never why or who.
+  const words = (x: AdHandoffRow) => [
+    ...(hasOnImage ? [x.on_image] : []), ...(hasSub ? [x.on_image_sub] : []),
+    ...Array.from({ length: nCards }, (_, i) => { const c = x.cards.find(y => y.card === i + 1); return [c?.text || '', ...(cardSub ? [c?.sub || ''] : [])]; }).flat(),
+    ...fields.flatMap(f => Array.from({ length: most(f) }, (_, i) => x.options[f]?.[i]?.text || '')),
+  ];
+  // The audience and the asset by name first: Trupanion's readers don't read the code.
+  const audience = (x: AdHandoffRow) => (r.personas[x.persona]?.name || x.persona).replace(/\s*\(.*\)$/, '');
+  const asset = (x: AdHandoffRow) => (r.territories[x.territory]?.name || x.territory).replace(/\.$/, '');
+  const complianceCsv = toCsv([['Audience', 'Asset', 'Ad name', 'Region', 'Platform', 'Format',
+    ...(hasOnImage ? ['On-image text'] : []), ...(hasSub ? ['On-image subhead'] : []),
+    ...Array.from({ length: nCards }, (_, i) => [`Card ${i + 1}`, ...(cardSub ? [`Card ${i + 1} subhead`] : [])]).flat(), ...optionCols, 'Please check'],
+    ...rows.map(x => [audience(x), asset(x), x.ad, REGION_NAMES[x.region], x.platform, x.format, ...words(x), x.check_specifically])]);
+  const mark = (c: string) => (test ? toCsv([['TEST – not for trafficking']]) + c : c);
+  return { count: rows.length, rows, csv: mark(csv), complianceCsv: mark(complianceCsv), test };
 }
 
