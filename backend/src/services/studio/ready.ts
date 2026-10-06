@@ -19,9 +19,9 @@
 
 import {
   type Api, type Batch, type ComplianceStatus, type Flag, type Line, type LineVersion, type Rules,
-  SHARED_PERSONA, checkBatch, similarFlag, finalText, getStore, keptLines, lineHash, loadBatch, loadRules, runLock, sha256, signedCodes, toCsv,
+  SHARED_PERSONA, SHARED_TERRITORY, checkBatch, similarFlag, finalText, getStore, keptLines, lineHash, loadBatch, loadRules, runLock, sha256, signedCodes, toCsv,
 } from './engine.js';
-import { DEFAULT_REGION, REGION_NAMES, parseCode, territoryToken, type Region } from '../../utils/namingCode.js';
+import { DEFAULT_REGION, REGION_NAMES, adName, parseCode, territoryToken, type Region } from '../../utils/namingCode.js';
 import { cleanFor, decidedBy, whoWords } from '../../utils/actor.js';
 import {
   type Draft, type SignedField, type SignedOnImage, type SignedVersion,
@@ -566,3 +566,94 @@ export async function handoffPack(filter: { persona?: string; territory?: string
   const mark = (c: string) => (test ? toCsv([['TEST – not for trafficking']]) + c : c);
   return { count: rows.length, csv: mark(csv), md: md.join('\n') + '\n', complianceCsv: mark(complianceCsv), test };
 }
+
+// ---------- the ad handoff: one row per ad, its copy as text options ----------
+
+/**
+ * One ad as Add3 traffic it (Add3, 6 Oct 2026): a visual, with the copy of its versions as the ad's text options.
+ * Add3 run one ad per visual with several primary texts and headlines, which Meta mixes freely, and report per ad
+ * only. The versions' own codes (A1, A2, A3) are listed as the record of where each option came from.
+ */
+export interface AdHandoffRow {
+  /** The ad's name (namingCode.adName): what it is trafficked and reported under. The date is added at trafficking. */
+  ad: string;
+  region: Region; round: string; month: string; persona: string; territory: string; format: string; platform: string; visual: string;
+  on_image: string; on_image_sub: string; cards: Array<{ card: number; text: string; sub?: string }>;
+  /** Per post-copy field (rules order): the distinct lines across the ad's versions, in first-use order. */
+  options: Record<string, Array<{ text: string; chars: number; line_id: string; shared: boolean; codes: string[] }>>;
+  /** The copy options' codes, in order. */
+  codes: string[];
+  /** Ready to traffic when every code on the ad is; otherwise what is outstanding. */
+  traffic: string; ready: boolean;
+  compliance: string; compliance_note: string; overrides: string; check_specifically: string; changed_since: string;
+  ready_by: string; ready_for?: string; ready_at: string; signoff_id: string;
+}
+
+export async function adHandoffRows(filter: { persona?: string; territory?: string; region?: string; round?: string; user?: string } = {}, trafficOf?: TrafficOf): Promise<AdHandoffRow[]> {
+  const out = new Map<string, AdHandoffRow>();
+  const uniq = (xs: string[]) => [...new Set(xs.filter(Boolean))];
+  for (const x of await handoffRows(filter, trafficOf)) {
+    const ad = adName(x.stub);
+    let row = out.get(ad);
+    if (!row) {
+      row = {
+        ad, region: x.region, round: x.round, month: x.month, persona: x.persona, territory: x.territory, format: x.format, platform: x.platform, visual: x.visual,
+        on_image: x.on_image?.text || '', on_image_sub: x.on_image_sub?.text || '', cards: x.cards.map(c => ({ card: c.card, text: c.text, ...(c.sub ? { sub: c.sub.text } : {}) })),
+        options: {}, codes: [], traffic: '', ready: true, compliance: 'cleared', compliance_note: '', overrides: '', check_specifically: '', changed_since: '',
+        ready_by: x.ready_by, ...(x.ready_for ? { ready_for: x.ready_for } : {}), ready_at: x.ready_at, signoff_id: x.signoff_id,
+      };
+      out.set(ad, row);
+    }
+    row.codes.push(x.stub);
+    for (const [field, v] of Object.entries(x.fields)) {
+      const list = (row.options[field] ||= []);
+      const have = list.find(o => o.line_id === v.line_id);
+      if (have) have.codes.push(x.stub);
+      else list.push({ text: v.text, chars: v.chars, line_id: v.line_id, shared: v.line_id.startsWith(`${SHARED_TERRITORY}-`), codes: [x.stub] });
+    }
+    const isReady = /^Ready to traffic/.test(x.traffic);
+    if (!isReady) row.ready = false;
+    // The ad is as far along as its least advanced option.
+    if (x.compliance === 'changes_requested') row.compliance = 'changes_requested';
+    else if (x.compliance !== 'cleared' && row.compliance !== 'changes_requested') row.compliance = 'pending';
+    row.compliance_note = uniq([...row.compliance_note.split(' | '), x.compliance_note]).join(' | ');
+    row.overrides = uniq([...row.overrides.split(' | '), ...x.overrides.split(' | ')]).join(' | ');
+    row.check_specifically = uniq([...row.check_specifically.split('\n'), x.check_specifically]).join('\n');
+    if (x.changed_since) row.changed_since = x.changed_since;
+    row.traffic = uniq([...row.traffic.split(' | '), isReady ? '' : `${x.stub.replace(/^.*?_([A-Z]\d+)_.*$/, '$1')}: ${x.traffic || 'not ready'}`]).join(' | ');
+  }
+  for (const row of out.values()) if (row.ready) row.traffic = trafficOf ? 'Ready to traffic' : '';
+  return [...out.values()];
+}
+
+/** The sheet for Add3: one row per ad. Text options as columns (Primary text 1..n, Headline 1..n), then where each came from. */
+export async function adHandoff(filter: { persona?: string; territory?: string; region?: string; round?: string; user?: string } = {}, trafficOf?: TrafficOf) {
+  const r = loadRules();
+  const test = testOnly(await roundView(filter.round, filter.user));
+  const rows = await adHandoffRows(filter, trafficOf);
+  const present = new Set(rows.flatMap(x => Object.keys(x.options)));
+  const fields = [...Object.keys(r.fields).filter(f => present.has(f)), ...[...present].filter(f => !r.fields[f])];
+  const label = (f: string) => (r.fields[f]?.label || f).replace(/\s*\(.*\)$/, '');
+  const most = (f: string) => Math.max(0, ...rows.map(x => x.options[f]?.length || 0));
+  const nCards = Math.max(0, ...rows.flatMap(x => x.cards.map(c => c.card)));
+  const cardSub = rows.some(x => x.cards.some(c => c.sub));
+  const hasOnImage = rows.some(x => x.on_image), hasSub = rows.some(x => x.on_image_sub);
+  const optionCols = fields.flatMap(f => Array.from({ length: most(f) }, (_, i) => `${label(f)} ${i + 1}`));
+  const head = ['Ad name', 'Region', 'Month', 'Persona', 'Territory', 'Format', 'Platform',
+    ...(hasOnImage ? ['On-image text'] : []), ...(hasSub ? ['On-image subhead'] : []),
+    ...Array.from({ length: nCards }, (_, i) => [`Card ${i + 1}`, ...(cardSub ? [`Card ${i + 1} subhead`] : [])]).flat(),
+    ...optionCols,
+    // Where each text option came from: its caption id, whether it is a shared caption, and the copy option(s) it was signed off in.
+    ...fields.map(f => `${label(f)}: ids`),
+    'Copy options (Studio codes)', 'Ready to traffic', 'Compliance status', 'Compliance note', 'Red flag overridden', 'Changed since sign-off', 'Decided by', 'Entered by', 'Signed off at'];
+  const short = (code: string) => code.replace(/^.*?_([A-Z]\d+)_.*$/, '$1');
+  const body = rows.map(x => [x.ad, x.region, x.month, x.persona, x.territory, x.format, x.platform,
+    ...(hasOnImage ? [x.on_image] : []), ...(hasSub ? [x.on_image_sub] : []),
+    ...Array.from({ length: nCards }, (_, i) => { const c = x.cards.find(y => y.card === i + 1); return [c?.text || '', ...(cardSub ? [c?.sub || ''] : [])]; }).flat(),
+    ...fields.flatMap(f => Array.from({ length: most(f) }, (_, i) => x.options[f]?.[i]?.text || '')),
+    ...fields.map(f => (x.options[f] || []).map((o, i) => `${i + 1}: ${o.line_id}${o.shared ? ' (shared)' : ''} [${o.codes.map(short).join(', ')}]`).join('\n')),
+    x.codes.join(', '), x.traffic, STATUS_WORDS[x.compliance] || x.compliance, x.compliance_note, x.overrides, x.changed_since, decidedBy(x.ready_by, x.ready_for), x.ready_by, x.ready_at]);
+  const csv = toCsv([head, ...body]);
+  return { count: rows.length, rows, csv: test ? toCsv([['TEST – not for trafficking']]) + csv : csv, test };
+}
+

@@ -196,3 +196,14 @@ Add3 will not run three copies of an ad that differ only by caption: Meta treats
 - **One definition:** `adName(code)` and `parseAdName(raw)` in `backend/src/utils/namingCode.ts` (`AD_PATTERN`). A copy option's code reads as the ad it belongs to; an older `v#` code is its own ad. `parseCode` still wants a line number: it reads copy options only.
 - **Weekly read:** `backend/config/weekly-read.json` v7 adds the form `PERSONA, TERRITORY, FORMAT, VISUAL, REGION, PLATFORM` (`naming.visual_pattern`), tried after the two earlier forms. An ad name parses with `level: 'ad'`, `line: null`, `version: 0`, and its `stub` is the visual (the same as `asset`). Features must then be per ad to join (a later PR); per-code features don't join an ad name.
 - If Add3 say otherwise on 8 Oct: change `AD_ORDER` / `adName` and the config form.
+
+### The ad handoff for Add3 (6 Oct)
+
+`GET /handoff-ads.csv` (Export → "Ad handoff: one row per ad, with text options"; and under Ready to traffic, "the ads, with their text options"): `adHandoffRows` / `adHandoff` in `services/studio/ready.ts`, built from the stored sign-offs through `handoffRows`. Nothing new is stored.
+
+- One row per ad (a visual): Ad name, Region, Month, Persona, Territory, Format, Platform, on-image text, subhead, cards, then each post-copy field's text options (`Meta primary text 1..n`, `Meta headline 1..n`, descriptions and TikTok fields when present).
+- Options are the distinct lines across the visual's versions, in first-use order: three versions sharing one headline give three primaries and one headline.
+- `<field>: ids` says where each option came from: its line id (the caption id), `(shared)` for a shared caption, and the copy option(s) it was signed off in (`[A1, A2]`). `Copy options (Studio codes)` lists the versions' codes.
+- Ready to traffic says "Ready to traffic" only when every copy option on the ad is ready; otherwise what is outstanding, per option. Compliance is the least advanced option's.
+- The per-option pack (`/handoff.csv`) is unchanged: it is the internal record.
+- Not in it: the asset files per ad (still in the asset handoff, per code, until Assets is grouped by ad).

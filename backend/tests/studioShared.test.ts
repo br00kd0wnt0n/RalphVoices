@@ -140,3 +140,34 @@ test('a single-line re-check keeps "similar line" for unchanged wording, and dro
   await S.setDecision(run.id, id, { edited_text: 'See how direct payment to your vet works at participating hospitals with Trupanion.' }, 'nick');
   assert.equal(dup(await R.recheckLine(run.id, id, api(), 'nick')), false, 'an edit that no longer resembles it loses the flag');
 });
+
+test('the ad handoff: one row per ad (a visual), its versions\' copy as text options, shared captions marked', async () => {
+  await fresh();
+  const [o1, mine] = await own('OWN_STILL', [['meta_on_image', 'Vet visits, calmer'], ['meta_primary', 'Trupanion pays the vet at partner clinics. Get a quote.']]);
+  const [s1, s2, sh1, sh2] = await own(S.SHARED_TERRITORY, [['meta_primary', 'Trupanion is medical insurance for pets. Get a quote.'], ['meta_primary', 'Medical insurance for pets from Trupanion. See how it works.'], ['meta_headline', 'Get a quote today'], ['meta_headline', 'See how it works']]);
+  // Three copy options on visual A: two shared captions and the asset's own, sharing two headlines between them.
+  const versions = [{ visual: 'A', fields: { meta_primary: s1, meta_headline: sh1 } }, { visual: 'A', fields: { meta_primary: s2, meta_headline: sh1 } }, { visual: 'A', fields: { meta_primary: mine, meta_headline: sh2 } }];
+  const view = await R.readyView('OWN', 'OWN_STILL', 'US', { versions, on_image: { A: o1 } });
+  assert.deepEqual(view.plan.issues, []);
+  await R.signOff({ persona: 'OWN', territory: 'OWN_STILL', versions, on_image: { A: o1 }, expectation: { codes: [view.plan.versions[0].code], reason: 'x' } }, 'brook', { for: 'nick' });
+
+  const { rows, csv, count } = await R.adHandoff();
+  assert.equal(count, 1, 'three codes, one ad');
+  const ad = rows[0];
+  assert.equal(ad.ad, 'OWN_STILL_ST_A_US_META');
+  assert.deepEqual(ad.codes, ['OWN_STILL_ST_A1_US_META', 'OWN_STILL_ST_A2_US_META', 'OWN_STILL_ST_A3_US_META']);
+  assert.deepEqual(ad.options.meta_primary.map(o => [o.line_id, o.shared, o.codes.length]), [[s1, true, 1], [s2, true, 1], [mine, false, 1]]);
+  assert.deepEqual(ad.options.meta_headline.map(o => [o.line_id, o.shared, o.codes.length]), [[sh1, true, 2], [sh2, true, 1]], 'a headline used by two options is one text option');
+  assert.equal(ad.on_image, 'Vet visits, calmer');
+  const [head, row] = S.parseCsv(csv);
+  const cell = (name: string) => row[head.indexOf(name)];
+  assert.deepEqual(head.slice(0, 8), ['Ad name', 'Region', 'Month', 'Persona', 'Territory', 'Format', 'Platform', 'On-image text']);
+  assert.deepEqual(['Meta primary text 1', 'Meta primary text 2', 'Meta primary text 3', 'Meta headline 1', 'Meta headline 2'].map(cell),
+    ['Trupanion is medical insurance for pets. Get a quote.', 'Medical insurance for pets from Trupanion. See how it works.', 'Trupanion pays the vet at partner clinics. Get a quote.', 'Get a quote today', 'See how it works']);
+  assert.equal(head.includes('Meta headline 3'), false);
+  assert.match(cell('Meta primary text: ids'), new RegExp(`^1: ${s1} \\(shared\\) \\[A1\\]\\n2: ${s2} \\(shared\\) \\[A2\\]\\n3: ${mine} \\[A3\\]$`));
+  assert.match(cell('Meta headline: ids'), /\(shared\) \[A1, A2\]/);
+  assert.deepEqual([cell('Ad name'), cell('Copy options (Studio codes)'), cell('Decided by'), cell('Entered by')], ['OWN_STILL_ST_A_US_META', ad.codes.join(', '), 'nick', 'brook']);
+  // The per-option pack still has its three rows: the internal record is unchanged.
+  assert.equal((await R.handoffPack()).count, 3);
+});
