@@ -79,3 +79,31 @@ test('Studio packs lines three to a visual, skips codes already signed off, and 
   assert.equal(book.assign(line('CA')), 'FAM_SUMMER_ST_A1_CA_META', 'Canada numbers on its own');
   assert.equal(book.assign(line(), 'd'), 'FAM_SUMMER_ST_D1_US_META');
 });
+
+test('an ad is a visual (Add3, 6 Oct): its name is the code without the line number, and every copy option reads as its ad', async () => {
+  const { adName, parseAdName, AD_PATTERN } = await import('../src/utils/namingCode.js');
+  assert.equal(AD_PATTERN, 'PERSONA_TERRITORY_FORMAT_[visual]_REGION_PLATFORM');
+  // The ad's name, with the trafficking date.
+  assert.deepEqual(parseAdName('DINK_SOCK_EATER_DOG_ST_A_US_META_261020'), { ad: 'DINK_SOCK_EATER_DOG_ST_A_US_META', level: 'ad', persona: 'DINK', territory: 'SOCK_EATER_DOG', format: 'ST', platform: 'META', visual: 'A', region: 'US', date: '2026-10-20', suffix: [] });
+  // A copy option is the same ad; the option's own code is kept beside it.
+  const opt = parseAdName('DINK_SOCK_EATER_DOG_ST_A2_US_META') as any;
+  assert.deepEqual([opt.ad, opt.level, opt.option, opt.line], ['DINK_SOCK_EATER_DOG_ST_A_US_META', 'option', 'DINK_SOCK_EATER_DOG_ST_A2_US_META', 2]);
+  // The nine Month 1 assets' codes, A1 to A3, all resolve to one ad each (and still parse as codes).
+  const assets = ['DINK_SOCK_EATER_DOG_ST', 'DINK_EASY_CHECKOUT_CAT_ST', 'DINK_HAVE_THIS_CAT_CAR', 'CUR_GOT_PROMOTED_DOG_ST', 'CUR_KNOW_MORE_CAT_ST', 'CUR_ASK_YOUR_VET_CAR', 'FAM_BAD_DAY_DOG_ST', 'FAM_ZERO_FORMS_CAT_ST', 'FAM_LABRADOR_PROOF_DOG_CAR'];
+  for (const a of assets) for (const n of [1, 2, 3]) {
+    const code = `${a}_A${n}_US_META`;
+    assert.ok(!('error' in parseCode(code)), code);
+    assert.equal(adName(code), `${a}_A_US_META`);
+    assert.equal(adName(code), visualKey(code), 'the ad name is what Studio already calls the visual key');
+  }
+  assert.equal(new Set(assets.flatMap(a => [1, 2, 3].map(n => adName(`${a}_A${n}_US_META`)))).size, 9, '27 codes, 9 ads');
+  // Long names, lower case, Canada, TikTok; an older v# code is its own ad; rubbish stays as it is.
+  assert.equal(adName('cur day-one carousel b ca tiktok 261020'), 'CUR_DAY_ONE_CAR_B_CA_TT');
+  assert.equal(adName('FAM_SUMMER_STATIC_v2_META_261013'), 'FAM_SUMMER_ST_v2_META');
+  assert.equal(adName('not a code'), 'not a code');
+  // A one-letter territory word is not taken for the visual, and parseCode itself still wants a line number.
+  assert.equal(adName('FAM_PLAN_B_ST_A_US_META'), 'FAM_PLAN_B_ST_A_US_META');
+  assert.equal((parseAdName('FAM_PLAN_B_ST_A_US_META') as any).territory, 'PLAN_B');
+  assert.ok('error' in parseCode('FAM_SUMMER_ST_A_US_META'));
+  assert.match((parseAdName('FAM_SUMMER_ST_US_META') as any).error, /not an ad name/);
+});

@@ -34,6 +34,8 @@ export interface WeeklyConfig {
     regions?: Record<string, string[]>;
     forms?: string[][];
     visual_line_pattern?: string;
+    /** The visual letter alone, for an ad's name (the VISUAL slot). */
+    visual_pattern?: string;
     version_pattern?: string;
   };
   audience: {
