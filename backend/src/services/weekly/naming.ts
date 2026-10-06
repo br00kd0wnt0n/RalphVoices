@@ -2,6 +2,8 @@
 // (naming.forms); on 29 Sep 2026 they are
 //   PERSONA_TERRITORY_FORMAT_[visual][line]_REGION_PLATFORM_YYMMDD  e.g. FAM_SUMMER_ST_A2_US_META_261013
 //   PERSONA_TERRITORY_FORMAT_v#_PLATFORM_YYMMDD (the first form; still accepted)  e.g. FAM_SUMMER_ST_v2_META_261013
+// and, since Add3's ruling of 6 Oct (one ad per visual, carrying its copy options; results per ad only),
+//   PERSONA_TERRITORY_FORMAT_[visual]_REGION_PLATFORM_YYMMDD  e.g. FAM_SUMMER_ST_A_US_META_261020  (the ad: no line number)
 // Tolerates case, stray spaces, Studio's long format names, Meta's " - Copy"
 // and extra suffixes after the date. Anything else fails with a reason; the
 // caller quarantines it (never drops it).
@@ -12,9 +14,10 @@ export interface ParsedName {
   persona: string;
   territory: string;
   format: string;
-  version: number;          // v# in the older form; the copy line in the newer one
+  version: number;          // v# in the older form; the copy line in the newer one; 0 for an ad name (no line)
   visual: string | null;    // the visual letter (A, B…), newer form only
-  line: number | null;      // the copy line on that visual, newer form only
+  line: number | null;      // the copy line on that visual, newer form only; null for an ad name
+  level: 'ad' | 'option';   // an ad name (the visual, as Add3 run it) or one copy option's code
   region: string | null;    // US / CA, newer form only
   platform: string;
   date: string | null;      // ISO yyyy-mm-dd, the delivery date
@@ -68,7 +71,8 @@ export function normalizeName(raw: string): { s: string; warnings: string[]; cop
 // The forms live in config (naming.forms): each is a list of slots, tried in order;
 // the date and any suffix follow the last slot. Changing the convention is a config edit.
 //   PERSONA, TERRITORY (one or more tokens), FORMAT, VISUALLINE (e.g. A2), VERSION (v2), REGION, PLATFORM
-type Slot = 'PERSONA' | 'TERRITORY' | 'FORMAT' | 'VISUALLINE' | 'VERSION' | 'REGION' | 'PLATFORM';
+//   VISUAL (A): the ad's name, a visual letter with no line number
+type Slot = 'PERSONA' | 'TERRITORY' | 'FORMAT' | 'VISUALLINE' | 'VISUAL' | 'VERSION' | 'REGION' | 'PLATFORM';
 
 export function parseAdName(raw: string, naming: Naming): NameResult {
   const { s, warnings, copy } = normalizeName(raw);
@@ -80,9 +84,10 @@ export function parseAdName(raw: string, naming: Naming): NameResult {
   const platforms = aliasIndex(naming.platforms);
   const regions = aliasIndex(naming.regions || {});
   const reVL = new RegExp(naming.visual_line_pattern || '^([A-Z])([1-9][0-9]?)$');
+  const reVis = new RegExp(naming.visual_pattern || '^([A-Z])$');
   const reV = new RegExp(naming.version_pattern || '^V([0-9]{1,3})$');
   const forms = (naming.forms?.length ? naming.forms : [['PERSONA', 'TERRITORY', 'FORMAT', 'VERSION', 'PLATFORM']]) as Slot[][];
-  const show = (f: Slot[]) => [...f.map(x => (x === 'VISUALLINE' ? 'A1' : x === 'VERSION' ? 'v#' : x)), 'YYMMDD'].join('_');
+  const show = (f: Slot[]) => [...f.map(x => (x === 'VISUALLINE' ? 'A1' : x === 'VISUAL' ? 'A' : x === 'VERSION' ? 'v#' : x)), 'YYMMDD'].join('_');
   const expected = `expected ${forms.map(show).join(' (or the older ')}${forms.length > 1 ? ')' : ''}`;
   const minParts = Math.min(...forms.map(f => f.length));
 
@@ -97,6 +102,7 @@ export function parseAdName(raw: string, naming: Naming): NameResult {
       case 'PLATFORM': return platforms.has(t);
       case 'REGION': return regions.has(t);
       case 'VISUALLINE': return reVL.test(t);
+      case 'VISUAL': return reVis.test(t);
       case 'VERSION': return reV.test(t);
       default: return true;
     }
@@ -133,12 +139,14 @@ export function parseAdName(raw: string, naming: Naming): NameResult {
       if (rest.length) w.push(`extra suffix ${rest.join('_')}`);
       if (copy) rest.push(copy);
       const vl = got.VISUALLINE ? reVL.exec(got.VISUALLINE)! : null;
-      const visual = vl ? vl[1] : null, line = vl ? Number(vl[2]) : null;
-      const version = got.VERSION ? Number(reV.exec(got.VERSION)![1]) : line!;
-      const idPart = vl ? `${visual}${line}` : `v${version}`;
+      const adLevel = !!got.VISUAL;
+      const visual = vl ? vl[1] : adLevel ? reVis.exec(got.VISUAL!)![1] : null, line = vl ? Number(vl[2]) : null;
+      const version = got.VERSION ? Number(reV.exec(got.VERSION)![1]) : line ?? 0;
+      const idPart = vl ? `${visual}${line}` : adLevel ? visual! : `v${version}`;
       const stub = [persona, territory, fmt, idPart, ...(region ? [region] : []), plat].join('_');
       return {
-        ok: true, persona, territory, format: fmt, version, visual, line, region, platform: plat, date, suffix: rest,
+        ok: true, persona, territory, format: fmt, version, visual, line, level: adLevel ? 'ad' : 'option', region, platform: plat, date, suffix: rest,
+        // For an ad name the stub IS the asset key: one ad per visual.
         // The visual: the key without the line. In the newer form it keeps region and platform,
         // as Studio's visualKey() does: US "A" and CA "A" can be different images.
         stub, asset: visual ? [persona, territory, fmt, visual, ...(region ? [region] : []), plat].join('_') : [persona, territory, fmt].join('_'), form: fi, warnings: w,
@@ -150,14 +158,16 @@ export function parseAdName(raw: string, naming: Naming): NameResult {
 
 // Why no form matched: the first slot that fails around the version or visual+line token.
 function diagnose(tokens: string[], forms: Slot[][], ok: (s: Slot, t: string | undefined) => boolean, naming: Naming, expected: string): string {
-  const anchors = tokens.map((t, i) => ({ t, i })).filter(({ t, i }) => i > 0 && (ok('VISUALLINE', t) || ok('VERSION', t)));
+  const anchors = tokens.map((t, i) => ({ t, i })).filter(({ t, i }) => i > 0 && (ok('VISUALLINE', t) || ok('VERSION', t) || (forms.some(f => f.includes('VISUAL')) && ok('VISUAL', t) && ok('FORMAT', tokens[i - 1]))));
   if (!anchors.length) return `no version (v#) or visual and line (e.g. A2); ${expected}`;
   const list = (m: Record<string, string[]>) => Object.keys(m).join(', ');
   for (const { t, i } of anchors) {
     if (i < 3) return `no territory between persona and format; ${expected}`;
     if (!ok('FORMAT', tokens[i - 1])) return `format "${tokens[i - 1]}" isn't one of ${list(naming.formats)}`;
     const next = tokens[i + 1];
-    const newForm = forms.some(f => f.includes('VISUALLINE')) && ok('VISUALLINE', t) && !ok('VERSION', t);
+    // An ad name (the letter alone) always carries its region.
+    if (!ok('VISUALLINE', t) && !ok('VERSION', t) && ok('VISUAL', t) && !ok('REGION', next)) return next && !ok('PLATFORM', next) ? `region "${next}" isn't one of ${list(naming.regions || {})}` : `no region after ${t}; ${expected}`;
+    const newForm = (forms.some(f => f.includes('VISUALLINE')) && ok('VISUALLINE', t) && !ok('VERSION', t)) || (forms.some(f => f.includes('VISUAL')) && ok('VISUAL', t));
     if (newForm && !ok('REGION', next) && !ok('PLATFORM', next)) return next ? `region "${next}" isn't one of ${list(naming.regions || {})}` : `no region after ${t}; ${expected}`;
     const platTok = newForm || ok('REGION', next) ? tokens[i + 2] : next;
     if (!ok('PLATFORM', platTok)) return platTok ? `platform "${platTok}" isn't one of ${list(naming.platforms)}` : `no platform after ${t}; ${expected}`;

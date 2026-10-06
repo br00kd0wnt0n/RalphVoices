@@ -1,13 +1,14 @@
 {
   "_note": "B3 weekly read (VOICES v2, Trupanion). Written 28 Sep 2026, before any live data. Change a threshold only with a dated entry in `changes` and a reason; the weekly note prints the config version it ran with.",
-  "version": 6,
+  "version": 7,
   "changes": [
     { "date": "2026-09-28", "version": 1, "by": "B3 build", "what": "First version, set before Month 1 goes live." },
     { "date": "2026-09-28", "version": 2, "by": "B3 build, asked by Brook", "what": "Hold bars on calls (calls.hold): a call made last week stays until the evidence falls well back, so ads near a threshold don't flip between scale and keep testing week to week. Still before any live data." },
     { "date": "2026-09-28", "version": 3, "by": "B3 build, fixes approved by Brook after review", "what": "(1) Ties and calls use the same draws: tied = fewer than 9 in 10 draws put one ad ahead (calls.tie_bar); a scale must be clear of every ad outside its group, a cut must be clear of the ad set's leader. Ties were judged by 90% range overlap before, so an ad could be tied with an ad and cut. (2) min_ads_in_cell 2 -> 3: with two ads the rules produced a scale and a cut every week, a coin toss. (3) Note: one-screen plain-English front, appendix, client variant; cost per enrollment hidden below 5 enrollments. Still before any live data." },
     { "date": "2026-09-29", "version": 4, "by": "B3 historic run", "what": "Audience rule: RET (Add3's retargeting prefix, e.g. Add3_RET_Trupanion_US_...) now reads as retargeting. Seen in Add3's historic Meta and TikTok exports; before this, RET campaigns fell to 'unknown' and were left out anyway, so no call changes." },
     { "date": "2026-09-29", "version": 5, "by": "B3, naming update from Brook (proposed to Add3, confirmation pending)", "what": "New ad-name form PERSONA_TERRITORY_FORMAT_[visual][line]_REGION_PLATFORM_YYMMDD (e.g. FAM_SUMMER_ST_A2_US_META_261013): US and Canada run as separate ads, 3 copy lines per visual. The older _v#_ form is still accepted. Region joins the cell (persona x platform x region) and the feature strata (features pool across regions with region as a control)." },
-    { "date": "2026-09-29", "version": 6, "by": "B3, Add3 confirmation via Brook", "what": "Meta conversion columns confirmed by Add3 (29 Sep): 'Checkouts initiated' = a quote started, 'Purchases' = an enrollment. Mapped first in columns.meta.quotes / enrollments. The attribution window is still unknown. TikTok's 'Purchases (website)' is mapped to enrollments as an unconfirmed assumption." }
+    { "date": "2026-09-29", "version": 6, "by": "B3, Add3 confirmation via Brook", "what": "Meta conversion columns confirmed by Add3 (29 Sep): 'Checkouts initiated' = a quote started, 'Purchases' = an enrollment. Mapped first in columns.meta.quotes / enrollments. The attribution window is still unknown. TikTok's 'Purchases (website)' is mapped to enrollments as an unconfirmed assumption." },
+    { "date": "2026-10-06", "version": 7, "by": "Studio build, Add3 ruling via Brook (6 Oct; Add3 to confirm the name on 8 Oct)", "what": "Add3 run each visual as one ad carrying several text options and report per ad only. New ad-name form PERSONA_TERRITORY_FORMAT_[visual]_REGION_PLATFORM_YYMMDD (e.g. FAM_SUMMER_ST_A_US_META_261020): the visual letter with no line number (naming.forms, VISUAL slot; naming.visual_pattern). The earlier forms are still read. No threshold changed." }
   ],
 
   "naming": {
@@ -18,10 +19,12 @@
     "regions": { "US": ["US", "USA"], "CA": ["CA", "CAN", "CANADA"] },
     "forms": [
       ["PERSONA", "TERRITORY", "FORMAT", "VISUALLINE", "REGION", "PLATFORM"],
-      ["PERSONA", "TERRITORY", "FORMAT", "VERSION", "PLATFORM"]
+      ["PERSONA", "TERRITORY", "FORMAT", "VERSION", "PLATFORM"],
+      ["PERSONA", "TERRITORY", "FORMAT", "VISUAL", "REGION", "PLATFORM"]
     ],
-    "_forms": "The naming convention, in one place. Each form is a list of slots tried in order; the delivery date (YYMMDD) and any suffix follow the last slot. VISUALLINE is a visual letter and copy line (A2 = visual A, line 2); VERSION is the older v#. If Add3 changes the format, edit this list (and the two patterns below if the tokens change).",
+    "_forms": "The naming convention, in one place. Each form is a list of slots tried in order; the delivery date (YYMMDD) and any suffix follow the last slot. VISUALLINE is a visual letter and copy line (A2 = visual A, line 2); VISUAL is the letter alone (A): the ad's name since 6 Oct, when Add3 said each visual runs as one ad with its copy as text options; VERSION is the older v#. If Add3 changes the format, edit this list (and the two patterns below if the tokens change).",
     "visual_line_pattern": "^([A-Z])([1-9][0-9]?)$",
+    "visual_pattern": "^([A-Z])$",
     "version_pattern": "^V([0-9]{1,3})$",
     "video_formats": ["VID", "TT", "UGC"],
     "territories": [],

@@ -186,3 +186,13 @@ YYMMDD     trafficking date, as today (YYYYMMDD accepted with a warning)
 2. **Canada applicability of the personas** is still unconfirmed; the note says so on screen.
 3. **Should the sign-off count restart per region** ("Canada set v1")? That needs the database's unique key widened (a migration, so a deploy with Brook). For now the count is shared and the id carries `-CA-`.
 4. **Visual letter default:** three to a visual in the order written. If Add3 or the creative lead would rather start every line on A and group by hand, it's a one-line change (`LINES_PER_VISUAL`).
+
+## The ad and its copy options (6 Oct, Add3; to be confirmed by them on 8 Oct)
+
+Add3 will not run three copies of an ad that differ only by caption: Meta treats them as the same ad. Each visual runs as ONE ad carrying several text options, and Add3 report per ad only.
+
+- **The ad's name** is the visual-level code, the current form without the line number: `PERSONA_TERRITORY_FORMAT_[visual]_REGION_PLATFORM[_YYMMDD]`, e.g. `DINK_SOCK_EATER_DOG_ST_A_US_META_261020`. It is what Studio already called the visual key.
+- **A1, A2, A3** are that ad's copy options: Studio's own ids, never trafficked as separate ads. The nine Month 1 sign-offs and their 27 codes are unchanged and read as before.
+- **One definition:** `adName(code)` and `parseAdName(raw)` in `backend/src/utils/namingCode.ts` (`AD_PATTERN`). A copy option's code reads as the ad it belongs to; an older `v#` code is its own ad. `parseCode` still wants a line number: it reads copy options only.
+- **Weekly read:** `backend/config/weekly-read.json` v7 adds the form `PERSONA, TERRITORY, FORMAT, VISUAL, REGION, PLATFORM` (`naming.visual_pattern`), tried after the two earlier forms. An ad name parses with `level: 'ad'`, `line: null`, `version: 0`, and its `stub` is the visual (the same as `asset`). Features must then be per ad to join (a later PR); per-code features don't join an ad name.
+- If Add3 say otherwise on 8 Oct: change `AD_ORDER` / `adName` and the config form.

@@ -655,3 +655,24 @@ test('feature ids are not a fixed list: new rules tags (v2.9 lifetime_coverage, 
   const labels = new Set(read.features.map(e => e.label));
   assert.ok(labels.has('lifetime_coverage') && labels.has('support_247'), [...labels].join(','));
 });
+
+test('an ad name with no line number reads as the ad (Add3, 6 Oct): the visual is the join key, and the older forms still read', () => {
+  const cfg = loadConfig();
+  const r = parseAdName('DINK_SOCK_EATER_DOG_ST_A_US_META_261020', cfg.naming);
+  assert.ok(r.ok);
+  assert.deepEqual([r.level, r.stub, r.asset, r.visual, r.line, r.version, r.region, r.date, r.territory], ['ad', 'DINK_SOCK_EATER_DOG_ST_A_US_META', 'DINK_SOCK_EATER_DOG_ST_A_US_META', 'A', null, 0, 'US', '2026-10-20', 'SOCK_EATER_DOG']);
+  // A copy option's code still reads as before, and its asset is that same ad.
+  const o = parseAdName('DINK_SOCK_EATER_DOG_ST_A2_US_META_261020', cfg.naming);
+  assert.ok(o.ok && o.level === 'option' && o.stub === 'DINK_SOCK_EATER_DOG_ST_A2_US_META' && o.asset === r.stub);
+  const v = parseAdName('FAM_SUMMER_ST_v2_META_261013', cfg.naming);
+  assert.ok(v.ok && v.level === 'option' && v.stub === 'FAM_SUMMER_ST_v2_META');
+  // Lower case, Canada, TikTok; a one-letter territory word isn't the visual.
+  const ca = parseAdName('cur_day_one_carousel_b_ca_tiktok_261020', cfg.naming);
+  assert.ok(ca.ok && ca.stub === 'CUR_DAY_ONE_CAR_B_CA_TT');
+  const b = parseAdName('FAM_PLAN_B_ST_A_US_META_261020', cfg.naming);
+  assert.ok(b.ok && b.territory === 'PLAN_B' && b.visual === 'A');
+  // Still refused, with a reason: no region after the letter.
+  const bad = parseAdName('FAM_SUMMER_ST_A_META_261020', cfg.naming);
+  assert.ok(!bad.ok && /region/.test(bad.reason), (bad as any).reason);
+  assert.equal(cfg.version, 7);
+});

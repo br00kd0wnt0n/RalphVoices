@@ -55,7 +55,8 @@ const stubName: Namer = a => a.stub;
 const FORMAT_WORD: Record<string, string> = { ST: 'static', VID: 'video', CAR: 'carousel', TT: 'TikTok-native', UGC: 'creator video' };
 export function readableLabel(a: Pick<AdRead, 'persona' | 'territory' | 'format' | 'version' | 'platform'> & { visual?: string | null; region?: string }, territoryNames: Record<string, string> = {}): string {
   const name = territoryNames[`${a.persona}_${a.territory}`] ?? territoryNames[a.territory] ?? a.territory;
-  const id = a.visual ? `${a.visual}${a.version}` : `v${a.version}`;
+  // An ad name has a visual and no copy line (version 0): just the letter.
+  const id = a.visual ? `${a.visual}${a.version || ''}` : `v${a.version}`;
   const where = [a.region, PLATFORM_NAME[a.platform] || a.platform].filter(Boolean).join(', ');
   return `${a.persona} · ${name.replace(/[.\s]+$/, '')} · ${FORMAT_WORD[a.format] || a.format} ${id} (${where})`;
 }
