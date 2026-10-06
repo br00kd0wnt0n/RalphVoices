@@ -170,9 +170,10 @@ test('the ad handoff: one row per ad (a visual), its versions\' copy as text opt
   assert.deepEqual([cell('Ad name'), cell('Copy options (Studio codes)'), cell('Decided by'), cell('Entered by')], ['OWN_STILL_ST_A_US_META', ad.codes.join(', '), 'nick', 'brook']);
   // Trupanion's sheet: one row per ad, every option's words, and nothing internal (no ids, codes, names or reasons).
   const sheet = S.parseCsv((await R.adHandoff()).complianceCsv);
-  assert.deepEqual(sheet[0], ['Ad name', 'Region', 'Platform', 'Format', 'On-image text', 'Meta primary text 1', 'Meta primary text 2', 'Meta primary text 3', 'Meta headline 1', 'Meta headline 2', 'Please check']);
+  assert.deepEqual(sheet[0], ['Audience', 'Asset', 'Ad name', 'Region', 'Platform', 'Format', 'On-image text', 'Meta primary text 1', 'Meta primary text 2', 'Meta primary text 3', 'Meta headline 1', 'Meta headline 2', 'Please check']);
   assert.equal(sheet.length, 2);
-  assert.deepEqual(sheet[1].slice(0, 6), ['OWN_STILL_ST_A_US_META', 'US', 'META', 'STATIC', 'Vet visits, calmer', 'Trupanion is medical insurance for pets. Get a quote.']);
+  assert.deepEqual(sheet[1].slice(1, 8), ['Still', 'OWN_STILL_ST_A_US_META', 'US', 'META', 'STATIC', 'Vet visits, calmer', 'Trupanion is medical insurance for pets. Get a quote.']);
+  assert.ok(sheet[1][0] && !/^OWN$/.test(sheet[1][0]), 'the audience by name, not its code');
   assert.equal(/nick|brook|shared|SHARED-|_A1_|Test line|overridden/i.test(sheet.slice(1).map(r => r.join(' ')).join(' ').replace(/Please check[\s\S]*$/, '')), false);
   // The per-option pack still has its three rows: the internal record is unchanged.
   assert.equal((await R.handoffPack()).count, 3);
