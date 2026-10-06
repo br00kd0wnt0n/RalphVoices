@@ -654,6 +654,18 @@ export async function adHandoff(filter: { persona?: string; territory?: string; 
     ...fields.map(f => (x.options[f] || []).map((o, i) => `${i + 1}: ${o.line_id}${o.shared ? ' (shared)' : ''} [${o.codes.map(short).join(', ')}]`).join('\n')),
     x.codes.join(', '), x.traffic, STATUS_WORDS[x.compliance] || x.compliance, x.compliance_note, x.overrides, x.changed_since, decidedBy(x.ready_by, x.ready_for), x.ready_by, x.ready_at]);
   const csv = toCsv([head, ...body]);
-  return { count: rows.length, rows, csv: test ? toCsv([['TEST – not for trafficking']]) + csv : csv, test };
+  // For Trupanion's compliance team, who review each finished ad once: the words only. No internal flags, objections,
+  // ids, codes or names; an ad that went through with an overridden red flag says which rule to look at, never why or who.
+  const words = (x: AdHandoffRow) => [
+    ...(hasOnImage ? [x.on_image] : []), ...(hasSub ? [x.on_image_sub] : []),
+    ...Array.from({ length: nCards }, (_, i) => { const c = x.cards.find(y => y.card === i + 1); return [c?.text || '', ...(cardSub ? [c?.sub || ''] : [])]; }).flat(),
+    ...fields.flatMap(f => Array.from({ length: most(f) }, (_, i) => x.options[f]?.[i]?.text || '')),
+  ];
+  const complianceCsv = toCsv([['Ad name', 'Region', 'Platform', 'Format',
+    ...(hasOnImage ? ['On-image text'] : []), ...(hasSub ? ['On-image subhead'] : []),
+    ...Array.from({ length: nCards }, (_, i) => [`Card ${i + 1}`, ...(cardSub ? [`Card ${i + 1} subhead`] : [])]).flat(), ...optionCols, 'Please check'],
+    ...rows.map(x => [x.ad, REGION_NAMES[x.region], x.platform, x.format, ...words(x), x.check_specifically])]);
+  const mark = (c: string) => (test ? toCsv([['TEST – not for trafficking']]) + c : c);
+  return { count: rows.length, rows, csv: mark(csv), complianceCsv: mark(complianceCsv), test };
 }
 
