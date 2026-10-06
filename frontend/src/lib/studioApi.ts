@@ -189,7 +189,8 @@ export interface RuleEntry { id: string; rule: string; severity: 'compliance' | 
 export interface ActiveRules {
   version: string; updated?: string; compliance: RuleEntry[]; brand: RuleEntry[]; clarity: RuleEntry[];
   personas: Record<string, { name: string; triggers: Array<{ label: string; detail?: string; source?: string }>; turn_offs: RuleEntry[]; language: Array<{ text: string; caution: boolean; source: string }> }>;
-  disclaimer?: (RuleEntry & { text: string | null; active: boolean }) | null;
+  /** text_by_region (rules v2.16): the approved versions by region (US, CA, NA = valid in both); an asset is checked against its region's. */
+  disclaimer?: (RuleEntry & { text: string | null; text_by_region?: Record<string, string>; active: boolean }) | null;
 }
 export interface RulesVersion { version: string; status: 'draft' | 'active' | 'retired'; notes?: string; created_by?: string; created_at: string; activated_by?: string | null; activated_at?: string | null }
 // ---------- Pre-flight ----------

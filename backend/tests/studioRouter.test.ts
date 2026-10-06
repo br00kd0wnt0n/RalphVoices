@@ -220,3 +220,45 @@ test('red brand items with two wordings are asked as yes/no too, so red still ne
   S.reconcile(line, r);
   assert.equal(line.flags[0].severity, 'warn');
 });
+
+test('the disclaimer by region (rules v2.16): an asset needs its own region\'s version or the North America one; every approved version is small print', async () => {
+  const { disclaimerCheck, disclaimerVersions } = await import('../src/services/studio/preflight.js');
+  const { withoutSmallPrint, disclaimerTexts } = await import('../src/services/audit/smallPrint.js');
+  // Made-up texts with the shape of the real ones: a shared opening, a US address and licence, a Canadian address, registration and phone.
+  const US = 'Example is a registered trademark owned by Example, Inc. Example policies are underwritten by First Example Insurance Company, 100-4th Ave S, Springfield, WA 98000 sold and administered by Example Managers USA, Inc. (CA license No. 0X00000, NPN 1234567).';
+  const CA = 'Example is a registered trademark owned by Example, Inc. Example policies are underwritten by Northern Example Insurance Company of Canada, and sold and administered by Canada Example Services, Inc. dba Example, 309-1277 Maple Valley Road, North Harbour, BC, V7J 0A2, a registered damage insurance agency and claims adjuster in Quebec #603927. To verify your underwriter please consult the declarations page of your policy or contact us at 1.888.555.0100.';
+  const NA = `${US.replace('100-4th Ave S, Springfield, WA 98000 sold', 'in the United States, and sold').replace('(CA license', '100 4th Ave S, Springfield, WA 98000, (CA license')} ${CA.replace('Example is a registered trademark owned by Example, Inc. ', '').replace('Company of Canada, and', 'Company of Canada in Canada, and')}`;
+  const rules = { disclaimer: { id: 'DISCLAIMER_LAST_SCREEN', rule: 'The approved disclaimer appears on the final frame or card of every asset.', severity: 'compliance', applies_to: 'visual', text: US, text_by_region: { US, CA, NA }, source: 'test' } };
+  const on = (text: string) => [{ where: 'image', text: `Vet visits, calmer\n${text}` }];
+  const check = (text: string, region: string) => disclaimerCheck(rules, on(text), 'static', 1, region);
+  assert.deepEqual(disclaimerVersions(rules, 'CA').map(v => v.key), ['CA', 'NA']);
+  // The right version for the region passes; so does the North America one, in either region.
+  assert.deepEqual([check(US, 'US'), check(CA, 'CA'), check(NA, 'US'), check(NA, 'CA')], [[], [], [], []]);
+  // Small print over lines, in capitals, still matches.
+  assert.deepEqual(check(CA.toUpperCase().replace(/, /g, ',\n'), 'CA'), []);
+  // A Canadian asset with the US disclaimer is red, and says which version it carries and which it needs.
+  const red = check(US, 'CA');
+  assert.deepEqual([red.length, red[0].severity], [1, 'red']);
+  assert.match(red[0].label, /the Canada disclaimer, or the North America disclaimer is expected on this Canada asset/);
+  assert.match(red[0].why!, /carries the US disclaimer; this asset needs the Canada disclaimer/);
+  assert.match(red[0].quote!, /^approved: "Example is a registered trademark.*1\.888\.555\.0100\."$/);
+  // And the other way round; with none at all it says what is missing.
+  assert.match(check(CA, 'US')[0].why!, /carries the Canada disclaimer; this asset needs the US disclaimer/);
+  assert.match(check('Get a quote', 'CA')[0].why!, /The Canada disclaimer, or the North America disclaimer isn't on image/);
+  // Rules without regional versions behave as before: `text` for every region, the rule as the label.
+  const plain = { disclaimer: { ...rules.disclaimer, text_by_region: undefined } };
+  assert.deepEqual(disclaimerCheck(plain, on(US), 'static', 1, 'CA'), []);
+  assert.equal(disclaimerCheck(plain, on('Get a quote'), 'static', 1, 'CA')[0].label, rules.disclaimer.rule);
+  assert.equal(disclaimerCheck(plain, on('Get a quote'), 'static')[0].why, "The approved disclaimer isn't on image (0% of its words found)");
+
+  // Any approved version is small print for the copy and figure checks, whatever the region: nothing of the Canadian
+  // address, registration or phone number is left to be read as ad copy or a figure.
+  const all = disclaimerTexts(rules);
+  assert.equal(all.length, 3);
+  for (const text of [CA, CA.replace(/, /g, ',\n'), NA, US]) {
+    const left = withoutSmallPrint(`Vet visits, calmer\nWe pay 90% of eligible bills.\n${text}`, all);
+    assert.equal(left, 'Vet visits, calmer\nWe pay 90% of eligible bills.', text.slice(60, 100));
+  }
+  // With only the US text known (rules before v2.16), the Canadian numbers would be left in: this is what the change fixes.
+  assert.match(withoutSmallPrint(`Vet visits, calmer\n${CA.replace(/, /g, ',\n')}`, US), /603927|309-1277/);
+});

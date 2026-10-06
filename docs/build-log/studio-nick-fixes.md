@@ -130,3 +130,14 @@ Screenshots are in `Claude outputs/voices-r1/studio/screens/nick-fixes-30sep/`:
 - "Remove this visual" on each visual: its ads and its on-image text, subhead and cards (`removeVisual`); the kept lines are untouched and the letter is free again. Removing a visual's last ad did this already, but the crash hid it.
 - An empty tray now says which field has no kept lines and where to write them.
 - Tests: "removing an ad or a visual" in `studioBuildDraft.test.ts`. There is no component-test harness in the frontend; the steps were run in the browser (add an ad, open a tray on it, remove it; add a visual, remove it).
+
+## The disclaimer by region (6 Oct, rules v2.16)
+
+Trupanion supplied the approved disclaimer in three versions: US, Canada and North America (valid in both). Canada runs in Month 1 as separate Canadian files with CA codes.
+
+- `disclaimer.text_by_region` (`US`, `CA`, `NA`) beside `disclaimer.text`. An asset is checked against its region's version (`text_by_region[region]`, else `text`), and also passes with the `NA` version. The region is the code's (`regionOf(stub)`). `disclaimerVersions` / `disclaimerCheck` in `services/studio/preflight.ts`.
+- The red flag names what is expected ("the Canada disclaimer, or the North America disclaimer is expected on this Canada asset") and, when the asset carries another region's version, says which ("image carries the US disclaimer").
+- Small print: every approved version is small print for the copy and figure checks, whatever the asset's region (`disclaimerTexts` in `services/audit/smallPrint.ts`). Small print broken over short lines is followed to its end: once a line is small print, the short lines after it are too while every word in them is from an approved disclaimer. So the Canadian address, registration number and phone number are never read as ad copy or as unsourced figures.
+- The Rules page lists the versions on file. Rules without `text_by_region` behave as before.
+- `PREFLIGHT_LOGIC_VERSION` is 4, so audits run before this show as out of date.
+- Test: "the disclaimer by region" in `studioRouter.test.ts` (made-up texts with the shape of the real ones). Also run by hand against the three real v2.16 texts, in three line wrappings.

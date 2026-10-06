@@ -4,7 +4,7 @@
 // (Studio has its own version of these checks; B2 doesn't import Studio code.)
 import type { Flag, Pattern, RuleItem, Rules, Severity } from './types.js';
 import { figureKey, isSmallFigure, notInFacts } from '../../utils/figures.js';
-import { withoutSmallPrint } from './smallPrint.js';
+import { disclaimerTexts, withoutSmallPrint } from './smallPrint.js';
 
 export interface TextBlock {
   where: string;      // "Meta headline", "card 1", "1.5 s (hook)"
@@ -63,7 +63,7 @@ export function copyFlags(blocks: TextBlock[], rules: Rules, persona: string | n
   const flags: Flag[] = [];
   // The asset's legal small print (the disclaimer, an address, a licence line) isn't ad copy: the figure and rule checks
   // skip it, and only the disclaimer check reads it (smallPrint.ts). Sidecar copy fields are all copy.
-  const disclaimer = (rules as any).disclaimer?.text as string | undefined;
+  const disclaimer = disclaimerTexts(rules as any);
   const copyOf = (b: TextBlock) => (b.onImage ? withoutSmallPrint(b.text, disclaimer) : b.text);
   const all = clean(blocks.map(copyOf).join('\n'));
 

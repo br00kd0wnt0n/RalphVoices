@@ -23,7 +23,7 @@ import { captionOf, clientOverrideLine, latestSignoffs, ruleName, setCompliance,
 import { complianceFor, platformOf, signoffOnImage, signoffVersions, type SignedField } from './versions.js';
 import { getRounds, labelOf, roundOf, roundView, testOnly } from './rounds.js';
 import { SIZES, detectSize, expectedSizes, parseSize, roleOf, sizeOfRole, slotOf, type Size } from './sizes.js';
-import { DEFAULT_REGION, parseCode, visualKey, type Region } from '../../utils/namingCode.js';
+import { DEFAULT_REGION, parseCode, regionOf as regionOfCode, visualKey, type Region } from '../../utils/namingCode.js';
 import { deletePrivateObject, downloadPrivateObject, getPrivateObject, getPrivateObjectStream, isR2Enabled, putPrivateObject } from '../r2.js';
 import { FatalError } from '../audit/api.js';
 import { cleanFor, decidedBy, packActor, unpackActor, whoWords } from '../../utils/actor.js';
@@ -63,8 +63,8 @@ export class StorageError extends Error {
 }
 
 export const DB_FILE_CAP = 25 * 1024 * 1024;     // local/dev only (R2 off)
-/** Bump when the audit or copy-match logic changes what a stored audit would say (2: on-asset copy match per stub; 3: the disclaimer on the last screen). */
-export const PREFLIGHT_LOGIC_VERSION = 3;
+/** Bump when the audit or copy-match logic changes what a stored audit would say (2: on-asset copy match per stub; 3: the disclaimer on the last screen; 4: the disclaimer by region, and every approved version read as small print). */
+export const PREFLIGHT_LOGIC_VERSION = 4;
 
 /**
  * Where Pre-flight files go. Production with R2 on: the private bucket
@@ -247,27 +247,55 @@ const normWords = (s: string) => s.normalize('NFKC').toLowerCase().replace(/[’
  * A match is the whole text in order, or (for OCR slips) at least 90% of its
  * words present on that screen.
  */
-export function disclaimerCheck(rules: any, assetText: Array<{ where: string; text: string }>, kind: AssetKind, cards = 1): AuditFlag[] {
+export const DISCLAIMER_REGION_NAMES: Record<string, string> = { US: 'US', CA: 'Canada', NA: 'North America' };
+/**
+ * The disclaimer versions an asset may carry, by its region (rules v2.16 `disclaimer.text_by_region`): its own
+ * region's, or the North America one (approved for both). Rules without regional versions have just `text`.
+ */
+export function disclaimerVersions(rules: any, region: string = DEFAULT_REGION): Array<{ key: string; name: string; text: string }> {
+  const d = rules?.disclaimer;
+  const by = (d?.text_by_region || {}) as Record<string, string>;
+  const own = String(by[region] || d?.text || '').trim();
+  const out = own ? [{ key: by[region] ? region : '', name: by[region] ? `the ${DISCLAIMER_REGION_NAMES[region] || region} disclaimer` : 'the approved disclaimer', text: own }] : [];
+  const na = String(by.NA || '').trim();
+  if (na && na !== own) out.push({ key: 'NA', name: 'the North America disclaimer', text: na });
+  return out;
+}
+export function disclaimerCheck(rules: any, assetText: Array<{ where: string; text: string }>, kind: AssetKind, cards = 1, region: string = DEFAULT_REGION): AuditFlag[] {
   const d = rules?.disclaimer;
   if (!d) return [];
   const base = { rule: d.id || 'DISCLAIMER_LAST_SCREEN', source: d.source, check: 'disclaimer' };
-  if (!String(d.text || '').trim()) return [{ ...base, severity: 'grey', label: 'Disclaimer check off: no approved text in the rules yet' }];
+  const versions = disclaimerVersions(rules, region);
+  if (!versions.length) return [{ ...base, severity: 'grey', label: 'Disclaimer check off: no approved text in the rules yet' }];
   const screens = assetText.filter(t => t.where !== 'voice-over');
   const where = kind === 'carousel' ? `card ${cards}` : kind === 'static' ? 'image' : 'last frame';
   const last = kind === 'carousel' ? screens.find(t => t.where === where)
     : kind === 'static' ? screens.find(t => t.where === 'image') || screens[0]
     : screens.find(t => /last frame/.test(t.where));
   if (kind === 'video' && !last) return [{ ...base, severity: 'grey', label: 'Disclaimer not checked: the last video frame wasn’t read', why: 'No frames from the video (ffmpeg couldn’t read it); check the last screen by eye' }];
-  const want = normWords(d.text), have = normWords(last?.text || '');
-  const words = want.split(' ').filter(w => w.length > 2);
+  const have = normWords(last?.text || '');
   const present = new Set(have.split(' '));
-  const coverage = words.length ? words.filter(w => present.has(w)).length / words.length : 1;
-  if (have.includes(want) || coverage >= 0.9) return [];
+  // The asset's own region's version, or the North America one (approved for both): either is a pass.
+  const tried = versions.map(v => {
+    const want = normWords(v.text);
+    const words = want.split(' ').filter(w => w.length > 2);
+    const coverage = words.length ? words.filter(w => present.has(w)).length / words.length : 1;
+    return { ...v, ok: have.includes(want) || coverage >= 0.9, coverage };
+  });
+  if (tried.some(t => t.ok)) return [];
+  // Another region's version on the asset is the likeliest slip: say so.
+  const others = Object.entries((d.text_by_region || {}) as Record<string, string>).filter(([k]) => !versions.some(v => v.key === k));
+  const wrong = others.find(([, text]) => { const w = normWords(String(text)).split(' ').filter(x => x.length > 2); return w.length && w.filter(x => present.has(x)).length / w.length >= 0.9; });
+  const expected = tried.map(t => t.name).join(', or ');
+  const best = tried.reduce((a, b) => (b.coverage > a.coverage ? b : a));
   const frame = kind === 'video' ? { label: last!.where } : { asset_position: kind === 'carousel' ? cards - 1 : 0, label: last?.where || where };
+  const regional = !!d.text_by_region;
   return [{
-    ...base, severity: 'red', label: d.rule, where: last?.where || where, frame,
-    quote: `approved: "${d.text}"`,
-    why: last?.text?.trim() ? `The approved disclaimer isn't on ${last.where} (${Math.round(coverage * 100)}% of its words found)` : `${last?.where || where} has no readable text`,
+    ...base, severity: 'red', label: regional ? `${String(d.rule).replace(/\.$/, '')}: ${expected} is expected on this ${DISCLAIMER_REGION_NAMES[region] || region} asset` : d.rule, where: last?.where || where, frame,
+    quote: `approved: "${tried[0].text}"`,
+    why: !last?.text?.trim() ? `${last?.where || where} has no readable text`
+      : wrong ? `${last.where} carries the ${DISCLAIMER_REGION_NAMES[wrong[0]] || wrong[0]} disclaimer; this asset needs ${expected}`
+      : `${regional ? expected.replace(/^t/, 'T') : 'The approved disclaimer'} isn't on ${last.where} (${Math.round(best.coverage * 100)}% of its words found)`,
   }];
 }
 
@@ -636,7 +664,7 @@ export class Preflight {
         const text = r.asset_text || [{ where: a.kind === 'static' ? 'image' : 'asset', text: r.text_found }];
         // Copy match is Studio's, per stub the visual serves (the engine's own copy flags are replaced by these).
         for (const f of r.flags.filter(f => f.check !== 'copy_match')) found.push({ flag: tag(g.size, f), rows: g.rows, stub: null, raw: f, size: g.size });
-        for (const f of disclaimerCheck(rules, text, a.kind, g.rows.length)) found.push({ flag: tag(g.size, f), rows: g.rows, stub: null, raw: f, size: g.size });
+        for (const f of disclaimerCheck(rules, text, a.kind, g.rows.length, regionOfCode(a.stub))) found.push({ flag: tag(g.size, f), rows: g.rows, stub: null, raw: f, size: g.size });
         for (const st of served) {
           const cm = copyMatchForStub((await this.findStub(st)).copy, r.asset_text || [{ where: 'asset', text: r.text_found }], rules, a.kind);
           copyByStub[st] = [...(copyByStub[st] || []), ...cm.rows.map(x => (multi ? { ...x, size: g.size } : x))];

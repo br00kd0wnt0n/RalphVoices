@@ -133,7 +133,16 @@ function LiveRules({ active, meta }: { active: ActiveRules; meta: Meta | null })
           <>
             <h3 className="mb-2 mt-4 text-base font-semibold">On the last screen <span className="text-sm font-normal text-[#858B96]">(checked in Assets)</span></h3>
             {list([active.disclaimer])}
-            <p className="mt-2 text-sm text-[#A3A8B1]">{active.disclaimer.active ? <>Approved text: “{active.disclaimer.text}”</> : 'Off for now: no approved disclaimer text in the rules yet. Pre-flight shows a grey note until it’s added.'}</p>
+            {active.disclaimer.text_by_region && Object.keys(active.disclaimer.text_by_region).length > 0 ? (
+              <div className="mt-2 space-y-1.5 text-sm text-[#A3A8B1]">
+                <p>An asset is checked against its region’s version; the North America version passes in either region.</p>
+                {Object.entries(active.disclaimer.text_by_region).map(([k, text]) => (
+                  <p key={k}><span className="font-semibold text-[#C9CCD2]">{({ US: 'US', CA: 'Canada', NA: 'North America (US and Canada)' } as Record<string, string>)[k] || k}</span> ({[...text].length} characters): “{text}”</p>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-2 text-sm text-[#A3A8B1]">{active.disclaimer.active ? <>Approved text: “{active.disclaimer.text}”</> : 'Off for now: no approved disclaimer text in the rules yet. Pre-flight shows a grey note until it’s added.'}</p>
+            )}
           </>
         )}
       </section>

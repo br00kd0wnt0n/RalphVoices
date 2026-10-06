@@ -28,24 +28,45 @@ const ADDRESS = /\b[A-Z]{2}\s+\d{5}(-\d{4})?\b|(?<![\d,$.])\b\d{2,6}[-\s]+\d+(st
 
 const words = (s: string) => s.toLowerCase().replace(/[^a-z0-9$% ]+/g, ' ').split(/\s+/).filter(w => w.length > 2);
 
-/** Is this piece of text small print (the disclaimer, or a legal line)? */
-export function isSmallPrint(piece: string, disclaimer?: string): boolean {
+/**
+ * Every approved version of the disclaimer in the rules: `disclaimer.text`, and the regional versions in
+ * `disclaimer.text_by_region` (US, CA, NA; rules v2.16). Any of them on an asset is small print, whatever the
+ * asset's region: their addresses, licence and phone numbers are never ad copy.
+ */
+export function disclaimerTexts(rules: { disclaimer?: { text?: string | null; text_by_region?: Record<string, string> } } | undefined | null): string[] {
+  const d = rules?.disclaimer;
+  return [...new Set([d?.text, ...Object.values(d?.text_by_region || {})].map(t => String(t || '').trim()).filter(Boolean))];
+}
+
+/** Is this piece of text small print (an approved disclaimer, or a legal line)? `disclaimer`: one text, or every approved version. */
+export function isSmallPrint(piece: string, disclaimer?: string | string[]): boolean {
   if (SMALL_PRINT.some(re => re.test(piece)) || MARKER.test(piece) || ADDRESS.test(piece)) return true;
-  if (disclaimer && disclaimer.trim()) {
-    const want = new Set(words(disclaimer)), have = words(piece);
+  for (const d of [disclaimer || []].flat()) {
+    if (!d.trim()) continue;
+    const want = new Set(words(d)), have = words(piece);
     if (have.length >= 4 && have.filter(w => want.has(w)).length / have.length >= 0.6) return true;
   }
   return false;
 }
 
 /** The text without its small print: whole lines, or sentences within a line, that are small print. */
-export function withoutSmallPrint(text: string, disclaimer?: string): string {
+export function withoutSmallPrint(text: string, disclaimer?: string | string[]): string {
+  // Small print is often broken over short lines ("Inc.", "North Vancouver,", "BC,"), too short to recognise alone.
+  // Once a line has been small print, the short lines that follow are too while every word in them is from an
+  // approved disclaimer (small print sits at the end of a card; ad copy after it would bring words of its own).
+  const known = new Set([disclaimer || []].flat().flatMap(d => words(d)));
+  let inSmall = false;
   return text.split(/\n/).map(line => {
-    if (isSmallPrint(line, disclaimer) && !/[.!?]\s+\S/.test(line)) return '';
+    if (isSmallPrint(line, disclaimer) && !/[.!?]\s+\S/.test(line)) { inSmall = true; return ''; }
+    const carries = (piece: string) => known.size > 0 && words(piece).length <= 6 && words(piece).every(w => known.has(w));
+    if (inSmall && carries(line)) return '';
     // Sentences: keep the ad copy in a line that also carries small print; from the first legal marker on, it's all
     // small print (the paragraph at the end of a card).
     const sentences = line.split(/(?<=[.!?])\s+/);
     const from = sentences.findIndex(s => MARKER.test(s));
-    return (from >= 0 ? sentences.slice(0, from) : sentences).filter(s => !isSmallPrint(s, disclaimer)).join(' ');
+    const wasSmall = inSmall;
+    const kept = (from >= 0 ? sentences.slice(0, from) : sentences).filter(s => !isSmallPrint(s, disclaimer) && !(wasSmall && carries(s)));
+    inSmall = from >= 0 || kept.length < sentences.length;
+    return kept.join(' ');
   }).filter(l => l.trim()).join('\n');
 }
