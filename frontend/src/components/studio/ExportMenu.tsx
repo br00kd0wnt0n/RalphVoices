@@ -30,10 +30,10 @@ export function ExportMenu({ meta, ctx, view, batch, onImported }: { meta: Meta 
   const ready = (v: string) => v === 'yes' || /^Ready to traffic/.test(v || '');
   const run = batch && batch.brief.territory === ctx.territory ? batch : null;
   const dl = (path: string, name: string) => { setOpen(false); studio.download(path, name).catch(e => onImported(`Download failed: ${e.message}`)); };
-  const dlReady = (path: string, name: string) => {
+  const dlReady = (path: string, name: string, noun = 'code') => {
     setOpen(false);
     studio.downloadCsvRows(path, name, row => ready(row['Ready to traffic']) && inScope(row))
-      .then(n => onImported(`${n} code${n === 1 ? '' : 's'} ready to traffic${narrow ? ` (${persona} · ${set})` : ' this month'}.`))
+      .then(n => onImported(`${n} ${noun}${n === 1 ? '' : 's'} ready to traffic${narrow ? ` (${persona} · ${set})` : ' this month'}.`))
       .catch(e => onImported(`Download failed: ${e.message}`));
   };
   async function importSheet(file: File) {
@@ -64,11 +64,13 @@ export function ExportMenu({ meta, ctx, view, batch, onImported }: { meta: Meta 
             <>
               <Head>Ready to traffic</Head>
               <Item onClick={() => dlReady('/preflight/handoff.csv', 'ready-to-traffic-assets.csv')} title="Codes that passed Pre-flight and Trupanion cleared: the asset, flags and who cleared it">Ready to traffic: asset handoff for Add3</Item>
+              <Item onClick={() => dlReady(narrow ? `/handoff-ads.csv${q}` : '/handoff-ads.csv', 'ready-to-traffic-ads.csv', 'ad')} title="For Add3: one row per ad (a visual), with its primary texts and headlines as text options. Only ads whose every copy option is ready.">Ready to traffic: the ads, with their text options</Item>
               <Item onClick={() => dlReady(narrow ? `/handoff.csv${q}` : '/handoff.csv', 'ready-to-traffic-copy.csv')} title="The copy of every ready code, a column per field">Ready to traffic: the copy, per code</Item>
             </>
           )}
           <Head>Everything signed off (any status)</Head>
-          <Item onClick={() => dl(narrow ? `/handoff.csv${q}` : '/handoff.csv', 'ready-for-production.csv')}>Handoff pack (CSV)</Item>
+          <Item onClick={() => dl(narrow ? `/handoff-ads.csv${q}` : '/handoff-ads.csv', 'ad-handoff.csv')} title="One row per ad (a visual): on-image text, then Primary text 1..n and Headline 1..n as the ad's text options. The ad's name is what Add3 traffic and report under.">Ad handoff: one row per ad, with text options</Item>
+          <Item onClick={() => dl(narrow ? `/handoff.csv${q}` : '/handoff.csv', 'ready-for-production.csv')} title="The internal record: one row per copy option (A1, A2, A3)">Handoff pack, per copy option (CSV)</Item>
           {narrow && <Item onClick={() => dl(`/handoff.md${q}`, 'ready-for-production.md')}>Handoff pack (Markdown)</Item>}
           {meta?.preflight?.enabled && <Item onClick={() => dl('/preflight/handoff.csv', 'asset-handoff.csv')} title="Per code: the asset, Ready to traffic and compliance status">Asset handoff, every code</Item>}
           <Item onClick={() => dl('/compliance-sheet.csv', 'trupanion-compliance-sheet.csv')} title="The final words only: no internal flags, objections or names">Compliance sheet for Trupanion</Item>
