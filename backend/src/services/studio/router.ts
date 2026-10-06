@@ -509,7 +509,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
       }])),
       sources: Object.fromEntries(Object.entries(full.sources || {}).map(([k, v]: [string, any]) => [k, v?.title || k])),
       // Checked on the last screen in Pre-flight; off until the approved text is in the rules.
-      disclaimer: full.disclaimer ? { ...item(full.disclaimer), text: full.disclaimer.text || null, active: !!String(full.disclaimer.text || '').trim() } : null,
+      disclaimer: full.disclaimer ? { ...item(full.disclaimer), text: full.disclaimer.text || null, ...(full.disclaimer.text_by_region ? { text_by_region: full.disclaimer.text_by_region } : {}), active: !!String(full.disclaimer.text || '').trim() || Object.values(full.disclaimer.text_by_region || {}).some(t => String(t || '').trim()) } : null,
     });
   }));
 

@@ -22,7 +22,7 @@ import { extractAudio, ocr, runTool } from './assets.js';
 import { CONFIG } from './config.js';
 import { copyMatch, type SignedOffCopy } from './copyMatch.js';
 import { defaultTools, type Tools } from './tools.js';
-import { withoutSmallPrint } from './smallPrint.js';
+import { disclaimerTexts, withoutSmallPrint } from './smallPrint.js';
 import type { Asset, AssetAudit, Flag, FrameText, Rubric, RuleItem, Rules, YesNo } from './types.js';
 import { CURRENT_PATTERN } from '../../utils/namingCode.js';
 
@@ -273,7 +273,7 @@ export async function auditAsset(a: Asset, ctx: AuditContext): Promise<AssetAudi
 
   // 4. Compliance yes/no on the words alone.
   // The asset's legal small print isn't ad copy (smallPrint.ts): only the disclaimer check reads it.
-  const disclaimerText = (ctx.rules as any).disclaimer?.text as string | undefined;
+  const disclaimerText = disclaimerTexts(ctx.rules as any);
   const words = blocks.map(b => (b.onImage ? withoutSmallPrint(b.text, disclaimerText) : b.text)).filter(t => t.trim()).join('\n');
   const compItems = ctx.rules.compliance.filter(c => c.wordings && c.wordings.length === 2);
   const compReads = words.trim() ? await pool(compItems.flatMap(c => c.wordings!.map((w, k) => async () => {
