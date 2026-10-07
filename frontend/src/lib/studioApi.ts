@@ -275,6 +275,12 @@ export interface WorksheetData {
   round: string; round_label: string; region: Region | 'all'; rules?: string; steps: Record<WsStep, WsRow[]>;
   counts: Record<WsStep, { total: number; kept: number; cut: number; undecided: number; red: number; amber: number; clear: number }>; other: number;
 }
+/** Feedback rounds: the client's feedback per round (R1, R2) and per ad. Separate from the compliance decision; it only informs. */
+export type FeedbackState = 'none' | 'change' | 'done';
+export interface FeedbackItem { state: FeedbackState; note?: string; by?: string; for?: string; at: string }
+export interface FeedbackReview { id: string; label: string; sent?: string; received?: string; notes?: string; by?: string; at?: string; counts: { change: number; done: number; none: number; unmarked: number } }
+export interface FeedbackAd { ad: string; persona: string; territory: string; region: Region; format: string; codes: string[]; items: Record<string, FeedbackItem> }
+export interface FeedbackView { round: string; region: Region; reviews: FeedbackReview[]; ads: FeedbackAd[]; summary: string }
 export type SheetAction = 'keep' | 'cut' | 'rewrite' | 'new' | 'none' | 'conflict' | 'error';
 /** One row of a filled-in worksheet against Studio as it is now: what importing it would do. */
 export interface SheetPreviewRow { tab: string; row: number; n: string; action: SheetAction; id?: string; matched?: boolean; now?: string; text?: string; chars?: number; visible?: number; note?: string; where?: string; territory?: string }
@@ -492,6 +498,9 @@ export const studio = {
     return studio.recheck(batch, line);
   },
 
+  feedback: (region: Region) => req<FeedbackView>(`/feedback?region=${region}`),
+  saveFeedbackReview: (region: Region, review: { id: string; label?: string; sent?: string; received?: string; notes?: string }) => req<FeedbackView>(`/feedback/reviews?region=${region}`, { method: 'POST', body: JSON.stringify(review) }),
+  setAdFeedback: (ad: string, review: string, state: FeedbackState, note?: string) => req<FeedbackItem>('/feedback/ads', { method: 'POST', body: JSON.stringify({ ad, review, state, ...(note === undefined ? {} : { note }) }) }),
   // The worksheet: the month's copy as a workbook, and the filled-in workbook read back.
   worksheet: (region: Region | 'all' = 'US') => req<WorksheetData>(`/worksheet?region=${region}`),
   worksheetXlsx: (region: Region | 'all' = 'US') => download(`/worksheet.xlsx?region=${region}`, 'copy-worksheet.xlsx'),

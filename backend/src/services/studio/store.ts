@@ -9,7 +9,7 @@ import path from 'node:path';
 export interface SpendEntry { label: string; usd: number; by_stage?: Record<string, number>; calls?: Record<string, number>; at: string; user?: string }
 export interface Asset { contentType: string; data: Buffer; filename?: string }
 /** working_round:<user>: the round a person is working in (rounds.ts). */
-export type InputKey = 'personas' | 'voices' | 'rubric' | 'rounds' | 'bulk_checks' | `working_round:${string}`;
+export type InputKey = 'personas' | 'voices' | 'rubric' | 'rounds' | 'bulk_checks' | `working_round:${string}` | `feedback:${string}`;
 export interface EditRecord { line_id: string; batch_id: string; before: unknown; after: unknown; by: string; at: string }
 /** saveBatch: `lineIds` writes only those lines (a job saving the lines it made or checked); the header always. */
 export interface SaveBatchOptions { lineIds?: string[] }
@@ -145,7 +145,7 @@ export class FileStore implements StudioStore {
   private inputFile = (key: string) => this.P(`${key.replace(/[^\w.@-]+/g, '_')}.json`);
   async putInput(key: InputKey, value: any) { writeJson(this.inputFile(key), value); }
   async getInput(key: InputKey) {
-    if (key === 'rounds' || key === 'bulk_checks' || key.startsWith('working_round:')) { const p = this.inputFile(key); return fs.existsSync(p) ? readJson(p) : null; }
+    if (key === 'rounds' || key === 'bulk_checks' || key.startsWith('working_round:') || key.startsWith('feedback:')) { const p = this.inputFile(key); return fs.existsSync(p) ? readJson(p) : null; }
     const inputs = this.opts.inputsDir;
     const candidates = key === 'rubric' ? [this.P('rubric.json'), ...(inputs ? [path.join(inputs, 'rubric.json')] : [])]
       : key === 'personas'

@@ -22,3 +22,14 @@ Not yet: Assets per ad, key dates, feedback rounds, the disclaimer and design br
 - Build and Assets show one line in their header (`DateNote`): the next date marked for that screen, else the next of all ("R1 feedback due Fri 9 Oct, in 2 days"), amber on the day and the day before.
 - The logic is pure (`frontend/src/lib/studioDates.ts`), tested in `studioRounds.test.ts`.
 - Nobody's dates are entered by the code: an admin types them in after deploy.
+
+## 4. Feedback rounds (PR 4)
+
+The client's feedback comes through Add3 as one set of notes per round (R1 on copy, R2 on the complete package). Studio only knew Trupanion's final compliance decision.
+
+- Stored per month in `studio_inputs` (`feedback:<round id>`; no migration): the rounds `{ id, label, sent, received, notes }` and, per ad name per round, `{ state: none | change | done, note, by, for, at }` (`services/studio/feedback.ts`). Endpoints: `GET /feedback?region=`, `POST /feedback/reviews`, `POST /feedback/ads` (the "for" person is honoured).
+- **It only informs.** It is separate from Trupanion's compliance decision in Assets, and "change wanted" does not hold an ad back from Ready to traffic (Brook, 7 Oct).
+- Board: a "Feedback" strip for the header's region: each round with its dates and counts ("1 with changes wanted · 2 done · 6 no change"), a one-line summary, and a panel to enter a round: the dates, the notes as they came (pasted; nothing is parsed out of them), then a state and note per signed-off ad, with "Fix in Build".
+- Build: the asset's feedback shows above the ad, with "Mark done" on a change.
+- Review: a signed-off line no longer offers Keep, Cut and Edit; it says "Signed off: change it in Build & sign off".
+- Not yet: the feedback line on each ad in Assets (it comes with Assets per ad).

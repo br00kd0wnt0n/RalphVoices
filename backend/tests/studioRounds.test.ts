@@ -226,3 +226,41 @@ test('key dates: stored on the month, in date order, kept when other things are 
   assert.deepEqual([D.dayWords(-1), D.dayWords(-4), D.dateWords('2027-01-04', '2026-10-07')], ['yesterday', '4 days ago', 'Mon 4 Jan 2027']);
   assert.equal((await Rounds.saveRound({ id: 'R1', name: 'Month 1', milestones: [] })).rounds[0].milestones, undefined);
 });
+
+test('feedback rounds: per round the dates and notes, per ad a state and note, for the person it is entered for; it informs, and is kept per month', async () => {
+  await fresh();
+  const F = await import('../src/services/studio/feedback.js');
+  const { versions } = await keptRun('fb');
+  const plan = (await R.readyView('OWN', 'OWN_CALM', 'US', { versions, on_image: {} })).plan;
+  await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions, on_image: {}, expectation: { codes: [plan.versions[0].code], reason: 'x' } }, 'nick');
+  const ad = plan.versions[0].code.replace(/_A1_/, '_A_');
+
+  // Before any round: the ad is listed, with nothing against it.
+  let v = await F.feedbackView('R1', 'US');
+  assert.deepEqual([v.reviews, v.ads.map(a => [a.ad, a.codes.length, a.items]), v.summary], [[], [[ad, 2, {}]], '']);
+  await assert.rejects(() => F.setAdFeedback('R1', ad, 'R1', { state: 'change' }, 'brook'), /No feedback round R1/);
+
+  // R1 goes out; then the consolidated notes come back and each ad gets its note.
+  await F.saveReview('R1', { id: 'r1', label: 'R1: copy', sent: '2026-10-06' }, 'brook');
+  assert.equal((await F.feedbackView('R1', 'US')).summary, 'R1: sent, feedback not in yet');
+  await F.saveReview('R1', { id: 'R1', received: '2026-10-09', notes: 'Add3, 9 Oct: soften the calm headline.' }, 'brook');
+  v = await F.feedbackView('R1', 'US');
+  assert.deepEqual([v.reviews[0].label, v.reviews[0].sent, v.reviews[0].received, v.reviews[0].counts, v.summary], ['R1: copy', '2026-10-06', '2026-10-09', { change: 0, done: 0, none: 0, unmarked: 1 }, 'R1: 1 ad not marked yet']);
+  const item = await F.setAdFeedback('R1', ad.toLowerCase(), 'R1', { state: 'change', note: 'Soften the headline' }, 'brook', 'nick');
+  assert.deepEqual([item.state, item.note, item.by, item.for], ['change', 'Soften the headline', 'brook', 'nick']);
+  v = await F.feedbackView('R1', 'US');
+  assert.deepEqual([v.reviews[0].counts, v.summary], [{ change: 1, done: 0, none: 0, unmarked: 0 }, 'R1: 1 ad with changes wanted']);
+  // Done keeps the note; the summary clears. Canada has its own ads, so nothing is listed there.
+  assert.equal((await F.setAdFeedback('R1', ad, 'R1', { state: 'done' }, 'brook')).note, 'Soften the headline');
+  assert.equal((await F.feedbackView('R1', 'US')).summary, 'R1: nothing outstanding');
+  assert.deepEqual((await F.feedbackView('R1', 'CA')).ads, []);
+  // A second round sits beside the first; an open change in an earlier round still shows until done.
+  await F.saveReview('R1', { id: 'R2', label: 'R2: with artwork' }, 'brook');
+  await F.setAdFeedback('R1', ad, 'R1', { state: 'change' }, 'brook');
+  v = await F.feedbackView('R1', 'US');
+  assert.deepEqual([v.reviews.map(r => r.id), v.summary], [['R1', 'R2'], 'R1: 1 ad with changes wanted']);
+  await assert.rejects(() => F.setAdFeedback('R1', ad, 'R1', { state: 'maybe' }, 'brook'), /none.*change.*done/);
+  await assert.rejects(() => F.saveReview('R1', { id: 'R3', sent: 'Friday' }, 'brook'), /is a date/);
+  // Another month has its own feedback.
+  assert.deepEqual((await F.loadFeedback('R2')).reviews, []);
+});

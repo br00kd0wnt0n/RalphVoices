@@ -9,6 +9,7 @@ import { onOriginal, studio, REGION_NAMES, type DraftVersion, type PlannedVersio
 import { addAd, adName, flagsAt, flagsAtShared, moveAd, redPlaces, nextVisual, placeLine, removeAd, removeVisual, slotAfter, setCard, setCardSub, setOnImage, setOnImageSub, useInAllAds, usesOf } from '@/lib/buildDraft';
 import { cn } from '@/lib/utils';
 import { DateNote } from './KeyDates';
+import { FeedbackNote } from './Feedback';
 import { personaColor, personaEdge, tint } from '@/lib/personaColors';
 import { PersonaChip, Chip, GhostButton, Intro, Label, LineHistory, NAMING_TIP, Overrides, PINK, PinkButton, Src, chipName, flagName, sevTone, specFor, territoryName, when, ForPicker, useActingFor, whoWords, type Ctx } from './ui';
 
@@ -170,6 +171,9 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
       {done && <div className="flex flex-wrap items-center gap-3 rounded-lg border-2 border-emerald-500/50 bg-emerald-500/10 p-3 text-base text-emerald-100"><span className="mr-auto">{done}</span><PinkButton className="px-4 py-1.5 text-base" onClick={onNext}>Next: Assets →</PinkButton></div>}
       {!view && !error && <div className="text-base text-[#858B96]">Loading…</div>}
       {view && !view.lines.length && !view.latest && <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#272B34] bg-[#16181D] p-5 text-base text-[#A3A8B1]"><span className="mr-auto">Nothing kept yet for {territoryName(t).replace(/\.$/, '')}. Keep lines in Review first.</span><GhostButton className="text-base" onClick={onReview}>Go to Review</GhostButton></div>}
+
+      {/* The client's feedback on this asset's ads (a round's note, with Done): it informs, it doesn't block. */}
+      <FeedbackNote region={pt.region} persona={pt.persona} territory={pt.territory} />
 
       {view && plan && draft && (view.lines.length > 0 || !!view.latest) && (
         <>
