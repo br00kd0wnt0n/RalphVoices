@@ -6,7 +6,7 @@
 // overrides, carousel cards and TikTok versions. The draft rules are in lib/buildDraft.ts.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { onOriginal, studio, REGION_NAMES, type DraftVersion, type PlannedVersion, type Meta, type ReadyDraft, type ReadyView, type VersionFlag } from '@/lib/studioApi';
-import { addAd, adName, flagsAt, moveAd, redPlaces, nextVisual, placeLine, removeAd, removeVisual, slotAfter, setCard, setCardSub, setOnImage, setOnImageSub, useInAllAds, usesOf } from '@/lib/buildDraft';
+import { addAd, adName, flagsAt, flagsAtShared, moveAd, redPlaces, nextVisual, placeLine, removeAd, removeVisual, slotAfter, setCard, setCardSub, setOnImage, setOnImageSub, useInAllAds, usesOf } from '@/lib/buildDraft';
 import { cn } from '@/lib/utils';
 import { personaColor, personaEdge, tint } from '@/lib/personaColors';
 import { PersonaChip, Chip, GhostButton, Intro, Label, LineHistory, NAMING_TIP, Overrides, PINK, PinkButton, Src, chipName, flagName, sevTone, specFor, territoryName, when, ForPicker, useActingFor, whoWords, type Ctx } from './ui';
@@ -99,9 +99,9 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
     === JSON.stringify(plan.versions.map(v => [v.code, Object.entries(v.fields).map(([f, id]) => [f, id, byId.get(id)?.sha256]).sort()]))
     && JSON.stringify((latest.on_image || []).map(o => [o.visual, o.card || 0, o.line_id, o.sha256])) === JSON.stringify(plan.on_image.map(o => [o.visual, o.card || 0, o.line_id, byId.get(o.line_id)?.sha256]));
   const canSignOff = meta.can_sign_off !== false;
-  const blockedBy = !canSignOff ? 'Ads are signed off by the creative lead or an admin.' : !plan ? '' : sameAsLatest ? `These ads are signed off (set v${latest!.version}). Change a line or an ad to sign off again.`
+  const blockedBy = !canSignOff ? 'Ads are signed off by the creative lead or an admin.' : !plan ? '' : sameAsLatest ? `This is signed off (set v${latest!.version}). Change a line or a copy option to sign off again.`
     : plan.issues.length ? `${plan.issues.length} thing${plan.issues.length === 1 ? '' : 's'} to finish: ${plan.issues[0]}${plan.issues.length > 1 ? '…' : ''}`
-    : reds ? `${reds} red flag${reds === 1 ? '' : 's'} to fix or override first: ${redList[0]}${redList.length > 1 ? ` (and ${redList.length - 1} more)` : ''}.` : !leads.length ? 'Choose the ad(s) you expect to lead (step ③).' : !reason.trim() ? 'Say why you expect them to lead (step ③).' : '';
+    : reds ? `${reds} red flag${reds === 1 ? '' : 's'} to fix or override first: ${redList[0]}${redList.length > 1 ? ` (and ${redList.length - 1} more)` : ''}.` : !leads.length ? 'Choose the copy option(s) you expect to do best (step ③).' : !reason.trim() ? 'Say why you expect them to lead (step ③).' : '';
 
   async function signOff() {
     if (!draft) return;
@@ -109,7 +109,7 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
     try {
       const r = await studio.signOff({ persona: pt.persona, territory: pt.territory, region: pt.region, ...draft, expectation: { codes: leads, reason }, expect_latest: view?.latest?.id ?? null });
       const n = r.signoff.versions?.length || 0;
-      setDone(`${n} ad${n === 1 ? '' : 's'} signed off (set v${r.signoff.version}), with your expectations locked alongside.`);
+      { const ads = new Set((r.signoff.versions || []).map(v => `${v.platform}|${v.visual}`)).size || 1; setDone(`${ads} ad${ads === 1 ? '' : 's'} signed off with ${n} copy option${n === 1 ? '' : 's'} (set v${r.signoff.version}), with your expectation kept alongside.`); }
       await preview(draft);
     } catch (e: any) {
       setError(e.body?.blocking ? `${e.message}: ${e.body.blocking.map((b: any) => byId.get(b.line_id)?.final_text || b.line_id).join(' · ')}` : e.message);
@@ -160,8 +160,8 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
 
   return (
     <div className="max-w-7xl space-y-5 pb-28">
-      <Intro title="Build & sign off" line="Build each visual's ads from your kept lines, then sign them off.">
-        <p>Work down each visual: ① the text on the image, ② the ads (click a slot to choose a line; each ad is one naming code), then ③ which ad you expect to lead and why, and ④ sign off.</p>
+      <Intro title="Build & sign off" line="Build each ad from your kept lines, then sign it off.">
+        <p>An ad is one piece of artwork with its copy as text options: it runs as one ad, and Meta mixes its primary texts and headlines. Work down each ad: ① the text on the image, ② the copy options (click a slot to choose a line), then ③ which option you expect to do best and why, and ④ sign off.</p>
         <p>Red flags must be fixed or overridden with a reason before sign-off; the other flags inform. This is creative sign-off, not compliance clearance: Trupanion reviews copy and visual together at Assets.</p>
       </Intro>
 
@@ -175,13 +175,15 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
           <div className="flex flex-wrap items-center gap-3 px-1 text-sm text-[#A3A8B1]">
             <PersonaChip meta={meta} persona={pt.persona} short />
             <span>{territoryName(t)} · {t?.format?.toLowerCase()} · {REGION_NAMES[view.region || 'US']}</span>
-            <span className="ml-auto text-xs text-[#646A75]">{checking ? 'Checking the ads…' : est?.calls ? `Checking ${est.calls} ad${est.calls === 1 ? '' : 's'} shortly` : 'Ads checked'}</span>
+            <span className="ml-auto text-xs text-[#646A75]">{checking ? 'Checking the copy options…' : est?.calls ? `Checking ${est.calls} copy option${est.calls === 1 ? '' : 's'} shortly` : 'Copy options checked'}</span>
           </div>
 
           {platforms.map(p => (
             <div key={p} className="space-y-5">
               {visualsOf(p).map(letter => {
                 const vs = indexed.filter(x => x.d.visual === letter && (x.p?.platform || platformOf(x.d)) === p);
+                // Flags at a slot the whole ad shares say which copy option(s) they were found with.
+                const sharedFlags = (field: string) => flagsAtShared(vs.map((x, k) => ({ n: k + 1, flags: x.p?.checks?.flags || [] })), field);
                 const oiFields = view.fields[p].per_visual.filter(f => !isSubField(f));
                 // The optional subhead under the on-image headline (per card on a carousel).
                 const subField = view.fields[p].per_visual.find(isSubField);
@@ -194,20 +196,22 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
                 return (
                   <section key={`${p}${letter}`} className="rounded-xl border border-l-4 border-[#272B34] bg-[#121419] p-4 sm:p-5" style={personaEdge(pt.persona)}>
                     <div className="mb-4 flex flex-wrap items-center gap-3">
-                      <h2 className="text-xl font-semibold" style={{ color: color.light }}>Visual {letter}</h2>
-                      <span className="text-sm text-[#858B96]">{p === 'TT' ? 'TikTok' : 'Meta'} · {vs.length} ad{vs.length === 1 ? '' : 's'}</span>
+                      <h2 className="text-xl font-semibold" style={{ color: color.light }}>Ad {letter}</h2>
+                      <span className="text-sm text-[#858B96]">{p === 'TT' ? 'TikTok' : 'Meta'} · one ad · {vs.length} copy option{vs.length === 1 ? '' : 's'}</span>
+                      {/* The ad's name: its copy options' codes without the option number. What it is trafficked and reported under. */}
+                      {vs[0]?.p?.code && <span className="font-mono text-xs text-[#858B96]" title="The ad's name: what it is trafficked and reported under (the date is added at trafficking). The copy options' codes below are Studio's own ids.">{vs[0].p.code.replace(/_([A-Z])\d+_/, '_$1_')}</span>}
                       {/* The whole visual: its ads and its on-image text. Nothing is deleted from the kept lines; the letter is free again. */}
-                      <button className="ml-auto text-xs text-[#858B96] underline-offset-2 hover:text-red-200 hover:underline" title="Takes this visual, its ads and its on-image text out of the set. The lines stay kept." aria-label={`Remove visual ${letter}`}
-                        onClick={() => { if (vs.length + cards.filter(Boolean).length <= 1 || window.confirm(`Remove visual ${letter}: its ${vs.length} ad${vs.length === 1 ? '' : 's'}${cards.some(Boolean) ? ' and its on-image text' : ''}? The lines stay kept.`)) change(d => removeVisual(d, letter, p, platformOf)); }}>Remove this visual</button>
+                      <button className="ml-auto text-xs text-[#858B96] underline-offset-2 hover:text-red-200 hover:underline" title="Takes this ad, its copy options and its on-image text out of the set. The lines stay kept." aria-label={`Remove ad ${letter}`}
+                        onClick={() => { if (vs.length + cards.filter(Boolean).length <= 1 || window.confirm(`Remove ad ${letter}: its ${vs.length} copy option${vs.length === 1 ? '' : 's'}${cards.some(Boolean) ? ' and its on-image text' : ''}? The lines stay kept.`)) change(d => removeVisual(d, letter, p, platformOf)); }}>Remove this ad</button>
                     </div>
 
                     {oiFields.length > 0 && (
-                      <Step n={++step} title={carousel ? 'The carousel cards (text on each card)' : 'The text on the image'} hint={`${carousel ? 'Card 1 is the hook; the last card is the end card. Every ad on this visual uses them.' : 'It goes into the artwork, so every ad on this visual uses it.'}${subField ? ` A subhead under the headline is optional${carousel ? ', card by card' : ''}.` : ''}`}>
+                      <Step n={++step} title={carousel ? 'The carousel cards (text on each card)' : 'The text on the image'} hint={`${carousel ? 'Card 1 is the hook; the last card is the end card. Every copy option on this ad runs with them.' : 'It goes into the artwork, so every copy option on this ad runs with it.'}${subField ? ` A subhead under the headline is optional${carousel ? ', card by card' : ''}.` : ''}`}>
                         {carousel ? oiFields.map(f => (
-                          <CardStrip key={f} meta={meta} field={f} letter={letter} cards={cards} lines={linesFor(f)} byId={byId} flagsFor={k => flagsAt(plan.versions.filter(v => v.visual === letter).flatMap(v => v.checks?.flags || []), `${f}#${k}`)}
+                          <CardStrip key={f} meta={meta} field={f} letter={letter} cards={cards} lines={linesFor(f)} byId={byId} flagsFor={k => sharedFlags(`${f}#${k}`)}
                             onOpen={card => setSlot({ kind: 'image', visual: letter, field: f, card })} onChange={next => change(d => setOnImage(d, letter, next))}
                             subField={subField} subs={subs} onOpenSub={card => subField && setSlot({ kind: 'image', visual: letter, field: subField, card })} onSubsChange={next => change(d => setOnImageSub(d, letter, next))}
-                            subFlagsFor={k => (subField ? flagsAt(plan.versions.filter(v => v.visual === letter).flatMap(v => v.checks?.flags || []), `${subField}#${k}`) : [])}
+                            subFlagsFor={k => (subField ? sharedFlags(`${subField}#${k}`) : [])}
                             nameOfCode={nameOfCode} onChanged={refresh} onError={setError} />
                         )) : oiFields.map(f => {
                           const id = typeof draft.on_image[letter] === 'string' ? draft.on_image[letter] as string : '';
@@ -215,11 +219,11 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
                             <div key={f} className="space-y-1.5">
                               <SlotBox meta={meta} x={id ? byId.get(id) : undefined} field={f} placeholder={`Choose ${short(f).toLowerCase()}`} className="text-xl font-semibold"
                                 active={slot?.kind === 'image' && slot.visual === letter && !isSubField(slot.field)} onOpen={() => setSlot({ kind: 'image', visual: letter, field: f })}
-                                flags={flagsAt(plan.versions.filter(v => v.visual === letter).flatMap(v => v.checks?.flags || []), f)} onChanged={refresh} onError={setError} />
+                                flags={sharedFlags(f)} onChanged={refresh} onError={setError} />
                               {subField && (
                                 <SlotBox meta={meta} x={typeof subVal === 'string' && subVal ? byId.get(subVal) : undefined} field={subField} placeholder="Add a subhead (optional)" className="text-base text-[#C9CCD2]"
                                   active={slot?.kind === 'image' && slot.visual === letter && isSubField(slot.field)} onOpen={() => setSlot({ kind: 'image', visual: letter, field: subField })}
-                                  flags={flagsAt(plan.versions.filter(v => v.visual === letter).flatMap(v => v.checks?.flags || []), subField)} onChanged={refresh} onError={setError} />
+                                  flags={sharedFlags(subField)} onChanged={refresh} onError={setError} />
                               )}
                             </div>
                           );
@@ -229,7 +233,7 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
                     )}
                     {hookField && oiFields.length === 0 && <p className="mb-3 text-sm text-[#858B96]">The hook goes on the video: choose it in each ad below.</p>}
 
-                    <Step n={++step} title="The ads" hint="Click a slot to choose a line. Each ad is one naming code.">
+                    <Step n={++step} title="The copy options" hint="Click a slot to choose a line. They are this ad's text options: one ad, not one each.">
                       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                         {vs.map(({ d, i, p: pv }) => (
                           <AdPreview key={i} meta={meta} view={view} draft={draft} version={d} index={i} planned={pv} platform={p} name={nameOf(i)} status={statusOf(i)} carousel={carousel}
@@ -239,19 +243,19 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
                             onSlot={s => setSlot(s)} onMove={to => change(dd => moveAd(dd, i, to === 'new' ? nextVisual(dd) : to))}
                             onRemove={() => change(dd => removeAd(dd, i))} onChanged={refresh} onError={setError} />
                         ))}
-                        <button onClick={() => newAd(p, letter)} className="flex min-h-40 items-center justify-center rounded-xl border-2 border-dashed border-[#343946] text-base text-[#858B96] hover:border-[#4A505D] hover:text-[#ECEDEF]">+ Ad on visual {letter}</button>
+                        <button onClick={() => newAd(p, letter)} className="flex min-h-40 items-center justify-center rounded-xl border-2 border-dashed border-[#343946] text-base text-[#858B96] hover:border-[#4A505D] hover:text-[#ECEDEF]">+ Copy option on ad {letter}</button>
                       </div>
                     </Step>
                   </section>
                 );
               })}
-              <GhostButton className="text-base" onClick={() => newAd(p, nextVisual(draft))}>+ New {p === 'TT' ? 'TikTok' : 'Meta'} visual</GhostButton>
+              <GhostButton className="text-base" onClick={() => newAd(p, nextVisual(draft))}>+ New {p === 'TT' ? 'TikTok' : 'Meta'} ad</GhostButton>
             </div>
           ))}
 
           {/* ③ and ④ apply to the whole persona × territory set. */}
           <section className="rounded-xl border-2 bg-[#16181D] p-5" style={{ borderColor: PINK }}>
-            <Step n={3} title="Which ad do you expect to lead, and why?" hint="Dated and locked with the sign-off, so it can be checked against what actually happens.">
+            <Step n={3} title="Which copy option do you expect to do best, and why?" hint="Dated and kept with the sign-off as a record of your call. Results come back per ad, not per option, so it can't be scored option by option.">
               <div className="mb-3 flex flex-wrap items-center gap-1.5">
                 {plan.versions.map((v, i) => v.code && !v.issues.length ? (
                   <button key={v.code} onClick={() => setLead(cur => { const n = new Set(cur); if (n.has(v.code)) n.delete(v.code); else n.add(v.code); return n; })}
@@ -266,7 +270,7 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
             </Step>
             <Step n={4} title="Sign off" hint={blockedBy || `Signed off as ${whoWords(user || 'you', actingFor)}: the ads, their checks and your expectations are locked together.`}>
               <div className="flex flex-wrap items-center gap-3">
-                <PinkButton disabled={!!blockedBy || busy} onClick={signOff}>{busy ? 'Checking and signing off…' : `Sign off ${plan.versions.length} ad${plan.versions.length === 1 ? '' : 's'}${actingFor ? ` for ${actingFor}` : ''}`}</PinkButton>
+                <PinkButton disabled={!!blockedBy || busy} onClick={signOff}>{busy ? 'Checking and signing off…' : `Sign off ${visualCount} ad${visualCount === 1 ? '' : 's'}${actingFor ? ` for ${actingFor}` : ''}`}</PinkButton>
                 <ForPicker meta={meta} doing="Signing off" />
               </div>
             </Step>
@@ -280,8 +284,8 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
                       const n = so.versions?.length ?? so.lines.length;
                       return (
                         <li key={so.id} className="border-l-2 border-[#343946] pl-3 text-[#A3A8B1]">
-                          <span className="font-semibold text-[#ECEDEF]">Set v{so.version}</span> · {n} ad{n === 1 ? '' : 's'} · {whoWords(so.ready_by, so.ready_for)}, {when(so.ready_at)}
-                          {e && <div>Expected to lead: {(e.stubs || []).map(nameOfCode).join(', ') || '–'}. “{e.reason}”</div>}
+                          <span className="font-semibold text-[#ECEDEF]">Set v{so.version}</span> · {n} copy option{n === 1 ? '' : 's'} · {whoWords(so.ready_by, so.ready_for)}, {when(so.ready_at)}
+                          {e && <div>Expected to do best: {(e.stubs || []).map(nameOfCode).join(', ') || '–'}. “{e.reason}”</div>}
                         </li>
                       );
                     })}
@@ -294,9 +298,9 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
           {/* The same sign-off, always in reach. */}
           <div className="fixed inset-x-0 bottom-0 z-20 border-t border-[#272B34] bg-[#16181D]/95 px-4 py-3 backdrop-blur sm:px-6">
             <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-3 text-sm">
-              <span className="font-semibold">{plan.versions.length} ad{plan.versions.length === 1 ? '' : 's'} on {visualCount} visual{visualCount === 1 ? '' : 's'}</span>
+              <span className="font-semibold">{visualCount} ad{visualCount === 1 ? '' : 's'} · {plan.versions.length} copy option{plan.versions.length === 1 ? '' : 's'}</span>
               <span className={reds || plan.issues.length ? 'text-red-200' : 'text-emerald-200'}>{plan.issues.length ? `${plan.issues.length} to finish` : reds ? `${reds} red flag${reds === 1 ? '' : 's'}` : 'no red flags'}</span>
-              <span className="text-[#A3A8B1]">Lead: {leads.length ? leads.map(nameOfCode).join(', ') : 'not chosen'}</span>
+              <span className="text-[#A3A8B1]">Expected best: {leads.length ? leads.map(nameOfCode).join(', ') : 'not chosen'}</span>
               <span className="ml-auto hidden max-w-md truncate text-xs text-[#858B96] md:inline" title={blockedBy}>{blockedBy}</span>
               <ForPicker meta={meta} doing="Signing off" />
               <PinkButton className="px-4 py-1.5 text-base" disabled={!!blockedBy || busy} onClick={signOff} title={blockedBy || undefined}>{busy ? 'Signing off…' : 'Sign off'}</PinkButton>
@@ -304,14 +308,14 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
           </div>
 
           {slot && (slot.kind === 'image' || !!draft.versions[slot.index]) && (
-            <Tray meta={meta} title={slot.kind === 'ad' ? `${short(trayField)} for ${nameOf(slot.index)}` : slot.card ? `Card ${slot.card}${isSubField(trayField) ? ' subhead' : ''}, visual ${slot.visual}` : `${short(trayField)}, visual ${slot.visual}`}
+            <Tray meta={meta} title={slot.kind === 'ad' ? `${short(trayField)} for ${nameOf(slot.index)}` : slot.card ? `Card ${slot.card}${isSubField(trayField) ? ' subhead' : ''}, ad ${slot.visual}` : `${short(trayField)}, ad ${slot.visual}`}
               lines={linesFor(trayField)} draft={draft} platformOf={platformOf}
               current={currentIn(draft, slot)}
               optional={slot.kind === 'image' || !view.fields[platformOf(draft.versions[slot.index])]?.required.includes(trayField)}
               field={label(trayField)} shared={view.lines.some(x => x.shared) || !/on_image/.test(trayField)}
               onPlace={id => { place(id); setSlot(null); }}
               onAll={slot.kind === 'ad' && /headline|description/.test(trayField) ? (id => { const v = draft.versions[slot.index]; change(d => useInAllAds(d, v.visual, platformOf(v), trayField, id)); setSlot(null); }) : undefined}
-              allLabel={slot.kind === 'ad' ? `Use in all ads on visual ${draft.versions[slot.index]?.visual}` : ''}
+              allLabel={slot.kind === 'ad' ? `Use in every copy option on ad ${draft.versions[slot.index]?.visual}` : ''}
               onClose={() => setSlot(null)} />
           )}
         </>
@@ -346,11 +350,12 @@ function versionFlagWords(meta: Meta, f: VersionFlag, nameOfCode: (c?: string) =
   if (f.severity === 'red') return `${cap(chipName(f.rule))} ${f.fields.length > 1 ? 'is in a different field' : 'is missing'}`;
   return f.label;
 }
-function FlagNote({ meta, f, nameOfCode }: { meta: Meta; f: VersionFlag; nameOfCode: (c?: string) => string }) {
+function FlagNote({ meta, f, nameOfCode }: { meta: Meta; f: VersionFlag & { from?: string }; nameOfCode: (c?: string) => string }) {
   return (
     <span className={cn('mr-1.5 mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs', f.severity === 'red' ? 'border-red-500/50 bg-red-500/10 text-red-200' : 'border-amber-400/50 bg-amber-400/10 text-amber-100')}
-      title={`${f.why || f.label}${f.quote ? ` · “${f.quote}”` : ''}\n${f.rule} · ${f.source}`}>
-      {versionFlagWords(meta, f, nameOfCode)}
+      title={`${f.from ? `${f.from}. ` : ''}${f.why || f.label}${f.quote ? ` · “${f.quote}”` : ''}\n${f.rule} · ${f.source}`}>
+      {/* On a slot the whole ad shares: which copy option(s) it was found with. */}
+      {f.from && <span className="font-semibold">{f.from}:</span>}{f.from ? versionFlagWords(meta, f, nameOfCode).replace(/^The fields /, 'its fields ') : versionFlagWords(meta, f, nameOfCode)}
     </span>
   );
 }
@@ -494,14 +499,14 @@ function CardStrip({ meta, field, letter, cards, lines, byId, flagsFor, onOpen, 
     <div>
       <div className="mb-2 flex flex-wrap items-center gap-3 text-sm text-[#A3A8B1]">
         <label className="flex items-center gap-1">Cards
-          <select aria-label={`Number of cards on visual ${letter}`} className="rounded border border-[#343946] bg-[#101216] px-1 py-0.5 text-sm" value={slots.length}
+          <select aria-label={`Number of cards on ad ${letter}`} className="rounded border border-[#343946] bg-[#101216] px-1 py-0.5 text-sm" value={slots.length}
             onChange={e => { const n = Number(e.target.value); set(n > slots.length ? [...slots, ...Array(n - slots.length).fill('')] : slots.slice(0, n)); if (n < subs.length) setSubs(subs.slice(0, n)); }}>
             {Array.from({ length: MAX_CARDS }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n}</option>)}
           </select>
         </label>
         {seqs.length > 0 && (
           <label className="flex items-center gap-1">Use a whole sequence
-            <select aria-label={`Sequence for visual ${letter}`} className="max-w-xs rounded border border-[#343946] bg-[#101216] px-1 py-0.5 text-sm" value=""
+            <select aria-label={`Sequence for ad ${letter}`} className="max-w-xs rounded border border-[#343946] bg-[#101216] px-1 py-0.5 text-sm" value=""
               onChange={e => { const s = seqs.find(([id]) => id === e.target.value); if (s) set(s[1].map(x => x.line.id)); }}>
               <option value="">Choose…</option>
               {seqs.map(([id, xs]) => <option key={id} value={id}>{xs.map(x => x.final_text).join(' → ')}</option>)}
@@ -577,9 +582,9 @@ function AdPreview({ meta, view, draft, version, index, planned, platform, name,
         <details className="relative">
           <summary className="cursor-pointer list-none rounded px-1.5 text-base leading-none text-[#858B96] hover:text-[#ECEDEF]" aria-label={`More for ${name}`}>⋯</summary>
           <div className="absolute right-0 z-10 mt-1 w-48 rounded-lg border border-[#343946] bg-[#101216] py-1 text-sm text-[#ECEDEF] shadow-lg">
-            {visuals.map(l => <button key={l} className="block w-full px-3 py-1.5 text-left hover:bg-white/5" onClick={() => onMove(l)}>Move to visual {l}</button>)}
-            <button className="block w-full px-3 py-1.5 text-left hover:bg-white/5" onClick={() => onMove('new')}>Move to a new visual</button>
-            <button className="block w-full px-3 py-1.5 text-left text-red-200 hover:bg-white/5" onClick={onRemove}>Remove this ad</button>
+            {visuals.map(l => <button key={l} className="block w-full px-3 py-1.5 text-left hover:bg-white/5" onClick={() => onMove(l)}>Move to ad {l}</button>)}
+            <button className="block w-full px-3 py-1.5 text-left hover:bg-white/5" onClick={() => onMove('new')}>Move to a new ad</button>
+            <button className="block w-full px-3 py-1.5 text-left text-red-200 hover:bg-white/5" onClick={onRemove}>Remove this copy option</button>
           </div>
         </details>
       </header>
@@ -637,7 +642,7 @@ function AdPreview({ meta, view, draft, version, index, planned, platform, name,
             {status === 'signed' ? 'Signed off' : status === 'edited' ? 'Edited since sign-off' : 'Draft'}
           </span>
           <button onClick={() => onLead(!lead)} disabled={!complete} className={cn('rounded-full border px-2.5 py-0.5 font-medium disabled:opacity-40', lead ? 'border-[#D94D8F] bg-[#D94D8F] text-white' : 'border-[#4A505D] text-[#C9CCD2] hover:border-[#D94D8F]')}>
-            {lead ? '★ Expected to lead' : '☆ Expect to lead'}
+            {lead ? '★ Expected to do best' : '☆ Expect to do best'}
           </button>
           {planned?.code && (
             <button className="ml-auto font-mono text-[11px] text-[#646A75] hover:text-[#A3A8B1]" title={`${NAMING_TIP}. Click to copy.`}

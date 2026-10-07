@@ -10,12 +10,12 @@
 // (or the old &asset=<upload id>), ?tab=compare&compare=<name>.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { HOSTED, getUser, setActingFor, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type Line, type Meta, type Region, type StudioEvent, REGION_NAMES } from '@/lib/studioApi';
+import { HOSTED, getUser, setActingFor, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type Line, type Meta, type Region, type StudioEvent } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { ArrowLeft, ClipboardCheck, HelpCircle, Map as MapIcon, ScrollText, Shuffle, Table2 } from 'lucide-react';
 import { LivePage, RoundBadge, RoundsPanel, TestBar } from './StudioRounds';
 import { Board, type Step } from '@/components/studio/Board';
-import { ALL_VIEW, Chip, GhostButton, Lockup, PINK, PersonaDot, initials, params, personaKeys, regionOf, sameCtx, setTerritoryNames, setWhatToDo, territoryName, useActingFor, isOpenTerritory, isSharedCtx, type Ctx, type ViewFilter } from '@/components/studio/ui';
+import { ALL_VIEW, Chip, GhostButton, Lockup, PINK, PersonaDot, initials, params, personaKeys, regionOf, sameCtx, setTerritoryNames, setWhatToDo, territoryName, useActingFor, isOpenTerritory, isSharedCtx, RegionSwitch, regionLabel, type Ctx, type ViewFilter } from '@/components/studio/ui';
 import { Home } from '@/components/studio/Home';
 import { Write, countsFor } from '@/components/studio/Write';
 import { applyPlace } from '@/lib/studioFields';
@@ -270,13 +270,15 @@ export function Studio() {
     );
   }
 
+  // One region everywhere (the header's switch): Assets and the exports follow it, as Write, Review and Build do.
+  const rview: ViewFilter = { ...view, region: ctx.region };
   const stepIndex = FLOW.findIndex(([t]) => t === tab);
   const viewMode = VIEW_TABS.includes(tab);
   const showCtx = (stepIndex >= 0 || viewMode) && !!meta;
   /** A board cell: set the context (and, for Assets, narrow the view to it) and open the step. */
   const openCell = (persona: string, territory: string, step: Step) => {
     setCtx({ persona, territory, region: ctx.region });
-    if (step === 'assets') setView({ persona, territory, region: 'all' });
+    if (step === 'assets') setView({ persona, territory, region: ctx.region });
     setTab(step);
   };
   const utility = (t: Tab, label: string, icon: React.ReactNode, title: string) => (
@@ -293,6 +295,8 @@ export function Studio() {
         {HOSTED && <a href="/" title="Back to Voices" className="-mr-2 hidden rounded-lg p-1.5 text-[#858B96] hover:bg-[#1C1F26] hover:text-[#ECEDEF] sm:block"><ArrowLeft className="h-4 w-4" aria-label="Back to Voices" /></a>}
         <span className="hidden min-[1440px]:block"><Lockup onHome={() => setTab('home')} /></span>
         <button onClick={() => setTab('home')} className="shrink-0 min-[1440px]:hidden" aria-label="VOICES Studio: this month" title="Voices Studio × Trupanion"><img src="/ralph-world.png" alt="Ralph" className="h-7 w-7 object-contain" /></button>
+        {/* The region: one switch, here on every screen. US and Canada are separate ads, so everything below shows one. */}
+        {meta && <RegionSwitch regions={(meta.regions || ['US', 'CA']) as Region[]} region={ctx.region} onChange={r => setCtx({ ...ctx, region: r })} />}
         <nav aria-label="Studio steps" className="order-last flex w-full min-w-0 flex-nowrap items-center md:order-none md:w-auto gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <GhostButton active={tab === 'howto'} onClick={() => setTab('howto')} title="How it works" aria-label="How it works" className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-2 py-1.5 text-sm">
             <HelpCircle className="h-4 w-4" aria-hidden />
@@ -317,7 +321,7 @@ export function Studio() {
           {utility('worksheet', 'Worksheet (preview)', <Table2 className="h-4 w-4" aria-hidden />, 'Worksheet (preview): the month’s copy on one page, one decision per line')}
           {utility('check', 'Check copy', <ClipboardCheck className="h-4 w-4" aria-hidden />, 'Check copy: paste copy written elsewhere, check every line, share the report')}
           <RoundBadge meta={meta} onViewChange={() => setRoundKey(k => k + 1)} onWorkingChange={() => { refreshMeta().catch(() => {}); setRoundKey(k => k + 1); }} />
-          <ExportMenu meta={meta} ctx={ctx} view={view} batch={batch} onImported={m => { setNote(m); setRunsTick(t => t + 1); }} />
+          <ExportMenu meta={meta} ctx={ctx} view={rview} batch={batch} onImported={m => { setNote(m); setRunsTick(t => t + 1); }} />
           <button onClick={() => setTab('compare')} title="Blind compare: a separate exercise, outside the writing flow" aria-label="Blind compare" className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-dashed border-[#4B55A8] bg-[#1B2150] px-2.5 py-1.5 text-sm font-medium text-white hover:bg-[#232A5C]">
             <Shuffle className="h-4 w-4" aria-hidden /><span className="hidden min-[1600px]:inline">Compare</span>
           </button>
@@ -335,7 +339,7 @@ export function Studio() {
         </div>
       </header>
       {showCtx && (viewMode
-        ? <ViewBar meta={meta!} view={view} setView={setView} what={tab === 'live' ? 'Live' : 'Assets'} />
+        ? <ViewBar meta={meta!} view={rview} setView={setView} what={tab === 'live' ? 'Live' : 'Assets'} />
         : <ContextBar meta={meta!} ctx={ctx} setCtx={setCtx} step={stepIndex} onNewTerritory={() => setDrawer({ code: null })} />)}
       {drawer && meta && <TerritoryDrawer meta={meta} persona={ctx.persona} code={drawer.code} onClose={() => setDrawer(null)} onSaved={c => { territorySaved(c).catch(e => setErr(e.message)); }} />}
       {running && (
@@ -346,7 +350,7 @@ export function Studio() {
       {err && <div className="mx-4 mt-4 rounded-lg border-2 border-red-500/45 bg-red-500/10 p-4 text-base text-red-200 sm:mx-8">{err}</div>}
       {note && <div className="mx-4 mt-4 flex items-center gap-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-base text-emerald-100 sm:mx-8"><span className="mr-auto">{note}</span><button className="text-sm underline" onClick={() => setNote('')}>dismiss</button></div>}
       <main key={roundKey} className="px-4 py-6 sm:px-6">
-        {tab === 'home' && meta && <Start meta={meta} onOpen={openCell} onHowItWorks={() => setTab('howto')} onStart={() => setTab('write')} onRoundSaved={() => refreshMeta().catch(() => {})} />}
+        {tab === 'home' && meta && <Start meta={meta} region={ctx.region} onOpen={openCell} onHowItWorks={() => setTab('howto')} onStart={() => setTab('write')} onRoundSaved={() => refreshMeta().catch(() => {})} />}
         {tab === 'home' && !meta && !err && <div className="text-base text-[#858B96]">Loading…</div>}
         {tab === 'howto' && <Home onStart={() => setTab('write')} />}
         {tab === 'live' && <LivePage />}
@@ -361,11 +365,11 @@ export function Studio() {
           </div>
         )}
         {meta && tab === 'build' && !isSharedCtx(meta, ctx) && <Build meta={meta} ctx={ctx} user={user} onNext={() => setTab('assets')} onReview={() => setTab('review')} />}
-        {meta && tab === 'assets' && <Assets meta={meta} view={view} setView={setView} onBuild={() => setTab('build')} onFixCopy={st => { setCtx({ persona: st.persona, territory: st.territory, region: regionOf(st) }); setTab('build'); }} />}
+        {meta && tab === 'assets' && <Assets meta={meta} view={rview} setView={setView} onBuild={() => setTab('build')} onFixCopy={st => { setCtx({ persona: st.persona, territory: st.territory, region: regionOf(st) }); setTab('build'); }} />}
         {meta && tab === 'territories' && <Territories meta={meta} onSaved={() => refreshMeta()} onBrief={code => { const t = meta.territories[code]; setCtx({ persona: t.persona, territory: code, region: ctx.region }); setTab('write'); }} />}
         {tab === 'rules' && meta?.rounds && <RoundsPanel meta={meta} onSaved={() => refreshMeta().catch(() => {})} />}
         {/* The worksheet (Round 2), in preview: everything on one page; it becomes the default screen on Brook's word. */}
-        {meta && tab === 'worksheet' && <Worksheet meta={meta} region={ctx.region} setRegion={r => setCtx({ ...ctx, region: r })} onStep={setTab} onChanged={() => setRunsTick(t => t + 1)} />}
+        {meta && tab === 'worksheet' && <Worksheet meta={meta} region={ctx.region} onStep={setTab} onChanged={() => setRunsTick(t => t + 1)} />}
         {meta && tab === 'check' && <CopyCheck meta={meta} onOpenRun={id => { continueRun(id).catch(e => setErr(e.message)); }} />}
         {tab === 'rules' && (meta || admin) && <Rules meta={meta} admin={HOSTED && (!!meta?.user?.admin || admin)} onActivated={() => refreshMeta().then(() => setErr('')).catch(() => {})} />}
       </main>
@@ -374,11 +378,11 @@ export function Studio() {
 }
 
 /** The start screen: the round board once the round has runs; How it works until then. */
-function Start({ meta, onOpen, onHowItWorks, onStart, onRoundSaved }: { meta: Meta; onOpen: (p: string, t: string, s: Step) => void; onHowItWorks: () => void; onStart: () => void; onRoundSaved: () => void }) {
+function Start({ meta, region, onOpen, onHowItWorks, onStart, onRoundSaved }: { meta: Meta; region: Region; onOpen: (p: string, t: string, s: Step) => void; onHowItWorks: () => void; onStart: () => void; onRoundSaved: () => void }) {
   const [runs, setRuns] = useState<number | null>(null);
   useEffect(() => { studio.batches().then(r => setRuns(r.length)).catch(() => setRuns(0)); }, []);
   if (runs === null) return <div className="text-base text-[#858B96]">Loading…</div>;
-  return runs ? <Board meta={meta} onOpen={onOpen} onHowItWorks={onHowItWorks} onRoundSaved={onRoundSaved} /> : <Home onStart={onStart} />;
+  return runs ? <Board meta={meta} region={region} onOpen={onOpen} onHowItWorks={onHowItWorks} onRoundSaved={onRoundSaved} /> : <Home onStart={onStart} />;
 }
 
 /** On Assets and Live: the bar shows "All" and narrows this view only (the writing context is untouched). */
@@ -402,12 +406,7 @@ function ViewBar({ meta, view, setView, what }: { meta: Meta; view: ViewFilter; 
         <option value="all">All territories</option>
         {territories.map(([k, x]) => <option key={k} value={k}>{view.persona === 'all' ? `${meta.personas[x.persona]?.name.replace(/\s*\(.*\)$/, '')}: ` : ''}{territoryName(x)}</option>)}
       </select>
-      <span className="text-[#4A505D]" aria-hidden>×</span>
-      <select aria-label="Region (this view)" className={sel} value={view.region} onChange={e => setView({ ...view, region: e.target.value as ViewFilter['region'] })}>
-        <option value="all">All regions</option>
-        {(meta.regions || ['US', 'CA']).map(r => <option key={r} value={r}>{REGION_NAMES[r]}</option>)}
-      </select>
-      {(view.persona !== 'all' || view.territory !== 'all' || view.region !== 'all') && <button className="text-xs text-[#858B96] underline-offset-2 hover:text-[#ECEDEF] hover:underline" onClick={() => setView(ALL_VIEW)}>show all</button>}
+      {(view.persona !== 'all' || view.territory !== 'all') && <button className="text-xs text-[#858B96] underline-offset-2 hover:text-[#ECEDEF] hover:underline" onClick={() => setView({ ...ALL_VIEW, region: view.region })}>show all</button>}
       <span className="ml-auto hidden text-xs text-[#646A75] md:inline">{what}: everything this month · filters this view only</span>
     </div>
   );
@@ -438,10 +437,7 @@ function ContextBar({ meta, ctx, setCtx, step, onNewTerritory }: { meta: Meta; c
         {territories.map(([k, x]) => <option key={k} value={k}>{territoryName(x)}{x.status === 'retired' ? ' (retired)' : ''}</option>)}
         {!onShared && <option value="__new">+ New territory…</option>}
       </select>
-      <span className="text-[#4A505D]" aria-hidden>×</span>
-      <select aria-label="Region" className={sel} value={ctx.region} onChange={e => setCtx({ ...ctx, region: e.target.value as Region })}>
-        {(meta.regions || ['US', 'CA']).map(r => <option key={r} value={r}>{REGION_NAMES[r]}</option>)}
-      </select>
+      <span className="text-sm font-semibold text-[#C9CCD2]" title="Change the region with the switch in the header">{regionLabel(ctx.region)}</span>
       <span className="ml-auto hidden text-xs text-[#646A75] md:inline">Step {step + 1} of 4 · applies to every step</span>
     </div>
   );

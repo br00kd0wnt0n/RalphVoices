@@ -48,17 +48,17 @@ test('ads: add from the visual\'s last ad (a shared headline carries over), move
   assert.deepEqual(d.versions[3].fields, { meta_primary: 'p2', meta_headline: 'h1' });
   d = addAd(d, 'C', 'META', ['meta_primary', 'meta_headline'], f => (f === 'meta_primary' ? 'pX' : 'hX'));
   assert.deepEqual(d.versions[4].fields, { meta_primary: 'pX', meta_headline: 'hX' }, 'a new visual starts from the first kept lines');
-  assert.deepEqual(d.versions.map((_, i) => adName(d, i, platformOf)), ['Visual A · Ad 1', 'Visual A · Ad 2', 'Visual B · Ad 1', 'Visual A · Ad 3', 'Visual C · Ad 1']);
-  assert.deepEqual(usesOf(d, 'h1', platformOf), ['Visual A · Ad 1', 'Visual A · Ad 2', 'Visual A · Ad 3']);
-  assert.deepEqual(usesOf(d, 'o1', platformOf), ['Visual A · on the image']);
+  assert.deepEqual(d.versions.map((_, i) => adName(d, i, platformOf)), ['Ad A · option 1', 'Ad A · option 2', 'Ad B · option 1', 'Ad A · option 3', 'Ad C · option 1']);
+  assert.deepEqual(usesOf(d, 'h1', platformOf), ['Ad A · option 1', 'Ad A · option 2', 'Ad A · option 3']);
+  assert.deepEqual(usesOf(d, 'o1', platformOf), ['Ad A · on the image']);
   assert.equal(nextVisual(d), 'D');
   d = moveAd(d, 1, 'B');
-  assert.equal(adName(d, 1, platformOf), 'Visual B · Ad 1');
+  assert.equal(adName(d, 1, platformOf), 'Ad B · option 1');
   d = removeAd(d, 4);
   assert.equal(d.versions.some(v => v.visual === 'C'), false);
   const onlyA = removeAd(removeAd(removeAd(base(), 1), 0), 0);
   assert.equal('A' in onlyA.on_image, false, 'a visual with no ads left keeps no on-image text');
-  assert.deepEqual(usesOf({ versions: [], on_image: { A: ['k1', 'k2'] } }, 'k2', platformOf), ['Visual A · card 2']);
+  assert.deepEqual(usesOf({ versions: [], on_image: { A: ['k1', 'k2'] } }, 'k2', platformOf), ['Ad A · card 2']);
 });
 
 test('flags at a slot: once per rule, even when two ads on the visual word it differently (production test, 1 Oct)', () => {
@@ -76,9 +76,9 @@ test('flags at a slot: once per rule, even when two ads on the visual word it di
 test('red places: the blocker names the flag and where it is, a carousel card included (production test, 1 Oct)', () => {
   const d = { versions: [{ visual: 'A', platform: 'META', fields: { meta_primary: 'p1', meta_headline: 'h1' } }], on_image: { A: ['c1', 'c2', 'c3', 'c4'] } };
   const pf = (v: { platform?: string }) => v.platform || 'META';
-  assert.deepEqual(redPlaces(d, { c2: ['unsourced figure', 'price lead'] }, pf), ['Visual A · card 2: unsourced figure, price lead']);
-  assert.deepEqual(redPlaces(d, { p1: ['direct pay'], c4: ['claim speed'] }, pf), ['Visual A · Ad 1: direct pay', 'Visual A · card 4: claim speed']);
-  assert.deepEqual(redPlaces({ ...d, on_image: { A: 'oi' } }, { oi: ['pays for itself'] }, pf), ['Visual A · on the image: pays for itself']);
+  assert.deepEqual(redPlaces(d, { c2: ['unsourced figure', 'price lead'] }, pf), ['Ad A · card 2: unsourced figure, price lead']);
+  assert.deepEqual(redPlaces(d, { p1: ['direct pay'], c4: ['claim speed'] }, pf), ['Ad A · option 1: direct pay', 'Ad A · card 4: claim speed']);
+  assert.deepEqual(redPlaces({ ...d, on_image: { A: 'oi' } }, { oi: ['pays for itself'] }, pf), ['Ad A · on the image: pays for itself']);
   assert.deepEqual(redPlaces(d, { zz: ['x'], c1: [] }, pf), [], 'a line not in the draft, or with no reds, is not named');
 });
 
@@ -87,12 +87,12 @@ test('subheads (rules v2.14): per visual or per card, optional, named in uses, g
   const pf = (v: { platform?: string }) => v.platform || 'META';
   const d1 = setCardSub(d0, 'A', 2, 's2');
   assert.deepEqual(d1.on_image_sub, { A: ['', 's2'] });
-  assert.deepEqual(usesOf(d1, 's2', pf), ['Visual A · card 2 subhead']);
+  assert.deepEqual(usesOf(d1, 's2', pf), ['Ad A · card 2 subhead']);
   assert.deepEqual(setCardSub(d1, 'A', 2, '').on_image_sub, {}, 'clearing the last subhead leaves none');
   const d2 = setOnImageSub({ ...d0, on_image: { A: 'oi' } }, 'A', 'sub');
-  assert.deepEqual(usesOf(d2, 'sub', pf), ['Visual A · subhead']);
+  assert.deepEqual(usesOf(d2, 'sub', pf), ['Ad A · subhead']);
   assert.deepEqual(removeAd(d2, 0).on_image_sub, {}, 'no ads left on the visual: no subhead either');
-  assert.deepEqual(redPlaces(d2, { sub: ['figure'] }, pf), ['Visual A · subhead: figure']);
+  assert.deepEqual(redPlaces(d2, { sub: ['figure'] }, pf), ['Ad A · subhead: figure']);
 });
 
 test('removing an ad or a visual: the open slot follows its ad or closes, names never read an ad that is gone, and the letter is free again', async () => {
@@ -123,4 +123,21 @@ test('removing an ad or a visual: the open slot follows its ad or closes, names 
   // A letter shared by a Meta and a TikTok visual keeps its on-image text while the other platform's ads are still on it.
   const both = { ...d, versions: [...d.versions, { visual: 'A', platform: 'TT', fields: { tiktok_caption: 't1' } }] };
   assert.deepEqual(removeVisual(both, 'A', 'META', platformOf).on_image.A, 'o1');
+});
+
+test('a flag at a slot the whole ad shares says which copy option(s) it was found with', async () => {
+  const { flagsAtShared } = await import('../../frontend/src/lib/buildDraft.js');
+  const clash = { rule: 'VERSION_CONFLICT', severity: 'amber', fields: ['meta_primary', 'meta_on_image'], label: 'Fields clash in tone' };
+  const repeat = { rule: 'VERSION_REPEAT', severity: 'amber', fields: ['meta_headline', 'meta_on_image'], label: 'repeat' };
+  const none: any[] = [];
+  // Only option 2's caption clashes with the on-image text.
+  assert.deepEqual(flagsAtShared([{ n: 1, flags: none }, { n: 2, flags: [clash] }, { n: 3, flags: none }], 'meta_on_image').map(f => [f.rule, f.from]), [['VERSION_CONFLICT', 'Copy option 2']]);
+  // Two of three; all three; and a red in one option wins over the same amber in another.
+  assert.equal(flagsAtShared([{ n: 1, flags: [clash] }, { n: 2, flags: none }, { n: 3, flags: [clash] }], 'meta_on_image')[0].from, 'Copy options 1 and 3');
+  assert.equal(flagsAtShared([{ n: 1, flags: [repeat] }, { n: 2, flags: [repeat] }, { n: 3, flags: [repeat] }], 'meta_on_image')[0].from, 'Every copy option');
+  const red = flagsAtShared([{ n: 1, flags: [clash] }, { n: 2, flags: [{ ...clash, severity: 'red' }] }], 'meta_on_image');
+  assert.deepEqual([red.length, red[0].severity, red[0].from], [1, 'red', 'Every copy option']);
+  // A flag about another slot isn't shown here; one option on its own is named as itself.
+  assert.deepEqual(flagsAtShared([{ n: 1, flags: [clash] }], 'meta_on_image_sub'), []);
+  assert.equal(flagsAtShared([{ n: 1, flags: [clash] }], 'meta_on_image')[0].from, 'Copy option 1');
 });

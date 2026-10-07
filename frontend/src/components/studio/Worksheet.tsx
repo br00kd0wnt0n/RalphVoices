@@ -5,7 +5,7 @@ import { Fragment, useCallback, useEffect, useState } from 'react';
 import { REGION_NAMES, studio, type Batch, type Line, type Meta, type Region, type WorksheetData, type WsRow, type WsStep } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { personaColor, tint } from '@/lib/personaColors';
-import { ForPicker, GhostButton, LineHistory, PersonaDot, PinkButton, Src, angleLabel, useActingFor, when, whoWords } from './ui';
+import { regionLabel, ForPicker, GhostButton, LineHistory, PersonaDot, PinkButton, Src, angleLabel, useActingFor, when, whoWords } from './ui';
 
 const STEPS: Array<{ key: WsStep; n: number; name: string; what: string }> = [
   { key: 'on_image', n: 1, name: 'On-image copy', what: 'Every headline, subhead and carousel card that sits in the artwork, by persona and asset.' },
@@ -14,8 +14,9 @@ const STEPS: Array<{ key: WsStep; n: number; name: string; what: string }> = [
 ];
 const LEVEL: Record<string, string> = { red: 'border-red-500/50 bg-red-500/10 text-red-200', amber: 'border-amber-400/40 bg-amber-400/10 text-amber-200', grey: 'border-[#343946] bg-[#1C1F26] text-[#A3A8B1]' };
 
-export function Worksheet({ meta, region, setRegion, onStep, onChanged }: {
-  meta: Meta; region: Region; setRegion: (r: Region) => void;
+export function Worksheet({ meta, region, onStep, onChanged }: {
+  /** The region shown: the header's switch. */
+  meta: Meta; region: Region;
   /** Steps 4 and 5 are the existing Build and Assets screens. */
   onStep: (step: 'build' | 'assets') => void; onChanged: () => void;
 }) {
@@ -36,22 +37,14 @@ export function Worksheet({ meta, region, setRegion, onStep, onChanged }: {
     const g = groups[groups.length - 1];
     if (g && g.key === key) g.rows.push(x); else groups.push({ key, ...(step === 'on_image' ? { persona: x.persona, asset: x.asset } : {}), rows: [x] });
   }
-  const regions = meta.regions || ['US', 'CA'];
 
   return (
     <div className="mx-auto max-w-6xl space-y-4">
       <div className="flex flex-wrap items-end gap-3">
         <div className="mr-auto">
-          <h1 className="text-2xl font-semibold">{data?.round_label || 'This month'}: copy worksheet</h1>
+          <h1 className="text-2xl font-semibold">{data?.round_label || 'This month'}: copy worksheet <span className="text-lg font-normal text-[#A3A8B1]">· {regionLabel(region)}</span></h1>
           <p className="text-base text-[#A3A8B1]">Everything on one page. One decision per line: keep it, cut it, or edit it.</p>
         </div>
-        {regions.length > 1 && (
-          <label className="text-sm text-[#858B96]">Region{' '}
-            <select aria-label="Region" className="rounded-lg border border-[#343946] bg-[#101216] px-2 py-1.5 text-sm text-[#ECEDEF]" value={region} onChange={e => setRegion(e.target.value as Region)}>
-              {regions.map(r => <option key={r} value={r}>{REGION_NAMES[r]}</option>)}
-            </select>
-          </label>
-        )}
         <ForPicker meta={meta} doing="Working" />
         <GhostButton title="The same three steps as a workbook (.xlsx), for Excel or Google Sheets. Import it back from the Export menu." onClick={() => studio.worksheetXlsx(region).catch(e => setError(`Download failed: ${e.message}`))}>Download as a sheet</GhostButton>
       </div>
