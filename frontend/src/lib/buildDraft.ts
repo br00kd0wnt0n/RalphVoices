@@ -97,26 +97,26 @@ export function addAd<D extends DraftLike>(d: D, visual: string, platform: strin
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 export const nextVisual = (d: DraftLike) => LETTERS.find(l => !d.versions.some(v => v.visual === l)) || 'Z';
 
-/** "Ad 1", "Ad 2"… within a visual (and platform), in the draft's order. */
+/** A copy option's number within its ad (a visual and platform), in the draft's order: 1, 2, 3… */
 export function adNumber(d: DraftLike, index: number, platformOf: (v: DraftVersionLike) => string): number {
   const v = d.versions[index];
   if (!v) return 0;
   return d.versions.slice(0, index + 1).filter(x => x.visual === v.visual && platformOf(x) === platformOf(v)).length;
 }
 /** '' for an index with no ad (an ad just removed, while the screen still holds the plan from before). */
-export const adName = (d: DraftLike, index: number, platformOf: (v: DraftVersionLike) => string) => (d.versions[index] ? `Visual ${d.versions[index].visual} · Ad ${adNumber(d, index, platformOf)}` : '');
+export const adName = (d: DraftLike, index: number, platformOf: (v: DraftVersionLike) => string) => (d.versions[index] ? `Ad ${d.versions[index].visual} · option ${adNumber(d, index, platformOf)}` : '');
 
-/** Where a line is used: "Visual A · Ad 1", "Visual A · on the image", "Visual B · card 2". */
+/** Where a line is used: "Ad A · option 1", "Ad A · on the image", "Ad B · card 2". (An ad is a visual; its versions are its copy options.) */
 export function usesOf(d: DraftLike, lineId: string, platformOf: (v: DraftVersionLike) => string): string[] {
   const out: string[] = [];
   d.versions.forEach((v, i) => { if (Object.values(v.fields).includes(lineId)) out.push(adName(d, i, platformOf)); });
   for (const [visual, val] of Object.entries(d.on_image)) {
-    if (Array.isArray(val)) val.forEach((id, k) => { if (id === lineId) out.push(`Visual ${visual} · card ${k + 1}`); });
-    else if (val === lineId) out.push(`Visual ${visual} · on the image`);
+    if (Array.isArray(val)) val.forEach((id, k) => { if (id === lineId) out.push(`Ad ${visual} · card ${k + 1}`); });
+    else if (val === lineId) out.push(`Ad ${visual} · on the image`);
   }
   for (const [visual, val] of Object.entries(d.on_image_sub || {})) {
-    if (Array.isArray(val)) val.forEach((id, k) => { if (id === lineId) out.push(`Visual ${visual} · card ${k + 1} subhead`); });
-    else if (val === lineId) out.push(`Visual ${visual} · subhead`);
+    if (Array.isArray(val)) val.forEach((id, k) => { if (id === lineId) out.push(`Ad ${visual} · card ${k + 1} subhead`); });
+    else if (val === lineId) out.push(`Ad ${visual} · subhead`);
   }
   return out;
 }
@@ -136,7 +136,25 @@ export function flagsAt<F extends { rule: string; fields: string[]; other?: stri
 }
 
 /**
- * Where each red flag that blocks sign-off is: "Visual B · card 2: unsourced figure, price lead" (production test,
+ * The same, for a slot the whole ad shares (on-image text, a card, the subhead): each flag says which copy option(s) it
+ * was found with (`from`: "Copy option 2", "Copy options 1 and 3", "Every copy option"), because the clash is between
+ * the shared text and ONE option's caption or headline (production, 7 Oct: "The fields clash in tone" beside the
+ * on-image text, with nothing to say which option).
+ */
+export function flagsAtShared<F extends { rule: string; fields: string[]; other?: string; severity?: string }>(options: Array<{ n: number; flags: F[] }>, field: string): Array<F & { from: string }> {
+  const groups = new Map<string, { f: F; ns: number[] }>();
+  for (const o of options) for (const f of flagsAt(o.flags, field)) {
+    const k = `${f.rule}|${f.other || ''}`;
+    const g = groups.get(k);
+    if (!g) groups.set(k, { f, ns: [o.n] });
+    else { if (!g.ns.includes(o.n)) g.ns.push(o.n); if (f.severity === 'red' && g.f.severity !== 'red') g.f = f; }
+  }
+  const words = (ns: number[]) => (ns.length === options.length && options.length > 1 ? 'Every copy option' : ns.length === 1 ? `Copy option ${ns[0]}` : `Copy options ${ns.slice(0, -1).join(', ')} and ${ns[ns.length - 1]}`);
+  return [...groups.values()].sort((a, b) => Number(b.f.severity === 'red') - Number(a.f.severity === 'red')).map(g => ({ ...g.f, from: words(g.ns.sort((x, y) => x - y)) }));
+}
+
+/**
+ * Where each red flag that blocks sign-off is: "Ad B · card 2: unsourced figure, price lead" (production test,
  * 1 Oct: a carousel card's red said only "1 red flag to fix or override first", with nothing on the card).
  * `reds` maps a line id to its unresolved red flags' names; a line used in several places is named at its first.
  */

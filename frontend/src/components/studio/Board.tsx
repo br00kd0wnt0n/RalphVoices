@@ -1,26 +1,30 @@
 // The round overview board: the start screen once a round has begun (How it works is behind "?", and is still the start
-// screen while the round has no runs). Persona rows (persona colours) × that persona's live territories, with a totals
-// column and row. Each cell: lines kept → ads signed off → uploaded → cleared by Trupanion → ready to traffic, red when
-// Trupanion asked for changes. Clicking a cell sets the context and opens the most useful step. Counts come from the
+// screen while the round has no runs). Persona rows (persona colours) × that persona's assets, with a totals column
+// and row, for ONE region (the header's switch): US and Canada are separate ads, so no number mixes them. Every count
+// after "kept" is in ads (Add3, 6 Oct: an ad is a visual; its versions are copy options, not ads): signed off →
+// artwork uploaded → Pre-flight passed → cleared by Trupanion → ready to traffic, red when Trupanion asked for changes. Clicking a cell sets the context and opens the most useful step. Counts come from the
 // existing lists (runs, kept lines, codes), all in the round the header shows.
 import { useEffect, useState } from 'react';
-import { roundLabel, studio, type Meta, type PfStub, type RunSummary, type ShortRow } from '@/lib/studioApi';
+import { roundLabel, studio, type Meta, type PfStub, type Region, type RunSummary, type ShortRow } from '@/lib/studioApi';
 import { personaColor, tint } from '@/lib/personaColors';
 import { cn } from '@/lib/utils';
-import { GhostButton, HEADING_FONT, Label, PersonaDot, personaKeys, territoryName, isOpenTerritory } from './ui';
+import { GhostButton, HEADING_FONT, Label, PersonaDot, personaKeys, regionLabel, regionOf, territoryName, isOpenTerritory } from './ui';
 
 export type Step = 'write' | 'review' | 'build' | 'assets';
-interface Counts { runs: number; kept: number; signed: number; uploaded: number; cleared: number; ready: number; changes: number; /** Of those, the copy sent back: fixed at Build & sign off. */ copyChanges: number }
-const zero = (): Counts => ({ runs: 0, kept: 0, signed: 0, uploaded: 0, cleared: 0, ready: 0, changes: 0, copyChanges: 0 });
+/** kept: lines. Everything after it: ads (a visual with its copy options). options: the copy options on the signed-off ads. */
+interface Counts { runs: number; kept: number; signed: number; options: number; uploaded: number; passed: number; cleared: number; ready: number; changes: number; /** Of those, the copy sent back: fixed at Build & sign off. */ copyChanges: number }
+const zero = (): Counts => ({ runs: 0, kept: 0, signed: 0, options: 0, uploaded: 0, passed: 0, cleared: 0, ready: 0, changes: 0, copyChanges: 0 });
 const add = (a: Counts, b: Counts): Counts => Object.fromEntries(Object.keys(a).map(k => [k, (a as any)[k] + (b as any)[k]])) as unknown as Counts;
-const STAGES: Array<[keyof Counts, string]> = [['kept', 'kept'], ['signed', 'signed off'], ['uploaded', 'uploaded'], ['cleared', 'cleared'], ['ready', 'ready']];
+const STAGES: Array<[keyof Counts, string]> = [['signed', 'signed off'], ['uploaded', 'uploaded'], ['passed', 'Pre-flight'], ['cleared', 'cleared'], ['ready', 'ready']];
 /**
  * The step a cell opens: Build when Trupanion sent copy back (it's fixed there), Assets once anything is signed off,
  * Build when lines are kept, else Review (or Write, not started).
  */
 export const stepFor = (c: Counts): Step => (c.copyChanges ? 'build' : c.signed ? 'assets' : c.kept ? 'build' : c.runs ? 'review' : 'write');
 
-export function Board({ meta, onOpen, onHowItWorks, onRoundSaved }: {
+export function Board({ meta, region, onOpen, onHowItWorks, onRoundSaved }: {
+  /** The region shown (the header's switch). */
+  region: Region;
   meta: Meta; onOpen: (persona: string, territory: string, step: Step) => void; onHowItWorks: () => void; onRoundSaved: () => void;
 }) {
   const [data, setData] = useState<{ runs: RunSummary[]; kept: ShortRow[]; stubs: PfStub[]; rules: string } | null>(null);
@@ -34,14 +38,21 @@ export function Board({ meta, onOpen, onHowItWorks, onRoundSaved }: {
 
   const cell = (persona: string, territory: string): Counts => {
     const c = zero();
-    c.runs = data.runs.filter(r => r.persona === persona && r.territory === territory).length;
-    c.kept = data.kept.filter(r => r.persona === persona && r.territory === territory).length;
-    for (const s of data.stubs.filter(x => x.persona === persona && x.territory === territory)) {
+    const here = <T extends { persona: string; territory: string; region?: Region }>(x: T) => x.persona === persona && x.territory === territory && regionOf(x) === region;
+    c.runs = data.runs.filter(here).length;
+    c.kept = data.kept.filter(here).length;
+    // An ad is a visual: its codes (copy options) share a visual key. The ad is as far along as its least advanced option.
+    const ads = new Map<string, PfStub[]>();
+    for (const s of data.stubs.filter(here)) { const k = s.visual_key || s.stub; ads.set(k, [...(ads.get(k) || []), s]); }
+    for (const codes of ads.values()) {
       c.signed++;
-      if (s.upload) c.uploaded++;
-      if (s.traffic?.compliance === 'cleared') c.cleared++;
-      if (s.traffic?.ready) c.ready++;
-      if (s.traffic?.compliance === 'changes_requested') { c.changes++; if (s.traffic.send_back !== 'asset') c.copyChanges++; }
+      c.options += codes.length;
+      if (codes.some(s => s.upload)) c.uploaded++;
+      if (codes.every(s => s.traffic?.preflight === 'passed')) c.passed++;
+      if (codes.every(s => s.traffic?.compliance === 'cleared')) c.cleared++;
+      if (codes.every(s => s.traffic?.ready)) c.ready++;
+      const back = codes.filter(s => s.traffic?.compliance === 'changes_requested');
+      if (back.length) { c.changes++; if (back.some(s => s.traffic.send_back !== 'asset')) c.copyChanges++; }
     }
     return c;
   };
@@ -65,7 +76,7 @@ export function Board({ meta, onOpen, onHowItWorks, onRoundSaved }: {
             <h1 className="text-2xl font-bold tracking-tight" style={HEADING_FONT}>{active ? roundLabel(active) : 'This month'}</h1>
             {active?.test && <span className="rounded-full border border-amber-400 bg-amber-400/15 px-2 py-0.5 text-xs font-semibold text-amber-100">TEST: never handed off</span>}
           </div>
-          <p className="text-base text-[#A3A8B1]">Where every persona × territory stands. Click a cell to work on it. <button className="underline underline-offset-2 hover:text-[#ECEDEF]" onClick={onHowItWorks}>How it works</button></p>
+          <p className="text-base text-[#A3A8B1]"><span className="font-semibold text-[#ECEDEF]">{regionLabel(region)}.</span> Where each asset stands. Click one to work on it. <button className="underline underline-offset-2 hover:text-[#ECEDEF]" onClick={onHowItWorks}>How it works</button></p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           {data.rules && <span className="rounded-lg border border-[#272B34] bg-[#16181D] px-3 py-1.5 text-sm text-[#A3A8B1]">Rules <span className="font-mono text-[#ECEDEF]">{data.rules}</span></span>}
@@ -78,8 +89,8 @@ export function Board({ meta, onOpen, onHowItWorks, onRoundSaved }: {
           <thead>
             <tr>
               <th className="w-48" />
-              {Array.from({ length: cols }, (_, i) => <th key={i} className="px-1 text-xs font-semibold uppercase tracking-wider text-[#646A75]">Territory {i + 1}</th>)}
-              <th className="w-44 px-1 text-xs font-semibold uppercase tracking-wider text-[#646A75]">Persona total</th>
+              <th colSpan={cols} className="px-1 text-xs font-semibold uppercase tracking-wider text-[#646A75]">Assets · {regionLabel(region)}</th>
+              <th className="w-44 px-1 text-xs font-semibold uppercase tracking-wider text-[#646A75]">Persona total, in ads</th>
             </tr>
           </thead>
           <tbody>
@@ -129,20 +140,24 @@ export function Board({ meta, onOpen, onHowItWorks, onRoundSaved }: {
             <tr className="align-top">
               <th scope="row" className="rounded-xl border border-[#272B34] bg-[#121419] px-3 py-3 text-sm font-semibold text-[#C9CCD2]">All personas</th>
               <td colSpan={cols} className="rounded-xl border border-[#272B34] bg-[#121419] px-3 py-2.5 text-sm text-[#858B96]">
-                {grand.runs} run{grand.runs === 1 ? '' : 's'} this month{grand.changes ? <span className="ml-2 font-semibold text-red-200">· {grand.changes} with changes requested</span> : null}
+                <span className="font-semibold text-[#ECEDEF]">{grand.signed} ad{grand.signed === 1 ? '' : 's'}</span> signed off in {regionLabel(region)}, of {rows.reduce((n, r) => n + r.cells.filter(x => x.c.runs || x.c.kept || x.c.signed).length, 0)} asset{rows.reduce((n, r) => n + r.cells.filter(x => x.c.runs || x.c.kept || x.c.signed).length, 0) === 1 ? '' : 's'} with copy{grand.changes ? <span className="ml-2 font-semibold text-red-200">· {grand.changes} with changes requested</span> : null}
               </td>
               <td className="rounded-xl border-2 border-[#343946] bg-[#121419] px-3 py-2.5"><Pipeline c={grand} /></td>
             </tr>
           </tbody>
         </table>
       </div>
-      <p className="text-sm text-[#646A75]">Lines kept → ads signed off (codes) → assets uploaded → cleared by Trupanion → ready to traffic. A red cell has changes requested. Totals follow the month in the header (“All months” counts every month).</p>
+      <p className="text-sm text-[#646A75]">Counted in ads, one region at a time: an ad is one visual with its copy options (never one per option). Signed off → artwork uploaded → Pre-flight passed → cleared by Trupanion → ready to traffic. A red cell has changes requested. Totals follow the month in the header (“All months” counts every month).</p>
     </div>
   );
 }
 
 function Pipeline({ c }: { c: Counts }) {
   if (!c.runs && !c.kept && !c.signed) return <div className="text-sm text-[#646A75]">not started</div>;
+  // Before sign-off there is no ad yet: say where the copy is.
+  if (!c.signed) return c.kept
+    ? <div className="text-sm text-[#A3A8B1]"><span className="font-mono text-base font-semibold text-[#ECEDEF]">{c.kept}</span> line{c.kept === 1 ? '' : 's'} kept · <span className="text-[#858B96]">not signed off</span></div>
+    : <div className="text-sm text-[#858B96]">in review · nothing kept yet</div>;
   return (
     <div className="space-y-1">
       <div className="flex flex-wrap items-baseline gap-x-1 text-sm">
@@ -150,11 +165,12 @@ function Pipeline({ c }: { c: Counts }) {
           <span key={k} className="flex items-baseline gap-1 whitespace-nowrap">
             {i > 0 && <span className="text-[#4A505D]" aria-hidden>→</span>}
             <span className={cn('font-mono text-base font-semibold', k === 'ready' && c.ready ? 'text-emerald-300' : c[k] ? 'text-[#ECEDEF]' : 'text-[#4A505D]')}>{c[k]}</span>
-            <span className="text-xs text-[#858B96]">{label}</span>
+            <span className="text-xs text-[#858B96]">{i === 0 ? `ad${c.signed === 1 ? '' : 's'} ${label}` : label}</span>
           </span>
         ))}
       </div>
-      {c.changes > 0 && <div className="text-xs font-semibold text-red-200">{c.changes} with changes requested{c.copyChanges ? ` (${c.copyChanges === c.changes ? '' : `${c.copyChanges} `}copy: fix in Build & sign off)` : ''}</div>}
+      <div className="text-xs text-[#646A75]">{c.options} copy option{c.options === 1 ? '' : 's'} · {c.kept} line{c.kept === 1 ? '' : 's'} kept</div>
+      {c.changes > 0 && <div className="text-xs font-semibold text-red-200">{c.changes} ad{c.changes === 1 ? '' : 's'} with changes requested{c.copyChanges ? ` (${c.copyChanges === c.changes ? '' : `${c.copyChanges} `}copy: fix in Build & sign off)` : ''}</div>}
     </div>
   );
 }

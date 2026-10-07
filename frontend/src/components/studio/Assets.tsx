@@ -202,8 +202,6 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy }: { meta: Meta
             return <button key={p} className="flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm transition" style={on ? { borderColor: pc.edge, background: tint(pc.base, 0.22), color: pc.light } : { borderColor: tint(pc.base, 0.45), color: pc.light }}
               onClick={() => setView({ ...view, persona: on ? 'all' : p, territory: 'all' })}><PersonaDot persona={p} />{meta.personas[p].name.replace(/\s*\(.*\)$/, '')}</button>;
           })}
-          <span className="ml-3 text-xs font-semibold uppercase tracking-wider text-[#646A75]">Region</span>
-          {(['all', ...(meta.regions || ['US', 'CA'])] as const).map(r => <button key={r} className={chip(view.region === r)} onClick={() => setView({ ...view, region: r as ViewFilter['region'] })}>{r === 'all' ? 'All' : r === 'CA' ? 'Canada' : r}</button>)}
           <span className="ml-3 text-xs font-semibold uppercase tracking-wider text-[#646A75]">Format</span>
           {['all', ...formats].map(f => <button key={f} className={chip(format === f)} onClick={() => setFormat(f)}>{f === 'all' ? 'All' : f.charAt(0) + f.slice(1).toLowerCase()}</button>)}
         </div>
@@ -212,8 +210,8 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy }: { meta: Meta
       {!stubs && !error && <div className="text-base text-[#858B96]">Loading the month’s codes…</div>}
       {stubs && !scoped.length && (
         <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#272B34] bg-[#16181D] p-5 text-base text-[#A3A8B1]">
-          <span className="mr-auto">{view.persona !== 'all' || view.territory !== 'all' || view.region !== 'all' || format !== 'all' ? 'Nothing signed off for this filter.' : 'Nothing signed off yet this month.'} Each code gets its asset here once it’s signed off.</span>
-          {(view.persona !== 'all' || view.territory !== 'all' || view.region !== 'all' || format !== 'all') && <GhostButton onClick={() => { setView({ persona: 'all', territory: 'all', region: 'all' }); setFormat('all'); }}>Show all</GhostButton>}
+          <span className="mr-auto">{view.persona !== 'all' || view.territory !== 'all' || format !== 'all' ? 'Nothing signed off for this filter.' : `Nothing signed off yet this month in ${view.region === 'CA' ? 'Canada' : 'the US'}.`} Each code gets its asset here once it’s signed off.</span>
+          {(view.persona !== 'all' || view.territory !== 'all' || format !== 'all') && <GhostButton onClick={() => { setView({ persona: 'all', territory: 'all', region: view.region }); setFormat('all'); }}>Show all</GhostButton>}
           <GhostButton onClick={onBuild}>Build & sign off</GhostButton>
         </div>
       )}

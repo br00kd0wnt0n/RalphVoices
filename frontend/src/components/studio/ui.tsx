@@ -121,6 +121,27 @@ export function limitsOf(meta: Pick<Meta, 'fields' | 'territories'>, field: stri
   const isCard = !!ctx.card || /^CAR/i.test(meta.territories[ctx.territory || '']?.format || '');
   return isCard && f.card ? { visible: f.card.visible, max: f.card.max, card: true } : { visible: f.visible, max: f.max, card: false };
 }
+export const REGION_FLAGS: Record<Region, string> = { US: '🇺🇸', CA: '🇨🇦' };
+/** "🇨🇦 Canada": a region as it is shown everywhere, flag first. */
+export const regionLabel = (r: Region) => `${REGION_FLAGS[r] || ''} ${REGION_NAMES[r] || r}`.trim();
+/**
+ * The region switch (Brook, 7 Oct): one control, in the header on every screen, flag and name. US and Canada are
+ * separate ads, sign-offs and codes, so every screen shows one region at a time and no count mixes the two.
+ */
+export function RegionSwitch({ regions, region, onChange, className }: { regions: Region[]; region: Region; onChange: (r: Region) => void; className?: string }) {
+  if (regions.length < 2) return null;
+  return (
+    <div role="group" aria-label="Region" className={cn('flex shrink-0 items-center rounded-lg border border-[#343946] bg-[#101216] p-0.5', className)}>
+      {regions.map(r => (
+        <button key={r} aria-pressed={r === region} onClick={() => onChange(r)} title={`Show ${REGION_NAMES[r]}: its copy, ads and assets`}
+          className={cn('flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1 text-sm font-semibold transition', r === region ? 'bg-[#ECEDEF] text-[#0E0F12]' : 'text-[#A3A8B1] hover:text-[#ECEDEF]')}>
+          <span aria-hidden className="text-base leading-none">{REGION_FLAGS[r]}</span><span className={cn(r === region ? '' : 'hidden min-[1700px]:inline')}>{REGION_NAMES[r]}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** The field's spec with the length guide that applies to this line (the card guide for a carousel card). */
 export function specFor(meta: Pick<Meta, 'fields' | 'territories'>, field: string, ctx: { card?: number; territory?: string } = {}) {
   const f = meta.fields[field], lim = limitsOf(meta, field, ctx);
