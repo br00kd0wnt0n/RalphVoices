@@ -18,7 +18,34 @@ import { getStore } from './engine.js';
  * `label`: what people see ("Month 1", or "Test" for a test round). The client's schedule uses "R1/R2" for review
  * rounds, so Studio's rounds are shown as months; the stored ids (R0, R1, R2…) and the _TEST suffix don't change.
  */
-export interface Round { id: string; name: string; label?: string; from?: string; test?: boolean; created_by?: string; created_at?: string; /** When the round's assets are due (YYYY-MM-DD), shown on the round board. */ assets_due?: string }
+export interface Round { id: string; name: string; label?: string; from?: string; test?: boolean; created_by?: string; created_at?: string; /** When the round's assets are due (YYYY-MM-DD), shown on the round board. */ assets_due?: string;
+  /** The month's key dates from the schedule (Brook, 7 Oct), shown on the board and on Build and Assets. Admin-edited; the schedule moves. */
+  milestones?: Milestone[] }
+/**
+ * One date in a month's schedule: "R1 feedback due", Fri 9 Oct. `track`: which work it is for (statics, video…; free
+ * text, so tracks can be added as they are planned). `screen`: the step it matters to, so Build and Assets show theirs.
+ */
+export interface Milestone { id: string; label: string; date: string; track?: string; screen?: 'build' | 'assets' }
+/** A clean, date-ordered list: every entry needs a label and a real date. */
+export function cleanMilestones(input: unknown): Milestone[] {
+  if (!Array.isArray(input)) throw new Error('Key dates are a list');
+  if (input.length > 40) throw new Error('At most 40 key dates a month');
+  const out: Milestone[] = [];
+  const seen = new Set<string>();
+  for (const [i, x] of input.entries()) {
+    const label = String(x?.label || '').trim().slice(0, 80);
+    const date = String(x?.date || '').trim();
+    if (!label) throw new Error(`Key date ${i + 1} needs a name`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(new Date(`${date}T12:00:00Z`).getTime()) || new Date(`${date}T12:00:00Z`).toISOString().slice(0, 10) !== date) throw new Error(`"${label}" needs a date (YYYY-MM-DD)`);
+    const track = String(x?.track || '').trim().slice(0, 30);
+    const screen = x?.screen === 'build' || x?.screen === 'assets' ? x.screen : undefined;
+    let id = String(x?.id || '').trim().replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40) || `m${i + 1}`;
+    while (seen.has(id)) id = `${id}x`;
+    seen.add(id);
+    out.push({ id, label, date, ...(track ? { track } : {}), ...(screen ? { screen } : {}) });
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date) || a.label.localeCompare(b.label));
+}
 export interface RoundsState { active: string; rounds: Round[] }
 
 /** Content with no round stamp is round one. */
@@ -109,6 +136,8 @@ export async function saveRound(input: Partial<Round> & { activate?: boolean }, 
   const label = input.label === undefined ? existing?.label : String(input.label || '').trim().slice(0, 40);
   const round: Round = { ...(existing || {}), id, name, from: input.from ? String(input.from).slice(0, 10) : existing?.from || new Date().toISOString().slice(0, 10), test: !!input.test, created_by: existing?.created_by || user, created_at: existing?.created_at || new Date().toISOString() };
   if (due) round.assets_due = due; else delete round.assets_due;
+  // The key dates: the whole list, or left out to keep what is there.
+  if (input.milestones !== undefined) { const ms = cleanMilestones(input.milestones); if (ms.length) round.milestones = ms; else delete round.milestones; }
   if (label) round.label = label; else delete round.label;
   if (input.activate && input.test) throw new Error(TEST_NOT_ACTIVE);
   const next: RoundsState = { active: input.activate ? id : state.active, rounds: [...state.rounds.filter(r => r.id !== id), round].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true })) };

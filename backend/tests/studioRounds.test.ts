@@ -189,3 +189,40 @@ test('rounds are shown as months (the client\'s "R1/R2" are review rounds): R1 =
   assert.equal(Rounds.labelOf(s, 'R1'), 'Month 1');
   assert.equal((await Rounds.getRounds()).rounds.find(r => r.id === 'R1')!.name, 'Month 1');
 });
+
+test('key dates: stored on the month, in date order, kept when other things are saved; the strip marks today and the next date; Build and Assets show theirs', async () => {
+  await fresh();
+  const D = await import('../../frontend/src/lib/studioDates.js');
+  const schedule = [
+    { label: 'Final delivery', date: '2026-10-20', screen: 'assets' as const, track: 'statics' },
+    { label: 'R1 feedback due', date: '2026-10-09', screen: 'build' as const, track: 'statics' },
+    { label: 'R1 sent to Trupanion', date: '2026-10-06', track: 'statics' },
+    { label: 'R2 with artwork', date: '2026-10-13', screen: 'assets' as const, track: 'statics' },
+    { label: 'Go-live', date: '2026-10-26' },
+  ];
+  const s = await Rounds.saveRound({ id: 'R1', name: 'Month 1', milestones: schedule }, 'brook');
+  const ms = s.rounds.find(r => r.id === 'R1')!.milestones!;
+  assert.deepEqual(ms.map(m => [m.date, m.label, m.screen || '']), [['2026-10-06', 'R1 sent to Trupanion', ''], ['2026-10-09', 'R1 feedback due', 'build'], ['2026-10-13', 'R2 with artwork', 'assets'], ['2026-10-20', 'Final delivery', 'assets'], ['2026-10-26', 'Go-live', '']]);
+  assert.equal(new Set(ms.map(m => m.id)).size, 5, 'each date has its own id');
+  // Saving something else about the month keeps the dates; an empty list clears them.
+  assert.equal((await Rounds.saveRound({ id: 'R1', name: 'Month 1', assets_due: '2026-10-13' })).rounds[0].milestones!.length, 5);
+  await assert.rejects(() => Rounds.saveRound({ id: 'R1', name: 'Month 1', milestones: [{ label: 'x', date: '13 Oct' }] as any }), /needs a date/);
+  await assert.rejects(() => Rounds.saveRound({ id: 'R1', name: 'Month 1', milestones: [{ label: '', date: '2026-10-13' }] as any }), /needs a name/);
+  await assert.rejects(() => Rounds.saveRound({ id: 'R1', name: 'Month 1', milestones: [{ label: 'x', date: '2026-02-31' }] as any }), /needs a date/);
+
+  // Wed 7 Oct: R1 has gone, feedback is next.
+  const wed = D.strip(ms, '2026-10-07');
+  assert.deepEqual(wed.items.map(x => x.state), ['past', 'next', 'later', 'later', 'later']);
+  assert.deepEqual(wed.tracks, ['statics']);
+  assert.equal(D.screenDate(ms, '2026-10-07', 'build')!.words, 'R1 feedback due Fri 9 Oct, in 2 days');
+  assert.equal(D.screenDate(ms, '2026-10-07', 'assets')!.words, 'R2 with artwork Tue 13 Oct, in 6 days');
+  // On the day itself it is "today", and the one after it is next.
+  assert.deepEqual(D.strip(ms, '2026-10-09').items.map(x => x.state), ['past', 'today', 'next', 'later', 'later']);
+  assert.equal(D.screenDate(ms, '2026-10-09', 'build')!.words, 'R1 feedback due Fri 9 Oct, today');
+  // Build has no date of its own left: it shows the next of all. After the last date, nothing.
+  assert.equal(D.screenDate(ms, '2026-10-12', 'build')!.words, 'R2 with artwork Tue 13 Oct, tomorrow');
+  assert.equal(D.screenDate(ms, '2026-11-01', 'build'), null);
+  assert.equal(D.screenDate(undefined, '2026-10-07', 'build'), null);
+  assert.deepEqual([D.dayWords(-1), D.dayWords(-4), D.dateWords('2027-01-04', '2026-10-07')], ['yesterday', '4 days ago', 'Mon 4 Jan 2027']);
+  assert.equal((await Rounds.saveRound({ id: 'R1', name: 'Month 1', milestones: [] })).rounds[0].milestones, undefined);
+});

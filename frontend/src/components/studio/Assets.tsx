@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { studio, type CodeCompliance, type ComplianceAsset, type ComplianceStatus, type ComplianceView, type Meta, type PfFlag, type PfReport, type PfStub, type StudioEvent } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
+import { DateNote } from './KeyDates';
 import { groupOverrides, overrideWhere } from '@/lib/overrideGroups';
 import { keepSelection, uploadFor, uploadLabel } from '@/lib/uploadTarget';
 import { SIZES, detectFileSize } from '@/lib/studioSizes';
@@ -181,7 +182,7 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy }: { meta: Meta
 
   return (
     <div className="max-w-[1500px] space-y-5">
-      <Intro title="Assets" line="Each code’s finished asset: checked, passed, then Trupanion’s decision.">
+      <Intro title="Assets" line="Each code’s finished asset: checked, passed, then Trupanion’s decision." right={<DateNote meta={meta} screen="assets" />}>
         <p>Upload the asset for a signed-off code (one upload can serve every code on the same visual). Studio checks it against the signed-off copy and the rules: agree or disagree with each flag; red flags are fixed with a new upload or overridden with a reason. The creative lead then marks it Pre-flight passed.</p>
         <p>Vivan coordinates with Trupanion and records their decision here, per code, with who at Trupanion made it: cleared, or changes requested with a note (the copy goes back to Build & sign off, the visual to a new upload). A code is Ready to traffic once Pre-flight has passed and Trupanion has cleared it.</p>
       </Intro>

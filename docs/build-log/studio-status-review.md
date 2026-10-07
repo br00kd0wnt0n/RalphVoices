@@ -14,3 +14,11 @@ Brook reviewed Studio for how clearly it shows where things stand and how ready 
 - A version check shown at a slot the whole ad shares (on-image text, a card, the subhead) names the copy option(s) it was found with: "Copy option 2: its fields clash in tone" (`flagsAtShared`).
 
 Not yet: Assets per ad, key dates, feedback rounds, the disclaimer and design brief, the worksheet fixes, video.
+
+## 3. Key dates (PR 3)
+
+- Stored on the month's record: `round.milestones` = `[{ id, label, date, track?, screen? }]` (`cleanMilestones` in `services/studio/rounds.ts`; `studio_inputs` 'rounds', no migration). Saved with the round (`POST /rounds`, admins); leaving `milestones` out of a save keeps them, an empty list clears them. `track` is free text (statics, video…), `screen` is `build` or `assets`.
+- The board has a "Key dates" strip (`components/studio/KeyDates.tsx`): every date in order, past ones dimmed, today marked, the next one highlighted with "in 2 days". An admin edits the list in place ("edit dates"): date, what is due, track, and whether it also shows on Build or Assets. It replaces "No asset deadline set"; the older single "assets due" date still shows for a month that has it and no key dates.
+- Build and Assets show one line in their header (`DateNote`): the next date marked for that screen, else the next of all ("R1 feedback due Fri 9 Oct, in 2 days"), amber on the day and the day before.
+- The logic is pure (`frontend/src/lib/studioDates.ts`), tested in `studioRounds.test.ts`.
+- Nobody's dates are entered by the code: an admin types them in after deploy.

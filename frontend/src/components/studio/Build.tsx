@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { onOriginal, studio, REGION_NAMES, type DraftVersion, type PlannedVersion, type Meta, type ReadyDraft, type ReadyView, type VersionFlag } from '@/lib/studioApi';
 import { addAd, adName, flagsAt, flagsAtShared, moveAd, redPlaces, nextVisual, placeLine, removeAd, removeVisual, slotAfter, setCard, setCardSub, setOnImage, setOnImageSub, useInAllAds, usesOf } from '@/lib/buildDraft';
 import { cn } from '@/lib/utils';
+import { DateNote } from './KeyDates';
 import { personaColor, personaEdge, tint } from '@/lib/personaColors';
 import { PersonaChip, Chip, GhostButton, Intro, Label, LineHistory, NAMING_TIP, Overrides, PINK, PinkButton, Src, chipName, flagName, sevTone, specFor, territoryName, when, ForPicker, useActingFor, whoWords, type Ctx } from './ui';
 
@@ -160,7 +161,7 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
 
   return (
     <div className="max-w-7xl space-y-5 pb-28">
-      <Intro title="Build & sign off" line="Build each ad from your kept lines, then sign it off.">
+      <Intro title="Build & sign off" line="Build each ad from your kept lines, then sign it off." right={<DateNote meta={meta} screen="build" />}>
         <p>An ad is one piece of artwork with its copy as text options: it runs as one ad, and Meta mixes its primary texts and headlines. Work down each ad: ① the text on the image, ② the copy options (click a slot to choose a line), then ③ which option you expect to do best and why, and ④ sign off.</p>
         <p>Red flags must be fixed or overridden with a reason before sign-off; the other flags inform. This is creative sign-off, not compliance clearance: Trupanion reviews copy and visual together at Assets.</p>
       </Intro>
