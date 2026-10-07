@@ -86,7 +86,7 @@ export interface RunSummary {
   /** The run's round (none before rounds: R1). */
   round?: string;
 }
-export interface FieldSpec { platform: string; label: string; visible: number; max: number; source: string; /** Options Write asks for by default (rules v2.11+). */ default_count?: number; /** A looser length guide when the line is a carousel card (rules v2.15+). */ card?: { visible: number; max: number; source?: string } }
+export interface FieldSpec { platform: string; label: string; visible: number; max: number; source: string; /** Options Write asks for by default (rules v2.11+). */ default_count?: number; /** A looser length guide when the line is a carousel card (rules v2.15+). */ card?: { visible: number; max: number; source?: string }; /** The territory formats the field belongs to (rules v2.17); none: every format. */ formats?: string[]; video_role?: 'open' | 'end' | 'script' | 'supers'; in_version?: string }
 export interface Territory {
   persona: string; name: string; angle: string; format: string; premise: string; source: string;
   /** The pitched headline ("headline as sold"), from the concept cards (rules v2.4+). */
