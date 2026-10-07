@@ -198,6 +198,7 @@ function LineCard({ meta, line, sequence, onChange, onMore }: { meta: Meta; line
   const chars = [...text].length;
   const over = f && chars > f.visible;
   const openFlag = line.flags.find(x => x.rule === open);
+  const signedOff = !!line.ready && !line.ready.superseded_by;
   const decide = async (patch: Partial<Pick<Line, 'decision' | 'edited_text' | 'note'>>) => onChange(await studio.decide(line.batch, line.id, patch));
   // The model's flags were found on the old wording: the new wording is re-checked straight away (a one-line check).
   const [recheck, setRecheck] = useState('');
@@ -285,9 +286,13 @@ function LineCard({ meta, line, sequence, onChange, onMore }: { meta: Meta; line
       )}
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
+        {/* A signed-off line is changed in Build, where the ad it belongs to is: Keep, Cut and Edit here would change it behind the sign-off. */}
+        {signedOff && <span className="rounded-lg border border-[#D94D8F]/50 px-3 py-1.5 text-sm text-[#F2C4DA]" title="It is part of a signed-off ad. Open Build & sign off to change the wording or take it out of the ad.">Signed off: change it in Build & sign off</span>}
+        {!signedOff && <>
         <GhostButton active={kept} disabled={checking} title={checking ? 'Flags still arriving' : edited ? 'Keeps your edited wording (Cut or Revert to original to change that)' : undefined} onClick={() => decide({ decision: kept && !edited ? '' : 'keep' })}>{kept && edited ? 'Kept (edited)' : kept ? 'Kept' : 'Keep'}</GhostButton>
         <GhostButton active={line.decision === 'cut'} disabled={checking} title={checking ? 'Flags still arriving' : undefined} onClick={() => decide({ decision: line.decision === 'cut' ? '' : 'cut' })}>Cut</GhostButton>
         <GhostButton active={edited} disabled={checking} title={checking ? 'Flags still arriving' : undefined} onClick={() => { setDraft(line.edited_text || line.text); setEditing(true); }}>Edit</GhostButton>
+        </>}
         <GhostButton onClick={() => onMore(line, note)} title="Writes three siblings, using the note as guidance">More like this</GhostButton>
         {sequence && sequence.length > 1 && sequence.some(x => x.decision !== 'keep' && x.decision !== 'edit') && (
           <GhostButton disabled={sequence.some(x => x.status !== 'checked')} title="Keep every card of this sequence (cards you edited keep the edit)"

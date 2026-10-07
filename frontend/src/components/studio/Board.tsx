@@ -9,6 +9,7 @@ import { roundLabel, studio, type Meta, type PfStub, type Region, type RunSummar
 import { personaColor, tint } from '@/lib/personaColors';
 import { cn } from '@/lib/utils';
 import { KeyDates } from './KeyDates';
+import { FeedbackPanel } from './Feedback';
 import { GhostButton, HEADING_FONT, Label, PersonaDot, personaKeys, regionLabel, regionOf, territoryName, isOpenTerritory } from './ui';
 
 export type Step = 'write' | 'review' | 'build' | 'assets';
@@ -87,6 +88,7 @@ export function Board({ meta, region, onOpen, onHowItWorks, onRoundSaved }: {
       </div>
 
       <KeyDates meta={meta} onSaved={onRoundSaved} />
+      <FeedbackPanel meta={meta} region={region} onFix={(p, t) => onOpen(p, t, 'build')} />
 
       <div className="overflow-x-auto">
         <table className="w-full min-w-[900px] border-separate border-spacing-2 text-left">

@@ -11,6 +11,7 @@ import * as R from './ready.js';
 import * as Rounds from './rounds.js';
 import * as Bulk from './bulk.js';
 import * as Ws from './worksheet.js';
+import * as Feedback from './feedback.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -385,6 +386,12 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   // The sheet for Add3: one row per ad (a visual), its copy as text options (Add3, 6 Oct: one ad per visual, results per ad).
   r.get('/handoff-ads.csv', wrap(async (req, res) => { const p = await R.adHandoff({ ...pt(req.query), user: o.who(req) }, trafficOf); download(res, 'text/csv; charset=utf-8', named(p, 'ad-handoff.csv'), p.csv); }));
   r.get('/compliance-sheet-ads.csv', wrap(async (req, res) => { const p = await R.adHandoff({ ...pt(req.query), user: o.who(req) }, trafficOf); download(res, 'text/csv; charset=utf-8', named(p, 'trupanion-compliance-sheet.csv'), p.complianceCsv); }));
+  // ----- Feedback rounds: the client's feedback per round and per ad (separate from the compliance decision; informs only) -----
+  const fbRound = async (req: Request) => { const v = await Rounds.roundView(rq(req), o.who(req)); return v.ids ? [...v.ids][0] : v.active.id; };
+  const fbRegion = (req: Request) => (String(req.query.region || req.body?.region || 'US').toUpperCase() === 'CA' ? 'CA' : 'US') as 'US' | 'CA';
+  r.get('/feedback', wrap(async (req, res) => { await S.refreshRules(); res.json(await Feedback.feedbackView(await fbRound(req), fbRegion(req), o.who(req))); }));
+  r.post('/feedback/reviews', wrap(async (req, res) => { await Feedback.saveReview(await fbRound(req), req.body || {}, o.who(req)); await S.refreshRules(); res.json(await Feedback.feedbackView(await fbRound(req), fbRegion(req), o.who(req))); }));
+  r.post('/feedback/ads', wrap(async (req, res) => res.json(await Feedback.setAdFeedback(await fbRound(req), String(req.body?.ad || ''), String(req.body?.review || ''), { state: req.body?.state, note: req.body?.note }, o.who(req), forOf(req)))));
   r.get('/handoff.md', wrap(async (req, res) => { const p = await pack(req); download(res, 'text/markdown; charset=utf-8', named(p, 'ready-for-production.md'), p.md); }));
   r.get('/compliance-sheet.csv', wrap(async (req, res) => { const p = await pack(req); download(res, 'text/csv; charset=utf-8', named(p, 'trupanion-compliance-sheet.csv'), p.complianceCsv); }));
 
