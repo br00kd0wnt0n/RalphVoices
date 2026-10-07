@@ -299,7 +299,9 @@ const USER_KEY = 'voices-studio-user';
 // ---------- rounds ----------
 /** A round (R1, R2…; R0 a test run-through): stamped on new runs and sign-offs; views show the active one by default. */
 /** label: what people see ("Month 1", "Test"); the id (R1…) is what's stored and stamped. */
-export interface Round { id: string; name: string; label?: string; from?: string; test?: boolean; created_by?: string; created_at?: string; /** When the round's assets are due (YYYY-MM-DD). */ assets_due?: string }
+export interface Round { id: string; name: string; label?: string; from?: string; test?: boolean; created_by?: string; created_at?: string; /** When the round's assets are due (YYYY-MM-DD). */ assets_due?: string; /** The month's key dates from the schedule, in date order. */ milestones?: Milestone[] }
+/** One date in a month's schedule. track: statics, video…; screen: the step it matters to. */
+export interface Milestone { id: string; label: string; date: string; track?: string; screen?: 'build' | 'assets' }
 export interface RoundsState { active: string; rounds: Round[] }
 const ROUND_VIEW_KEY = 'voices-studio-round-view';
 /** 'active': this round only (the default); 'all': every round, test rounds marked. Sent as ?round=all on every request. */
@@ -548,7 +550,7 @@ export const studio = {
   rules: () => req<RulesVersion[]>('/rules'),
   activateRules: (version: string) => req<RulesVersion[]>(`/rules/${enc(version)}/activate`, { method: 'POST' }),
   /** Rounds (admin): create or rename one (optionally making it active), or set the active round. */
-  saveRound: (round: { id: string; name: string; label?: string; from?: string; test?: boolean; activate?: boolean; assets_due?: string }) => req<RoundsState>('/rounds', { method: 'POST', body: JSON.stringify(round) }),
+  saveRound: (round: { id: string; name: string; label?: string; from?: string; test?: boolean; activate?: boolean; assets_due?: string; milestones?: Milestone[] }) => req<RoundsState>('/rounds', { method: 'POST', body: JSON.stringify(round) }),
   activateRound: (id: string) => req<RoundsState>(`/rounds/${enc(id)}/activate`, { method: 'POST' }),
   /** The round this person works in (the active round, or a test round for an admin). Never changes the active round. */
   setWorkingRound: (id: string) => req<Round>('/rounds/working', { method: 'POST', body: JSON.stringify({ id }) }),

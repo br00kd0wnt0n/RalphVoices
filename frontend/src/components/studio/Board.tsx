@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { roundLabel, studio, type Meta, type PfStub, type Region, type RunSummary, type ShortRow } from '@/lib/studioApi';
 import { personaColor, tint } from '@/lib/personaColors';
 import { cn } from '@/lib/utils';
+import { KeyDates } from './KeyDates';
 import { GhostButton, HEADING_FONT, Label, PersonaDot, personaKeys, regionLabel, regionOf, territoryName, isOpenTerritory } from './ui';
 
 export type Step = 'write' | 'review' | 'build' | 'assets';
@@ -80,9 +81,12 @@ export function Board({ meta, region, onOpen, onHowItWorks, onRoundSaved }: {
         </div>
         <div className="flex flex-wrap items-center gap-3">
           {data.rules && <span className="rounded-lg border border-[#272B34] bg-[#16181D] px-3 py-1.5 text-sm text-[#A3A8B1]">Rules <span className="font-mono text-[#ECEDEF]">{data.rules}</span></span>}
-          {active && <Deadline meta={meta} round={active} onSaved={onRoundSaved} />}
+          {/* The older single "assets due" date, until the month has key dates (the strip below replaces it). */}
+          {active && !active.milestones?.length && active.assets_due && <Deadline meta={meta} round={active} onSaved={onRoundSaved} />}
         </div>
       </div>
+
+      <KeyDates meta={meta} onSaved={onRoundSaved} />
 
       <div className="overflow-x-auto">
         <table className="w-full min-w-[900px] border-separate border-spacing-2 text-left">
