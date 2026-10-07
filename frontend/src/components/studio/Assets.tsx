@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { studio, type CodeCompliance, type ComplianceAsset, type ComplianceStatus, type ComplianceView, type Meta, type PfFlag, type PfReport, type PfStub, type StudioEvent } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { DateNote } from './KeyDates';
+import { FeedbackNote } from './Feedback';
 import { groupOverrides, overrideWhere } from '@/lib/overrideGroups';
 import { keepSelection, uploadFor, uploadLabel } from '@/lib/uploadTarget';
 import { SIZES, detectFileSize } from '@/lib/studioSizes';
@@ -29,6 +30,25 @@ const inFilter = (r: CodeRow, f: Filter) => {
   if (f === 'awaiting') return !!r.s.upload && comp === 'pending' && !r.s.traffic?.ready;
   return !r.s.upload || !auditDone(r.s) || !!r.s.audit?.open_red || r.s.status.status !== 'ready' || comp === 'changes_requested';
 };
+/**
+ * An ad on this screen (Add3, 6 Oct: one ad per visual, its codes are copy options): the codes that share a visual.
+ * It sits in ONE status, that of its least advanced option: changes requested if any option has them, else needs
+ * upload or review if any does, else awaiting Trupanion, else ready.
+ */
+interface AdRow { key: string; ad: string; codes: CodeRow[]; bucket: Exclude<Filter, 'all'>; lead: CodeRow }
+const BUCKETS: Array<Exclude<Filter, 'all'>> = ['changes', 'needs', 'awaiting', 'ready'];
+function adsOf(rs: CodeRow[]): AdRow[] {
+  const groups = new Map<string, CodeRow[]>();
+  for (const r of rs) { const k = `${r.s.territory}|${regionOf(r.s)}|${r.s.visual_key || r.s.stub}`; groups.set(k, [...(groups.get(k) || []), r]); }
+  return [...groups.entries()].map(([key, codes]) => {
+    const bucket = BUCKETS.find(b => (b === 'ready' ? codes.every(c => inFilter(c, b)) : codes.some(c => inFilter(c, b)))) || 'needs';
+    // The option that holds the ad back is the one its row shows.
+    const lead = codes.find(c => inFilter(c, bucket)) || codes[0];
+    return { key, ad: codes[0].s.visual_key || codes[0].s.stub, codes, bucket, lead };
+  });
+}
+/** A code's short option name: "A2" from …_ST_A2_US_META. */
+const optionOf = (stub: string) => /_([A-Z]\d+)_[A-Z]{2}_[A-Z]+$/.exec(stub)?.[1] || stub;
 const stateOf = (r: CodeRow) => codeState({ signed: true, edited: !!r.c?.wording_edited, passed: r.s.status.status === 'ready', compliance: complianceOf(r), ready: r.s.traffic?.ready });
 
 /** The five steps for one code: done, current, or a problem at that step. */
@@ -59,17 +79,6 @@ function Track({ r, compact }: { r: CodeRow; compact?: boolean }) {
       ))}
     </ol>
   );
-}
-
-/** Codes grouped by the visual they run on (codes sharing an upload together; before any upload, the same visual letter). */
-function byVisual(rs: CodeRow[]): Array<[string, CodeRow[]]> {
-  const groups = new Map<string, CodeRow[]>();
-  for (const r of rs) {
-    const s = r.s;
-    const k = s.upload ? `u:${s.upload.id}` : s.visual_key ? `v:${s.visual_key}` : `s:${s.stub}`;
-    groups.set(k, [...(groups.get(k) || []), r]);
-  }
-  return [...groups.entries()].map(([k, g]) => [k.startsWith('u:') ? g[0].s.upload!.files.map(f => f.filename).join(', ') : k.startsWith('v:') ? 'not uploaded yet' : '', g]);
 }
 
 /** A thumbnail box in the shape of its size (a 4:5 card isn't squashed into a square). */
@@ -121,7 +130,10 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy }: { meta: Meta
   });
   const formatOf = (s: PfStub) => String(meta.territories[s.territory]?.format || '').toUpperCase() || 'OTHER';
   const scoped = rows.filter(r => inViewFilter(r.s, view) && (format === 'all' || formatOf(r.s) === format));
-  const shown = scoped.filter(r => inFilter(r, filter));
+  // The list and the counts are in ads; an ad is in one status (its least advanced copy option's).
+  const ads = adsOf(scoped);
+  const shownAds = ads.filter(a => filter === 'all' || a.bucket === filter);
+  const shown = shownAds.flatMap(a => a.codes);
   // Keep a selection in view (keepSelection): the first shown code when the current one isn't in the list, but never
   // off a code with files waiting or an upload or check running.
   useEffect(() => {
@@ -177,14 +189,14 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy }: { meta: Meta
   });
   const formats = [...new Set(rows.filter(r => inViewFilter(r.s, view)).map(r => formatOf(r.s)))].sort();
   const chip = (on: boolean) => cn('rounded-full border px-3 py-1 text-sm transition', on ? 'border-[#ECEDEF] bg-[#ECEDEF] text-[#0E0F12]' : 'border-[#343946] text-[#C9CCD2] hover:border-[#6B7280]');
-  const count = (f: Filter) => scoped.filter(r => inFilter(r, f)).length;
+  const count = (f: Filter) => ads.filter(a => f === 'all' || a.bucket === f).length;
   const row = rows.find(r => r.s.stub === sel) || null;
 
   return (
     <div className="max-w-[1500px] space-y-5">
-      <Intro title="Assets" line="Each code’s finished asset: checked, passed, then Trupanion’s decision." right={<DateNote meta={meta} screen="assets" />}>
-        <p>Upload the asset for a signed-off code (one upload can serve every code on the same visual). Studio checks it against the signed-off copy and the rules: agree or disagree with each flag; red flags are fixed with a new upload or overridden with a reason. The creative lead then marks it Pre-flight passed.</p>
-        <p>Vivan coordinates with Trupanion and records their decision here, per code, with who at Trupanion made it: cleared, or changes requested with a note (the copy goes back to Build & sign off, the visual to a new upload). A code is Ready to traffic once Pre-flight has passed and Trupanion has cleared it.</p>
+      <Intro title="Assets" line="Each ad’s finished artwork: checked, passed, then Trupanion’s decision." right={<DateNote meta={meta} screen="assets" />}>
+        <p>An ad is one piece of artwork with its copy as text options. Upload the artwork once for the ad: it serves every copy option. Studio checks it against the signed-off on-image copy, the disclaimer and the rules: agree or disagree with each flag; red flags are fixed with a new upload or overridden with a reason. The creative lead then marks the ad Pre-flight passed.</p>
+        <p>Vivan coordinates with Trupanion and records their decision here, once for the ad (or per copy option if they differ), with who at Trupanion made it: cleared, or changes requested with a note (the copy goes back to Build & sign off, the visual to a new upload). An ad is Ready to traffic once Pre-flight has passed and Trupanion has cleared every copy option on it.</p>
       </Intro>
       {meta.preflight?.storage?.startsWith('refused') && <div className="rounded-lg border-2 border-amber-400/50 bg-amber-400/10 p-3 text-base text-amber-100">Uploads are switched off: {meta.preflight.storage.replace(/^refused:\s*/, '')}. An admin sets this on Railway.</div>}
       {error && <div className="rounded-lg border-2 border-red-500/45 bg-red-500/10 p-3 text-base text-red-200">{error}</div>}
@@ -208,10 +220,10 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy }: { meta: Meta
         </div>
       </div>
 
-      {!stubs && !error && <div className="text-base text-[#858B96]">Loading the month’s codes…</div>}
+      {!stubs && !error && <div className="text-base text-[#858B96]">Loading the month’s ads…</div>}
       {stubs && !scoped.length && (
         <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#272B34] bg-[#16181D] p-5 text-base text-[#A3A8B1]">
-          <span className="mr-auto">{view.persona !== 'all' || view.territory !== 'all' || format !== 'all' ? 'Nothing signed off for this filter.' : `Nothing signed off yet this month in ${view.region === 'CA' ? 'Canada' : 'the US'}.`} Each code gets its asset here once it’s signed off.</span>
+          <span className="mr-auto">{view.persona !== 'all' || view.territory !== 'all' || format !== 'all' ? 'Nothing signed off for this filter.' : `Nothing signed off yet this month in ${view.region === 'CA' ? 'Canada' : 'the US'}.`} Each ad gets its artwork here once it’s signed off.</span>
           {(view.persona !== 'all' || view.territory !== 'all' || format !== 'all') && <GhostButton onClick={() => { setView({ persona: 'all', territory: 'all', region: view.region }); setFormat('all'); }}>Show all</GhostButton>}
           <GhostButton onClick={onBuild}>Build & sign off</GhostButton>
         </div>
@@ -228,19 +240,24 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy }: { meta: Meta
                 <div key={`${rs[0].s.territory}|${regionOf(rs[0].s)}`}>
                 <div className="mb-1.5 px-1 text-sm font-semibold">{territoryName(meta.territories[rs[0].s.territory]) || rs[0].s.territory}{inRegion(rs[0].s.region)}</div>
                 <ul className="space-y-1.5">
-                  {byVisual(rs).map(([visual, group]) => group.map((r, gi) => (
-                    <li key={r.s.stub} className={cn(visual && group.length > 1 && gi > 0 && '-mt-1 ml-3 border-l-2 border-[#343946] pl-2')}>
-                      {visual && gi === 0 && group.length > 1 && <div className="mb-1 px-1 text-xs text-[#858B96]">One visual, {group.length} codes: {visual}</div>}
-                      <button onClick={() => setSel(r.s.stub)} className={cn('w-full rounded-lg border px-3 py-2 text-left transition', sel === r.s.stub ? 'border-[#D94D8F] bg-[#D94D8F]/10' : 'border-[#272B34] hover:border-[#4A505D]')}>
-                        <div className="break-all font-mono text-sm" title={NAMING_TIP}>{r.s.stub}</div>
-                        <div className="mt-1 flex items-center gap-2">
-                          <Track r={r} compact />
-                          <CodeChip state={stateOf(r)} className="ml-auto" />
-                        </div>
-                        <div className="mt-1 truncate text-sm text-[#858B96]">{r.s.copy.map(c => c.text).join(' · ')}</div>
-                      </button>
-                    </li>
-                  )))}
+                  {adsOf(rs).map(a => {
+                    const on = a.codes.some(c => c.s.stub === sel);
+                    const onImage = a.lead.s.copy.filter(c => /on_image|hook/.test(c.field) && !/_sub$/.test(c.field)).map(c => c.text);
+                    return (
+                      <li key={a.key}>
+                        {/* One row per ad; its copy options are inside (the first that holds it back opens). */}
+                        <button onClick={() => { if (!on) setSel(a.lead.s.stub); }} aria-current={on ? 'true' : undefined} className={cn('w-full rounded-lg border px-3 py-2 text-left transition', on ? 'border-[#D94D8F] bg-[#D94D8F]/10' : 'border-[#272B34] hover:border-[#4A505D]')}>
+                          <div className="break-all font-mono text-sm" title="The ad's name: what it is trafficked and reported under">{a.ad}</div>
+                          <div className="mt-1 flex items-center gap-2">
+                            <Track r={a.lead} compact />
+                            <span className="text-xs text-[#858B96]">{a.codes.length} copy option{a.codes.length === 1 ? '' : 's'}</span>
+                            <CodeChip state={stateOf(a.lead)} className="ml-auto" />
+                          </div>
+                          <div className="mt-1 truncate text-sm text-[#858B96]">{a.lead.s.upload ? a.lead.s.upload.files.map(f => f.filename).join(', ') : 'artwork not uploaded yet'}{onImage.length ? ` · ${onImage.join(' / ')}` : ''}</div>
+                        </button>
+                      </li>
+                    );
+                  })}
                 </ul>
                 </div>
                 ))}
@@ -249,10 +266,10 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy }: { meta: Meta
           </aside>
 
           <main className="min-w-0 space-y-4">
-            {!row && <div className="text-base text-[#858B96]">Choose a code.</div>}
+            {!row && <div className="text-base text-[#858B96]">Choose an ad.</div>}
             {row && !report && <div className="text-base text-[#858B96]">Loading…</div>}
             {row && report && report.stub === row.s.stub && (
-              <CodeView meta={meta} row={row} report={report} stubs={stubs || []} canReady={canReady} canCompliance={canCompliance} producer={producer} progress={progressBy[report.stub] || ''}
+              <CodeView meta={meta} row={row} report={report} stubs={stubs || []} onSelect={setSel} canReady={canReady} canCompliance={canCompliance} producer={producer} progress={progressBy[report.stub] || ''}
                 elsewhere={Object.keys(progressBy).filter(k => k !== report.stub)} pending={pendingBy[report.stub] || null}
                 files={picked[report.stub]?.files || []} fileSizes={picked[report.stub]?.sizes || []}
                 setFiles={f => setPicked(cur => ({ ...cur, [report.stub]: { files: f, sizes: f.map(() => '') } }))}
@@ -266,12 +283,14 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy }: { meta: Meta
   );
 }
 
-function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer, progress, elsewhere, pending, files, setFiles, fileSizes, setFileSizes, onUpload, onAudit, onChanged, onError, onFixCopy }: {
+function CodeView({ meta, row, report, stubs, onSelect, canReady, canCompliance, producer, progress, elsewhere, pending, files, setFiles, fileSizes, setFileSizes, onUpload, onAudit, onChanged, onError, onFixCopy }: {
   meta: Meta; row: CodeRow; report: PfReport; stubs: PfStub[]; canReady: boolean; canCompliance: boolean; producer: boolean; progress: string;
   /** Other codes with an upload or check running (they don't block this one). */
   elsewhere: string[];
   fileSizes: string[]; setFileSizes: (z: string[] | ((cur: string[]) => string[])) => void;
   pending: { upload_id: string; estimate: { usd: number; seconds: number; sizes?: number } } | null;
+  /** Show another copy option of the same ad. */
+  onSelect: (stub: string) => void;
   files: File[]; setFiles: (f: File[]) => void; onUpload: (code: string, also: string[], sizes: string[]) => void; onAudit: (code: string, uploadId: string) => void;
   onChanged: () => Promise<void>; onError: (m: string) => void; onFixCopy?: (s: PfStub) => void;
 }) {
@@ -310,6 +329,8 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
   const copyRows = res?.copy_match ?? res?.report?.copy_match;
   const sameVisual = (s: PfStub) => !!report.visual_key && s.visual_key === report.visual_key;
   const siblings = stubs.filter(s => s.stub !== report.stub && s.persona === report.persona && s.territory === report.territory && regionOf(s) === regionOf(report)).sort((x, y) => Number(sameVisual(y)) - Number(sameVisual(x)));
+  // The ad's copy options: this code and the others on its visual, in order.
+  const options = [...stubs.filter(s => s.stub === report.stub || (sameVisual(s) && siblings.includes(s)))].sort((x, y) => x.stub.localeCompare(y.stub, undefined, { numeric: true }));
   const [also, setAlso] = useState<string[]>([]);
   useEffect(() => { setAlso(siblings.filter(sameVisual).map(s => s.stub)); }, [report.stub]); // eslint-disable-line react-hooks/exhaustive-deps
   const secs = (n: number) => (n >= 90 ? `${Math.round(n / 60)} min` : `${Math.round(n)} s`);
@@ -321,7 +342,18 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
       <div className="space-y-3 rounded-xl border border-l-4 border-[#272B34] bg-[#16181D] px-5 py-4" style={personaEdge(report.persona)}>
         <div className="flex flex-wrap items-center gap-3">
           <div className="mr-auto min-w-0">
-            <div className="flex flex-wrap items-center gap-2"><span className="break-all font-mono text-lg font-semibold" title={NAMING_TIP}>{report.stub}</span><CodeChip state={stateOf(row)} /></div>
+            <div className="flex flex-wrap items-center gap-2"><span className="break-all font-mono text-lg font-semibold" title="The ad's name: what it is trafficked and reported under">{report.visual_key || report.stub}</span><CodeChip state={stateOf(row)} /></div>
+            {/* The ad's copy options (Studio's own codes): one artwork, one Pre-flight pass and one decision cover them; pick one to see its copy and flags. */}
+            {options.length > 1 && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-sm" role="group" aria-label="Copy options on this ad">
+                <span className="text-xs uppercase tracking-wider text-[#646A75]">Copy option</span>
+                {options.map(o => (
+                  <button key={o.stub} onClick={() => onSelect(o.stub)} aria-pressed={o.stub === report.stub} title={o.stub}
+                    className={cn('rounded-full border px-2.5 py-0.5 font-mono text-[13px]', o.stub === report.stub ? 'border-[#ECEDEF] bg-[#ECEDEF] text-[#0E0F12]' : 'border-[#343946] text-[#C9CCD2] hover:border-[#6B7280]')}>{optionOf(o.stub)}</button>
+                ))}
+                <span className="font-mono text-xs text-[#646A75]" title={NAMING_TIP}>{report.stub}</span>
+              </div>
+            )}
             <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-[#858B96]"><PersonaChip meta={meta} persona={report.persona} short /><span>{territoryName(meta.territories[report.territory]) || report.territory}{inRegion(report.region)} · signed off in {report.signoff_id}</span></div>
           </div>
           {canReady && (ready
@@ -337,15 +369,17 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
                         if (r.blocked.length) onError(`Passed: ${r.passed.join(', ') || 'none'}. Not passed: ${r.blocked.map(b => `${b.code} (${b.error})`).join('; ')}`);
                       } catch (e: any) { onError(e.message); }
                     }}>
-                    Mark all {report.same_visual_as.length + 1} codes on this visual passed
+                    Mark this ad Pre-flight passed ({report.same_visual_as.length + 1} copy options)
                   </PinkButton>
-                  <button className="text-sm text-[#858B96] underline-offset-2 hover:text-[#ECEDEF] hover:underline disabled:opacity-40" disabled={!!readyBlock} onClick={() => act(() => studio.pfReady(report.stub, true))}>just {report.stub}</button>
+                  <button className="text-sm text-[#858B96] underline-offset-2 hover:text-[#ECEDEF] hover:underline disabled:opacity-40" disabled={!!readyBlock} onClick={() => act(() => studio.pfReady(report.stub, true))}>just option {optionOf(report.stub)}</button>
                 </span>
               : <PinkButton className="px-4 py-2 text-base" disabled={!!readyBlock} title={readyBlock || 'Ready to traffic once Trupanion has cleared it too'} onClick={() => act(() => studio.pfReady(report.stub, true))}>Mark Pre-flight passed</PinkButton>)}
           {/* Whose call "passed" is, when it's marked for them (the creative lead's, entered by you). */}
           {canReady && !ready && <ForPicker meta={meta} doing="Marking passed" />}
         </div>
         <Track r={row} />
+        {/* The client's feedback on this ad (a round's note): it informs; it is not Trupanion's compliance decision below. */}
+        <FeedbackNote region={report.region} persona={report.persona} territory={report.territory} />
         <p className="text-sm text-[#A3A8B1]">
           {ready ? `Pre-flight passed by ${whoWords(report.status.ready_by, report.status.ready_for)}, ${when(report.status.ready_at)}. ` : readyBlock ? `${readyBlock} ` : ''}
           {report.traffic && !report.traffic.ready && report.traffic.blocker ? report.traffic.blocker : report.traffic?.ready ? 'Ready to traffic.' : ''}
@@ -404,7 +438,7 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
               )}
               {siblings.length > 0 && files.length > 0 && (
                 <fieldset className="rounded-lg border border-[#272B34] px-3 py-2">
-                  <legend className="px-1 text-xs text-[#858B96]">Also use this visual for (codes signed off on this visual are ticked)</legend>
+                  <legend className="px-1 text-xs text-[#858B96]">This artwork also serves (the ad’s other copy options are ticked)</legend>
                   {siblings.map(s => (
                     <label key={s.stub} className="flex cursor-pointer items-center gap-2 py-0.5 text-sm">
                       <input type="checkbox" className="h-4 w-4 accent-[#D94D8F]" checked={also.includes(s.stub)} onChange={e => setAlso(cur => e.target.checked ? [...cur, s.stub] : cur.filter(x => x !== s.stub))} />
@@ -646,7 +680,7 @@ function Decision({ meta, asset, stub, can, onChanged, onError }: { meta: Meta; 
           <textarea rows={2} className={cn('w-full rounded-lg border-2 px-3 py-2 text-base', needsNote ? 'border-amber-400/60' : 'border-[#343946]')} placeholder={acceptedReds.length ? 'Note (required to clear: what Trupanion accepted; for changes: what needs changing)' : 'Note (required for changes: what needs changing)'} value={note} onChange={e => setNote(e.target.value)} />
           {asset.codes.length > 1 && (
             <fieldset className="text-sm">
-              <legend className="mb-1 text-[#858B96]">Applies to {apply.size} of the {asset.codes.length} codes on this asset</legend>
+              <legend className="mb-1 text-[#858B96]">Applies to {apply.size} of the {asset.codes.length} copy options on this ad</legend>
               {asset.codes.map(c => (
                 <label key={c.stub} className="mr-4 inline-flex cursor-pointer items-center gap-1.5">
                   <input type="checkbox" className="accent-[#D94D8F]" checked={apply.has(c.stub)} onChange={e => setApply(s => { const n = new Set(s); if (e.target.checked) n.add(c.stub); else n.delete(c.stub); return n; })} />

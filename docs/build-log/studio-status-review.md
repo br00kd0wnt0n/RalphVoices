@@ -41,3 +41,13 @@ The client's feedback comes through Add3 as one set of notes per round (R1 on co
 - The ad handoff has "Disclaimer (required small print)" and "Disclaimer goes on"; Trupanion's per-ad compliance sheet has "Disclaimer" and "Disclaimer goes on".
 - **Design brief** (`GET /design-brief.md` and `/design-brief.csv`; Export → For design): one section or row per ad with the ad name, audience, asset, region, format, platform, expected sizes, the words that go into the artwork in order (on-image text, subhead, cards) with their lengths, and the disclaimer with its length and where it sits. No post copy, nothing internal.
 - Audiences are in one order everywhere, DINKs, Curators, Families (`utils/personaOrder.ts`, the picker's order): both per-ad exports, the design brief and the worksheet.
+
+## 2 (the Assets part). Assets per ad
+
+The screen keeps its layout and its storage (uploads, Pre-flight status and compliance are still per code); what changed is the grouping and the words (`components/studio/Assets.tsx`).
+
+- The list has one row per ad (`adsOf`: the codes that share a visual), named by the ad's name, with "3 copy options", the artwork's file names and the on-image text. The status filters count ads. An ad is in one status, its least advanced copy option's: changes requested if any option has them, else needs upload or review, else awaiting Trupanion, else ready.
+- Opening an ad shows the option that holds it back. The header has the ad's name and a small "Copy option A1 / A2 / A3" switch for the per-option copy and flags.
+- One upload serves the ad (the other options are ticked, as before); "Mark this ad Pre-flight passed (3 copy options)" passes them together (`setReadyVisual`), with "just option A2" beside it; Trupanion's decision applies to the options on the ad, with the tick boxes for when they differ.
+- The ad's client feedback (a round's note) shows under the status track, and the required disclaimer beside the upload.
+- Not unit-tested: the grouping is in the component. Checked in the browser on local data (one ad with two options, not uploaded).
