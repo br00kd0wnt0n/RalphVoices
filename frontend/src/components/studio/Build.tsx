@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils';
 import { DateNote } from './KeyDates';
 import { FeedbackNote } from './Feedback';
 import { personaColor, personaEdge, tint } from '@/lib/personaColors';
-import { PersonaChip, Chip, GhostButton, Intro, Label, LineHistory, NAMING_TIP, Overrides, PINK, PinkButton, Src, chipName, flagName, sevTone, specFor, territoryName, when, ForPicker, useActingFor, whoWords, type Ctx } from './ui';
+import { PersonaChip, Chip, GhostButton, Intro, Label, LineHistory, NAMING_TIP, Overrides, PINK, PinkButton, Src, chipName, flagName, sevTone, specFor, territoryName, DisclaimerNote, when, ForPicker, useActingFor, whoWords, type Ctx } from './ui';
 
 type RL = ReadyView['lines'][number];
 /** Where the tray places a line: a field of one ad, or the visual's image (a carousel card, 1-based). */
@@ -237,6 +237,8 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
                       </Step>
                     )}
                     {hookField && oiFields.length === 0 && <p className="mb-3 text-sm text-[#858B96]">The hook goes on the video: choose it in each ad below.</p>}
+                    {/* The small print the artwork must carry: the region's approved disclaimer, and where it sits. */}
+                    <DisclaimerNote meta={meta} region={pt.region} format={t?.format} className="mb-4" />
 
                     <Step n={++step} title="The copy options" hint="Click a slot to choose a line. They are this ad's text options: one ad, not one each.">
                       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">

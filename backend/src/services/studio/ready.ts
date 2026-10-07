@@ -21,6 +21,9 @@ import {
   type Api, type Batch, type ComplianceStatus, type Flag, type Line, type LineVersion, type Rules,
   SHARED_PERSONA, SHARED_TERRITORY, checkBatch, similarFlag, finalText, getStore, keptLines, lineHash, loadBatch, loadRules, runLock, sha256, signedCodes, toCsv,
 } from './engine.js';
+import { disclaimerFor, disclaimerPlace } from './disclaimer.js';
+import { expectedSizes } from './sizes.js';
+import { personaRank } from '../../utils/personaOrder.js';
 import { DEFAULT_REGION, REGION_NAMES, adName, parseCode, territoryToken, type Region } from '../../utils/namingCode.js';
 import { cleanFor, decidedBy, whoWords } from '../../utils/actor.js';
 import {
@@ -587,10 +590,15 @@ export interface AdHandoffRow {
   traffic: string; ready: boolean;
   compliance: string; compliance_note: string; overrides: string; check_specifically: string; changed_since: string;
   ready_by: string; ready_for?: string; ready_at: string; signoff_id: string;
+  /** The approved disclaimer this ad carries (its region's version), and where it sits; '' when the rules have none yet. */
+  disclaimer: string; disclaimer_place: string;
+  /** The sizes the artwork is expected in (by format). */
+  sizes: string[];
 }
 
 export async function adHandoffRows(filter: { persona?: string; territory?: string; region?: string; round?: string; user?: string } = {}, trafficOf?: TrafficOf): Promise<AdHandoffRow[]> {
   const out = new Map<string, AdHandoffRow>();
+  const rules = loadRules();
   const uniq = (xs: string[]) => [...new Set(xs.filter(Boolean))];
   for (const x of await handoffRows(filter, trafficOf)) {
     const ad = adName(x.stub);
@@ -601,6 +609,7 @@ export async function adHandoffRows(filter: { persona?: string; territory?: stri
         on_image: x.on_image?.text || '', on_image_sub: x.on_image_sub?.text || '', cards: x.cards.map(c => ({ card: c.card, text: c.text, ...(c.sub ? { sub: c.sub.text } : {}) })),
         options: {}, codes: [], traffic: '', ready: true, compliance: 'cleared', compliance_note: '', overrides: '', check_specifically: '', changed_since: '',
         ready_by: x.ready_by, ...(x.ready_for ? { ready_for: x.ready_for } : {}), ready_at: x.ready_at, signoff_id: x.signoff_id,
+        disclaimer: disclaimerFor(rules, x.region)?.text || '', disclaimer_place: disclaimerPlace(x.format), sizes: expectedSizes(x.stub, rules),
       };
       out.set(ad, row);
     }
@@ -623,11 +632,11 @@ export async function adHandoffRows(filter: { persona?: string; territory?: stri
     row.traffic = uniq([...row.traffic.split(' | '), isReady ? '' : `${x.stub.replace(/^.*?_([A-Z]\d+)_.*$/, '$1')}: ${x.traffic || 'not ready'}`]).join(' | ');
   }
   for (const row of out.values()) if (row.ready) row.traffic = trafficOf ? 'Ready to traffic' : '';
-  // By audience (the rules' order), then asset, then ad: the same order in every per-ad export.
-  const r = loadRules();
+  // By audience (DINKs, Curators, Families: utils/personaOrder.ts), then asset, then ad: the same order in every per-ad export.
+  const r = rules;
   const at = (list: string[], k: string) => { const i = list.indexOf(k); return i < 0 ? list.length : i; };
   const personas = Object.keys(r.personas), territories = Object.keys(r.territories);
-  return [...out.values()].sort((a, b) => at(personas, a.persona) - at(personas, b.persona) || at(territories, a.territory) - at(territories, b.territory) || a.territory.localeCompare(b.territory) || a.ad.localeCompare(b.ad));
+  return [...out.values()].sort((a, b) => personaRank(a.persona, personas) - personaRank(b.persona, personas) || at(territories, a.territory) - at(territories, b.territory) || a.territory.localeCompare(b.territory) || a.ad.localeCompare(b.ad));
 }
 
 /** The sheet for Add3: one row per ad. Text options as columns (Primary text 1..n, Headline 1..n), then where each came from. */
@@ -642,11 +651,13 @@ export async function adHandoff(filter: { persona?: string; territory?: string; 
   const nCards = Math.max(0, ...rows.flatMap(x => x.cards.map(c => c.card)));
   const cardSub = rows.some(x => x.cards.some(c => c.sub));
   const hasOnImage = rows.some(x => x.on_image), hasSub = rows.some(x => x.on_image_sub);
+  const hasDisclaimer = rows.some(x => x.disclaimer);
   const optionCols = fields.flatMap(f => Array.from({ length: most(f) }, (_, i) => `${label(f)} ${i + 1}`));
   const head = ['Ad name', 'Region', 'Month', 'Persona', 'Territory', 'Format', 'Platform',
     ...(hasOnImage ? ['On-image text'] : []), ...(hasSub ? ['On-image subhead'] : []),
     ...Array.from({ length: nCards }, (_, i) => [`Card ${i + 1}`, ...(cardSub ? [`Card ${i + 1} subhead`] : [])]).flat(),
     ...optionCols,
+    ...(hasDisclaimer ? ['Disclaimer (required small print)', 'Disclaimer goes on'] : []),
     // Where each text option came from: its caption id, whether it is a shared caption, and the copy option(s) it was signed off in.
     ...fields.map(f => `${label(f)}: ids`),
     'Copy options (Studio codes)', 'Ready to traffic', 'Compliance status', 'Compliance note', 'Red flag overridden', 'Changed since sign-off', 'Decided by', 'Entered by', 'Signed off at'];
@@ -655,6 +666,7 @@ export async function adHandoff(filter: { persona?: string; territory?: string; 
     ...(hasOnImage ? [x.on_image] : []), ...(hasSub ? [x.on_image_sub] : []),
     ...Array.from({ length: nCards }, (_, i) => { const c = x.cards.find(y => y.card === i + 1); return [c?.text || '', ...(cardSub ? [c?.sub || ''] : [])]; }).flat(),
     ...fields.flatMap(f => Array.from({ length: most(f) }, (_, i) => x.options[f]?.[i]?.text || '')),
+    ...(hasDisclaimer ? [x.disclaimer, x.disclaimer_place] : []),
     ...fields.map(f => (x.options[f] || []).map((o, i) => `${i + 1}: ${o.line_id}${o.shared ? ' (shared)' : ''} [${o.codes.map(short).join(', ')}]`).join('\n')),
     x.codes.join(', '), x.traffic, STATUS_WORDS[x.compliance] || x.compliance, x.compliance_note, x.overrides, x.changed_since, decidedBy(x.ready_by, x.ready_for), x.ready_by, x.ready_at]);
   const csv = toCsv([head, ...body]);
@@ -670,9 +682,31 @@ export async function adHandoff(filter: { persona?: string; territory?: string; 
   const asset = (x: AdHandoffRow) => (r.territories[x.territory]?.name || x.territory).replace(/\.$/, '');
   const complianceCsv = toCsv([['Audience', 'Asset', 'Ad name', 'Region', 'Platform', 'Format',
     ...(hasOnImage ? ['On-image text'] : []), ...(hasSub ? ['On-image subhead'] : []),
-    ...Array.from({ length: nCards }, (_, i) => [`Card ${i + 1}`, ...(cardSub ? [`Card ${i + 1} subhead`] : [])]).flat(), ...optionCols, 'Please check'],
-    ...rows.map(x => [audience(x), asset(x), x.ad, REGION_NAMES[x.region], x.platform, x.format, ...words(x), x.check_specifically])]);
+    ...Array.from({ length: nCards }, (_, i) => [`Card ${i + 1}`, ...(cardSub ? [`Card ${i + 1} subhead`] : [])]).flat(), ...optionCols, ...(hasDisclaimer ? ['Disclaimer', 'Disclaimer goes on'] : []), 'Please check'],
+    ...rows.map(x => [audience(x), asset(x), x.ad, REGION_NAMES[x.region], x.platform, x.format, ...words(x), ...(hasDisclaimer ? [x.disclaimer, x.disclaimer_place] : []), x.check_specifically])]);
   const mark = (c: string) => (test ? toCsv([['TEST – not for trafficking']]) + c : c);
-  return { count: rows.length, rows, csv: mark(csv), complianceCsv: mark(complianceCsv), test };
+  // The design brief: one row per ad, what design builds from. The words that go INTO the artwork, in order, with their
+  // lengths; the sizes; and the disclaimer with where it sits. No post copy (it isn't in the artwork), nothing internal.
+  const n = (t: string) => (t ? String([...t].length) : '');
+  const na = (x: AdHandoffRow) => { const d = disclaimerFor(loadRules(), x.region); return d?.also ? `${d.also.name.replace(/^t/, 'T')} is also accepted (${d.also.chars} characters).` : ''; };
+  const designHead = ['Ad name', 'Audience', 'Asset', 'Region', 'Format', 'Platform', 'Sizes',
+    ...(hasOnImage ? ['On-image text', 'Characters'] : []), ...(hasSub ? ['On-image subhead', 'Characters'] : []),
+    ...Array.from({ length: nCards }, (_, i) => [`Card ${i + 1}`, 'Characters', ...(cardSub ? [`Card ${i + 1} subhead`, 'Characters'] : [])]).flat(),
+    'Disclaimer', 'Disclaimer characters', 'Disclaimer goes on', 'Disclaimer note'];
+  const designCsv = toCsv([designHead, ...rows.map(x => [x.ad, audience(x), asset(x), REGION_NAMES[x.region], x.format, x.platform, x.sizes.join(', '),
+    ...(hasOnImage ? [x.on_image, n(x.on_image)] : []), ...(hasSub ? [x.on_image_sub, n(x.on_image_sub)] : []),
+    ...Array.from({ length: nCards }, (_, i) => { const c = x.cards.find(y => y.card === i + 1); return [c?.text || '', n(c?.text || ''), ...(cardSub ? [c?.sub || '', n(c?.sub || '')] : [])]; }).flat(),
+    x.disclaimer, n(x.disclaimer), x.disclaimer ? x.disclaimer_place : '', x.disclaimer ? na(x) : 'No approved disclaimer text in the rules yet'])]);
+  const md = [...(test ? ['# TEST – not for trafficking', ''] : []), '# Design brief', '', 'One section per ad: the words that go into the artwork, in order, the sizes, and the required small print. Post copy is not in the artwork and is not listed here.', ''];
+  let lastAudience = '';
+  for (const x of rows) {
+    if (audience(x) !== lastAudience) { lastAudience = audience(x); md.push(`## ${lastAudience}`, ''); }
+    md.push(`### ${asset(x)} · ${REGION_NAMES[x.region]}`, '', `- Ad name: \`${x.ad}\``, `- Format: ${x.format.toLowerCase()} · ${x.platform === 'TT' ? 'TikTok' : 'Meta'}`, `- Sizes: ${x.sizes.join(', ') || 'not set'}`);
+    if (x.on_image) md.push(`- On-image text (${n(x.on_image)} characters): ${x.on_image.replace(/\s*\n\s*/g, ' ')}`);
+    if (x.on_image_sub) md.push(`- On-image subhead (${n(x.on_image_sub)} characters): ${x.on_image_sub.replace(/\s*\n\s*/g, ' ')}`);
+    if (x.cards.length) md.push('- Cards, in order:', ...x.cards.map(c => `  ${c.card}. ${c.text.replace(/\s*\n\s*/g, ' ')} (${n(c.text)} characters)${c.sub ? ` / subhead: ${c.sub.replace(/\s*\n\s*/g, ' ')} (${n(c.sub)} characters)` : ''}`));
+    md.push(x.disclaimer ? `- Disclaimer, on ${x.disclaimer_place} (${n(x.disclaimer)} characters), exactly as written: ${x.disclaimer}${na(x) ? `  \n  ${na(x)}` : ''}` : '- Disclaimer: no approved text in the rules yet', '');
+  }
+  return { count: rows.length, rows, csv: mark(csv), complianceCsv: mark(complianceCsv), designCsv: mark(designCsv), designMd: md.join('\n') + '\n', test };
 }
 

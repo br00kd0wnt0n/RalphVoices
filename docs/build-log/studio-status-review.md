@@ -33,3 +33,11 @@ The client's feedback comes through Add3 as one set of notes per round (R1 on co
 - Build: the asset's feedback shows above the ad, with "Mark done" on a change.
 - Review: a signed-off line no longer offers Keep, Cut and Edit; it says "Signed off: change it in Build & sign off".
 - Not yet: the feedback line on each ad in Assets (it comes with Assets per ad).
+
+## 7. The disclaimer, where the ad is shown, and the design brief (built before 5 and 6, as artwork is imminent)
+
+- One place for "which text, and where": `services/studio/disclaimer.ts` (`disclaimerVersions`, `disclaimerFor(rules, region)`, `disclaimerPlace(format)`: the image of a static, the last card of a carousel, the last frame of a video). Pre-flight's check uses the same functions. `/meta` carries `disclaimers` per region.
+- Shown as "Required small print" (`DisclaimerNote` in ui.tsx: the region's text, its length, where it goes, a Copy button, and a note that the North America version is also accepted): in Build under the on-image text of each ad, and in Assets beside the upload.
+- The ad handoff has "Disclaimer (required small print)" and "Disclaimer goes on"; Trupanion's per-ad compliance sheet has "Disclaimer" and "Disclaimer goes on".
+- **Design brief** (`GET /design-brief.md` and `/design-brief.csv`; Export → For design): one section or row per ad with the ad name, audience, asset, region, format, platform, expected sizes, the words that go into the artwork in order (on-image text, subhead, cards) with their lengths, and the disclaimer with its length and where it sits. No post copy, nothing internal.
+- Audiences are in one order everywhere, DINKs, Curators, Families (`utils/personaOrder.ts`, the picker's order): both per-ad exports, the design brief and the worksheet.

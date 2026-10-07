@@ -116,6 +116,8 @@ export interface Meta {
   /** Source codes (TM, EP, CLB…) → titles, for plain-words sources. */
   sources?: Record<string, string>;
   what_to_do?: Record<string, string>;
+  /** The approved disclaimer each region's ads carry (rules v2.16), with its length; `also`: the North America version, accepted in either region. */
+  disclaimers?: Partial<Record<Region, { text: string; chars: number; name: string; also?: { name: string; chars: number }; rule: string }>>;
   can_set_compliance?: boolean;
   can_override?: boolean;
   /** May this person sign lines off at Ready for production (the creative lead or an admin). */

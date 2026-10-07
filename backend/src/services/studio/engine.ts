@@ -16,6 +16,7 @@ import OpenAI from 'openai';
 import { withRetry } from '../../utils/retry.js';
 import { figureKey, isSmallFigure, notInFacts } from '../../utils/figures.js';
 import { cleanFor, whoWords } from '../../utils/actor.js';
+import { disclaimerFor } from './disclaimer.js';
 import { probabilityYes } from '../../utils/probes.js';
 import { mockClient } from './mock.js';
 import { claudeWrite, isClaude } from './claude.js';
@@ -2314,6 +2315,8 @@ export async function meta() {
     // The fix in plain words, from the rules file where an item carries one (v2.7+); the page has its own for the rest.
     what_to_do: Object.fromEntries([...r.compliance, ...r.brand, ...r.clarity, ...((r as any).disclaimer ? [(r as any).disclaimer] : [])]
       .filter((i: any) => i.what_to_do).map((i: any) => [i.id, i.what_to_do])),
+    // The approved disclaimer each region's ads carry (rules v2.16), for the small print in Build and Assets.
+    disclaimers: Object.fromEntries(REGIONS.map(rg => [rg, disclaimerFor(r, rg)]).filter(([, d]) => d)),
     // Each territory's default fields (by its format), for Write & brief.
     territories: Object.fromEntries(Object.entries(r.territories).map(([k, v]) => [k, { ...v, default_fields: defaultFields(k, r), ...(k === SHARED_TERRITORY ? { shared: true } : {}) }])),
     // The shared captions pool (persona-less post copy): where a bulk check files lines with no persona.

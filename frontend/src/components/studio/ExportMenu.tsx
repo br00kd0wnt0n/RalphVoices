@@ -68,6 +68,9 @@ export function ExportMenu({ meta, ctx, view, batch, onImported }: { meta: Meta 
               <Item onClick={() => dlReady(narrow ? `/handoff.csv${q}` : '/handoff.csv', 'ready-to-traffic-copy.csv')} title="The copy of every ready code, a column per field">Ready to traffic: the copy, per code</Item>
             </>
           )}
+          <Head>For design</Head>
+          <Item onClick={() => dl(narrow ? `/design-brief.md${q}` : '/design-brief.md', 'design-brief.md')} title="One section per ad: the words that go into the artwork in order, with their lengths, the sizes, and the disclaimer with where it sits">Design brief (to read)</Item>
+          <Item onClick={() => dl(narrow ? `/design-brief.csv${q}` : '/design-brief.csv', 'design-brief.csv')} title="The same, one row per ad, for a sheet">Design brief (sheet)</Item>
           <Head>Everything signed off (any status)</Head>
           <Item onClick={() => dl(narrow ? `/handoff-ads.csv${q}` : '/handoff-ads.csv', 'ad-handoff.csv')} title="One row per ad (a visual): on-image text, then Primary text 1..n and Headline 1..n as the ad's text options. The ad's name is what Add3 traffic and report under.">Ad handoff: one row per ad, with text options</Item>
           <Item onClick={() => dl(narrow ? `/handoff.csv${q}` : '/handoff.csv', 'ready-for-production.csv')} title="The internal record: one row per copy option (A1, A2, A3)">Handoff pack, per copy option (CSV)</Item>

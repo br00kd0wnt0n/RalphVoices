@@ -175,6 +175,26 @@ test('the ad handoff: one row per ad (a visual), its versions\' copy as text opt
   assert.deepEqual(sheet[1].slice(1, 8), ['Still', 'OWN_STILL_ST_A_US_META', 'US', 'META', 'STATIC', 'Vet visits, calmer', 'Trupanion is medical insurance for pets. Get a quote.']);
   assert.ok(sheet[1][0] && !/^OWN$/.test(sheet[1][0]), 'the audience by name, not its code');
   assert.equal(/nick|brook|shared|SHARED-|_A1_|Test line|overridden/i.test(sheet.slice(1).map(r => r.join(' ')).join(' ').replace(/Please check[\s\S]*$/, '')), false);
+  // With an approved disclaimer in the rules (by region), every per-ad export carries the ad's version and where it
+  // sits, and the design brief lists what goes into the artwork with its lengths and sizes.
+  const rules = S.loadRules() as any;
+  rules.disclaimer = { id: 'DISCLAIMER_LAST_SCREEN', rule: 'The approved disclaimer appears on the final frame or card of every asset.', text: 'US small print, Example Inc.', text_by_region: { US: 'US small print, Example Inc.', CA: 'Canada small print, Example Services Inc., a longer text.', NA: 'North America small print, both.' }, source: 'test' };
+  const withD = await R.adHandoff();
+  const [dh, dr] = S.parseCsv(withD.csv);
+  assert.deepEqual([dr[dh.indexOf('Disclaimer (required small print)')], dr[dh.indexOf('Disclaimer goes on')]], ['US small print, Example Inc.', 'the image']);
+  const cs = S.parseCsv(withD.complianceCsv);
+  assert.deepEqual(cs[0].slice(-3), ['Disclaimer', 'Disclaimer goes on', 'Please check']);
+  assert.equal(cs[1][cs[0].indexOf('Disclaimer')], 'US small print, Example Inc.');
+  const [bh, br] = S.parseCsv(withD.designCsv);
+  assert.deepEqual(bh, ['Ad name', 'Audience', 'Asset', 'Region', 'Format', 'Platform', 'Sizes', 'On-image text', 'Characters', 'Disclaimer', 'Disclaimer characters', 'Disclaimer goes on', 'Disclaimer note']);
+  assert.deepEqual(br.slice(2), ['Still', 'US', 'STATIC', 'META', '1:1, 4:5, 9:16', 'Vet visits, calmer', '18', 'US small print, Example Inc.', '28', 'the image', 'The North America disclaimer is also accepted (32 characters).']);
+  assert.match(withD.designMd, /### Still · US\n\n- Ad name: `OWN_STILL_ST_A_US_META`\n- Format: static · Meta\n- Sizes: 1:1, 4:5, 9:16\n- On-image text \(18 characters\): Vet visits, calmer\n- Disclaimer, on the image \(28 characters\), exactly as written: US small print, Example Inc\./);
+  assert.equal(/primary|headline|Get a quote/i.test(withD.designCsv), false, 'post copy is not in the design brief');
+  const { disclaimerFor, disclaimerPlace } = await import('../src/services/studio/disclaimer.js');
+  assert.deepEqual([disclaimerFor(rules, 'CA')!.name, disclaimerFor(rules, 'CA')!.chars, disclaimerFor(rules, 'CA')!.also!.name], ['the Canada disclaimer', 57, 'the North America disclaimer']);
+  assert.deepEqual(['STATIC', 'CAROUSEL', 'VIDEO', 'UGC', 'TT'].map(disclaimerPlace), ['the image', 'the last card', 'the last frame', 'the last frame', 'the last frame']);
+  assert.equal(disclaimerFor({}, 'US'), null);
+  delete rules.disclaimer;
   // The per-option pack still has its three rows: the internal record is unchanged.
   assert.equal((await R.handoffPack()).count, 3);
 });

@@ -121,6 +121,30 @@ export function limitsOf(meta: Pick<Meta, 'fields' | 'territories'>, field: stri
   const isCard = !!ctx.card || /^CAR/i.test(meta.territories[ctx.territory || '']?.format || '');
   return isCard && f.card ? { visible: f.card.visible, max: f.card.max, card: true } : { visible: f.visible, max: f.max, card: false };
 }
+/** Where the disclaimer sits, by format: the image of a static, the last card of a carousel, the last frame of a video. */
+export const disclaimerPlace = (format?: string) => (/^CAR/i.test(format || '') ? 'the last card' : /^(VID|UGC|TT|TIKTOK)/i.test(format || '') ? 'the last frame' : 'the image');
+/**
+ * The required small print (Brook, 7 Oct): the approved disclaimer for the ad's region, with where it must sit and a
+ * button to copy it. It was only visible when an upload failed the check. Nothing when the rules carry no text yet.
+ */
+export function DisclaimerNote({ meta, region, format, className }: { meta: Meta; region: Region; format?: string; className?: string }) {
+  const d = meta.disclaimers?.[region];
+  const [copied, setCopied] = useState(false);
+  if (!d) return null;
+  return (
+    <div className={cn('rounded-lg border border-[#343946] bg-[#101216] px-3 py-2 text-sm', className)}>
+      <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="text-xs font-semibold uppercase tracking-wider text-[#858B96]">Required small print · {regionLabel(region)}</span>
+        <span className="text-xs text-[#A3A8B1]">goes on <span className="font-semibold text-[#ECEDEF]">{disclaimerPlace(format)}</span>, exactly as written · {d.chars} characters</span>
+        <button className="ml-auto rounded border border-[#343946] px-2 py-0.5 text-xs text-[#C9CCD2] hover:border-[#6B7280] hover:text-[#ECEDEF]"
+          onClick={() => { navigator.clipboard?.writeText(d.text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => {}); }}>{copied ? 'Copied' : 'Copy the text'}</button>
+      </div>
+      <p className="text-[13px] leading-snug text-[#C9CCD2]">{d.text}</p>
+      {d.also && <p className="mt-1 text-xs text-[#646A75]">{d.also.name.replace(/^t/, 'T')} ({d.also.chars} characters) is also accepted. Pre-flight checks the last screen for one of them.</p>}
+    </div>
+  );
+}
+
 export const REGION_FLAGS: Record<Region, string> = { US: '🇺🇸', CA: '🇨🇦' };
 /** "🇨🇦 Canada": a region as it is shown everywhere, flag first. */
 export const regionLabel = (r: Region) => `${REGION_FLAGS[r] || ''} ${REGION_NAMES[r] || r}`.trim();

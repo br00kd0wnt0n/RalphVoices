@@ -12,7 +12,7 @@ import { keepSelection, uploadFor, uploadLabel } from '@/lib/uploadTarget';
 import { SIZES, detectFileSize } from '@/lib/studioSizes';
 import { personaEdge } from '@/lib/personaColors';
 import { personaColor, tint } from '@/lib/personaColors';
-import { AuthMedia, ForPicker, whoWords, PersonaChip, PersonaDot, inViewFilter, personaKeys, type ViewFilter, Chip, CodeChip, COMPLIANCE_TONE, COMPLIANCE_WORDS, COPY_STATUS, GhostButton, Intro, Label, NAMING_TIP, PINK, PinkButton, SEV_ORDER, chipName, codeState, inRegion, params, plainSource, regionOf, territoryName, when, whatToDo } from './ui';
+import { AuthMedia, DisclaimerNote, ForPicker, whoWords, PersonaChip, PersonaDot, inViewFilter, personaKeys, type ViewFilter, Chip, CodeChip, COMPLIANCE_TONE, COMPLIANCE_WORDS, COPY_STATUS, GhostButton, Intro, Label, NAMING_TIP, PINK, PinkButton, SEV_ORDER, chipName, codeState, inRegion, params, plainSource, regionOf, territoryName, when, whatToDo } from './ui';
 
 type Filter = 'needs' | 'awaiting' | 'changes' | 'ready' | 'all';
 const FILTERS: Array<[Filter, string]> = [['needs', 'Needs upload or review'], ['awaiting', 'Awaiting Trupanion'], ['changes', 'Changes requested'], ['ready', 'Ready to traffic'], ['all', 'All']];
@@ -413,6 +413,8 @@ function CodeView({ meta, row, report, stubs, canReady, canCompliance, producer,
                   ))}
                 </fieldset>
               )}
+              {/* What the artwork must carry before it is uploaded: the region's disclaimer, and where. */}
+              <DisclaimerNote meta={meta} region={report.region} format={meta.territories[report.territory]?.format} />
               <div className="flex flex-wrap items-center gap-2">
                 <PinkButton className="px-4 py-1.5 text-base" disabled={!files.length || !!progress} onClick={() => onUpload(report.stub, also, fileSizes)}>{uploadLabel(report.stub, files.length, !!up)}</PinkButton>
               </div>

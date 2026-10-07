@@ -16,6 +16,7 @@ import * as R from './ready.js';
 import { isSubField } from './versions.js';
 import { inView, roundOf, type RoundView } from './rounds.js';
 import { chipName } from '../../utils/flagChips.js';
+import { personaRank } from '../../utils/personaOrder.js';
 
 export type Step = 'on_image' | 'primary' | 'headline';
 export const STEPS: Array<{ key: Step; tab: string; prefix: string; title: string }> = [
@@ -89,7 +90,7 @@ export async function worksheet(view: RoundView, region: Region | 'all' = 'US'):
   const rank = (x: Omit<WsRow, 'n'>) => (x.card ? x.card * 2 + (isSubField(x.field, r) ? 1 : 0) : isSubField(x.field, r) ? 1 : 0);
   const idx = (list: string[], k: string) => { const i = list.indexOf(k); return i < 0 ? list.length : i; };
   const cmp = (a: Omit<WsRow, 'n'>, b: Omit<WsRow, 'n'>) =>
-    idx(personaOrder, a.persona) - idx(personaOrder, b.persona) || idx(territoryOrder, a.territory) - idx(territoryOrder, b.territory) || a.territory.localeCompare(b.territory)
+    personaRank(a.persona, personaOrder) - personaRank(b.persona, personaOrder) || idx(territoryOrder, a.territory) - idx(territoryOrder, b.territory) || a.territory.localeCompare(b.territory)
     || a.region.localeCompare(b.region) || (a.step === 'on_image' ? rank(a) - rank(b) : 0) || a.id.localeCompare(b.id, undefined, { numeric: true });
   const steps = {} as Worksheet['steps'], counts = {} as Worksheet['counts'];
   for (const s of STEPS) {

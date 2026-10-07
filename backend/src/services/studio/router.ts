@@ -385,6 +385,9 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
   r.get('/handoff.csv', wrap(async (req, res) => { const p = await pack(req); download(res, 'text/csv; charset=utf-8', named(p, 'ready-for-production.csv'), p.csv); }));
   // The sheet for Add3: one row per ad (a visual), its copy as text options (Add3, 6 Oct: one ad per visual, results per ad).
   r.get('/handoff-ads.csv', wrap(async (req, res) => { const p = await R.adHandoff({ ...pt(req.query), user: o.who(req) }, trafficOf); download(res, 'text/csv; charset=utf-8', named(p, 'ad-handoff.csv'), p.csv); }));
+  // The design brief: one row (or section) per ad, the words in the artwork, the sizes and the disclaimer.
+  r.get('/design-brief.csv', wrap(async (req, res) => { const p = await R.adHandoff({ ...pt(req.query), user: o.who(req) }, trafficOf); download(res, 'text/csv; charset=utf-8', named(p, 'design-brief.csv'), p.designCsv); }));
+  r.get('/design-brief.md', wrap(async (req, res) => { const p = await R.adHandoff({ ...pt(req.query), user: o.who(req) }, trafficOf); download(res, 'text/markdown; charset=utf-8', named(p, 'design-brief.md'), p.designMd); }));
   r.get('/compliance-sheet-ads.csv', wrap(async (req, res) => { const p = await R.adHandoff({ ...pt(req.query), user: o.who(req) }, trafficOf); download(res, 'text/csv; charset=utf-8', named(p, 'trupanion-compliance-sheet.csv'), p.complianceCsv); }));
   // ----- Feedback rounds: the client's feedback per round and per ad (separate from the compliance decision; informs only) -----
   const fbRound = async (req: Request) => { const v = await Rounds.roundView(rq(req), o.who(req)); return v.ids ? [...v.ids][0] : v.active.id; };
