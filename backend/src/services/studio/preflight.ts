@@ -23,6 +23,7 @@ import { captionOf, clientOverrideLine, latestSignoffs, ruleName, setCompliance,
 import { complianceFor, platformOf, signoffOnImage, signoffVersions, type SignedField } from './versions.js';
 import { getRounds, labelOf, roundOf, roundView, testOnly } from './rounds.js';
 import { SIZES, detectSize, expectedSizes, parseSize, roleOf, sizeOfRole, slotOf, type Size } from './sizes.js';
+import { DISCLAIMER_REGION_NAMES, disclaimerVersions } from './disclaimer.js';
 import { DEFAULT_REGION, parseCode, regionOf as regionOfCode, visualKey, type Region } from '../../utils/namingCode.js';
 import { deletePrivateObject, downloadPrivateObject, getPrivateObject, getPrivateObjectStream, isR2Enabled, putPrivateObject } from '../r2.js';
 import { FatalError } from '../audit/api.js';
@@ -247,20 +248,7 @@ const normWords = (s: string) => s.normalize('NFKC').toLowerCase().replace(/[’
  * A match is the whole text in order, or (for OCR slips) at least 90% of its
  * words present on that screen.
  */
-export const DISCLAIMER_REGION_NAMES: Record<string, string> = { US: 'US', CA: 'Canada', NA: 'North America' };
-/**
- * The disclaimer versions an asset may carry, by its region (rules v2.16 `disclaimer.text_by_region`): its own
- * region's, or the North America one (approved for both). Rules without regional versions have just `text`.
- */
-export function disclaimerVersions(rules: any, region: string = DEFAULT_REGION): Array<{ key: string; name: string; text: string }> {
-  const d = rules?.disclaimer;
-  const by = (d?.text_by_region || {}) as Record<string, string>;
-  const own = String(by[region] || d?.text || '').trim();
-  const out = own ? [{ key: by[region] ? region : '', name: by[region] ? `the ${DISCLAIMER_REGION_NAMES[region] || region} disclaimer` : 'the approved disclaimer', text: own }] : [];
-  const na = String(by.NA || '').trim();
-  if (na && na !== own) out.push({ key: 'NA', name: 'the North America disclaimer', text: na });
-  return out;
-}
+export { DISCLAIMER_REGION_NAMES, disclaimerVersions } from './disclaimer.js';
 export function disclaimerCheck(rules: any, assetText: Array<{ where: string; text: string }>, kind: AssetKind, cards = 1, region: string = DEFAULT_REGION): AuditFlag[] {
   const d = rules?.disclaimer;
   if (!d) return [];
