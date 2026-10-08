@@ -28,3 +28,19 @@ test('selection: kept while shown, or while uploading/checking; otherwise the fi
   assert.equal(keepSelection(null, [A1, B1], [A1, B1], []), A1);
   assert.equal(keepSelection(null, [], [], []), null);
 });
+
+test('arriving at Assets for one asset opens that asset\'s ad, not the first in the list (production, 8 Oct)', () => {
+  const ask = ['CUR_ASK_YOUR_VET_CAR_A1_US_META', 'CUR_ASK_YOUR_VET_CAR_A2_US_META'], know = ['CUR_KNOW_MORE_CAT_ST_A1_US_META', 'CUR_KNOW_MORE_CAT_ST_A2_US_META'];
+  const all = [...ask, ...know];
+  // Nothing selected yet: the asset arrived for, not the alphabetically first.
+  assert.equal(keepSelection(null, all, all, [], know), know[0]);
+  // The default had already picked the first ad: the arrival still wins.
+  assert.equal(keepSelection(ask[0], all, all, [], know), know[0]);
+  // Already on one of its copy options: stay there. Hidden by the status filter (not shown) but listed: still opened.
+  assert.equal(keepSelection(know[1], all, all, [], know), know[1]);
+  assert.equal(keepSelection(null, ask, all, [], know), know[0]);
+  // A code with files waiting or a check running is never left; an asset with no signed-off codes changes nothing.
+  assert.equal(keepSelection(ask[1], all, all, [ask[1]], know), ask[1]);
+  assert.equal(keepSelection(null, all, all, [], ['FAM_NOT_SIGNED_ST_A1_US_META']), ask[0]);
+  assert.equal(keepSelection(ask[1], all, all, []), ask[1], 'without an arrival it is as before');
+});
