@@ -5,7 +5,7 @@ import { toggleField as toggleFieldIn } from '@/lib/studioFields';
 import { roundName, studio, type Batch, type Brief, type Meta, type OwnLine, type RunSummary, type Tone, REGION_NAMES } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { personaColor, personaEdge, tint } from '@/lib/personaColors';
-import { CanadaNote, Chip, GhostButton, Intro, Label, PersonaChip, PersonaPanel, PinkButton, angleLabel, fieldOrder, regionOf, specFor, territoryName, when, ForPicker, isOpenTerritory, isSharedCtx, type Ctx } from './ui';
+import { CanadaNote, Chip, GhostButton, Intro, Label, PersonaChip, PersonaPanel, PinkButton, angleLabel, fieldOrder, regionOf, specFor, territoryName, fieldFits, when, ForPicker, isOpenTerritory, isSharedCtx, type Ctx } from './ui';
 
 /** A field's starting count: the rules' default_count, else an even split of n over the ticked fields. */
 export function defaultCount(meta: Meta, f: string, fields: string[], n: number): number {
@@ -34,7 +34,8 @@ export function Write({ meta, brief, setBrief, ctx, setCtx, run, running, user, 
   // The shared captions pool: post copy only, written to sit under every persona's kept on-image headlines.
   const shared = isSharedCtx(meta, ctx);
   const retired = t?.status === 'retired';
-  const usable = (k: string) => !shared || !((meta.fields[k] as { in_version?: string }).in_version ? (meta.fields[k] as { in_version?: string }).in_version === 'per_visual' : /on_image/.test(k));
+  // Fields of other formats are not offered (a static has no script; a video's lines are only on a video).
+  const usable = (k: string) => fieldFits(meta, k, t?.format) && (!shared || !((meta.fields[k] as { in_version?: string }).in_version ? (meta.fields[k] as { in_version?: string }).in_version === 'per_visual' : /on_image/.test(k)));
   const [approved, setApproved] = useState<string[] | null>(null);
   useEffect(() => {
     if (!shared) { setApproved(null); return; }

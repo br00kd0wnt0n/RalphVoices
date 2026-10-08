@@ -166,6 +166,13 @@ export function RegionSwitch({ regions, region, onChange, className }: { regions
   );
 }
 
+/** Is a field offered on a territory of this format? (Mirrors `fieldFitsFormat` in the engine: a field with `formats` belongs only to those.) */
+export function fieldFits(meta: Pick<Meta, 'fields'>, field: string, format?: string): boolean {
+  const fs = meta.fields[field]?.formats;
+  if (!fs?.length || !format) return true;
+  const name = (f: string) => ({ TT: 'TIKTOK', VID: 'VIDEO', ST: 'STATIC', CAR: 'CAROUSEL' } as Record<string, string>)[f.toUpperCase()] || f.toUpperCase();
+  return fs.map(name).includes(name(format));
+}
 /** The field's spec with the length guide that applies to this line (the card guide for a carousel card). */
 export function specFor(meta: Pick<Meta, 'fields' | 'territories'>, field: string, ctx: { card?: number; territory?: string } = {}) {
   const f = meta.fields[field], lim = limitsOf(meta, field, ctx);

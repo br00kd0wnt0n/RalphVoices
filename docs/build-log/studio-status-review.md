@@ -51,3 +51,17 @@ The screen keeps its layout and its storage (uploads, Pre-flight status and comp
 - One upload serves the ad (the other options are ticked, as before); "Mark this ad Pre-flight passed (3 copy options)" passes them together (`setReadyVisual`), with "just option A2" beside it; Trupanion's decision applies to the options on the ad, with the tick boxes for when they differ.
 - The ad's client feedback (a round's note) shows under the status track, and the required disclaimer beside the upload.
 - Not unit-tested: the grouping is in the component. Checked in the browser on local data (one ad with two options, not uploaded).
+
+## 6. Video, TikTok and creator: fields by format (8b, part 1)
+
+Rules v2.17 adds a video's lines as fields (`video_open`, `video_end`, `video_script`, `video_supers`, `tiktok_end`, `tiktok_script`; `formats` and `video_role` on each). Activated on the build before this, Build offered them on every static and carousel.
+
+- **Fields by format** (`services/studio/fieldFormats.ts`: `fieldFitsFormat`, `fieldByRole`; `fieldFits` in ui.tsx): a field with `formats` is offered only on territories of those formats, in Build (`versionFields(platform, rules, format)`), in Write and in a territory's default fields. With v2.17 a static and a carousel are exactly as before (tested, and compared on a local database with signed-off ads: Build's data and every export identical between v2.16 and v2.17).
+- **TIKTOK is a territory format** (`FORMATS`): a TikTok-native build can be created; its codes say TT and its ads are made of the TikTok fields.
+- A VIDEO or UGC territory starts with primary text, headline, opening line and end line; a TikTok one with hook, end line and caption.
+- Length flags use the field's own words ("Long for a script", "Long for an opening on-screen line").
+- **Check copy** reads "opening line", "end line", "script", "supers" and "caption" and files each in the right field for the territory's format (the opening line is `video_open` on a hero video and the TikTok hook on a TikTok build); a video's line on a static is refused with a reason.
+- Pre-flight's copy match doesn't look for a script in the frames' text (it is spoken).
+- `rules.schema.json` knows `formats` and `video_role`.
+
+**Not done, and it matters for video (part 2):** Build keeps ONE on-image line per ad (plus a subhead, or a carousel's cards). A filmed video has several (opening line, end line, script, supers). Until the draft and the sign-off can hold a line per field per ad, a video territory's lines can be pasted, checked and kept, but only one of them can be placed in Build. An animated version of a static needs none of this (it has one on-image line, like its static).

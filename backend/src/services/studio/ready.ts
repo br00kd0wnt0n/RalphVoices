@@ -266,7 +266,8 @@ export async function readyView(persona: string, territory: string, region: Regi
     });
   }
   const platforms = [...new Set([...lines.map(l => platformOf(l.field, r)), ...versions.map(v => v.platform)])].sort();
-  const fields = Object.fromEntries(platforms.map(p => [p, versionFields(p, r)]));
+  // Only the fields this territory's format uses (a static has no script slot; a video has its own lines).
+  const fields = Object.fromEntries(platforms.map(p => [p, versionFields(p, r, r.territories[territory]?.format)]));
   return { persona, territory, region, round, lines: out, draft: d, plan: { ...plan, versions, check_estimate }, fields, signoffs, expectations, latest };
 }
 

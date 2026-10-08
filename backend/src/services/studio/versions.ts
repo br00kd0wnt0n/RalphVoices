@@ -12,6 +12,7 @@
 // those as one-field versions, so old codes keep working everywhere.
 
 import type { Line, Rules } from './engine.js';
+import { fieldFitsFormat } from './fieldFormats.js';
 import { CodeBook, regionOf } from './codes.js';
 import { LINES_PER_VISUAL, PLATFORM_CODES, VISUAL_LETTERS, formatCode, parseCode, visualKey, type Region } from '../../utils/namingCode.js';
 
@@ -38,8 +39,9 @@ export function isSubField(field: string, rules: Pick<Rules, 'fields'>): boolean
 /** META or TT, from a field's platform in the rules. */
 export const platformOf = (field: string, rules: Pick<Rules, 'fields'>) => PLATFORM_CODES[String(rules.fields[field]?.platform || 'META').toUpperCase()] || 'META';
 /** The fields a version of a platform can have, in the rules' order, split by role. */
-export function versionFields(platform: string, rules: Pick<Rules, 'fields'>) {
-  const all = Object.keys(rules.fields).filter(f => platformOf(f, rules) === platform);
+/** `format`: the territory's, so fields that belong to other formats are left out (a static has no script slot). */
+export function versionFields(platform: string, rules: Pick<Rules, 'fields'>, format?: string) {
+  const all = Object.keys(rules.fields).filter(f => platformOf(f, rules) === platform && fieldFitsFormat(f, format, rules));
   const required = all.filter(f => fieldRole(f, rules) === 'required');
   return {
     // A platform with none of the usual required fields in the rules needs at least one field.
@@ -112,7 +114,7 @@ export function defaultDraft(lines: Line[], rules: Pick<Rules, 'fields'>, latest
   const on_image: Draft['on_image'] = {};
   const on_image_sub: Draft['on_image'] = {};
   for (const platform of [...new Set(lines.map(l => platformOf(l.field, rules)))].sort()) {
-    const vf = versionFields(platform, rules);
+    const vf = versionFields(platform, rules, format);
     const lead = vf.required.length ? vf.required : [...vf.optional];
     const n = Math.max(0, ...lead.map(f => byField.get(f)?.length || 0));
     for (let i = 0; i < n; i++) {
@@ -206,7 +208,7 @@ export function planDraft(draft: Draft, lines: Line[], ctx: Ctx, signedCodes: st
     const platforms = [...new Set(Object.keys(fields).map(f => platformOf(f, r)))];
     const platform = platforms[0] || d.platform || 'META';
     if (platforms.length > 1) vIssues.push('a version is for one platform (Meta or TikTok), not both');
-    const vf = versionFields(platform, r);
+    const vf = versionFields(platform, r, ctx.format);
     const missing = (vf.required.length ? vf.required : []).filter(f => !fields[f]);
     if (!Object.keys(fields).length) vIssues.push('no lines chosen');
     else if (missing.length) vIssues.push(`needs ${missing.map(f => (r.fields[f]?.label || f).replace(/^(Meta|TikTok) /, '').toLowerCase()).join(' and ')}`);

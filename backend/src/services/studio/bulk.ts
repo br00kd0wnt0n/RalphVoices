@@ -52,6 +52,20 @@ export function resolveField(raw: string, r: Pick<Rules, 'fields'>): string | nu
   return hit && r.fields[hit[1]] ? hit[1] : null;
 }
 
+/**
+ * Video words (rules v2.17): what people call a video's lines → the field's role. Which field that is depends on the
+ * territory's format (the opening line is `video_open` on a hero video and the TikTok hook on a TikTok build), so it is
+ * settled once the territory is known.
+ */
+const ROLE_WORDS: Array<[RegExp, string]> = [
+  [/^(opening( on screen)?( line| super)?|opening on screen line|open|opener|first super)$/, 'open'],
+  [/^(end( line| card| super)?|closing( line| super)?|end on screen line|last super)$/, 'end'],
+  [/^(script|voice ?over|vo|video script|script voice ?over)$/, 'script'],
+  [/^(supers|other supers|on screen lines|other on screen lines)$/, 'supers'],
+];
+export const videoRole = (raw: string): string | null => ROLE_WORDS.find(([re]) => re.test(norm(raw)))?.[1] || null;
+const isVideoFormat = (f: string | undefined) => /^(VID|UGC|TT|TIKTOK)/i.test(String(f || ''));
+
 /** A persona by code or name ("DINK", "DINKs with pets", "busy families"); blank, "all", "shared" or "generic" is the shared pool. */
 export function resolvePersona(raw: string, r: Pick<Rules, 'personas'>): string | null {
   const w = norm(raw);
@@ -122,7 +136,10 @@ export function parseBulk(text: string, r: Rules, defaults: BulkDefaults = {}): 
     const cardCol = Number(/\d+/.exec(get('card'))?.[0] || 0);
     const card = inCell?.card || cardCol || undefined;
     const fieldRaw = inCell ? inCell.field : get('field') || (cardCol ? 'on-image' : '') || defaults.field || '';
-    const field = resolveField(fieldRaw, r);
+    // A video's line ("opening line", "end line", "script") or its caption: the field depends on the territory's format.
+    const role = videoRole(fieldRaw);
+    const captionWord = /^(caption|video caption|caption for this video)$/.test(norm(fieldRaw));
+    let field = role ? '__role' : resolveField(fieldRaw, r) || (captionWord ? '__caption' : null);
     if (!field) return fail(fieldRaw ? `Unknown field "${fieldRaw}" (on-image, subhead, primary, headline, description, caption or hook)` : 'No field (on-image, subhead, primary, headline, caption or hook)');
     const personaRaw = get('persona') || defaults.persona || '';
     const persona = resolvePersona(personaRaw, r);
@@ -132,6 +149,19 @@ export function parseBulk(text: string, r: Rules, defaults: BulkDefaults = {}): 
     const terr = resolveTerritory(get('territory') || (persona === resolvePersona(defaults.persona || '', r) ? defaults.territory || '' : ''), persona, r);
     if (!terr.code) return fail(get('territory') ? `Unknown territory "${get('territory')}" for ${r.personas[persona].name}` : `No territory for ${r.personas[persona].name}`);
     if (terr.note) notes.push(terr.note);
+    const format = r.territories[terr.code]?.format;
+    if (role) {
+      const f = S.fieldByRole(role, format, r);
+      if (!f) return fail(isVideoFormat(format) ? `These rules have no ${role === 'open' ? 'opening line' : role === 'end' ? 'end line' : role} field for a ${String(format).toLowerCase()} ad` : `"${fieldRaw}" is a video's line, and ${r.territories[terr.code].name.replace(/\.$/, '')} is a ${String(format || '').toLowerCase()} ad`);
+      field = f;
+    } else if (captionWord && !isVideoFormat(format) && field === '__caption') {
+      return fail('These rules have no caption field for this ad: say primary text');
+    } else if (isVideoFormat(format) && captionWord) {
+      // "Caption" on a video: the Meta primary text on a hero video, the TikTok caption on a TikTok build.
+      field = /^(TT|TIKTOK)/i.test(String(format)) ? 'tiktok_caption' : 'meta_primary';
+      if (!r.fields[field]) return fail(`These rules have no ${field} field`);
+    }
+    if (!S.fieldFitsFormat(field, format, r)) return fail(`${r.fields[field].label} isn't used on a ${String(format || '').toLowerCase()} ad (${r.territories[terr.code].name.replace(/\.$/, '')})`);
     const regionRaw = (get('region') || defaults.region || DEFAULT_REGION).toUpperCase().replace(/^CANADA$/, 'CA').replace(/^(USA|UNITED STATES)$/, 'US');
     if (!REGIONS.includes(regionRaw as Region)) return fail(`Unknown region "${get('region')}" (US or CA)`);
     if (rows.some(x => x.persona === persona && x.territory === terr.code && x.field === field && x.region === regionRaw && x.text === body)) return fail('The same line is in the table twice');

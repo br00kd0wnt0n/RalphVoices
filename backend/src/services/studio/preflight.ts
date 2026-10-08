@@ -182,7 +182,9 @@ export const POST_COPY_FIELDS = new Set(['meta_primary', 'meta_headline', 'meta_
  * asset; a hook that differs is amber. The headline is post copy (30 Sep).
  */
 export function copyMatchForStub(copy: SignedCopy[], assetText: Array<{ where: string; text: string }>, rules: any, kind: AssetKind) {
-  const onAsset = copy.filter(c => !POST_COPY_FIELDS.has(c.field));
+  // A script or voice-over is spoken, not shown: it isn't looked for in the frames' text (it is matched against the
+  // transcript once that check exists). Everything else that isn't post copy must be on the asset.
+  const onAsset = copy.filter(c => !POST_COPY_FIELDS.has(c.field) && rules?.fields?.[c.field]?.video_role !== 'script');
   const cards = onAsset.filter(c => c.card);
   const res = copyMatch(signedOffCopy(onAsset), assetText, rules);
   // A carousel's cards are matched card by card below; B2's whole-asset row for the joined text would only repeat them.

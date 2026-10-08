@@ -17,6 +17,8 @@ import { withRetry } from '../../utils/retry.js';
 import { figureKey, isSmallFigure, notInFacts } from '../../utils/figures.js';
 import { cleanFor, whoWords } from '../../utils/actor.js';
 import { disclaimerFor } from './disclaimer.js';
+import { fieldByRole, fieldFitsFormat } from './fieldFormats.js';
+export { fieldByRole, fieldFitsFormat };
 import { probabilityYes } from '../../utils/probes.js';
 import { mockClient } from './mock.js';
 import { claudeWrite, isClaude } from './claude.js';
@@ -223,7 +225,11 @@ export interface Rules {
   sources: Record<string, any>;
   fields: Record<string, { platform: string; label: string; visible: number; max: number; source: string; note?: string; writer_note?: string; default_count?: number;
     /** A looser length guide when the line is a carousel card (rules v2.15+): a card is read, not glanced. */
-    card?: { visible: number; max: number; source?: string } }>;
+    card?: { visible: number; max: number; source?: string };
+    /** The territory formats the field belongs to (rules v2.17: video fields are for VIDEO, UGC or TIKTOK only). None: every format. */
+    formats?: string[];
+    /** What a video field is (rules v2.17): the opening on-screen line, the end line, the script or voice-over, other supers. */
+    video_role?: 'open' | 'end' | 'script' | 'supers' }>;
   tone_controls: Record<string, Record<string, string>>;
   structures: Record<Structure, string>;
   facts: Fact[];
@@ -266,7 +272,8 @@ export interface Territory {
   note?: string; updated_by?: string; updated_at?: string;
   history?: Array<{ at: string; by: string; note: string; before: Partial<Territory> | null }>;
 }
-export const FORMATS = ['STATIC', 'UGC', 'VIDEO', 'CAROUSEL'];
+/** A territory's format. TIKTOK: a TikTok-native build (codes say TT; its ads are made of the TikTok fields). */
+export const FORMATS = ['STATIC', 'UGC', 'VIDEO', 'CAROUSEL', 'TIKTOK'];
 export interface PersonaRules {
   name: string; platforms: string[]; default_fields: string[];
   triggers: Array<{ id: string; label: string; detail: string; source: string }>;
@@ -830,7 +837,10 @@ export async function tasteFor(b: Pick<Brief, 'round'>): Promise<TasteExample[]>
 
 /** Text that goes into the artwork: the rules' `on_asset`, else a per-visual field (on-image headline, subhead). */
 export const onAsset = (field: string, r: Pick<Rules, 'fields'>) => ((r.fields[field] as any)?.on_asset ?? isOnImageField(field, r)) === true;
-const onAssetWords = (field: string, r: Pick<Rules, 'fields'>) => (isSubField(field, r) ? 'an on-image subhead' : 'on-image text');
+const onAssetWords = (field: string, r: Pick<Rules, 'fields'>) => {
+  const role = r.fields[field]?.video_role;
+  return role === 'script' ? 'a script' : role === 'open' ? 'an opening on-screen line' : role === 'end' ? 'an end line' : role === 'supers' ? 'an on-screen line' : isSubField(field, r) ? 'an on-image subhead' : 'on-image text';
+};
 
 /**
  * The length guide for a line: the field's own, or its `card` guide (rules v2.15+) when the line is a carousel card
@@ -991,12 +1001,13 @@ export function looseCounts(b: Brief, seqField: string): Partial<Brief> {
 const FORMAT_FIELDS: Record<string, string[]> = {
   // The on-image subhead (rules v2.14) is offered wherever the rules have it.
   STATIC: ['meta_primary', 'meta_headline', 'meta_on_image', 'meta_on_image_sub'], CAROUSEL: ['meta_primary', 'meta_headline', 'meta_on_image', 'meta_on_image_sub'],
-  VIDEO: ['meta_primary', 'meta_headline'], UGC: ['meta_primary', 'meta_headline'],
-  TIKTOK: ['tiktok_hook', 'tiktok_caption'], TT: ['tiktok_hook', 'tiktok_caption'],
+  // A video starts with its opening and end lines too, where the rules have them (v2.17); the script is ticked when wanted.
+  VIDEO: ['meta_primary', 'meta_headline', 'video_open', 'video_end'], UGC: ['meta_primary', 'meta_headline', 'video_open', 'video_end'],
+  TIKTOK: ['tiktok_hook', 'tiktok_end', 'tiktok_caption'], TT: ['tiktok_hook', 'tiktok_end', 'tiktok_caption'],
 };
 export function defaultFields(territory: string, r: Rules = loadRules()): string[] {
   const t = r.territories[territory];
-  const want = (FORMAT_FIELDS[String(t?.format || '').toUpperCase()] || []).filter(f => r.fields[f]);
+  const want = (FORMAT_FIELDS[String(t?.format || '').toUpperCase()] || []).filter(f => r.fields[f] && fieldFitsFormat(f, t?.format, r));
   return want.length ? want : r.personas[t?.persona || '']?.default_fields || [];
 }
 
