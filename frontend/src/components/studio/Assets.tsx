@@ -129,14 +129,9 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy, focus }: { met
     const asset = comp?.assets.find(a => a.codes.some(c => c.stub === s.stub));
     return { s, asset, c: asset?.codes.find(c => c.stub === s.stub)?.compliance };
   });
-  // Arriving for one asset: open its ad (on All, so it is listed whatever its status), once its codes have loaded.
-  const focused = useRef<string | null>(null);
-  useEffect(() => {
-    if (!focus || !stubs || focused.current === focus || params.get('stub')) return;
-    const mine = stubs.filter(s => s.territory === focus && regionOf(s) === view.region);
-    focused.current = focus;
-    if (mine.length && !mine.some(s => s.stub === sel)) { setFilter('all'); setSel(mine[0].stub); }
-  }, [focus, stubs, view.region]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Arriving for one asset (a board cell, Build's "next"): its ad opens, once, when its codes have loaded. It is decided
+  // in the same place as the default selection below (keepSelection), so the default can't override it.
+  const arrived = useRef<string | null>(null);
   const formatOf = (s: PfStub) => String(meta.territories[s.territory]?.format || '').toUpperCase() || 'OTHER';
   const scoped = rows.filter(r => inViewFilter(r.s, view) && (format === 'all' || formatOf(r.s) === format));
   // The list and the counts are in ads; an ad is in one status (its least advanced copy option's).
@@ -147,9 +142,11 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy, focus }: { met
   // off a code with files waiting or an upload or check running.
   useEffect(() => {
     if (!stubs) return;
-    const next = keepSelection(sel, shown.map(r => r.s.stub), scoped.map(r => r.s.stub), [...Object.keys(picked), ...Object.keys(progressBy)]);
+    const arriving = focus && arrived.current !== focus && !params.get('stub') ? scoped.filter(r => r.s.territory === focus).map(r => r.s.stub) : [];
+    if (focus && arrived.current !== focus) { arrived.current = focus; if (arriving.length) setFilter('all'); }
+    const next = keepSelection(sel, shown.map(r => r.s.stub), scoped.map(r => r.s.stub), [...Object.keys(picked), ...Object.keys(progressBy)], arriving);
     if (next !== sel) setSel(next);
-  }, [stubs, comp, filter, format, view.persona, view.territory, view.region]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [stubs, comp, filter, format, view.persona, view.territory, view.region, focus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!enabled) return <div className="max-w-3xl rounded-xl border border-[#272B34] bg-[#16181D] p-6 text-base text-[#A3A8B1]">Assets need the database: in <code>backend/</code>, run <code>npx tsx scripts/studio.ts serve --store pg --database-url …</code> (hosted Studio has it on).</div>;
 
