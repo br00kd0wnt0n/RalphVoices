@@ -65,3 +65,7 @@ Rules v2.17 adds a video's lines as fields (`video_open`, `video_end`, `video_sc
 - `rules.schema.json` knows `formats` and `video_role`.
 
 **Not done, and it matters for video (part 2):** Build keeps ONE on-image line per ad (plus a subhead, or a carousel's cards). A filmed video has several (opening line, end line, script, supers). Until the draft and the sign-off can hold a line per field per ad, a video territory's lines can be pasted, checked and kept, but only one of them can be placed in Build. An animated version of a static needs none of this (it has one on-image line, like its static).
+
+## Assets opens on all personas (8 Oct)
+
+Brook: "On Assets tab, let's have ALL PERSONAS toggled on by default". Arriving at Assets (the step row, Build's "next", the worksheet's step 5, a board cell) always shows the whole month's ads for the header's region; the persona chips narrow it only when clicked. From a board cell or Build, the asset's own ad is opened (`focus`), with every persona still listed. A deep link with `?persona=` still narrows. The header's lockup now shows from 1700 px wide (the logo below that), so the four steps and the region switch fit at 1440 px: at that width the Assets step had been pushed out of view.
