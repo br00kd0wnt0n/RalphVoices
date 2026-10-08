@@ -85,7 +85,8 @@ function Track({ r, compact }: { r: CodeRow; compact?: boolean }) {
 const ASPECT: Record<string, string> = { '1:1': 'aspect-square', '4:5': 'aspect-[4/5]', '9:16': 'aspect-[9/16]' };
 
 /** onFixCopy: open Build & sign off on a code's persona, territory and region (where copy Trupanion sent back is fixed). */
-export function Assets({ meta, view, setView, onBuild, onFixCopy }: { meta: Meta; view: ViewFilter; setView: (v: ViewFilter) => void; onBuild: () => void; onFixCopy?: (s: PfStub) => void }) {
+/** focus: an asset (territory) to open on arrival, with every persona still listed (from a board cell, or Build's "next"). */
+export function Assets({ meta, view, setView, onBuild, onFixCopy, focus }: { meta: Meta; view: ViewFilter; setView: (v: ViewFilter) => void; onBuild: () => void; onFixCopy?: (s: PfStub) => void; focus?: string | null }) {
   const enabled = !!meta.preflight?.enabled;
   const canReady = !!meta.preflight?.can_set_ready;
   const canCompliance = meta.can_set_compliance !== false;
@@ -128,6 +129,14 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy }: { meta: Meta
     const asset = comp?.assets.find(a => a.codes.some(c => c.stub === s.stub));
     return { s, asset, c: asset?.codes.find(c => c.stub === s.stub)?.compliance };
   });
+  // Arriving for one asset: open its ad (on All, so it is listed whatever its status), once its codes have loaded.
+  const focused = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focus || !stubs || focused.current === focus || params.get('stub')) return;
+    const mine = stubs.filter(s => s.territory === focus && regionOf(s) === view.region);
+    focused.current = focus;
+    if (mine.length && !mine.some(s => s.stub === sel)) { setFilter('all'); setSel(mine[0].stub); }
+  }, [focus, stubs, view.region]); // eslint-disable-line react-hooks/exhaustive-deps
   const formatOf = (s: PfStub) => String(meta.territories[s.territory]?.format || '').toUpperCase() || 'OTHER';
   const scoped = rows.filter(r => inViewFilter(r.s, view) && (format === 'all' || formatOf(r.s) === format));
   // The list and the counts are in ads; an ad is in one status (its least advanced copy option's).

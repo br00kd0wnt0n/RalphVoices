@@ -275,11 +275,17 @@ export function Studio() {
   const stepIndex = FLOW.findIndex(([t]) => t === tab);
   const viewMode = VIEW_TABS.includes(tab);
   const showCtx = (stepIndex >= 0 || viewMode) && !!meta;
-  /** A board cell: set the context (and, for Assets, narrow the view to it) and open the step. */
+  // Assets opens on ALL personas (Brook, 8 Oct): the whole month's ads for the header's region; the persona chips narrow
+  // it only when someone clicks one. A board cell opens Assets on that asset's ad, with every persona still listed.
+  const [assetFocus, setAssetFocus] = useState<string | null>(null);
+  const goTab = (t: Tab, focus: string | null = null) => {
+    if (t === 'assets') { setView({ ...ALL_VIEW, region: ctx.region }); setAssetFocus(focus); }
+    setTab(t);
+  };
+  /** A board cell: set the context and open the step (Assets: on that asset's ad). */
   const openCell = (persona: string, territory: string, step: Step) => {
     setCtx({ persona, territory, region: ctx.region });
-    if (step === 'assets') setView({ persona, territory, region: ctx.region });
-    setTab(step);
+    goTab(step, step === 'assets' ? territory : null);
   };
   const utility = (t: Tab, label: string, icon: React.ReactNode, title: string) => (
     <button onClick={() => setTab(t)} title={title} aria-label={label} className={cn('flex items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 py-1.5 text-sm transition', tab === t ? 'border-[#ECEDEF] text-[#ECEDEF]' : 'border-transparent text-[#858B96] hover:text-[#ECEDEF]')}>
@@ -293,8 +299,8 @@ export function Studio() {
       {/* In a test round the header keeps an amber edge after the bar above scrolls away. */}
       <header className={cn('sticky top-0 z-20 flex min-h-16 flex-wrap items-center py-2 md:h-16 md:flex-nowrap md:py-0 gap-3 border-b bg-[#16181D] px-4 min-[1440px]:gap-4 min-[1440px]:px-6', meta?.rounds?.rounds.find(r => r.id === meta.rounds?.working)?.test ? 'border-b-4 border-amber-400' : 'border-[#272B34]')}>
         {HOSTED && <a href="/" title="Back to Voices" className="-mr-2 hidden rounded-lg p-1.5 text-[#858B96] hover:bg-[#1C1F26] hover:text-[#ECEDEF] sm:block"><ArrowLeft className="h-4 w-4" aria-label="Back to Voices" /></a>}
-        <span className="hidden min-[1440px]:block"><Lockup onHome={() => setTab('home')} /></span>
-        <button onClick={() => setTab('home')} className="shrink-0 min-[1440px]:hidden" aria-label="VOICES Studio: this month" title="Voices Studio × Trupanion"><img src="/ralph-world.png" alt="Ralph" className="h-7 w-7 object-contain" /></button>
+        <span className="hidden min-[1700px]:block"><Lockup onHome={() => setTab('home')} /></span>
+        <button onClick={() => setTab('home')} className="shrink-0 min-[1700px]:hidden" aria-label="VOICES Studio: this month" title="Voices Studio × Trupanion"><img src="/ralph-world.png" alt="Ralph" className="h-7 w-7 object-contain" /></button>
         {/* The region: one switch, here on every screen. US and Canada are separate ads, so everything below shows one. */}
         {meta && <RegionSwitch regions={(meta.regions || ['US', 'CA']) as Region[]} region={ctx.region} onChange={r => setCtx({ ...ctx, region: r })} />}
         <nav aria-label="Studio steps" className="order-last flex w-full min-w-0 flex-nowrap items-center md:order-none md:w-auto gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -303,7 +309,7 @@ export function Studio() {
           </GhostButton>
           <span className="mx-1 h-5 w-px bg-[#343946]" aria-hidden />
           {FLOW.map(([t, label], i) => (
-            <GhostButton key={t} active={tab === t} aria-current={tab === t ? 'step' : undefined} onClick={() => setTab(t)} className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-2 py-1.5 text-sm hover:border-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D94D8F]">
+            <GhostButton key={t} active={tab === t} aria-current={tab === t ? 'step' : undefined} onClick={() => goTab(t)} className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-2 py-1.5 text-sm hover:border-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D94D8F]">
               <span className={cn('flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold', tab === t ? 'bg-[#0E0F12] text-white' : 'bg-[#272B34] text-[#A3A8B1]')}>{i + 1}</span>
               {t === 'review' && batch && sameCtx(batch.brief, ctx) ? `${label} (${batch.lines.length})` : label}
             </GhostButton>
@@ -364,12 +370,12 @@ export function Studio() {
             <p>Kept shared captions are offered in every territory’s Build, under “Shared captions” when you pick post copy for an ad. Choose a persona and territory in the bar above to build with them.</p>
           </div>
         )}
-        {meta && tab === 'build' && !isSharedCtx(meta, ctx) && <Build meta={meta} ctx={ctx} user={user} onNext={() => setTab('assets')} onReview={() => setTab('review')} />}
-        {meta && tab === 'assets' && <Assets meta={meta} view={rview} setView={setView} onBuild={() => setTab('build')} onFixCopy={st => { setCtx({ persona: st.persona, territory: st.territory, region: regionOf(st) }); setTab('build'); }} />}
+        {meta && tab === 'build' && !isSharedCtx(meta, ctx) && <Build meta={meta} ctx={ctx} user={user} onNext={() => goTab('assets', ctx.territory)} onReview={() => setTab('review')} />}
+        {meta && tab === 'assets' && <Assets meta={meta} view={rview} setView={setView} focus={assetFocus} onBuild={() => setTab('build')} onFixCopy={st => { setCtx({ persona: st.persona, territory: st.territory, region: regionOf(st) }); setTab('build'); }} />}
         {meta && tab === 'territories' && <Territories meta={meta} onSaved={() => refreshMeta()} onBrief={code => { const t = meta.territories[code]; setCtx({ persona: t.persona, territory: code, region: ctx.region }); setTab('write'); }} />}
         {tab === 'rules' && meta?.rounds && <RoundsPanel meta={meta} onSaved={() => refreshMeta().catch(() => {})} />}
         {/* The worksheet (Round 2), in preview: everything on one page; it becomes the default screen on Brook's word. */}
-        {meta && tab === 'worksheet' && <Worksheet meta={meta} region={ctx.region} onStep={setTab} onChanged={() => setRunsTick(t => t + 1)} />}
+        {meta && tab === 'worksheet' && <Worksheet meta={meta} region={ctx.region} onStep={t => goTab(t)} onChanged={() => setRunsTick(t => t + 1)} />}
         {meta && tab === 'check' && <CopyCheck meta={meta} onOpenRun={id => { continueRun(id).catch(e => setErr(e.message)); }} />}
         {tab === 'rules' && (meta || admin) && <Rules meta={meta} admin={HOSTED && (!!meta?.user?.admin || admin)} onActivated={() => refreshMeta().then(() => setErr('')).catch(() => {})} />}
       </main>
