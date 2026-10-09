@@ -222,6 +222,8 @@ export interface Rules {
   version?: string;
   /** Who to show in the creative (rules v2.12, from Trupanion's breed data): notes for every persona, and a line for the writer. */
   casting?: { _note?: string; notes?: Array<{ text: string; source: string; caution?: boolean }>; writer_note?: string };
+  /** A status note per rule id, printed beside its flags in the Pre-flight flag report (e.g. a rule awaiting the client's answer). */
+  flag_notes?: Record<string, string>;
   sources: Record<string, any>;
   fields: Record<string, { platform: string; label: string; visible: number; max: number; source: string; note?: string; writer_note?: string; default_count?: number;
     /** A looser length guide when the line is a carousel card (rules v2.15+): a card is read, not glanced. */

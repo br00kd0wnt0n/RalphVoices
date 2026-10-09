@@ -212,6 +212,16 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy, focus }: { met
           <span className="w-16 text-xs font-semibold uppercase tracking-wider text-[#646A75]">Status</span>
           {FILTERS.map(([k, l]) => <GhostButton key={k} active={filter === k} onClick={() => setFilter(k)} className="text-base">{l} ({stubs ? count(k) : '…'})</GhostButton>)}
           {filter === (producer ? 'awaiting' : 'needs') && <span className="text-xs text-[#646A75]">your default</span>}
+          {/* The flag report for the ads these filters show: one internal document for the team (nothing of Trupanion's decision). */}
+          {stubs && shownAds.length > 0 && (
+            <span className="ml-auto flex flex-wrap items-center gap-1.5 text-sm text-[#858B96]" title="One internal document for the ads listed below: a summary, then each ad’s flags (red, amber, note) with the size or card, the quote, overrides and marks, and what was checked. Trupanion’s decision is not in it.">
+              Flag report for {shownAds.length === 1 ? 'this ad' : `these ${shownAds.length} ads`}:
+              {([['html', 'For a doc'], ['md', 'Markdown'], ['csv', 'Sheet']] as const).map(([ext, words]) => (
+                <GhostButton key={ext} className="px-2.5 py-0.5 text-sm" title={ext === 'html' ? 'A page that opens in the browser or Word and pastes into a doc with its headings and table' : undefined}
+                  onClick={() => studio.download(`/preflight/flag-report.${ext}?stubs=${encodeURIComponent(shownAds.map(a => a.codes[0].s.stub).join(','))}`, `preflight-flag-report.${ext}`).catch(e => setError(e.message))}>{words}</GhostButton>
+              ))}
+            </span>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="w-16 text-xs font-semibold uppercase tracking-wider text-[#646A75]">Persona</span>
