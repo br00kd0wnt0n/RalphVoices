@@ -43,8 +43,9 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         {/* Copy Studio: full-width, outside the Layout. Hosted it needs sign-in (and the server's STUDIO_EMAILS);
-            locally it talks to `scripts/studio.ts serve` with no sign-in. */}
-        <Route path="/studio" element={HOSTED ? <StudioRoute /> : <StudioErrorBoundary><Studio /></StudioErrorBoundary>} />
+            locally it talks to `scripts/studio.ts serve` with no sign-in. Each step has its own path under it
+            (/studio/assets…; lib/studioRoute.ts), which Studio reads itself. */}
+        <Route path="/studio/*" element={HOSTED ? <StudioRoute /> : <StudioErrorBoundary><Studio /></StudioErrorBoundary>} />
         <Route
           path="/"
           element={

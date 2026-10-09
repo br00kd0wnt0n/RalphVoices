@@ -33,8 +33,9 @@ export function Login() {
   // the page the route guard captured (or "/" if the user came directly).
   useEffect(() => {
     if (user) {
-      const from = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname || '/';
-      navigate(from, { replace: true });
+      // The whole address, not just its path: a link to /studio/assets?stub=… comes back to that ad.
+      const from = (location.state as { from?: { pathname?: string; search?: string; hash?: string } } | null)?.from;
+      navigate(from?.pathname ? `${from.pathname}${from.search || ''}${from.hash || ''}` : '/', { replace: true });
     }
   }, [user, navigate, location.state]);
 

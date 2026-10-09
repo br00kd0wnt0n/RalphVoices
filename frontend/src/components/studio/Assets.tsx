@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { studio, type CodeCompliance, type ComplianceAsset, type ComplianceStatus, type ComplianceView, type Meta, type PfFlag, type PfReport, type PfStub, type StudioEvent } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
+import { tabFrom, withState } from '@/lib/studioRoute';
 import { DateNote } from './KeyDates';
 import { FeedbackNote } from './Feedback';
 import { groupOverrides, overrideWhere } from '@/lib/overrideGroups';
@@ -13,7 +14,7 @@ import { keepSelection, uploadFor, uploadLabel } from '@/lib/uploadTarget';
 import { SIZES, detectFileSize } from '@/lib/studioSizes';
 import { personaEdge } from '@/lib/personaColors';
 import { personaColor, tint } from '@/lib/personaColors';
-import { AuthMedia, DisclaimerNote, ForPicker, whoWords, PersonaChip, PersonaDot, inViewFilter, personaKeys, type ViewFilter, Chip, CodeChip, COMPLIANCE_TONE, COMPLIANCE_WORDS, COPY_STATUS, GhostButton, Intro, Label, NAMING_TIP, PINK, PinkButton, SEV_ORDER, chipName, codeState, inRegion, params, plainSource, regionOf, territoryName, when, whatToDo } from './ui';
+import { AuthMedia, DisclaimerNote, ForPicker, whoWords, PersonaChip, PersonaDot, inViewFilter, personaKeys, type ViewFilter, Chip, CodeChip, COMPLIANCE_TONE, COMPLIANCE_WORDS, COPY_STATUS, GhostButton, Intro, Label, NAMING_TIP, PINK, PinkButton, SEV_ORDER, chipName, codeState, inRegion, plainSource, regionOf, territoryName, when, whatToDo } from './ui';
 
 type Filter = 'needs' | 'awaiting' | 'changes' | 'ready' | 'all';
 const FILTERS: Array<[Filter, string]> = [['needs', 'Needs upload or review'], ['awaiting', 'Awaiting Trupanion'], ['changes', 'Changes requested'], ['ready', 'Ready to traffic'], ['all', 'All']];
@@ -93,11 +94,13 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy, focus }: { met
   // The producer (compliance emails, not an admin or the creative lead) starts on what's waiting for Trupanion, across every set.
   const producer = canCompliance && !meta.user?.admin && !canReady;
   // A link to one code (?stub=, or an old ?asset=) opens on All, so the code is in the list whatever its status.
-  const [filter, setFilter] = useState<Filter>(params.get('stub') || params.get('asset') ? 'all' : producer ? 'awaiting' : 'needs');
+  // (Read from the address as it is when Assets opens, not as it was when the page loaded: Back and a shared link both work.)
+  const linked = useRef((() => { const q = new URLSearchParams(window.location.search); return { stub: q.get('stub'), asset: q.get('asset') }; })()).current;
+  const [filter, setFilter] = useState<Filter>(linked.stub || linked.asset ? 'all' : producer ? 'awaiting' : 'needs');
   const [format, setFormat] = useState<string>('all');
   const [stubs, setStubs] = useState<PfStub[] | null>(null);
   const [comp, setComp] = useState<ComplianceView | null>(null);
-  const [sel, setSel] = useState<string | null>(params.get('stub'));
+  const [sel, setSel] = useState<string | null>(linked.stub);
   const [report, setReport] = useState<PfReport | null>(null);
   const [error, setError] = useState('');
   // Per code, so another code's upload or check never blocks this one, and the files chosen for a code (with their
@@ -114,9 +117,17 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy, focus }: { met
     const [s, c] = await Promise.all([studio.pfStubs(), studio.complianceView()]);
     setStubs(s); setComp(c);
     // An old ?asset= link (Compliance) opens that asset's first code.
-    const asset = params.get('asset');
-    if (asset && !params.get('stub')) { const a = c.assets.find(x => x.upload_id === asset); if (a) setSel(cur => cur || a.codes[0]?.stub || null); }
+    const asset = linked.asset;
+    if (asset && !linked.stub) { const a = c.assets.find(x => x.upload_id === asset); if (a) setSel(cur => cur || a.codes[0]?.stub || null); }
   }, []);
+  // The address names the open ad (/studio/assets?stub=<code>), so it can be shared and survives a reload.
+  useEffect(() => {
+    if (!stubs) return;
+    const u = new URL(window.location.href);
+    if (tabFrom(u.pathname, u.search) !== 'assets') return;
+    const next = withState('assets', u.search, { region: u.searchParams.get('region') || undefined, stub: sel });
+    if (next !== u.search) window.history.replaceState(window.history.state, '', `${u.pathname}${next}${u.hash}`);
+  }, [sel, stubs]);
   const loadReport = useCallback((stub: string) => studio.pfReport(stub).then(setReport), []);
   const refresh = useCallback(async () => {
     try { await Promise.all([loadLists(), sel ? loadReport(sel) : Promise.resolve()]); setError(''); }
@@ -142,7 +153,7 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy, focus }: { met
   // off a code with files waiting or an upload or check running.
   useEffect(() => {
     if (!stubs) return;
-    const arriving = focus && arrived.current !== focus && !params.get('stub') ? scoped.filter(r => r.s.territory === focus || r.s.stub === focus).map(r => r.s.stub) : [];
+    const arriving = focus && arrived.current !== focus && !linked.stub ? scoped.filter(r => r.s.territory === focus || r.s.stub === focus).map(r => r.s.stub) : [];
     if (focus && arrived.current !== focus) { arrived.current = focus; if (arriving.length) setFilter('all'); }
     const next = keepSelection(sel, shown.map(r => r.s.stub), scoped.map(r => r.s.stub), [...Object.keys(picked), ...Object.keys(progressBy)], arriving);
     if (next !== sel) setSel(next);
