@@ -5,9 +5,10 @@
 // Draft, Signed off, Edited since sign-off. Behaviour and endpoints are unchanged: versions, checks, expect_latest,
 // overrides, carousel cards and TikTok versions. The draft rules are in lib/buildDraft.ts.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { onOriginal, studio, REGION_NAMES, type DraftVersion, type PlannedVersion, type Meta, type ReadyDraft, type ReadyView, type VersionFlag } from '@/lib/studioApi';
+import { onOriginal, studio, REGION_NAMES, type DraftVersion, type PlannedVersion, type Meta, type PfStub, type ReadyDraft, type ReadyView, type VersionFlag } from '@/lib/studioApi';
 import { addAd, adName, flagsAt, flagsAtShared, moveAd, redPlaces, nextVisual, placeLine, removeAd, removeVisual, slotAfter, setCard, setCardSub, setOnImage, setOnImageSub, useInAllAds, usesOf } from '@/lib/buildDraft';
 import { cn } from '@/lib/utils';
+import { Artwork } from './Artwork';
 import { DateNote } from './KeyDates';
 import { FeedbackNote } from './Feedback';
 import { personaColor, personaEdge, tint } from '@/lib/personaColors';
@@ -27,7 +28,8 @@ function currentIn(d: ReadyDraft, slot: Slot): string {
 }
 const DEFAULT_CARDS = 4, MAX_CARDS = 10;
 
-export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: Ctx; user: string; onNext: () => void; onReview: () => void }) {
+/** onAsset: open Assets on one ad (a code of it). */
+export function Build({ meta, ctx, user, onNext, onReview, onAsset }: { meta: Meta; ctx: Ctx; user: string; onNext: () => void; onReview: () => void; onAsset?: (stub: string) => void }) {
   const pt = ctx;
   // "On behalf of": whose call the sign-off, expectation and overrides here are recorded as (the picker; '' = yours).
   const actingFor = useActingFor();
@@ -42,6 +44,16 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
   const [checking, setChecking] = useState(false);
   const [slot, setSlot] = useState<Slot | null>(null);
   const [history, setHistory] = useState(false);
+  // The uploaded artwork, shown read-only beside each signed-off ad (files and checks stay in Assets). null: loading.
+  const [assets, setAssets] = useState<PfStub[] | null>(null);
+  const showArtwork = !!meta.preflight?.enabled && !!onAsset;
+  useEffect(() => {
+    if (!showArtwork) return;
+    let live = true;
+    setAssets(null);
+    studio.pfStubs({ persona: pt.persona, territory: pt.territory, region: pt.region }).then(x => { if (live) setAssets(x); }).catch(() => { if (live) setAssets([]); });
+    return () => { live = false; };
+  }, [showArtwork, pt.persona, pt.territory, pt.region, view?.latest?.id]);
 
   // First load of a set: its default versions (the last sign-off's, or a first pairing), and the last expectations.
   const load = useCallback(async () => {
@@ -210,6 +222,8 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
                         onClick={() => { if (vs.length + cards.filter(Boolean).length <= 1 || window.confirm(`Remove ad ${letter}: its ${vs.length} copy option${vs.length === 1 ? '' : 's'}${cards.some(Boolean) ? ' and its on-image text' : ''}? The lines stay kept.`)) change(d => removeVisual(d, letter, p, platformOf)); }}>Remove this ad</button>
                     </div>
 
+                    <div className={cn(showArtwork && 'grid grid-cols-1 gap-x-5 lg:grid-cols-[minmax(0,1fr)_16rem]')}>
+                    <div className="min-w-0">
                     {oiFields.length > 0 && (
                       <Step n={++step} title={carousel ? 'The carousel cards (text on each card)' : 'The text on the image'} hint={`${carousel ? 'Card 1 is the hook; the last card is the end card. Every copy option on this ad runs with them.' : 'It goes into the artwork, so every copy option on this ad runs with it.'}${subField ? ` A subhead under the headline is optional${carousel ? ', card by card' : ''}.` : ''}`}>
                         {carousel ? oiFields.map(f => (
@@ -239,6 +253,12 @@ export function Build({ meta, ctx, user, onNext, onReview }: { meta: Meta; ctx: 
                     {hookField && oiFields.length === 0 && <p className="mb-3 text-sm text-[#858B96]">The hook goes on the video: choose it in each ad below.</p>}
                     {/* The small print the artwork must carry: the region's approved disclaimer, and where it sits. */}
                     <DisclaimerNote meta={meta} region={pt.region} format={t?.format} className="mb-4" />
+                    </div>
+                    {showArtwork && (
+                      <Artwork className="mb-4 self-start" stubs={assets} edited={vs.some(x => statusOf(x.i) === 'edited')} onOpen={onAsset!}
+                        codes={(latest?.versions || []).filter(v => v.visual === letter && (v.platform || 'META') === p).map(v => v.code)} />
+                    )}
+                    </div>
 
                     <Step n={++step} title="The copy options" hint="Click a slot to choose a line. They are this ad's text options: one ad, not one each.">
                       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">

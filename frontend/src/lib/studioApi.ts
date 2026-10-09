@@ -518,7 +518,7 @@ export const studio = {
     return (await (await raw('/worksheet/import/apply', { method: 'POST', body: form })).json()) as { job: string; estimate: SheetPreview['estimate'] };
   },
   // Pre-flight
-  pfStubs: () => req<PfStub[]>('/preflight/stubs'),
+  pfStubs: (q: { persona?: string; territory?: string; region?: Region } = {}) => req<PfStub[]>(`/preflight/stubs${qs(q)}`),
   /** Upload the visual for a stub; `also`: other signed-off stubs that run on the same visual. */
   /** sizes: each file's size (1:1, 4:5, 9:16; '' to let the server read it), in file order. */
   pfUpload: async (stub: string, files: File[], also: string[] = [], sizes: string[] = []) => {

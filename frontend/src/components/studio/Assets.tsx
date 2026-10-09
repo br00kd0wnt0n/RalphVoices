@@ -85,7 +85,7 @@ function Track({ r, compact }: { r: CodeRow; compact?: boolean }) {
 const ASPECT: Record<string, string> = { '1:1': 'aspect-square', '4:5': 'aspect-[4/5]', '9:16': 'aspect-[9/16]' };
 
 /** onFixCopy: open Build & sign off on a code's persona, territory and region (where copy Trupanion sent back is fixed). */
-/** focus: an asset (territory) to open on arrival, with every persona still listed (from a board cell, or Build's "next"). */
+/** focus: an asset (territory), or one ad (a code of it), to open on arrival, with every persona still listed (from a board cell, or Build's "next"). */
 export function Assets({ meta, view, setView, onBuild, onFixCopy, focus }: { meta: Meta; view: ViewFilter; setView: (v: ViewFilter) => void; onBuild: () => void; onFixCopy?: (s: PfStub) => void; focus?: string | null }) {
   const enabled = !!meta.preflight?.enabled;
   const canReady = !!meta.preflight?.can_set_ready;
@@ -142,7 +142,7 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy, focus }: { met
   // off a code with files waiting or an upload or check running.
   useEffect(() => {
     if (!stubs) return;
-    const arriving = focus && arrived.current !== focus && !params.get('stub') ? scoped.filter(r => r.s.territory === focus).map(r => r.s.stub) : [];
+    const arriving = focus && arrived.current !== focus && !params.get('stub') ? scoped.filter(r => r.s.territory === focus || r.s.stub === focus).map(r => r.s.stub) : [];
     if (focus && arrived.current !== focus) { arrived.current = focus; if (arriving.length) setFilter('all'); }
     const next = keepSelection(sel, shown.map(r => r.s.stub), scoped.map(r => r.s.stub), [...Object.keys(picked), ...Object.keys(progressBy)], arriving);
     if (next !== sel) setSel(next);
