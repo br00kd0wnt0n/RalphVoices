@@ -370,7 +370,7 @@ export function Studio() {
             <p>Kept shared captions are offered in every territory’s Build, under “Shared captions” when you pick post copy for an ad. Choose a persona and territory in the bar above to build with them.</p>
           </div>
         )}
-        {meta && tab === 'build' && !isSharedCtx(meta, ctx) && <Build meta={meta} ctx={ctx} user={user} onNext={() => goTab('assets', ctx.territory)} onReview={() => setTab('review')} />}
+        {meta && tab === 'build' && !isSharedCtx(meta, ctx) && <Build meta={meta} ctx={ctx} user={user} onNext={() => goTab('assets', ctx.territory)} onAsset={stub => goTab('assets', stub)} onReview={() => setTab('review')} />}
         {meta && tab === 'assets' && <Assets meta={meta} view={rview} setView={setView} focus={assetFocus} onBuild={() => setTab('build')} onFixCopy={st => { setCtx({ persona: st.persona, territory: st.territory, region: regionOf(st) }); setTab('build'); }} />}
         {meta && tab === 'territories' && <Territories meta={meta} onSaved={() => refreshMeta()} onBrief={code => { const t = meta.territories[code]; setCtx({ persona: t.persona, territory: code, region: ctx.region }); setTab('write'); }} />}
         {tab === 'rules' && meta?.rounds && <RoundsPanel meta={meta} onSaved={() => refreshMeta().catch(() => {})} />}
