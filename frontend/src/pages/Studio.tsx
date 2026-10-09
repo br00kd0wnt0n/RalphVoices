@@ -5,9 +5,11 @@
 // the round, and narrowing them there never changes the writing context. Territories, Rules (with Rounds), Export and
 // Compare sit top right. The steps live in components/studio/*; rounds and Live in pages/StudioRounds.tsx.
 //
-// Old tab keys redirect: brief → write, shortlist → review (Kept), ready → build, preflight and compliance → assets.
-// Deep links: ?tab=review&batch=<id>&open=L07, ?tab=build&persona=<P>&territory=<T>[&region=CA], ?tab=assets&stub=<code>
-// (or the old &asset=<upload id>), ?tab=compare&compare=<name>.
+// Each screen has its own path (lib/studioRoute.ts): /studio is the board, then /studio/write, /review, /build, /assets,
+// /live, and the utilities (/territories, /rules, /worksheet, /check, /compare, /howto). The rest is in the query:
+// /studio/review?batch=<id>&open=L07, /studio/build?persona=<P>&territory=<T>[&region=CA], /studio/assets?stub=<code>
+// (or the old &asset=<upload id>), /studio/compare?compare=<name>. Old links (?tab=…, and the keys brief, shortlist,
+// ready, preflight, compliance) land on the new paths.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { HOSTED, getUser, setActingFor, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type Line, type Meta, type Region, type StudioEvent } from '@/lib/studioApi';
@@ -31,29 +33,45 @@ import { GatePanel } from '@/components/studio/Gate';
 import { CopyCheck } from '@/components/studio/CopyCheck';
 import { Worksheet } from '@/components/studio/Worksheet';
 import { inFrame, studioGate, type GateError } from '@/lib/studioGate';
+import { tabFrom, tabKey, urlFor, withState, type StudioTab } from '@/lib/studioRoute';
 
-type Tab = 'home' | 'howto' | 'write' | 'review' | 'build' | 'assets' | 'live' | 'territories' | 'rules' | 'check' | 'compare' | 'worksheet';
-const TABS: Tab[] = ['home', 'howto', 'write', 'review', 'build', 'assets', 'live', 'territories', 'rules', 'check', 'compare', 'worksheet'];
+type Tab = StudioTab;
 /** Screens that show everything in the round (the bar filters the view there, never the writing context). */
 const VIEW_TABS: Tab[] = ['assets', 'live'];
 // The four steps, in order, with their full names (never shortened).
 const FLOW: Array<[Tab, string]> = [['write', 'Write'], ['review', 'Review'], ['build', 'Build & sign off'], ['assets', 'Assets']];
-/** Old tab keys and where they live now. */
-const MOVED: Record<string, Tab> = { brief: 'write', shortlist: 'review', ready: 'build', preflight: 'assets', compliance: 'assets' };
-function tabFrom(url: string): Tab {
-  const t = new URL(url).searchParams.get('tab') || 'home';
-  return MOVED[t] || (TABS.includes(t as Tab) ? (t as Tab) : 'home');
+const tabNow = (): Tab => tabFrom(window.location.pathname, window.location.search);
+// An old link (?tab=assets, or an older key: brief, shortlist, ready, preflight, compliance) is redirected in place: the
+// address shows the step's path. The Shortlist is now Review's Kept tray.
+const linkedKey = tabKey(window.location.pathname, window.location.search);
+const openKept = linkedKey === 'shortlist' || params.get('view') === 'kept';
+const INITIAL_TAB = tabNow();
+{
+  const here = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  const canonical = urlFor(INITIAL_TAB, window.location.search, window.location.hash);
+  if (window.location.pathname.startsWith('/studio') && here !== canonical) window.history.replaceState({ tab: INITIAL_TAB }, '', canonical);
 }
-// Redirect an old link in place (the address shows the new key), remembering that the Shortlist is now Review's Kept tray.
-const oldTab = params.get('tab') || '';
-const openKept = oldTab === 'shortlist' || params.get('view') === 'kept';
-if (MOVED[oldTab]) { const u = new URL(window.location.href); u.searchParams.set('tab', MOVED[oldTab]); window.history.replaceState({ tab: MOVED[oldTab] }, '', u); }
+/** Inside the Narrativ shell: tell it where Studio is, so the shell can keep its own address in step (it may not listen yet). */
+function announce() {
+  if (!inFrame()) return;
+  const q = new URLSearchParams(window.location.search);
+  q.delete('narrativ_sso');
+  try { window.parent.postMessage({ type: 'voices-nav', source: 'voices-studio', pathname: window.location.pathname, search: q.toString() ? `?${q}` : '' }, '*'); } catch { /* no parent to tell */ }
+}
 
 const CTX_KEY = 'voices-studio-context';
+/** The region a link asks for: ?region=, else the region in the ad's code (/studio/assets?stub=…_CA_META). */
+function linkedRegion(): Region | null {
+  const r = params.get('region')?.toUpperCase();
+  if (r === 'US' || r === 'CA') return r;
+  const m = /_(US|CA)_/.exec(params.get('stub') || '');
+  return m ? (m[1] as Region) : null;
+}
 function initialCtx(): Ctx {
-  if (params.get('persona') && params.get('territory')) return { persona: params.get('persona')!, territory: params.get('territory')!, region: (params.get('region')?.toUpperCase() as Region) || 'US' };
-  try { const c = JSON.parse(localStorage.getItem(CTX_KEY) || 'null'); if (c?.persona && c?.territory) return { persona: c.persona, territory: c.territory, region: c.region === 'CA' ? 'CA' : 'US' }; } catch { /* private mode */ }
-  return { persona: 'DINK', territory: 'DINK_NEVER', region: 'US' };
+  const region = linkedRegion();
+  if (params.get('persona') && params.get('territory')) return { persona: params.get('persona')!, territory: params.get('territory')!, region: region || 'US' };
+  try { const c = JSON.parse(localStorage.getItem(CTX_KEY) || 'null'); if (c?.persona && c?.territory) return { persona: c.persona, territory: c.territory, region: region || (c.region === 'CA' ? 'CA' : 'US') }; } catch { /* private mode */ }
+  return { persona: 'DINK', territory: 'DINK_NEVER', region: region || 'US' };
 }
 
 export function Studio() {
@@ -63,17 +81,18 @@ export function Studio() {
   // Hosted: why the first load failed (401 expired sign-in, 403 no access, 404 off), shown in place of Studio.
   const [loadErr, setLoadErr] = useState<GateError | null>(null);
   const [note, setNote] = useState('');
-  const [tab, setTabState] = useState<Tab>(tabFrom(window.location.href));
-  // Every step opens at the top; the step bar, the screen and the address all follow this one value.
+  const [tab, setTabState] = useState<Tab>(tabNow);
+  // Every step opens at the top; the step bar, the screen and the address (the step's own path) all follow this one value.
   const setTab = useCallback((t: Tab) => {
     setTabState(t);
     window.scrollTo({ top: 0 });
     (document.activeElement as HTMLElement | null)?.blur?.();
-    const u = new URL(window.location.href);
-    if (u.searchParams.get('tab') !== t) { u.searchParams.set('tab', t); window.history.pushState({ tab: t }, '', u); }
+    const next = urlFor(t, window.location.search, window.location.hash);
+    if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== next) window.history.pushState({ tab: t }, '', next);
   }, []);
+  // Back and forward move between the steps.
   useEffect(() => {
-    const onPop = () => setTabState(tabFrom(window.location.href));
+    const onPop = () => setTabState(tabNow());
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
@@ -84,8 +103,17 @@ export function Studio() {
     setCtxState(c);
     try { localStorage.setItem(CTX_KEY, JSON.stringify(c)); } catch { /* private mode */ }
   }, []);
+  // The address says what is on screen (the writing steps' persona × territory × region; the region elsewhere), so it
+  // can be shared: /studio/build?persona=DINK&territory=DINK_SOCK&region=US.
+  useEffect(() => {
+    const u = new URL(window.location.href);
+    if (!u.pathname.startsWith('/studio')) return;
+    const next = withState(tab, u.search, { persona: ctx.persona, territory: ctx.territory, region: ctx.region });
+    if (next !== u.search) window.history.replaceState(window.history.state, '', `${u.pathname}${next}${u.hash}`);
+    announce();
+  }, [tab, ctx.persona, ctx.territory, ctx.region]);
   // Assets, Export and Live: everything in the round unless narrowed there (a deep link to a set narrows it).
-  const [view, setView] = useState<ViewFilter>(() => (params.get('persona') && ['assets', 'preflight', 'compliance'].includes(params.get('tab') || '') ? { ...ALL_VIEW, persona: params.get('persona')!, territory: params.get('territory') || 'all' } : ALL_VIEW));
+  const [view, setView] = useState<ViewFilter>(() => (params.get('persona') && INITIAL_TAB === 'assets' ? { ...ALL_VIEW, persona: params.get('persona')!, territory: params.get('territory') || 'all' } : ALL_VIEW));
   // "This round / All rounds" (header): the views reload with the new filter.
   const [roundKey, setRoundKey] = useState(0);
   // A context from a link is remembered like one chosen in the bar.
