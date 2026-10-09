@@ -44,3 +44,13 @@ Nick's Round 1 worksheet was made by hand before the export existed: no `Row id`
 - A persona's own post copy is not shown; the count of such lines is, with where they are.
 
 Not in this PR: targets and due dates (nothing stores them yet), paste / add a line / write more inside the worksheet (PR 3), the lock (PR 4), card order by dragging (open question 2), the default screen (PR 5).
+
+## Fixes from Brook's review (point 5), 9 Oct
+
+- **Carousel cards say "Card".** On a carousel asset an on-image headline is a card: "Card 2" when the line has its number (written as a card, or placed as one in the latest sign-off), else "Card" (pasted with no number and not yet placed in Build). Unnumbered cards come after the numbered ones. Same in the sheet's Where column.
+- **Turn-off flags in plain words** (`flagWords`): "puts Curators off: don't explain insurance basics", from the rules file's own sentence (its first clause; a `label` on the turn-off wins if the rules give one), where it read "turn-off: explain". On the screen and in the sheet's Flags column and Flag key. The chips on the other screens (`chipName`) are unchanged.
+- **Asset-specific captions and headlines are on steps 2 and 3.** Each step reads the shared pool first, then each asset's own lines under a persona and asset heading, as step 1 does. `stepOf` no longer drops a persona's own primary text, caption or Meta headline; `WsRow.shared` says which pool a row is in. What is still off the worksheet: descriptions, TikTok hooks, a video's words.
+- **The sheet:** tabs 2 and 3 have Persona and Asset columns ("Shared" and blank for the pool). A new row with no Asset joins the shared pool; with an Asset it is that asset's own caption (a TikTok asset: its caption field) or headline. A sheet exported before this still imports (columns are found by name).
+- **A state line per step** (`stepState`): how many lines are left to decide; or that every line is decided and Build is next; or that the step is finished because every kept line is signed off, that a signed-off line is changed in Build and signed off again, and that Assets is next, with a button to the next step. A locked row says the same in its own cell.
+- **Attribution reads the same on every row** (`attribution`): whose call it is, then who entered it when that was someone else: "kept by Nick Larson · entered by brook", or "kept by brook". Nothing stored is rewritten, so a line Brook decided before the "for" picker existed still reads "kept by brook".
+- Not done here: targets per step (they belong on the month's record), paste / add a line in the worksheet (PR 3), the lock (PR 4).

@@ -5,12 +5,12 @@ import { Fragment, useCallback, useEffect, useState } from 'react';
 import { REGION_NAMES, studio, type Batch, type Line, type Meta, type Region, type WorksheetData, type WsRow, type WsStep } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { personaColor, tint } from '@/lib/personaColors';
-import { regionLabel, ForPicker, GhostButton, LineHistory, PersonaDot, PinkButton, Src, angleLabel, useActingFor, when, whoWords } from './ui';
+import { regionLabel, ForPicker, GhostButton, LineHistory, PersonaDot, PinkButton, Src, angleLabel, useActingFor, when } from './ui';
 
 const STEPS: Array<{ key: WsStep; n: number; name: string; what: string }> = [
   { key: 'on_image', n: 1, name: 'On-image copy', what: 'Every headline, subhead and carousel card that sits in the artwork, by persona and asset.' },
-  { key: 'primary', n: 2, name: 'Captions', what: 'The shared primary texts and captions: one pool, used under every persona’s assets.' },
-  { key: 'headline', n: 3, name: 'Headlines', what: 'The shared headline bank: short lines that work under any caption here.' },
+  { key: 'primary', n: 2, name: 'Captions', what: 'Primary texts and captions: the shared pool, used under every persona’s assets, then the caption written for each asset.' },
+  { key: 'headline', n: 3, name: 'Headlines', what: 'The headline bank: short shared lines that work under any caption here, then any written for one asset.' },
 ];
 const LEVEL: Record<string, string> = { red: 'border-red-500/50 bg-red-500/10 text-red-200', amber: 'border-amber-400/40 bg-amber-400/10 text-amber-200', grey: 'border-[#343946] bg-[#1C1F26] text-[#A3A8B1]' };
 
@@ -30,13 +30,16 @@ export function Worksheet({ meta, region, onStep, onChanged }: {
   const s = STEPS.find(x => x.key === step)!;
   const rows = data?.steps[step] || [];
   const c = data?.counts[step];
-  // Step 1 reads persona, then asset; the pools are one list.
-  const groups: Array<{ key: string; persona?: string; asset?: string; rows: WsRow[] }> = [];
+  // Step 1 reads persona, then asset. Steps 2 and 3: the shared pool first, then each asset's own lines the same way.
+  const groups: Array<{ key: string; persona?: string; asset?: string; shared?: boolean; rows: WsRow[] }> = [];
+  const ownLines = step !== 'on_image' && rows.some(x => x.shared === false);
   for (const x of rows) {
-    const key = step === 'on_image' ? `${x.persona}|${x.territory}|${x.region}` : 'pool';
+    const byAsset = step === 'on_image' || x.shared === false;
+    const key = byAsset ? `${x.persona}|${x.territory}|${x.region}` : 'pool';
     const g = groups[groups.length - 1];
-    if (g && g.key === key) g.rows.push(x); else groups.push({ key, ...(step === 'on_image' ? { persona: x.persona, asset: x.asset } : {}), rows: [x] });
+    if (g && g.key === key) g.rows.push(x); else groups.push({ key, ...(byAsset ? { persona: x.persona, asset: x.asset } : { shared: true }), rows: [x] });
   }
+  const state = c ? stepState(rows, step) : null;
 
   return (
     <div className="mx-auto max-w-6xl space-y-4">
@@ -76,6 +79,12 @@ export function Worksheet({ meta, region, onStep, onChanged }: {
               {c.undecided > 0 && <> · <strong className="text-[#ECEDEF]">{c.undecided}</strong> to decide</>}
             </span>
           </div>
+          {state && (
+            <div className={cn('flex flex-wrap items-center gap-3 rounded-xl border px-4 py-2.5 text-base', state.done ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-100' : 'border-[#343946] bg-[#16181D] text-[#C9CCD2]')} role="status">
+              <span className="mr-auto">{state.words}</span>
+              {state.next && <GhostButton onClick={() => onStep(state.next!)}>{state.next === 'build' ? 'Go to 4 Build ads' : 'Go to 5 Assets'}</GhostButton>}
+            </div>
+          )}
           {!rows.length && <p className="rounded-xl border border-dashed border-[#343946] px-4 py-6 text-base text-[#858B96]">No lines here yet for {REGION_NAMES[region]}. {step === 'on_image' ? 'Paste the copy deck in Check copy' : 'Write them in the Shared captions context, or paste them in Check copy'} and they appear as rows.</p>}
           {rows.length > 0 && (
             <div className="overflow-x-auto rounded-xl border border-[#272B34]">
@@ -102,6 +111,9 @@ export function Worksheet({ meta, region, onStep, onChanged }: {
                           </td>
                         </tr>
                       )}
+                      {g.shared && ownLines && (
+                        <tr className="bg-[#16181D]"><td colSpan={6} className="border-t border-[#272B34] px-3 py-1.5 text-sm font-semibold text-[#ECEDEF]">Shared <span className="ml-1 font-normal text-[#858B96]">used under every persona’s assets</span></td></tr>
+                      )}
                       {g.rows.map(x => <Row key={x.id} meta={meta} x={x} step={step} who={who} onChanged={changed} onError={setError} />)}
                     </Fragment>
                   ))}
@@ -110,11 +122,39 @@ export function Worksheet({ meta, region, onStep, onChanged }: {
             </div>
           )}
           <p className="text-sm text-[#A3A8B1]"><span className="font-semibold text-red-200">Red</span> breaks a client rule as written and needs a fix. <span className="font-semibold text-amber-200">Amber</span> is only “have a look”: it is yours to keep as it is. A line with nothing to say is <span className="text-emerald-300">clear</span>.</p>
-          {data.other > 0 && <p className="text-xs text-[#646A75]">{data.other} other line{data.other === 1 ? '' : 's'} this month (a persona’s own post copy) {data.other === 1 ? 'is' : 'are'} not on the worksheet: captions and headlines are shared. They are in Review, under Advanced.</p>}
+          {data.other > 0 && <p className="text-xs text-[#646A75]">{data.other} other line{data.other === 1 ? '' : 's'} this month (a description, a TikTok hook or a video’s words) {data.other === 1 ? 'is' : 'are'} not on the worksheet. They are in Review.</p>}
         </>
       )}
     </div>
   );
+}
+
+/**
+ * Who made the call on a line, said the same way on every row: whose call it is, then who entered it when that was
+ * someone else ("kept by nick · entered by brook"; "kept by brook" when it was their own). The records are as stored.
+ */
+export function attribution(x: Pick<WsRow, 'call' | 'decided_by' | 'decided_for'>): string {
+  const name = (s?: string) => String(s || '').split('@')[0];
+  const by = name(x.decided_by), whose = name(x.decided_for);
+  const verb = x.call === 'cut' ? 'cut' : 'kept';
+  return whose && whose.toLowerCase() !== by.toLowerCase() ? `${verb} by ${whose} · entered by ${by}` : `${verb} by ${by}`;
+}
+
+/** What state a step is in, and what happens next, in a sentence (so a step with every row locked doesn't read as dead). */
+export function stepState(rows: WsRow[], step: WsStep): { words: string; done: boolean; next?: 'build' | 'assets' } | null {
+  if (!rows.length) return null;
+  const live = rows.filter(x => x.call !== 'cut');
+  const undecided = rows.filter(x => !x.call).length;
+  const kept = rows.filter(x => x.call === 'keep');
+  const signed = kept.filter(x => x.signed_off).length;
+  const lines = (n: number) => `${n} line${n === 1 ? '' : 's'}`;
+  const locked = signed ? ` ${signed === kept.length ? 'All' : signed} of the kept lines ${signed === 1 && signed !== kept.length ? 'is' : 'are'} signed off: those are changed in Build, not here.` : '';
+  if (undecided) return { words: `${lines(undecided)} to decide here: Keep, Cut or Edit each.${signed ? ` ${signed} kept ${signed === 1 ? 'line is' : 'lines are'} already signed off: those are changed in Build, not here.` : ''}`, done: false };
+  if (kept.length && signed === kept.length) {
+    return { words: `This step is finished: ${signed === 1 ? 'the kept line is' : `all ${signed} kept lines are`} signed off in Build, so nothing here needs a decision. To change one, edit it in Build (step 4) and sign off again. Next is the artwork, in Assets (step 5).`, done: true, next: 'assets' };
+  }
+  if (!live.length) return { words: 'Every line here is cut. Add lines in Check copy or Write, or undo a cut.', done: false };
+  return { words: `Every line here is decided (${kept.length} kept).${locked} Next: ${step === 'on_image' ? 'finish steps 2 and 3, then ' : ''}build the ads from the kept lines (step 4).`, done: false, next: 'build' };
 }
 
 function Row({ meta, x, step, who, onChanged, onError }: { meta: Meta; x: WsRow; step: WsStep; who: string; onChanged: () => void; onError: (m: string) => void }) {
@@ -164,7 +204,7 @@ function Row({ meta, x, step, who, onChanged, onError }: { meta: Meta; x: WsRow;
           <div className="mt-1 flex flex-wrap items-center gap-x-3 text-xs text-[#646A75]">
             {x.edited && <span>edited</span>}
             {x.signed_off && <span className="text-[#F2C4DA]">signed off in Build</span>}
-            {x.decided_by && <span>{cut ? 'cut' : 'decided'} by {whoWords(x.decided_by.split('@')[0], x.decided_for)}</span>}
+            {x.decided_by && x.call && <span>{attribution(x)}</span>}
             {busy && <span className="animate-pulse text-[#F2C4DA]" role="status">{busy}</span>}
             <button onClick={() => setDetails(!details)} aria-expanded={details} className="underline-offset-2 hover:text-[#ECEDEF] hover:underline">{details ? 'hide details' : 'details'}</button>
           </div>
@@ -182,7 +222,7 @@ function Row({ meta, x, step, who, onChanged, onError }: { meta: Meta; x: WsRow;
               <PinkButton className="px-3 py-1.5 text-sm" onClick={save} disabled={!!busy}>Save and check</PinkButton>
               <GhostButton onClick={() => setEditing(false)} disabled={!!busy}>Cancel</GhostButton>
             </div>
-          ) : locked ? <span className="text-xs text-[#858B96]">Change it in Build (step 4)</span> : (
+          ) : locked ? <span className="text-sm text-[#A3A8B1]">Signed off. To change it, edit it in Build (step 4) and sign off again.</span> : (
             <div className="flex flex-wrap gap-1.5" role="group" aria-label={`Your call on ${x.n}`}>
               <GhostButton active={x.call === 'keep'} disabled={!!busy} onClick={() => decide(x.call === 'keep' ? '' : 'keep')}>Keep</GhostButton>
               <GhostButton active={cut} disabled={!!busy} onClick={() => decide(cut ? '' : 'cut')}>Cut</GhostButton>

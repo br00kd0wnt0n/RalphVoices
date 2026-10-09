@@ -53,13 +53,13 @@ test('the worksheet: on-image copy by persona and asset, then the shared pools; 
   assert.deepEqual(ws.steps.on_image.map(x => [x.n, x.asset, x.where, x.visible, x.call, x.flags.some(f => f.rule === 'LIMIT_ON_ASSET')]), [
     ['O1', 'Sock Eater (dog)', 'Headline', 40, '', true],
     ['O2', 'Sock Eater (dog)', 'Subhead', 60, '', false],
-    ['O3', 'Ask Your Vet', 'Headline', 90, '', false],
-  ], 'headline before subhead; a carousel territory uses the card guide');
+    ['O3', 'Ask Your Vet', 'Card', 90, '', false],
+  ], 'headline before subhead; on a carousel a headline is a card, with the card guide');
   assert.equal(ws.steps.on_image[0].status, 'amber');
-  assert.deepEqual(ws.steps.primary.map(x => x.n), ['P1', 'P2', 'P3']);
+  assert.deepEqual(ws.steps.primary.map(x => [x.n, x.shared, x.shared ? '' : x.asset]), [['P1', true, ''], ['P2', true, ''], ['P3', true, ''], ['P4', false, 'Sock Eater (dog)']], 'the shared pool, then the caption written for one asset');
   assert.deepEqual(ws.steps.headline.map(x => [x.n, x.text]), [['H1', 'Vet bills? No sweat.']]);
-  assert.equal(ws.other, 1, "the persona's own primary text is counted, not shown");
-  assert.deepEqual(ws.counts.primary, { total: 3, kept: 0, cut: 0, undecided: 3, red: ws.counts.primary.red, amber: ws.counts.primary.amber, clear: ws.counts.primary.clear });
+  assert.equal(ws.other, 0);
+  assert.deepEqual(ws.counts.primary, { total: 4, kept: 0, cut: 0, undecided: 4, red: ws.counts.primary.red, amber: ws.counts.primary.amber, clear: ws.counts.primary.clear });
   assert.ok(ws.steps.primary[1].flags.some(f => f.rule === 'SHARED_CTA' && f.level === 'amber'));
 });
 
@@ -75,8 +75,10 @@ test('the sheet has the Round 1 shape, and an untouched sheet read back changes 
   assert.deepEqual(head, ['#', 'Persona', 'Asset', 'Where', 'Line', 'Chars', 'Visible', 'Status', 'Flags', 'Your call', 'Your rewrite', 'Rewrite chars', 'Row id', 'Hash']);
   assert.deepEqual([one.getColumn(13).hidden, one.getColumn(14).hidden], [true, true]);
   assert.equal(one.getRow(6).getCell(10).dataValidation.formulae[0], '"Keep,Cut,Rewrite"');
-  assert.deepEqual((wb.getWorksheet('2 Primary text')!.getRow(5).values as any[]).slice(1), ['#', 'Line', 'Chars', 'Status', 'Flags', 'Your call', 'Your rewrite', 'Rewrite chars', 'Row id', 'Hash']);
-  assert.equal(String(wb.getWorksheet('2 Primary text')!.getRow(9).getCell(1).value), 'N1', 'blank rows for new lines after the pool');
+  assert.deepEqual((wb.getWorksheet('2 Primary text')!.getRow(5).values as any[]).slice(1), ['#', 'Persona', 'Asset', 'Line', 'Chars', 'Status', 'Flags', 'Your call', 'Your rewrite', 'Rewrite chars', 'Row id', 'Hash']);
+  const two = wb.getWorksheet('2 Primary text')!;
+  assert.deepEqual([6, 9].map(i => [String(two.getRow(i).getCell(2).value), String(two.getRow(i).getCell(3).value)]), [['Shared', ''], ['Own the calm', 'Sock Eater (dog)']].map(([a, b], i) => (i ? [String(two.getRow(9).getCell(2).value), b] : [a, b])), 'a shared line says Shared; an asset caption names its asset');
+  assert.equal(String(two.getRow(10).getCell(1).value), 'N1', 'blank rows for new lines after the pool');
   const p = await Ws.previewImport(await Ws.parseXlsx(buf), view);
   assert.deepEqual([p.rows, p.problems, p.estimate.usd], [[], [], 0]);
 });
@@ -91,6 +93,7 @@ test('import: keep, cut, rewrite and new lines are previewed, then written for t
     p.set('P2', 'Your rewrite', 'Trupanion pays your vet directly at participating hospitals. Get a quote.');
     p.set('P3', 'Your rewrite', '  ');                       // a stray space isn't a rewrite
     p.set('N1', 'Line', 'Medical insurance for pets from Trupanion. See how it works.');
+    p.set('N2', 'Asset', 'Sock Eater (dog)'); p.set('N2', 'Line', 'For the sock eater in your house: Trupanion. Get a quote.');   // a caption for one asset
     const o = tab('1 On-image copy');
     o.set('O1', 'Your call', 'rewrite ');                    // typed, not picked
     o.set('O1', 'Your rewrite', 'Two incomes. One sock eater.');
@@ -101,18 +104,19 @@ test('import: keep, cut, rewrite and new lines are previewed, then written for t
   });
   const sheet = await Ws.parseXlsx(filled);
   const p = await Ws.previewImport(sheet, view);
-  assert.deepEqual(p.rows.map(x => [x.tab[0], x.n, x.action]), [['1', 'O1', 'rewrite'], ['1', 'O2', 'error'], ['1', 'N1', 'new'], ['1', 'N2', 'error'], ['2', 'P1', 'cut'], ['2', 'P2', 'rewrite'], ['2', 'N1', 'new'], ['3', 'H1', 'keep']]);
+  assert.deepEqual(p.rows.map(x => [x.tab[0], x.n, x.action]), [['1', 'O1', 'rewrite'], ['1', 'O2', 'error'], ['1', 'N1', 'new'], ['1', 'N2', 'error'], ['2', 'P1', 'cut'], ['2', 'P2', 'rewrite'], ['2', 'N1', 'new'], ['2', 'N2', 'new'], ['3', 'H1', 'keep']]);
+  assert.deepEqual([p.rows[6].territory, p.rows[7].territory, p.rows[7].field], [S.SHARED_TERRITORY, 'OWN_STILL', 'meta_primary'], 'no asset: the shared pool; an asset: that asset’s own caption');
   assert.match(p.rows[1].note!, /"Maybe" isn't Keep, Cut or Rewrite/);
   assert.match(p.rows[3].note!, /No asset called "No such asset"/);
   assert.deepEqual([p.rows[2].territory, p.rows[2].field, p.rows[2].card, p.rows[2].where], ['OWN_CARDS', 'meta_on_image', 2, 'Card 2']);
-  assert.deepEqual(p.counts, { keep: 1, cut: 1, rewrite: 2, new: 2, none: 0, conflict: 0, error: 2 });
-  assert.equal(p.estimate.checks, 4);
+  assert.deepEqual(p.counts, { keep: 1, cut: 1, rewrite: 2, new: 3, none: 0, conflict: 0, error: 2 });
+  assert.equal(p.estimate.checks, 5);
   // Nothing was written by the preview.
   assert.equal((await S.loadBatch(shared.id)).lines[0].decision || '', '');
 
   const events: S.StudioEvent[] = [];
   const res = await Ws.applyImport(sheet, view, api(), { user: 'brook', for: 'nick' }, e => events.push(e));
-  assert.deepEqual([res.applied, res.failed], [{ keep: 1, cut: 1, rewrite: 2, new: 2 }, []]);
+  assert.deepEqual([res.applied, res.failed], [{ keep: 1, cut: 1, rewrite: 2, new: 3 }, []]);
   assert.deepEqual(events.filter(e => e.type === 'done').length, 1, 'one "done", at the end');
   const pool = (await S.loadBatch(shared.id)).lines;
   assert.deepEqual([pool[0].decision, pool[0].decided_by, pool[0].decided_for], ['cut', 'brook', 'nick']);
@@ -121,13 +125,14 @@ test('import: keep, cut, rewrite and new lines are previewed, then written for t
   const head = (await S.loadBatch(still.id)).lines.find(l => l.field === 'meta_on_image')!;
   assert.deepEqual([S.finalText(head), head.flags.some(f => f.rule === 'LIMIT_ON_ASSET')], ['Two incomes. One sock eater.', false]);
   const after = await Ws.worksheet(view, 'US');
-  assert.deepEqual(after.steps.on_image.filter(x => x.asset === 'Ask Your Vet').map(x => [x.where, x.text, x.decided_for || '']).pop(), ['Card 2', 'Then ask them why.', 'nick']);
-  assert.equal(after.steps.primary.length, 4);
+  assert.deepEqual(after.steps.on_image.filter(x => x.asset === 'Ask Your Vet').map(x => [x.where, x.text, x.decided_for || '']), [['Card 2', 'Then ask them why.', 'nick'], ['Card', 'Ask your vet which pet insurance they would choose for their own dog, and why.', '']], 'the numbered card first; the one pasted with no number is a card too');
+  assert.equal(after.steps.primary.length, 6);
+  assert.deepEqual(after.steps.primary.filter(x => !x.shared).map(x => x.asset), ['Sock Eater (dog)', 'Sock Eater (dog)']);
   const added = (await S.loadBatch(res.runs.find(id => id.startsWith('SHARED'))!)).lines[0];
   assert.deepEqual([added.added_by, added.added_for, added.text], ['brook', 'nick', 'Medical insurance for pets from Trupanion. See how it works.']);
   // The same sheet again: everything is already as the sheet says.
   const again = await Ws.previewImport(sheet, view);
-  assert.deepEqual([again.rows.filter(x => x.action !== 'error'), again.matched], [[], 2], 'the two typed rows are now lines in Studio, matched by their wording');
+  assert.deepEqual([again.rows.filter(x => x.action !== 'error'), again.matched], [[], 3], 'the three typed rows are now lines in Studio, matched by their wording');
 });
 
 test('import: a line changed in Studio after the export is a conflict, left alone unless chosen', async () => {
@@ -183,8 +188,9 @@ test('a hand-made sheet (no row ids): rows are matched by wording, cut lines inc
   rowOf(one, 'O3').getCell(10).value = 'Keep';
   // A new card for the live asset, by its name.
   const n1 = rowOf(one, 'N1'); n1.getCell(3).value = 'Ask Your Vet'; n1.getCell(4).value = 'Carousel card'; n1.getCell(5).value = 'Then ask them why.';
-  rowOf(two, 'P1').getCell(6).value = '';                           // the cut line, with no call on this copy of the sheet
-  rowOf(two, 'P2').getCell(6).value = 'Keep';
+  const call2 = (two.getRow(5).values as any[]).indexOf('Your call');
+  rowOf(two, 'P1').getCell(call2).value = '';                       // the cut line, with no call on this copy of the sheet
+  rowOf(two, 'P2').getCell(call2).value = 'Keep';
   const sheet = await Ws.parseXlsx(Buffer.from(await wb.xlsx.writeBuffer()));
   assert.equal(sheet.no_ids, true);
   assert.equal(sheet.rows.some(x => /Kept so far/.test(x.line)), false, 'the totals row is not a line');
@@ -209,4 +215,15 @@ test('a workbook whose comments trip the reader (saved by another tool) is still
   zip.file('xl/worksheets/_rels/sheet2.xml.rels', '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="/xl/comments/comment1.xml" Id="comments"/></Relationships>');
   const sheet = await Ws.parseXlsx(await zip.generateAsync({ type: 'nodebuffer' }));
   assert.equal(sheet.rows.filter(x => x.step === 'on_image').length, 3);
+});
+
+test('a turn-off flag says who it puts off and what the rule asks, in the rules file’s words', async () => {
+  await fresh();
+  const r = S.loadRules();
+  const [code, persona] = Object.entries(r.personas).find(([, p]) => (p.turn_offs || []).length)!;
+  const t = persona.turn_offs[0];
+  const words = Ws.flagWords(t.id, r);
+  assert.match(words, new RegExp(`^puts ${String(persona.name || code).replace(/\\s*\\(.*\\)$/, '').replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')} off: \\S`));
+  assert.doesNotMatch(words, /turn-off|_T_/);
+  assert.equal(Ws.flagWords('SHARED_CTA', r), 'no call to action', 'other flags keep their chip names');
 });
