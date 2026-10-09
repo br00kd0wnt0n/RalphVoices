@@ -31,6 +31,8 @@ import { cleanFor, decidedBy, packActor, unpackActor, whoWords } from '../../uti
 import type { AssetKind, AuditEngine, AuditFlag, AuditResult, SignedCopy } from './preflightEngine.js';
 import { COPY_MATCH_SOURCE, REWORD_MIN, bestMatch, copyMatch, normalise } from '../audit/copyMatch.js';
 import { signedOffCopy } from './preflightB2.js';
+import { blocksToHtml, blocksToMarkdown, flagReportBlocks, flagReportRows, mergeAdFlags, type FlagReportInput, type ReportAd, type ReportFlag } from './flagReport.js';
+import { plainSource } from '../../utils/plainSource.js';
 
 type Queryable = Pick<pg.Pool, 'query'>;
 
@@ -812,6 +814,54 @@ export class Preflight {
       compliance: await this.codeCompliance(stub, upload?.id ?? null),
       traffic: await this.traffic(stub),
     };
+  }
+
+  /**
+   * The flag report for the ads in view (Assets' Export): one document, internal. `stubs` narrows to those codes' ads
+   * (the page sends the ads its filters show); otherwise the persona / territory / region / round filter.
+   * Nothing of Trupanion's compliance decision is in it.
+   */
+  async flagReport(filter: { persona?: string; territory?: string; region?: string; round?: string; user?: string; stubs?: string[] } = {}): Promise<{ input: FlagReportInput; md: string; html: string; csv: string; test: boolean }> {
+    const rules: any = await S.getStore().getRules();
+    const view = await roundView(filter.round, filter.user);
+    const test = testOnly(view);
+    const rounds = await getRounds();
+    const tNames: Record<string, string> = Object.fromEntries(Object.entries(rules?.territories || {}).map(([k, t]: [string, any]) => [k, String(t?.name || k).replace(/\s*\(springboard[^)]*\)\s*/i, '').trim().replace(/(?<!\.)\.$/, '')]));
+    const pName = (code: string) => String(rules?.personas?.[code]?.name || code).replace(/\s*\(.*\)$/, '');
+    const all = (await this.stubs(filter)).filter(s => !s.test || test);
+    const adKey = (s: StubRow) => `${s.region}|${s.visual_key || s.stub}`;
+    const wanted = filter.stubs?.length ? new Set(all.filter(s => filter.stubs!.includes(s.stub)).map(adKey)) : null;
+    const groups = new Map<string, StubRow[]>();
+    for (const s of all) if (!wanted || wanted.has(adKey(s))) groups.set(adKey(s), [...(groups.get(adKey(s)) || []), s]);
+    const ads: ReportAd[] = [];
+    for (const codes of groups.values()) {
+      // The ad's asset: the newest upload among its codes; its flags: every code on that upload, merged.
+      const lead = [...codes].filter(c => c.upload).sort((a, b) => b.upload!.uploaded_at.localeCompare(a.upload!.uploaded_at))[0] || codes[0];
+      const onIt = lead.upload ? codes.filter(c => c.upload?.id === lead.upload!.id) : [];
+      const reports = await Promise.all(onIt.map(c => this.report(c.stub)));
+      const first = reports.find(x => x.stub === lead.stub);
+      const flags = mergeAdFlags(reports.map(x => ({ code: x.stub, flags: (x.flags as any[]).map((f): ReportFlag => ({
+        rule: f.rule, severity: f.severity, label: f.label, source: plainSource(f.source, tNames), quote: f.quote, why: f.why, where: f.where, size: f.size, check: f.check,
+        cross_persona: !!f.cross_persona, persona: f.persona ? pName(f.persona) : undefined, override: f.override || null, agreements: f.agreements || [],
+      })) })));
+      const passed = onIt.find(c => c.status.status === 'ready' && c.status.upload_id === lead.upload?.id)?.status;
+      ads.push({
+        ad: lead.visual_key || lead.stub, asset: tNames[lead.territory] || lead.territory, persona: pName(lead.persona), region: lead.region, kind: lead.upload?.kind,
+        upload: lead.upload ? { files: lead.upload.files.map(f => ({ filename: f.filename, size: f.aspect })), uploaded_by: lead.upload.uploaded_by, uploaded_at: lead.upload.uploaded_at } : null,
+        sizes: lead.sizes,
+        audit: first?.audit ? { status: first.audit.status, finished_at: first.audit.finished_at, started_by: first.audit.started_by, rules_version: first.audit.rules_version, stale: first.audit.stale, error: first.audit.error, notes: first.audit.result?.notes || [] } : null,
+        passed: passed ? whoWords(passed.ready_by, passed.ready_for) : undefined,
+        flags,
+      });
+    }
+    const personas = [...new Set(ads.map(a => a.persona))], regions = [...new Set(ads.map(a => a.region))];
+    const month = view.ids ? labelOf(rounds, [...view.ids][0]) : 'All months';
+    const input: FlagReportInput = {
+      title: 'Pre-flight flag report', scope: [month, regions.map(x => DISCLAIMER_REGION_NAMES[x] || x).join(' and '), personas.length === 1 ? personas[0] : ''].filter(Boolean).join(' · '),
+      at: new Date().toISOString(), by: filter.user, rules_version: rules?.version, ads, notes: rules?.flag_notes || {}, test,
+    };
+    const blocks = flagReportBlocks(input);
+    return { input, md: blocksToMarkdown(blocks), html: blocksToHtml(blocks, input.title), csv: S.toCsv(flagReportRows(input)), test };
   }
 
   // ---------- review: agree or disagree, overrides, Ready to traffic ----------

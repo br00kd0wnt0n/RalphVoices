@@ -465,6 +465,15 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     }));
     r.get('/preflight/agreement', wrap(async (req, res) => res.json(await pf.agreement({ ...pt(req.query), user: o.who(req) } as any))));
     r.get('/preflight/features.csv', wrap(async (_req, res) => download(res, 'text/csv; charset=utf-8', 'preflight-features.csv', await pf.featuresCsv())));
+    // The flag report for the ads in view on Assets (internal; nothing of Trupanion's decision): ?stubs=a,b narrows to those ads.
+    r.get('/preflight/flag-report.:ext', wrap(async (req, res) => {
+      const ext = String(req.params.ext);
+      if (!['md', 'html', 'csv'].includes(ext)) return res.status(404).json({ error: 'The flag report comes as .md, .html or .csv' });
+      const stubs = String(req.query.stubs || '').split(',').map(x => x.trim()).filter(Boolean);
+      const p = await pf.flagReport({ ...pt(req.query), user: o.who(req), ...(stubs.length ? { stubs } : {}) });
+      const name = `${p.test ? 'TEST_' : ''}preflight-flag-report-${new Date().toISOString().slice(0, 10)}.${ext}`;
+      download(res, ext === 'md' ? 'text/markdown; charset=utf-8' : ext === 'html' ? 'text/html; charset=utf-8' : 'text/csv; charset=utf-8', name, ext === 'md' ? p.md : ext === 'html' ? p.html : p.csv);
+    }));
     r.get('/preflight/handoff.csv', wrap(async (req, res) => {
       const test = Rounds.testOnly(await Rounds.roundView(rq(req), o.who(req)));
       download(res, 'text/csv; charset=utf-8', test ? 'TEST_asset-handoff.csv' : 'asset-handoff.csv', await pf.handoffCsv(rq(req), o.who(req)));
