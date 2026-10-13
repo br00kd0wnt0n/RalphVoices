@@ -229,7 +229,7 @@ export async function exportXlsx(ws: Worksheet, opts: { by?: string; due?: Parti
   const builtin: Record<string, string> = {
     LIMIT_ON_ASSET: 'More text than reads comfortably in the artwork. Nothing is cut off; shorter is easier to read.', LIMIT_VISIBLE: 'Longer than what shows before the feed cuts it off: keep the point in the first characters.',
     LIMIT_MAX: 'Longer than the field allows.', NEAR_DUP: 'Very close to another line in the same pool.',
-    FIG_UNSOURCED: 'A figure that is not in the facts list as written. Use a figure from the list, exactly, or take it out.', FIG_CITATION: 'A survey figure that needs its citation.', FIG_ATTRIBUTION: 'A figure credited to the wrong source.', CHECK_FAILED: 'The check did not finish for this line: re-check it.', SHARED_CTA: 'A shared primary text or caption should end on what to do next (e.g. get a quote).',
+    FIG_UNSOURCED: 'A figure that is not in the facts list as written. Use a figure from the list, exactly, or take it out.', FIG_CITATION: 'A survey figure that needs its citation.', FIG_ATTRIBUTION: 'A figure credited to the wrong source.', CHECK_FAILED: 'The check did not finish for this line: re-check it.', SHARED_CTA: "A shared primary text or caption should end on what to do next (e.g. build your pet's plan).",
   };
   const seen = new Map<string, [string, string, string]>();
   const order = { red: 0, amber: 1, grey: 2 };

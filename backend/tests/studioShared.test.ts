@@ -121,6 +121,9 @@ test('shared primary text with no call to action at the end is flagged (amber); 
   assert.deepEqual(cta('Trupanion is medical insurance for pets. We pay your vet directly.'), ['warn']);
   assert.deepEqual(cta('Trupanion is medical insurance for pets. Get a quote in minutes.'), []);
   assert.deepEqual(cta('Trupanion pays your vet directly. Ready? See how it works.'), []);
+  // Trupanion's Round 1 feedback (13 Oct): the call to action is "Build your pet's plan", typed with either apostrophe.
+  for (const end of ["Build your pet's plan.", 'Build your pet’s plan.', "Build your dog's plan.", 'Build your cat’s plan', 'Ready? Build your pet’s plan today!']) assert.deepEqual(cta(`Trupanion is medical insurance for pets. ${end}`), [], end);
+  assert.deepEqual(cta('Trupanion is medical insurance for pets. We build your pet’s plan around them.'), ['warn'], 'a description that contains the verb is not a call to action');
   // Production, 1 Oct: "Protect your pet today." is a call to action; a description that merely contains the verb isn't.
   assert.deepEqual(cta('Trupanion paid $697M in vet bills last year. Protect your pet today.'), []);
   assert.deepEqual(cta('Trupanion is medical insurance for pets. Enroll today.'), []);
