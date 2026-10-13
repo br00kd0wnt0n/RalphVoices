@@ -272,6 +272,8 @@ export interface WsRow {
   field: string; where: string; card?: number; text: string; chars: number; visible: number; max: number;
   status: 'red' | 'amber' | 'clear'; flags: Array<{ level: 'red' | 'amber' | 'grey'; name: string; rule: string; detail?: string }>;
   call: 'keep' | 'cut' | ''; edited: boolean; sha256: string; decided_by?: string; decided_for?: string; signed_off?: boolean;
+  /** Steps 2 and 3: a line of the shared pool (false: written for one asset). */
+  shared?: boolean;
 }
 export interface WorksheetData {
   round: string; round_label: string; region: Region | 'all'; rules?: string; steps: Record<WsStep, WsRow[]>;

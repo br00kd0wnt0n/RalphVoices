@@ -1,6 +1,7 @@
 // The worksheet (Brook, 2 Oct): the month's copy as one table per step, the way the Round 1 spreadsheet worked.
 // Step 1: every on-image headline, subhead and carousel card, by persona and asset (a territory; one territory is
-// one asset). Step 2: the shared primary texts and captions. Step 3: the shared headline bank.
+// one asset). Step 2: the shared primary texts and captions, then each asset's own. Step 3: the shared headline bank,
+// then each asset's own.
 //
 // It is a view over the runs: nothing new is stored. This file has the rows (`worksheet`), the sheet (`exportXlsx`,
 // the Round 1 workbook's shape with the line id and wording hash in two hidden columns) and the way back
@@ -13,7 +14,7 @@ import type { Api, Line, Rules, StudioEvent } from './engine.js';
 import type { Region } from '../../utils/namingCode.js';
 import * as Bulk from './bulk.js';
 import * as R from './ready.js';
-import { isSubField } from './versions.js';
+import { isCarousel, isSubField, signoffOnImage } from './versions.js';
 import { inView, roundOf, type RoundView } from './rounds.js';
 import { chipName } from '../../utils/flagChips.js';
 import { personaRank } from '../../utils/personaOrder.js';
@@ -36,6 +37,8 @@ export interface WsRow {
   /** keep (kept or edited), cut, or '' (undecided: not in the kept set, the board's count or Build, whoever wrote it). */
   call: 'keep' | 'cut' | ''; edited: boolean;
   sha256: string; decided_by?: string; decided_for?: string; signed_off?: boolean;
+  /** Steps 2 and 3: a line of the shared pool (false: written for one asset). */
+  shared?: boolean;
 }
 export interface Worksheet {
   round: string; round_label: string; region: Region | 'all'; rules?: string;
@@ -45,15 +48,39 @@ export interface Worksheet {
   other: number;
 }
 
-/** Which step a line belongs to, or null (a persona's own post copy isn't on the worksheet: captions are shared). */
+/**
+ * Which step a line belongs to, or null (a TikTok hook, a description: not on the worksheet). Primary texts, captions
+ * and Meta headlines are on steps 2 and 3 whether they are shared or written for one asset.
+ */
 export function stepOf(l: Pick<Line, 'field' | 'persona'>, r: Rules): Step | null {
-  if (l.persona === S.SHARED_PERSONA) return S.isOnImageField(l.field, r) ? null : S.PRODUCT_FIELDS.includes(l.field) ? 'primary' : 'headline';
-  return S.isOnImageField(l.field, r) ? 'on_image' : null;
+  if (S.isOnImageField(l.field, r)) return l.persona === S.SHARED_PERSONA ? null : 'on_image';
+  if (S.PRODUCT_FIELDS.includes(l.field)) return 'primary';
+  return l.persona === S.SHARED_PERSONA || /headline/.test(l.field) ? 'headline' : null;
 }
-const whereOf = (l: Pick<Line, 'field' | 'card'>, r: Rules) => {
+/**
+ * Where an on-image line sits. On a carousel every headline is a card: "Card 2" when the line has its number (written
+ * as a card, or placed as one in the sign-off: `card`), else "Card" (pasted with no number, not yet placed in Build).
+ */
+const whereOf = (l: Pick<Line, 'field' | 'card'> & { territory?: string }, r: Rules, card = l.card) => {
   const sub = isSubField(l.field, r);
-  return l.card ? `Card ${l.card}${sub ? ' subhead' : ''}` : sub ? 'Subhead' : S.isOnImageField(l.field, r) ? 'Headline' : r.fields[l.field]?.label || l.field;
+  if (card) return `Card ${card}${sub ? ' subhead' : ''}`;
+  if (S.isOnImageField(l.field, r) && isCarousel(String(r.territories[l.territory || '']?.format || ''))) return sub ? 'Card subhead' : 'Card';
+  return sub ? 'Subhead' : S.isOnImageField(l.field, r) ? 'Headline' : r.fields[l.field]?.label || l.field;
 };
+/**
+ * A flag's plain words. A persona's turn-off says who it puts off and what the rule asks, from the rules file
+ * ("puts Curators off: don't explain insurance basics"), never the rule's code ("turn-off: explain").
+ */
+export function flagWords(rule: string, r: Rules): string {
+  for (const [code, p] of Object.entries(r.personas || {})) {
+    const t = (p.turn_offs || []).find(x => x.id === rule);
+    if (!t) continue;
+    const who = String(p.name || code).replace(/\s*\(.*\)$/, '');
+    const what = String((t as any).label || t.rule || '').split(/[;.:(]/)[0].trim();
+    return what ? `puts ${who} off: ${what.charAt(0).toLowerCase()}${what.slice(1)}` : `puts ${who} off`;
+  }
+  return chipName(rule);
+}
 const isKept = (l: Line) => l.decision === 'keep' || l.decision === 'edit';
 
 export async function worksheet(view: RoundView, region: Region | 'all' = 'US'): Promise<Worksheet> {
@@ -62,6 +89,9 @@ export async function worksheet(view: RoundView, region: Region | 'all' = 'US'):
   const personaOrder = Object.keys(r.personas), territoryOrder = Object.keys(r.territories);
   const all: Array<Omit<WsRow, 'n'>> = [];
   let other = 0;
+  // A carousel line pasted without a card number has one once it is placed in Build and signed off.
+  const cardOf = new Map<string, number>();
+  for (const so of await R.latestSignoffs({ view })) for (const o of signoffOnImage(so)) if (o.card) cardOf.set(o.line_id, o.card);
   for (const run of await S.listBatches(undefined, view)) {
     const b = await S.loadBatch(run.id);
     for (const l of b.lines) {
@@ -72,12 +102,14 @@ export async function worksheet(view: RoundView, region: Region | 'all' = 'US'):
       const text = S.finalText(l);
       const lim = S.fieldLimits(l.field, r, l);
       const flags = l.flags.filter(x => !(l.overrides || []).some(o => o.rule === x.rule)).map(x => ({
-        level: Bulk.SEV[x.severity] || 'grey', name: chipName(x.rule), rule: x.rule,
+        level: Bulk.SEV[x.severity] || 'grey', name: flagWords(x.rule, r), rule: x.rule,
         ...(/^LIMIT_/.test(x.rule) && lim ? { detail: `${[...text].length}, ${x.rule === 'LIMIT_MAX' ? `${lim.max} at most` : `${lim.visible} ${x.rule === 'LIMIT_ON_ASSET' ? 'is the guide' : 'visible'}`}` } : x.rule === 'NEAR_DUP' ? { detail: /Close to (L\d+)/.exec(x.label)?.[1] ? `${b.id}-${/Close to (L\d+)/.exec(x.label)![1]}` : '' } : {}),
       }));
+      const card = l.card || (step === 'on_image' ? cardOf.get(l.id) : undefined);
+      const shared = l.persona === S.SHARED_PERSONA;
       all.push({
         id: l.id, run: b.id, step, persona: l.persona, persona_name: r.personas[l.persona]?.name || l.persona, territory: l.territory,
-        asset: (r.territories[l.territory]?.name || l.territory).replace(/\.$/, ''), region: lineRegion, field: l.field, where: whereOf(l, r), ...(l.card ? { card: l.card } : {}),
+        asset: (r.territories[l.territory]?.name || l.territory).replace(/\.$/, ''), region: lineRegion, field: l.field, where: whereOf(l, r, card), ...(card ? { card } : {}), ...(step !== 'on_image' ? { shared } : {}),
         text, chars: [...text].length, visible: lim?.visible ?? 0, max: lim?.max ?? 0,
         status: flags.some(x => x.level === 'red') ? 'red' : flags.some(x => x.level === 'amber') ? 'amber' : 'clear', flags,
         call: l.decision === 'cut' ? 'cut' : isKept(l) ? 'keep' : '', edited: S.isEdited(l),
@@ -86,11 +118,13 @@ export async function worksheet(view: RoundView, region: Region | 'all' = 'US'):
       });
     }
   }
-  // Step 1 reads persona, then asset, then headline → subhead, or card by card; the pools read in the order written.
-  const rank = (x: Omit<WsRow, 'n'>) => (x.card ? x.card * 2 + (isSubField(x.field, r) ? 1 : 0) : isSubField(x.field, r) ? 1 : 0);
+  // Step 1 reads persona, then asset, then headline → subhead, or card by card. Steps 2 and 3 read the shared pool
+  // first, in the order written, then each asset's own lines by persona and asset.
+  // (A carousel line with no card number yet comes after the numbered cards.)
+  const rank = (x: Omit<WsRow, 'n'>) => (x.card ? x.card * 2 + (isSubField(x.field, r) ? 1 : 0) : (/^Card/.test(x.where) ? 1000 : 0) + (isSubField(x.field, r) ? 1 : 0));
   const idx = (list: string[], k: string) => { const i = list.indexOf(k); return i < 0 ? list.length : i; };
   const cmp = (a: Omit<WsRow, 'n'>, b: Omit<WsRow, 'n'>) =>
-    personaRank(a.persona, personaOrder) - personaRank(b.persona, personaOrder) || idx(territoryOrder, a.territory) - idx(territoryOrder, b.territory) || a.territory.localeCompare(b.territory)
+    Number(a.shared === false) - Number(b.shared === false) || personaRank(a.persona, personaOrder) - personaRank(b.persona, personaOrder) || idx(territoryOrder, a.territory) - idx(territoryOrder, b.territory) || a.territory.localeCompare(b.territory)
     || a.region.localeCompare(b.region) || (a.step === 'on_image' ? rank(a) - rank(b) : 0) || a.id.localeCompare(b.id, undefined, { numeric: true });
   const steps = {} as Worksheet['steps'], counts = {} as Worksheet['counts'];
   for (const s of STEPS) {
@@ -138,8 +172,8 @@ export async function exportXlsx(ws: Worksheet, opts: { by?: string; due?: Parti
   start.addRow(['Step', 'Tab', 'What it is', 'What we need from you', 'By']).eachCell(c => { c.font = { bold: true }; c.fill = HEAD_FILL; });
   const c = ws.counts;
   start.addRow(['1', STEPS[0].tab, `${c.on_image.total} on-image lines (headlines, subheads and carousel cards), by persona and asset.`, 'Keep, cut or rewrite each line.', opts.due?.on_image || '']);
-  start.addRow(['2', STEPS[1].tab, `${c.primary.total} shared primary texts and captions: the same pool runs under every persona's assets.`, `Keep, cut or rewrite; add your own in rows N1 to N${NEW_ROWS}.`, opts.due?.primary || '']);
-  start.addRow(['3', STEPS[2].tab, `${c.headline.total} shared headlines, the same way.`, `Keep, cut or rewrite; add your own in rows N1 to N${NEW_ROWS}.`, opts.due?.headline || '']);
+  start.addRow(['2', STEPS[1].tab, `${c.primary.total} primary texts and captions: the shared pool (it runs under every persona's assets), then the ones written for one asset.`, `Keep, cut or rewrite; add your own in rows N1 to N${NEW_ROWS}.`, opts.due?.primary || '']);
+  start.addRow(['3', STEPS[2].tab, `${c.headline.total} headlines, the same way.`, `Keep, cut or rewrite; add your own in rows N1 to N${NEW_ROWS}.`, opts.due?.headline || '']);
   start.addRow([]);
   start.addRow(['Red breaks a client rule as written and needs a rewrite. Amber is only "have a look": it is yours to keep as it is. Clear has no flags. The "Flag key" tab says what each flag means.']).alignment = { wrapText: true };
   start.mergeCells(`A${start.rowCount}:E${start.rowCount}`); start.getRow(start.rowCount).height = 34;
@@ -149,14 +183,15 @@ export async function exportXlsx(ws: Worksheet, opts: { by?: string; due?: Parti
     const rows = ws.steps[s.key];
     const sh = wb.addWorksheet(s.tab);
     const onImage = s.key === 'on_image';
-    const lead = onImage ? ['Persona', 'Asset', 'Where'] : [];
+    // Steps 2 and 3: the shared pool has no persona or asset; a line written for one asset names both.
+    const lead = onImage ? ['Persona', 'Asset', 'Where'] : ['Persona', 'Asset'];
     const head = ['#', ...(both ? ['Region'] : []), ...lead, 'Line', 'Chars', ...(onImage ? ['Visible'] : []), 'Status', 'Flags', 'Your call', 'Your rewrite', 'Rewrite chars', 'Row id', 'Hash'];
     const at = (name: string) => head.indexOf(name) + 1, L = (name: string) => colLetter(at(name));
     const widths: Record<string, number> = { '#': 6, Region: 8, Persona: 20, Asset: 26, Where: 12, Line: 60, Chars: 7, Visible: 8, Status: 9, Flags: 44, 'Your call': 12, 'Your rewrite': 60, 'Rewrite chars': 9, 'Row id': 30, Hash: 12 };
     sh.columns = head.map(h => ({ width: widths[h] }));
     const cc = ws.counts[s.key];
-    sh.addRow([`Step ${STEPS.indexOf(s) + 1}. ${s.title}${onImage ? ', by persona and asset' : ' (shared across personas)'}`]).font = { bold: true, size: 13 };
-    sh.addRow([`${cc.total} lines: ${cc.red} red, ${cc.amber} amber, ${cc.clear} clear${cc.cut ? ` (${cc.cut} cut, not counted)` : ''}. Yellow cells are yours: choose Keep, Cut or Rewrite, and type the rewrite beside the line.`]);
+    sh.addRow([`Step ${STEPS.indexOf(s) + 1}. ${s.title}${onImage ? ', by persona and asset' : ': the shared pool, then each asset’s own'}`]).font = { bold: true, size: 13 };
+    sh.addRow([`${cc.total} lines: ${cc.red} red, ${cc.amber} amber, ${cc.clear} clear${cc.cut ? ` (${cc.cut} cut, not counted)` : ''}. Yellow cells are yours: choose Keep, Cut or Rewrite, and type the rewrite beside the line.${onImage ? '' : ' A new line with no Asset joins the shared pool; name an Asset to write it for that asset only.'}`]);
     const guide = onImage ? null : S.fieldLimits(s.key === 'primary' ? 'meta_primary' : 'meta_headline', r);
     sh.addRow(onImage ? ['Visible: the guide for what reads comfortably on the image (carousel cards have a looser one). Nothing is cut off; it is about how much there is to read.']
       : [`Visible characters before the text is cut off: ${guide?.visible ?? ''}`]);
@@ -167,7 +202,7 @@ export async function exportXlsx(ws: Worksheet, opts: { by?: string; due?: Parti
       const n = first + i;
       const line = `${L('Line')}${n}`, rw = `${L('Your rewrite')}${n}`;
       const v: Record<string, ExcelJS.CellValue> = {
-        '#': x ? x.n : `N${i - rows.length + 1}`, Region: x?.region || (both ? '' : ws.region), Persona: x?.persona_name || '', Asset: x?.asset || '', Where: x?.where || '', Line: x?.text || '',
+        '#': x ? x.n : `N${i - rows.length + 1}`, Region: x?.region || (both ? '' : ws.region), Persona: x ? (x.shared ? 'Shared' : x.persona_name) : '', Asset: x ? (x.shared ? '' : x.asset) : '', Where: x?.where || '', Line: x?.text || '',
         Chars: x ? { formula: `LEN(${line})`, result: x.chars } : { formula: `IF(${line}="","",LEN(${line}))`, result: '' }, Visible: x ? x.visible : '',
         Status: x ? STATUS_WORD[x.status] : '', Flags: x ? flagsText(x) : '', 'Your call': x ? CALL_WORD[x.call] : '', 'Your rewrite': '',
         'Rewrite chars': { formula: `IF(${rw}="","",LEN(${rw}))`, result: '' }, 'Row id': x?.id || '', Hash: x ? `h${x.sha256.slice(0, 16)}` : '',
@@ -314,14 +349,17 @@ export interface ImportPreview {
   estimate: { usd: number; seconds: number; checks: number };
 }
 
-/** Where a new on-image row goes: persona and asset by name or code, the field and card from "Where". */
+/** Where a new row goes: persona and asset by name or code (steps 2 and 3: none is the shared pool), the field and card from "Where". */
 function placeNew(x: SheetRow, r: Rules): { persona: string; territory: string; field: string; card?: number } | { error: string } {
   const named = <T extends { name: string }>(o: Record<string, T>, w: string) => Object.keys(o).filter(k => k.toLowerCase() === w.toLowerCase() || norm(o[k].name) === norm(w) || norm(o[k].name.replace(/\s*\(.*\)$/, '')) === norm(w));
   const find = <T extends { name: string }>(o: Record<string, T>, w: string) => named(o, w)[0];
-  if (x.step !== 'on_image') return { persona: S.SHARED_PERSONA, territory: S.SHARED_TERRITORY, field: x.step === 'primary' ? 'meta_primary' : 'meta_headline' };
+  // Steps 2 and 3: no asset (or "Shared") is the shared pool; an asset is that asset's own caption or headline.
+  const sharedRow = x.step !== 'on_image' && (!x.asset || /^shared$/i.test(x.asset.trim()));
+  if (sharedRow) return { persona: S.SHARED_PERSONA, territory: S.SHARED_TERRITORY, field: x.step === 'primary' ? 'meta_primary' : 'meta_headline' };
   if (!x.asset) return { error: 'A new on-image line needs its asset (the Asset column)' };
   // Two territories can share a name (a retired pitch territory and the live asset): the row's persona first, a live one before a retired one.
-  const wantPersona = x.persona ? find(r.personas, x.persona) : undefined;
+  const personaCell = /^shared$/i.test(x.persona.trim()) ? '' : x.persona;
+  const wantPersona = personaCell ? find(r.personas, personaCell) : undefined;
   const cands = named(r.territories, x.asset).filter(k => k !== S.SHARED_TERRITORY);
   const mine = cands.filter(k => !wantPersona || r.territories[k].persona === wantPersona);
   const pool = mine.length ? mine : cands;
@@ -329,7 +367,13 @@ function placeNew(x: SheetRow, r: Rules): { persona: string; territory: string; 
   if (!territory) return { error: `No asset called "${x.asset}" in Studio` };
   if (r.territories[territory].status === 'retired') return { error: `"${x.asset}" is retired: it takes no new lines` };
   const persona = r.territories[territory].persona;
-  if (x.persona && find(r.personas, x.persona) !== persona) return { error: `"${x.asset}" belongs to ${r.personas[persona]?.name || persona}, not "${x.persona}"` };
+  if (personaCell && find(r.personas, personaCell) !== persona) return { error: `"${x.asset}" belongs to ${r.personas[persona]?.name || persona}, not "${x.persona}"` };
+  if (x.step !== 'on_image') {
+    // A TikTok asset's caption is its own field; everything else is Meta's primary text or headline.
+    const tiktok = /^TIKTOK/i.test(String(r.territories[territory].format || ''));
+    if (x.step === 'headline' && tiktok) return { error: `"${x.asset}" is a TikTok asset: it has a caption, not a headline` };
+    return { persona, territory, field: x.step === 'headline' ? 'meta_headline' : tiktok && r.fields.tiktok_caption ? 'tiktok_caption' : 'meta_primary' };
+  }
   const w = norm(x.where || 'headline');
   const card = /(card|slide)\s*(\d+)/.exec(w);
   const sub = /sub/.test(w);
