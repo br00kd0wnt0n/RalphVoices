@@ -297,6 +297,20 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     if ('error' in held) return res.status(402).json({ error: held.error });
     res.json({ job: startJob(id, emit => Ws.applyImport(sheet, view, api, { user: who, for: forWho, accept, addUnmatched }, emit).finally(held.release)), estimate: p.estimate, counts: p.counts });
   }));
+  // A line typed on the worksheet: placed by step and asset, checked, kept. ?dry=1 says where it would go and the cost.
+  r.post('/worksheet/lines', wrap(async (req, res) => {
+    await S.refreshRules();
+    const view = await Rounds.roundView(rq(req), o.who(req));
+    const a: Ws.AddLine = { step: req.body?.step, text: String(req.body?.text || ''), asset: req.body?.asset ? String(req.body.asset) : undefined, where: req.body?.where ? String(req.body.where) : undefined, region: wsRegion(req) === 'CA' ? 'CA' : 'US' };
+    const p = await Ws.planAdd(a, view);
+    if (!o.mock && p.usd > o.askOver && !req.body?.confirm) return res.status(409).json({ needs_confirm: true, estimate: p.usd });
+    const who = o.who(req), forWho = forOf(req);
+    const api = o.api(req);
+    const held = await reserve(`worksheet line ${p.place.territory}`, p.usd, api, who);
+    if ('error' in held) return res.status(402).json({ error: held.error });
+    const batchId = p.run || await S.newBatchId(p.place.territory);
+    res.json({ job: startJob(`${batchId}~${Date.now()}`, emit => Ws.addLine(a, view, api, { user: who, for: forWho, batchId }, emit).finally(held.release)), run: batchId, estimate: p.usd });
+  }));
   // Shared captions are written to sit under these: every persona's kept on-image headlines, in a region and the round in view.
   r.get('/approved-headlines', wrap(async (req, res) => {
     await S.refreshRules();

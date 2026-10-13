@@ -504,3 +504,51 @@ export async function applyImport(sheet: SheetParse, view: RoundView, api: Api, 
   out({ type: 'done', batch: 'worksheet-import', result: res });
   return res;
 }
+
+// ---------- adding a line on the worksheet (PR 3) ----------
+
+/** A line typed on the worksheet: the step, the wording, and (step 1, or a caption for one asset) the asset and where it sits. */
+export interface AddLine { step: Step; text: string; asset?: string; where?: string; region?: Region }
+
+/** Where a typed line goes and what checking it costs; throws (400) with the reason when it can't be placed. */
+export async function planAdd(a: AddLine, view: RoundView): Promise<{ place: { persona: string; territory: string; field: string; card?: number }; region: Region; text: string; run?: string; brief: S.Brief; usd: number }> {
+  const r = S.loadRules();
+  const bad = (m: string) => Object.assign(new Error(m), { status: 400 });
+  const text = String(a.text || '').replace(/\s+/g, ' ').trim();
+  if (!text) throw bad('Type the line first');
+  if (!STEPS.some(s => s.key === a.step)) throw bad('Which step is the line for?');
+  const region: Region = a.region === 'CA' ? 'CA' : 'US';
+  const place = placeNew({ tab: '', step: a.step, row: 0, n: '', id: '', hash: '', line: text, call: '', call_raw: '', rewrite: '', persona: '', asset: a.asset || '', where: a.where || '', region }, r);
+  if ('error' in place) throw bad(place.error);
+  // The asset's run in this month and region, if it has one: the line joins it (no run per line). With several,
+  // the one that already holds this step's lines (on-image copy with on-image copy), else the oldest.
+  const runs: Array<{ id: string; created: string; sameStep: boolean }> = [];
+  for (const x of await S.listBatches(undefined, view)) {
+    if (x.persona !== place.persona || x.territory !== place.territory || x.region !== region) continue;
+    const b = await S.loadBatch(x.id);
+    if (b.lines.some(l => l.field === place.field && l.decision !== 'cut' && S.regionOfLine(l, b.brief) === region && S.finalText(l).trim() === text)) throw bad('That wording is already on the worksheet');
+    runs.push({ id: b.id, created: x.created, sameStep: b.lines.some(l => stepOf(l, r) === a.step) });
+  }
+  runs.sort((x, y) => Number(y.sameStep) - Number(x.sameStep) || x.created.localeCompare(y.created) || x.id.localeCompare(y.id));
+  const run: string | undefined = runs[0]?.id;
+  const base = run ? (await S.loadBatch(run)).brief : S.makeBrief({ persona: place.persona, territory: place.territory, region, name: `worksheet ${place.territory}`, fields: [place.field] });
+  const brief = { ...base, own_lines: [{ text, field: place.field }] } as S.Brief;
+  return { place, region, text, run, brief, usd: S.estimate(brief, { ownOnly: true }).usd };
+}
+
+/**
+ * Add the line: filed in its asset's run (or a new one), checked in full, kept, and recorded for the person named,
+ * the same as a line pasted in Check copy or typed in a sheet's N rows.
+ */
+export async function addLine(a: AddLine, view: RoundView, api: Api, opts: { user?: string; for?: string; batchId?: string }, out: (e: StudioEvent) => void = () => {}): Promise<{ run: string; line: string }> {
+  const p = await planAdd(a, view);
+  const before = new Set(p.run ? (await S.loadBatch(p.run)).lines.map(l => l.id) : []);
+  out({ type: 'status', message: 'Checking the new line…' });
+  const batch = await S.generate(p.brief, api, () => {}, { ownOnly: true, user: opts.user, for: opts.for, batchId: p.run || opts.batchId });
+  if (p.place.card) await S.stampFor(batch.id, { cards: [{ text: p.text, field: p.place.field, card: p.place.card }] });
+  const added = batch.lines.filter(l => !before.has(l.id));
+  for (const l of added) await S.setDecision(batch.id, l.id, { decision: 'keep' }, opts.user, opts.for);
+  const res = { run: batch.id, line: added[0]?.id || '' };
+  out({ type: 'done', batch: batch.id, result: res });
+  return res;
+}

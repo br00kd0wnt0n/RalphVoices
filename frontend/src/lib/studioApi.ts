@@ -507,6 +507,9 @@ export const studio = {
   setAdFeedback: (ad: string, review: string, state: FeedbackState, note?: string) => req<FeedbackItem>('/feedback/ads', { method: 'POST', body: JSON.stringify({ ad, review, state, ...(note === undefined ? {} : { note }) }) }),
   // The worksheet: the month's copy as a workbook, and the filled-in workbook read back.
   worksheet: (region: Region | 'all' = 'US') => req<WorksheetData>(`/worksheet?region=${region}`),
+  /** A line typed on the worksheet: placed by step and asset (none on steps 2 and 3: the shared pool), checked, kept. */
+  worksheetAdd: (line: { step: WsStep; text: string; asset?: string; where?: string; region: Region }, confirm = false) =>
+    req<{ job: string; run: string; estimate: number }>('/worksheet/lines', { method: 'POST', body: JSON.stringify({ ...line, confirm }) }),
   worksheetXlsx: (region: Region | 'all' = 'US') => download(`/worksheet.xlsx?region=${region}`, 'copy-worksheet.xlsx'),
   worksheetPreview: async (file: File, accept: string[] = []) => {
     const form = new FormData();

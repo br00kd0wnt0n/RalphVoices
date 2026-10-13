@@ -403,7 +403,7 @@ export function Studio() {
         {meta && tab === 'territories' && <Territories meta={meta} onSaved={() => refreshMeta()} onBrief={code => { const t = meta.territories[code]; setCtx({ persona: t.persona, territory: code, region: ctx.region }); setTab('write'); }} />}
         {tab === 'rules' && meta?.rounds && <RoundsPanel meta={meta} onSaved={() => refreshMeta().catch(() => {})} />}
         {/* The worksheet (Round 2), in preview: everything on one page; it becomes the default screen on Brook's word. */}
-        {meta && tab === 'worksheet' && <Worksheet meta={meta} region={ctx.region} onStep={t => goTab(t)} onChanged={() => setRunsTick(t => t + 1)} />}
+        {meta && tab === 'worksheet' && <Worksheet meta={meta} region={ctx.region} onStep={t => goTab(t)} onChanged={() => setRunsTick(t => t + 1)} onOpenRun={id => { continueRun(id).catch(e => setErr(e.message)); }} />}
         {meta && tab === 'check' && <CopyCheck meta={meta} onOpenRun={id => { continueRun(id).catch(e => setErr(e.message)); }} />}
         {tab === 'rules' && (meta || admin) && <Rules meta={meta} admin={HOSTED && (!!meta?.user?.admin || admin)} onActivated={() => refreshMeta().then(() => setErr('')).catch(() => {})} />}
       </main>
