@@ -822,7 +822,8 @@ export class Preflight {
    * Nothing of Trupanion's compliance decision is in it.
    */
   async flagReport(filter: { persona?: string; territory?: string; region?: string; round?: string; user?: string; stubs?: string[] } = {}): Promise<{ input: FlagReportInput; md: string; html: string; csv: string; test: boolean }> {
-    const rules: any = await S.getStore().getRules();
+    // The rules as Studio uses them: with the territories added or edited in Studio (the month's assets), not only the file's.
+    const rules: any = await S.refreshRules();
     const view = await roundView(filter.round, filter.user);
     const test = testOnly(view);
     const rounds = await getRounds();
