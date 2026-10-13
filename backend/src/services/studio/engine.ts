@@ -875,8 +875,8 @@ export function screenWritten(text: string, cell: Pick<Cell, 'field' | 'structur
   if (PRODUCT_FIELDS.includes(cell.field) && !NAMES_PRODUCT.test(text)) return { reason: 'doesn’t say what’s sold (no "Trupanion" or "medical insurance for pets")', rule: 'CL_PRODUCT' };
   return null;
 }
-/** The last sentence asks for an action (get a quote, see how it works, learn more…). */
-const CTA = /^\W*(get|see|start|begin|find|learn|compare|check|explore|visit|request|discover|try|tap|click|sign up|enrol+|join|ask|talk to|protect|cover|quote|choose|meet|give|make|take|keep|plan|call|download|shop|apply|switch|look|read|watch)\b/i;
+/** The last sentence asks for an action (build your pet's plan, see how it works, learn more…). */
+const CTA = /^\W*(build|get|see|start|begin|find|learn|compare|check|explore|visit|request|discover|try|tap|click|sign up|enrol+|join|ask|talk to|protect|cover|quote|choose|meet|give|make|take|keep|plan|call|download|shop|apply|switch|look|read|watch)\b/i;
 export function endsOnCta(text: string): boolean {
   const parts = text.trim().split(/(?<=[.!?…])\s+/).filter(Boolean);
   const last = parts[parts.length - 1] || '';
@@ -912,7 +912,7 @@ function sharedAudience(b: Brief, r: Rules): string {
 - No persona-specific references: no particular household, life stage, income, age or kind of owner. The artwork carries the persona; this copy doesn't.
 - Build on what Trupanion is and does (the ANGLE is ${r.personas[b.persona].triggers[0].id} "${r.personas[b.persona].triggers[0].label}"). Reasons to believe, from the facts list:
 ${own.map(f => `  - ${f.text}`).join('\n') || '  - (the facts list below)'}
-- Primary text and captions, MUST: name Trupanion or "medical insurance for pets" in the words (a line that doesn't is thrown away), give one reason to believe from the list above, and make the LAST sentence a call to action that starts with a verb (e.g. "Get a quote in minutes.", "See how it works."). No line ends on a description or a feeling.
+- Primary text and captions, MUST: name Trupanion or "medical insurance for pets" in the words (a line that doesn't is thrown away), give one reason to believe from the list above, and make the LAST sentence a call to action that starts with a verb (e.g. "Build your pet's plan.", "See how it works."). No line ends on a description or a feeling.
 - Meta headline: the benefit or the action, short. A bank of headlines that work under any primary text here.
 ${heads.length ? `APPROVED ON-IMAGE HEADLINES this copy will run under (each ad's artwork carries one; they are persona-specific, yours is not). Write post copy that works under any of them, supports them, and never repeats their words:\n${heads.map(h => `- ${h}`).join('\n')}\n` : ''}${r.casting?.writer_note ? `PETS: ${r.casting.writer_note}\n` : ''}
 TERRITORY: ${r.territories[b.territory].name}. ${r.territories[b.territory].premise}
