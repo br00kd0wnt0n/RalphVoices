@@ -10,6 +10,7 @@
 // Nothing imports src/db or src/routes.
 
 import crypto from 'node:crypto';
+import { memo } from '../../utils/requestMemo.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import OpenAI from 'openai';
@@ -1111,7 +1112,8 @@ function parseLines(text: string): Array<{ cell: string; text: string }> {
 // ---------- batches on disk ----------
 
 export async function batchExists(id: string): Promise<boolean> { return getStore().batchExists(id); }
-export async function loadBatch(id: string): Promise<Batch> { return getStore().getBatch(id); }
+/** A run (once per request inside `withMemo`: the read-only Pre-flight views load the same runs for every code). */
+export async function loadBatch(id: string): Promise<Batch> { return memo(`batch:${id}`, () => getStore().getBatch(id)); }
 /**
  * Changes to one run are made one at a time, each on fresh data (two people on the same run: the two-user test,
  * 30 Sep, lost decisions, compliance statuses and added lines to last-write-wins).

@@ -31,6 +31,7 @@ import { cleanFor, decidedBy, packActor, unpackActor, whoWords } from '../../uti
 import type { AssetKind, AuditEngine, AuditFlag, AuditResult, SignedCopy } from './preflightEngine.js';
 import { COPY_MATCH_SOURCE, REWORD_MIN, bestMatch, copyMatch, normalise, stylingDiff } from '../audit/copyMatch.js';
 import { signedOffCopy } from './preflightB2.js';
+import { memo } from '../../utils/requestMemo.js';
 import { blocksToHtml, blocksToMarkdown, flagReportBlocks, flagReportRows, mergeAdFlags, type FlagReportInput, type ReportAd, type ReportFlag } from './flagReport.js';
 import { plainSource } from '../../utils/plainSource.js';
 
@@ -354,7 +355,7 @@ export class Preflight {
     await this.expireStuck();
     const out: StubRow[] = [];
     const view = await roundView(filter.round, filter.user);
-    const rules = await S.getStore().getRules();
+    const rules = await memo('rules', () => S.getStore().getRules());
     for (const s of await latestSignoffs({ ...filter, view })) {
       for (const stub of signoffVersions(s).map(v => v.code).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) {
         const upload = await this.latestUpload(stub);
@@ -554,7 +555,8 @@ export class Preflight {
   }
 
   /** The latest upload serving a stub (its own, or a shared visual). */
-  private async latestUpload(stub: string): Promise<StubRow['upload']> {
+  private latestUpload(stub: string): Promise<StubRow['upload']> { return memo(`upload:${stub}`, () => this.loadLatestUpload(stub)); }
+  private async loadLatestUpload(stub: string): Promise<StubRow['upload']> {
     const u = (await this.db.query(
       // An upload with no files (storage refused it) is never the current one.
       `SELECT u.* FROM studio_asset_uploads u JOIN studio_upload_stubs us ON us.upload_id = u.id WHERE us.stub = $1
@@ -808,7 +810,7 @@ export class Preflight {
     const result = a?.result ? { ...a.result, copy_match: a.result.copy_match_by_stub?.[stub] ?? a.result.report?.copy_match } : null;
     return {
       stub, persona: signoff.persona, territory: signoff.territory, region: signoff.region || DEFAULT_REGION, visual_key: visualKey(stub), signoff_id: signoff.id, copy, upload, history,
-      sizes: this.sizesOf(stub, upload, await S.getStore().getRules()),
+      sizes: this.sizesOf(stub, upload, await memo('rules', () => S.getStore().getRules())),
       same_visual_as: upload ? upload.stubs.filter(x => x !== stub) : [],
       format_note: upload ? formatNote(stub, upload.kind) : null,
       // Red flags on the copy overridden at sign-off: a Pre-flight flag on the same rule shows the earlier override and
@@ -898,7 +900,7 @@ export class Preflight {
   }
 
   private async status(stub: string): Promise<StubRow['status']> {
-    const r = (await this.db.query(`SELECT * FROM studio_asset_status WHERE stub = $1`, [stub])).rows[0];
+    const r = (await memo(`status:${stub}`, () => this.db.query(`SELECT * FROM studio_asset_status WHERE stub = $1`, [stub]))).rows[0];
     // ready_by is a text column: "by (for X)" when it was marked for someone (utils/actor.ts).
     const who = unpackActor(r?.ready_by);
     return r ? { status: r.status, ready_by: who.by || undefined, ...(who.for ? { ready_for: who.for } : {}), ready_at: r.ready_at ? new Date(r.ready_at).toISOString() : undefined, upload_id: r.upload_id ?? undefined } : { status: 'open' };

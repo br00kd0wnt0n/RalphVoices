@@ -12,6 +12,7 @@ import * as Rounds from './rounds.js';
 import * as Bulk from './bulk.js';
 import * as Ws from './worksheet.js';
 import * as Locks from './locks.js';
+import { withMemo } from '../../utils/requestMemo.js';
 import * as Feedback from './feedback.js';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -81,6 +82,8 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     // An error that says what it is (402 budget, 403 not allowed, 409 someone else changed it) keeps its status.
     try { await fn(req, res); } catch (err: any) { if (!res.headersSent) res.status([402, 403, 409, 423, 503].includes(err?.status) ? err.status : 400).json({ error: String(err?.message || err), ...(err?.status === 409 ? { conflict: true } : {}), ...(err?.locked ? { locked: err.locked } : {}) }); }
   };
+  /** A read-only route: sign-offs, runs and uploads are loaded once for the request (utils/requestMemo.ts). */
+  const view = (fn: (req: Request, res: Response) => any) => wrap((req, res) => withMemo(async () => fn(req, res)));
   /**
    * Reserve a job's estimated cost against the cap before it starts, under a lock: two runs started together can't
    * pass the cap between them (each used to check the total before either had spent). The reservation is a spend row
@@ -442,7 +445,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     const uploadDir = path.join(os.tmpdir(), 'studio-uploads');
     fs.mkdirSync(uploadDir, { recursive: true });
     const files = multer({ storage: multer.diskStorage({ destination: uploadDir }), limits: { fileSize: R2_FILE_CAP, files: 20 } });
-    r.get('/preflight/stubs', wrap(async (req, res) => res.json(await pf.stubs({ ...pt(req.query), user: o.who(req) }))));
+    r.get('/preflight/stubs', view(async (req, res) => res.json(await pf.stubs({ ...pt(req.query), user: o.who(req) }))));
     // Up to 40 files: a carousel is its cards in each size (10 cards × 3 sizes at most, plus room).
     r.post('/preflight/stubs/:stub/uploads', (req, res, next) => files.array('files', 40)(req, res, (err: any) => {
       if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? `A file is over the ${Math.round(R2_FILE_CAP / 1048576)} MB limit` : String(err.message || err) });
@@ -478,7 +481,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
       const who = o.who(req);
       res.json({ audit: auditId, job: startJob(`preflight~${auditId}`, emit => pf.runAudit(auditId, emit, who).finally(held.release)), estimate: e });
     }));
-    r.get('/preflight/stubs/:stub/report', wrap(async (req, res) => res.json(await pf.report(req.params.stub, o.who(req)))));
+    r.get('/preflight/stubs/:stub/report', view(async (req, res) => res.json(await pf.report(req.params.stub, o.who(req)))));
     r.get('/preflight/files/:upload/:position', wrap(async (req, res) => {
       const f = await pf.fileStream(req.params.upload, Number(req.params.position));
       res.setHeader('Content-Type', f.contentType);
@@ -501,9 +504,9 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
       catch (err: any) { if (err.blocking) return res.status(409).json({ error: err.message, blocking: err.blocking }); throw err; }
     }));
     r.get('/preflight/agreement', wrap(async (req, res) => res.json(await pf.agreement({ ...pt(req.query), user: o.who(req) } as any))));
-    r.get('/preflight/features.csv', wrap(async (_req, res) => download(res, 'text/csv; charset=utf-8', 'preflight-features.csv', await pf.featuresCsv())));
+    r.get('/preflight/features.csv', view(async (_req, res) => download(res, 'text/csv; charset=utf-8', 'preflight-features.csv', await pf.featuresCsv())));
     // The flag report for the ads in view on Assets (internal; nothing of Trupanion's decision): ?stubs=a,b narrows to those ads.
-    r.get('/preflight/flag-report.:ext', wrap(async (req, res) => {
+    r.get('/preflight/flag-report.:ext', view(async (req, res) => {
       const ext = String(req.params.ext);
       if (!['md', 'html', 'csv'].includes(ext)) return res.status(404).json({ error: 'The flag report comes as .md, .html or .csv' });
       const stubs = String(req.query.stubs || '').split(',').map(x => x.trim()).filter(Boolean);
@@ -511,13 +514,13 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
       const name = `${p.test ? 'TEST_' : ''}preflight-flag-report-${new Date().toISOString().slice(0, 10)}.${ext}`;
       download(res, ext === 'md' ? 'text/markdown; charset=utf-8' : ext === 'html' ? 'text/html; charset=utf-8' : 'text/csv; charset=utf-8', name, ext === 'md' ? p.md : ext === 'html' ? p.html : p.csv);
     }));
-    r.get('/preflight/handoff.csv', wrap(async (req, res) => {
+    r.get('/preflight/handoff.csv', view(async (req, res) => {
       const test = Rounds.testOnly(await Rounds.roundView(rq(req), o.who(req)));
       download(res, 'text/csv; charset=utf-8', test ? 'TEST_asset-handoff.csv' : 'asset-handoff.csv', await pf.handoffCsv(rq(req), o.who(req)));
     }));
 
     // ----- Compliance (step 7): each asset with its codes' copy and flags; Trupanion's reviewer sets the status -----
-    r.get('/compliance', wrap(async (req, res) => res.json(await pf.complianceAssets({ ...pt(req.query), user: o.who(req) }))));
+    r.get('/compliance', view(async (req, res) => res.json(await pf.complianceAssets({ ...pt(req.query), user: o.who(req) }))));
     r.post('/compliance/assets/:upload', wrap(async (req, res) => {
       if (o.canSetCompliance && !o.canSetCompliance(req)) return res.status(403).json({ error: 'Trupanion’s compliance decisions are recorded by the producer (Vivan) or an admin' });
       try { res.json(await pf.setAssetCompliance(req.params.upload, { ...(req.body || {}), for: forOf(req) }, o.who(req))); }
