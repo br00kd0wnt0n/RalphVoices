@@ -225,6 +225,11 @@ export interface PfFlag {
   mine: boolean | null;
 }
 export interface PfSizes { expected: string[]; uploaded: string[]; missing: string[] }
+/** The upload declaration (no AI imagery, the source, a real member when a customer is shown): needed before Pre-flight passes. */
+export interface UploadDeclaration {
+  no_ai: boolean; sources: Array<'shot' | 'stock' | 'library' | 'animated' | 'other'>; reference?: string; based_on?: string; member: 'member' | 'none' | null;
+  by: string; for?: string; at: string;
+}
 export interface PfReport {
   stub: string; persona: string; territory: string; region: Region; visual_key: string | null; signoff_id: string; copy: SignedCopy[]; upload: PfUpload | null;
   sizes?: PfSizes;
@@ -240,6 +245,8 @@ export interface PfReport {
       retryable?: boolean; interrupted?: boolean;
       report?: { copy_match?: Array<{ field: string; signed_off: string; found: string; similarity: number; status: string; card?: number; found_on?: number; size?: string }>; tagged_features?: string[]; set_aside?: Array<{ rule: string; quote?: string; why: string }> } } };
   flags: PfFlag[]; status: PfStatus;
+  /** The latest upload's declaration; for one not yet declared, the last answers for this ad to start from. */
+  declaration?: UploadDeclaration | null; declaration_draft?: UploadDeclaration | null;
   compliance?: CodeCompliance;
   traffic?: Traffic;
 }
@@ -552,6 +559,7 @@ export const studio = {
   pfFile: (uploadId: string, position: number) => `/preflight/files/${enc(uploadId)}/${position}`,
   pfAgree: (flagId: string, agree: boolean, note?: string) => req<unknown>(`/preflight/flags/${enc(flagId)}/agree`, { method: 'POST', body: JSON.stringify({ agree, note }) }),
   pfOverride: (flagId: string, reason: string) => req<unknown>(`/preflight/flags/${enc(flagId)}/override`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  pfDeclare: (uploadId: string, d: Pick<UploadDeclaration, 'no_ai' | 'sources' | 'reference' | 'based_on' | 'member'>) => req<UploadDeclaration>(`/preflight/uploads/${enc(uploadId)}/declaration`, { method: 'POST', body: JSON.stringify(d) }),
   pfReady: (stub: string, ready: boolean) => req<PfStatus>(`/preflight/stubs/${enc(stub)}/ready`, { method: 'POST', body: JSON.stringify({ ready }) }),
   /** Every code on this code's visual: each passes on its own flags; the ones that can't say why. */
   pfReadyVisual: (stub: string) => req<{ passed: string[]; blocked: Array<{ code: string; error: string }> }>(`/preflight/stubs/${enc(stub)}/ready`, { method: 'POST', body: JSON.stringify({ ready: true, all_on_visual: true }) }),

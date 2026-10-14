@@ -21,6 +21,8 @@ export interface ReportAd {
   asset: string; persona: string; region: string;
   kind?: string;
   upload: null | { files: Array<{ filename: string; size?: string | null }>; uploaded_by: string; uploaded_at: string };
+  /** The upload's imagery and footage declaration, in words (declaration.ts). */
+  declaration?: string;
   sizes: { expected: string[]; uploaded: string[]; missing: string[] };
   audit: null | { status: string; finished_at?: string | null; started_by?: string | null; rules_version?: string | null; stale?: string | null; error?: string | null; notes?: string[] };
   /** Pre-flight marked passed: by whom. */
@@ -153,7 +155,7 @@ export function flagReportBlocks(r: FlagReportInput): Block[] {
 
   out.push({ h: 2, text: 'What was checked' });
   out.push({ ul: [
-    ...withArt.map(a => `**${a.asset} (${a.persona}):** ${a.upload!.files.map(f => `${f.filename}${f.size ? ` (${f.size})` : ''}`).join(', ')}. Uploaded by ${a.upload!.uploaded_by || 'unknown'}, ${day(a.upload!.uploaded_at)}.${a.audit ? ` ${checked(a) ? 'Checked' : `Check ${a.audit.status}`}${a.audit.finished_at ? ` ${day(a.audit.finished_at)}` : ''}${a.audit.started_by ? ` (started by ${a.audit.started_by})` : ''}${a.audit.rules_version ? `, rules ${a.audit.rules_version}` : ''}.` : ''}${a.audit?.notes?.length ? ` ${a.audit.notes.map(stop).join('. ')}.` : ''}${a.audit?.error ? ` Error: ${stop(a.audit.error)}.` : ''}`),
+    ...withArt.map(a => `**${a.asset} (${a.persona}):** ${a.upload!.files.map(f => `${f.filename}${f.size ? ` (${f.size})` : ''}`).join(', ')}. Uploaded by ${a.upload!.uploaded_by || 'unknown'}, ${day(a.upload!.uploaded_at)}.${a.declaration ? ` Declared: ${a.declaration}.` : ''}${a.audit ? ` ${checked(a) ? 'Checked' : `Check ${a.audit.status}`}${a.audit.finished_at ? ` ${day(a.audit.finished_at)}` : ''}${a.audit.started_by ? ` (started by ${a.audit.started_by})` : ''}${a.audit.rules_version ? `, rules ${a.audit.rules_version}` : ''}.` : ''}${a.audit?.notes?.length ? ` ${a.audit.notes.map(stop).join('. ')}.` : ''}${a.audit?.error ? ` Error: ${stop(a.audit.error)}.` : ''}`),
     ...(r.rules_version ? [`Rules in force now: ${r.rules_version}.`] : []),
     'Flags are prompts for a person to look, not a verdict on the ad. Sign-off stays with the creative lead and compliance clearance with Trupanion.',
   ] });
