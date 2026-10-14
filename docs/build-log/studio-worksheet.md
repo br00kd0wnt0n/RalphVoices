@@ -75,3 +75,13 @@ Three ways to get lines onto the worksheet without leaving it. Nothing new is st
 - **Build:** a note, never a block. "Not locked yet on the worksheet: 1 On-image copy, 2 Captions" sits beside the key dates until all three are locked for the header's region. (Brook's open question, "does an unlocked step block Build or warn": built as warn, in line with Studio informing rather than blocking; a block is a small change if wanted.)
 - **Note:** a copy fix asked for by Trupanion after the lock needs the step unlocked first, by design.
 - Tests: `tests/studioWorksheet.test.ts` (refusals per step, region and round; the sheet's locked rows), `tests/studioRouter.test.ts` (423 over HTTP for keep, more, generate and worksheet lines; unlock).
+
+## PR 5: the worksheet is the start screen (14 Oct)
+
+"Make it the default screen; move the rest behind Advanced" (`frontend/src/lib/studioMode.ts`; frontend only).
+
+- **The simple view (the default):** `/studio` opens the worksheet. The header has its five steps: Worksheet (1–3), 4 Build ads, 5 Assets, plus the region, the month, Export and "Advanced". Build ads keeps its persona × territory bar (Build needs it) and Assets its view bar.
+- **Advanced:** the round board, Write, Review, Territories, Rules, the worksheet link, Check copy, Compare, How it works and Live, unchanged. "Advanced" switches to it (and `/studio` is then the board); "Simple view" switches back.
+- **Remembered per browser** (`localStorage` `voices-studio-mode`; no storage: the simple view). Brook clicks Advanced once on each browser to keep today's Studio.
+- **Links still work:** a link to an advanced screen (`/studio/review?…`, a board cell, Review from Build) opens it in the simple view too, with the advanced header and "← Worksheet" to come back; the remembered choice doesn't change.
+- Tests: `backend/tests/studioRoute.test.ts` (start screen per view, the remembered choice, which screens are advanced).

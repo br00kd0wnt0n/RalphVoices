@@ -43,3 +43,17 @@ test('studio route: the query follows what is on screen', () => {
   assert.equal(withState('home', '?persona=FAM&territory=FAM_SUMMER', { region: 'US' }), '?region=US');
   assert.equal(withState('review', '?batch=b1', s), '?batch=b1&persona=DINK&territory=DINK_SOCK&region=CA');
 });
+
+test('studio mode: the worksheet is the start in the simple view; the board in the advanced one; the choice is remembered', async () => {
+  const { getMode, setMode, startTab, isAdvancedTab } = await import('../../frontend/src/lib/studioMode.js');
+  const mem = new Map<string, string>();
+  const store = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); } };
+  assert.equal(getMode(store), 'simple', 'the simple view by default');
+  assert.equal(startTab('home', 'simple'), 'worksheet');
+  assert.equal(startTab('home', 'advanced'), 'home');
+  assert.equal(startTab('review', 'simple'), 'review', 'a link to an advanced screen still opens it');
+  setMode('advanced', store);
+  assert.equal(getMode(store), 'advanced');
+  assert.deepEqual(['worksheet', 'build', 'assets', 'write', 'review', 'home', 'rules', 'check'].map(t => isAdvancedTab(t as any)), [false, false, false, true, true, true, true, true]);
+  assert.equal(getMode({ getItem: () => { throw new Error('blocked'); } }), 'simple', 'no storage: the simple view');
+});
