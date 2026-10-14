@@ -29,7 +29,7 @@ import { deletePrivateObject, downloadPrivateObject, getPrivateObject, getPrivat
 import { FatalError } from '../audit/api.js';
 import { cleanFor, decidedBy, packActor, unpackActor, whoWords } from '../../utils/actor.js';
 import type { AssetKind, AuditEngine, AuditFlag, AuditResult, SignedCopy } from './preflightEngine.js';
-import { COPY_MATCH_SOURCE, REWORD_MIN, bestMatch, copyMatch, normalise } from '../audit/copyMatch.js';
+import { COPY_MATCH_SOURCE, REWORD_MIN, bestMatch, copyMatch, normalise, stylingDiff } from '../audit/copyMatch.js';
 import { signedOffCopy } from './preflightB2.js';
 import { blocksToHtml, blocksToMarkdown, flagReportBlocks, flagReportRows, mergeAdFlags, type FlagReportInput, type ReportAd, type ReportFlag } from './flagReport.js';
 import { plainSource } from '../../utils/plainSource.js';
@@ -66,8 +66,8 @@ export class StorageError extends Error {
 }
 
 export const DB_FILE_CAP = 25 * 1024 * 1024;     // local/dev only (R2 off)
-/** Bump when the audit or copy-match logic changes what a stored audit would say (2: on-asset copy match per stub; 3: the disclaimer on the last screen; 4: the disclaimer by region, and every approved version read as small print). */
-export const PREFLIGHT_LOGIC_VERSION = 4;
+/** Bump when the audit or copy-match logic changes what a stored audit would say (2: on-asset copy match per stub; 3: the disclaimer on the last screen; 4: the disclaimer by region, and every approved version read as small print; 5: a matching line set in other capitals or punctuation, COPY_STYLING). */
+export const PREFLIGHT_LOGIC_VERSION = 5;
 
 /**
  * Where Pre-flight files go. Production with R2 on: the private bucket
@@ -223,7 +223,13 @@ export function cardMatch(cards: SignedCopy[], assetText: Array<{ where: string;
     const field = sub ? 'on_image_sub' as const : 'on_image' as const;
     const what = (kk: number) => `Card ${kk}'s ${sub ? 'subhead' : 'text'}`;
     const mine = onCard(k);
-    if (mine && normalise(mine).includes(normalise(c.text))) { rows.push({ field, card: k, signed_off: c.text, found: normalise(c.text), similarity: 1, status: 'match' }); continue; }
+    if (mine && normalise(mine).includes(normalise(c.text))) {
+      rows.push({ field, card: k, signed_off: c.text, found: normalise(c.text), similarity: 1, status: 'match' });
+      // The words match; set differently (all capitals, an added "!") is its own amber (Brook, 9 Oct).
+      const st = stylingDiff(c.text, [mine]);
+      if (st) flags.push({ rule: 'COPY_STYLING', severity: 'amber', label: `${what(k)}: the words match, ${st.what}`, source: COPY_MATCH_SOURCE, quote: `signed off: "${c.text.trim()}" · on card ${k}: "${st.found}"`, why: 'The brand writes in sentence case; use the signed-off capitals and punctuation, or sign off the line as set', where: `card ${k}`, check: 'copy_match', frame: frame(k) });
+      continue;
+    }
     const other = cardNos.filter(j => j !== k).find(j => normalise(onCard(j)).includes(normalise(c.text)));
     if (other) {
       rows.push({ field, card: k, signed_off: c.text, found: normalise(c.text), similarity: 1, status: 'wrong card', found_on: other });

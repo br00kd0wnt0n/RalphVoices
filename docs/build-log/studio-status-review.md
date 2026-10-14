@@ -101,3 +101,13 @@ Brook asked for "full URL extensions to the subsection steps": each screen now h
 - **Local `serve` mode** behaves the same (the Vite dev server answers any path with the app).
 - **Through the Narrativ shell (tools.ralph.world): deep links do not work yet.** The shell always loads the frame at `<Voices>/studio` and its address bar stays at `tools.ralph.world/studio`, so the path inside the frame is not visible and cannot be shared from the address bar. Deep links work on the direct Voices URL, for someone already signed in there. The shell change is in the Narrativ repo (not made here): (1) in `PersistentToolHost.tsx`, build the Studio frame's first `src` from the shell's own path and query (`/studio/assets?stub=…` → `<Voices>/studio/assets?stub=…`; the shell already routes `/studio/*`); (2) listen for Studio's message and `replaceState` the shell's address, as it does for RCB's `rcb-nav`. Studio already posts it when framed: `{ type: 'voices-nav', source: 'voices-studio', pathname, search }` on every screen or state change (never the sign-in token).
 - Frontend only; no migration.
+
+## Capitals and punctuation on the artwork (14 Oct)
+
+From the first real uploads (9 Oct): copy match ignores case and punctuation, so "YOU DO HAVE THIS!" on the Have This artwork passed against the signed-off "You do have this." The brand rule is sentence case.
+
+- **New amber, `COPY_STYLING`** ("capitals or punctuation"): the words match the signed-off line, but the asset sets them in capitals, in other capitals ("No Kids."), or with punctuation added, dropped or changed ("!" for "."). Both versions are quoted, e.g. `signed off: "You do have this." · on card 2: "YOU DO HAVE THIS!"`. It is amber: the creative lead can keep the artwork as it is.
+- **Not counted:** a final full stop dropped from artwork (the usual design convention), curly versus straight quotes, line breaks.
+- **Where:** statics and video text (`copyMatch` in `services/audit/copyMatch.ts`, `stylingDiff`) and carousel cards, card by card (`cardMatch` in preflight.ts). The match itself is unchanged: a styled line is still a match, never "reworded" or "not on the asset".
+- **Older audits:** `PREFLIGHT_LOGIC_VERSION` is now 5, so the audits from before this say "Checked by an older version of the checks: audit again". Nothing else changes until an ad is audited again. Re-auditing the three DINK ads should add one styling amber to Have This (card 2), going by the coordinator's 9 Oct notes; I could not check that, because I can't see production.
+- **Limit:** the check reads the text the vision model returns. If the model transcribes capitals differently from the artwork, the amber can be wrong either way; there is still no OCR cross-check.

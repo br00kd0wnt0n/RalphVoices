@@ -97,8 +97,10 @@ test('version checks: a subhead repeating its headline\'s words is "fields repea
 test('Pre-flight copy match: the subhead must be on the asset (red if not), as must each card\'s subhead', () => {
   const copy = (field: string, text: string, card?: number) => ({ line_id: `${field}${card || ''}`, field, label: field, text, version: 1, ...(card ? { card } : {}) });
   const statics = [copy('meta_on_image', 'Vet visits, calmer'), copy('meta_on_image_sub', 'Medical insurance for your whole household'), copy('meta_primary', 'Post copy')];
-  const both = copyMatchForStub(statics, [{ where: 'image', text: 'VET VISITS, CALMER\nMedical insurance for your whole household' }], { compliance: [] }, 'static');
+  const both = copyMatchForStub(statics, [{ where: 'image', text: 'Vet visits, calmer\nMedical insurance for your whole household' }], { compliance: [] }, 'static');
   assert.deepEqual(both.flags, []);
+  // The same words set in capitals: matched, with the styling amber (COPY_STYLING), never a missing line.
+  assert.deepEqual(copyMatchForStub(statics, [{ where: 'image', text: 'VET VISITS, CALMER\nMedical insurance for your whole household' }], { compliance: [] }, 'static').flags.map(f => [f.rule, f.severity]), [['COPY_STYLING', 'amber']]);
   const missing = copyMatchForStub(statics, [{ where: 'image', text: 'Vet visits, calmer' }], { compliance: [] }, 'static');
   assert.deepEqual(missing.flags.map(f => [f.rule, f.severity, f.label]), [['COPY_MATCH', 'red', 'On-image subhead (signed off) not found on the asset']]);
   // A carousel: card 2's subhead is matched on card 2.
