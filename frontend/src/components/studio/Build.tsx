@@ -5,7 +5,7 @@
 // Draft, Signed off, Edited since sign-off. Behaviour and endpoints are unchanged: versions, checks, expect_latest,
 // overrides, carousel cards and TikTok versions. The draft rules are in lib/buildDraft.ts.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { onOriginal, studio, REGION_NAMES, type DraftVersion, type PlannedVersion, type Meta, type PfStub, type ReadyDraft, type ReadyView, type VersionFlag } from '@/lib/studioApi';
+import { onOriginal, studio, REGION_NAMES, type DraftVersion, type PlannedVersion, type Meta, type Region, type WsStep, type PfStub, type ReadyDraft, type ReadyView, type VersionFlag } from '@/lib/studioApi';
 import { addAd, adName, flagsAt, flagsAtShared, moveAd, redPlaces, nextVisual, placeLine, removeAd, removeVisual, slotAfter, setCard, setCardSub, setOnImage, setOnImageSub, useInAllAds, usesOf } from '@/lib/buildDraft';
 import { cn } from '@/lib/utils';
 import { Artwork } from './Artwork';
@@ -29,6 +29,21 @@ function currentIn(d: ReadyDraft, slot: Slot): string {
 const DEFAULT_CARDS = 4, MAX_CARDS = 10;
 
 /** onAsset: open Assets on one ad (a code of it). */
+/**
+ * The worksheet lock, as a note (it informs, never blocks a sign-off): the copy steps not yet locked for this region,
+ * whose lines can still change after the ads are built. Nothing shows once all three are locked.
+ */
+function UnlockedNote({ region }: { region: Region }) {
+  const [open, setOpen] = useState<string[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    studio.worksheetLocks(region).then(x => { if (live) setOpen([['on_image', '1 On-image copy'], ['primary', '2 Captions'], ['headline', '3 Headlines']].filter(([k]) => !x.locks[k as WsStep]).map(([, n]) => n)); }).catch(() => {});
+    return () => { live = false; };
+  }, [region]);
+  if (!open?.length) return null;
+  return <span className="rounded-lg border border-[#343946] px-2.5 py-1 text-sm text-[#A3A8B1]" title="Locking is on the worksheet. A locked step’s lines are read-only everywhere until it is unlocked.">Not locked yet on the worksheet: {open.join(', ')}</span>;
+}
+
 export function Build({ meta, ctx, user, onNext, onReview, onAsset }: { meta: Meta; ctx: Ctx; user: string; onNext: () => void; onReview: () => void; onAsset?: (stub: string) => void }) {
   const pt = ctx;
   // "On behalf of": whose call the sign-off, expectation and overrides here are recorded as (the picker; '' = yours).
@@ -174,7 +189,7 @@ export function Build({ meta, ctx, user, onNext, onReview, onAsset }: { meta: Me
 
   return (
     <div className="max-w-7xl space-y-5 pb-28">
-      <Intro title="Build & sign off" line="Build each ad from your kept lines, then sign it off." right={<DateNote meta={meta} screen="build" />}>
+      <Intro title="Build & sign off" line="Build each ad from your kept lines, then sign it off." right={<><UnlockedNote region={pt.region} /><DateNote meta={meta} screen="build" /></>}>
         <p>An ad is one piece of artwork with its copy as text options: it runs as one ad, and Meta mixes its primary texts and headlines. Work down each ad: ① the text on the image, ② the copy options (click a slot to choose a line), then ③ which option you expect to do best and why, and ④ sign off.</p>
         <p>Red flags must be fixed or overridden with a reason before sign-off; the other flags inform. This is creative sign-off, not compliance clearance: Trupanion reviews copy and visual together at Assets.</p>
       </Intro>

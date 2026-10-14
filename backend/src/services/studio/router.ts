@@ -11,6 +11,7 @@ import * as R from './ready.js';
 import * as Rounds from './rounds.js';
 import * as Bulk from './bulk.js';
 import * as Ws from './worksheet.js';
+import * as Locks from './locks.js';
 import * as Feedback from './feedback.js';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -78,7 +79,7 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
 
   const wrap = (fn: (req: Request, res: Response) => any) => async (req: Request, res: Response) => {
     // An error that says what it is (402 budget, 403 not allowed, 409 someone else changed it) keeps its status.
-    try { await fn(req, res); } catch (err: any) { if (!res.headersSent) res.status([402, 403, 409, 503].includes(err?.status) ? err.status : 400).json({ error: String(err?.message || err), ...(err?.status === 409 ? { conflict: true } : {}) }); }
+    try { await fn(req, res); } catch (err: any) { if (!res.headersSent) res.status([402, 403, 409, 423, 503].includes(err?.status) ? err.status : 400).json({ error: String(err?.message || err), ...(err?.status === 409 ? { conflict: true } : {}), ...(err?.locked ? { locked: err.locked } : {}) }); }
   };
   /**
    * Reserve a job's estimated cost against the cap before it starts, under a lock: two runs started together can't
@@ -186,6 +187,9 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     const mismatch = await S.runMismatch(req.body.batch ? String(req.body.batch) : undefined, { persona: raw.persona || S.loadRules().territories[raw.territory]?.persona, territory: raw.territory, region: raw.region });
     if (mismatch) return res.status(409).json({ error: mismatch, run_mismatch: true });
     const b = S.makeBrief(raw);
+    // New lines go into the run's round (a new run: the person's working round); not into a locked worksheet step.
+    const genRound = req.body.batch && await S.batchExists(String(req.body.batch)) ? Rounds.roundOf((await S.loadBatch(String(req.body.batch))).brief) : (await Rounds.roundView(undefined, o.who(req))).active.id;
+    await Locks.assertBriefUnlocked(b, genRound);
     const ownOnly = !!req.body.own_only;
     const e = S.estimate(b, { ownOnly });
     if (!o.mock && e.usd > o.askOver && !req.body.confirm) return res.status(409).json({ needs_confirm: true, estimate: e.usd });
@@ -225,12 +229,14 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     job.clients.add(res);
     req.on('close', () => job.clients.delete(res));
   });
-  r.patch('/batches/:id/lines/:line', wrap(async (req, res) => res.json(await S.setDecision(req.params.id, req.params.line, req.body || {}, o.who(req), forOf(req)))));
+  // A line in a locked worksheet step can't be kept, cut or edited anywhere (locks.ts).
+  r.patch('/batches/:id/lines/:line', wrap(async (req, res) => { await Locks.assertLineUnlocked(req.params.id, req.params.line); res.json(await S.setDecision(req.params.id, req.params.line, req.body || {}, o.who(req), forOf(req))); }));
   r.get('/lines/:line/history', wrap(async (req, res) => res.json(await S.lineHistory(req.params.line))));
   r.post('/batches/:id/lines/:line/more', wrap(async (req, res) => {
     const api = o.api(req);
     const k = Number(req.body?.k || 3);
     const run = await S.loadBatch(req.params.id);
+    await Locks.assertLineUnlocked(req.params.id, req.params.line);
     const held = await reserve(`more ${req.params.line}`, S.estimate({ ...run.brief, n: k, own_lines: [] }).usd, api, o.who(req));
     if ('error' in held) return res.status(402).json({ error: held.error });
     res.json({ job: startJob(`${req.params.id}~more~${Date.now()}`, emit => S.moreLikeThis(req.params.id, req.params.line, String(req.body?.note || ''), k, api, emit).finally(held.release)) });
@@ -249,6 +255,9 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     const parsed = Bulk.parseBulk(String(req.body?.text || ''), S.loadRules(), req.body?.defaults || {});
     if (!parsed.rows.length) return res.status(400).json({ error: parsed.errors[0] ? `Nothing to check: ${parsed.errors[0].error}` : 'Paste the lines to check' });
     const est = Bulk.estimateBulk(parsed.rows);
+    // Pasted lines that land in a locked worksheet step are refused before anything is checked.
+    const lockRound = (await Rounds.roundView(undefined, o.who(req))).active.id;
+    for (const x of parsed.rows) await Locks.assertUnlocked({ field: x.field, persona: x.persona, round: lockRound, region: x.region });
     if (!o.mock && est.usd > o.askOver && !req.body?.confirm) return res.status(409).json({ needs_confirm: true, estimate: est.usd });
     const api = o.api(req);
     const id = `bulk-${new Date().toISOString().replace(/[-:T]/g, '').slice(2, 14)}`;
@@ -296,6 +305,20 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
     const held = await reserve(`worksheet import`, p.estimate.usd, api, who);
     if ('error' in held) return res.status(402).json({ error: held.error });
     res.json({ job: startJob(id, emit => Ws.applyImport(sheet, view, api, { user: who, for: forWho, accept, addUnmatched }, emit).finally(held.release)), estimate: p.estimate, counts: p.counts });
+  }));
+  // The worksheet lock: a step of the month's copy, per round and region (locks.ts). Locking is the creative lead's (or an admin's).
+  r.get('/worksheet/locks', wrap(async (req, res) => {
+    const view = await Rounds.roundView(rq(req), o.who(req));
+    const round = view.ids ? [...view.ids][0] : view.active.id;
+    const region = wsRegion(req) === 'CA' ? 'CA' : 'US';
+    res.json({ round, region, locks: await Locks.getLocks(round, region), can_lock: o.canSignOff ? o.canSignOff(req) : true });
+  }));
+  r.post('/worksheet/locks', wrap(async (req, res) => {
+    if (o.canSignOff && !o.canSignOff(req)) return res.status(403).json({ error: 'A step is locked or unlocked by the creative lead or an admin' });
+    const view = await Rounds.roundView(rq(req), o.who(req));
+    const round = view.ids ? [...view.ids][0] : view.active.id;
+    const region = wsRegion(req) === 'CA' ? 'CA' : 'US';
+    res.json({ round, region, locks: await Locks.setLock(round, region, req.body?.step, !!req.body?.locked, o.who(req), forOf(req)), can_lock: true });
   }));
   // A line typed on the worksheet: placed by step and asset, checked, kept. ?dry=1 says where it would go and the cost.
   r.post('/worksheet/lines', wrap(async (req, res) => {

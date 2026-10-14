@@ -45,6 +45,16 @@ export function Worksheet({ meta, region, onStep, onChanged, onOpenRun }: {
     if (g && g.key === key) g.rows.push(x); else groups.push({ key, ...(byAsset ? { persona: x.persona, asset: x.asset } : { shared: true }), rows: [x] });
   }
   const state = c ? stepState(rows, step) : null;
+  // The lock (the Friday lock, made explicit): this step's lines are read-only everywhere until it is unlocked.
+  const lock = data?.locks?.[step];
+  const [canLock, setCanLock] = useState(false);
+  useEffect(() => { studio.worksheetLocks(region).then(x => setCanLock(x.can_lock)).catch(() => setCanLock(false)); }, [region]);
+  const [locking, setLocking] = useState(false);
+  const toggleLock = async () => {
+    if (!lock && c && c.undecided > 0 && !window.confirm(`${c.undecided} line${c.undecided === 1 ? ' is' : 's are'} still undecided. Lock ${s.name.toLowerCase()} anyway? Undecided lines stay out of Build.`)) return;
+    setLocking(true);
+    try { await studio.setWorksheetLock(step, !lock, region); changed(); } catch (e: any) { setError(e.message); } finally { setLocking(false); }
+  };
 
   return (
     <div className="mx-auto max-w-6xl space-y-4">
@@ -65,7 +75,7 @@ export function Worksheet({ meta, region, onStep, onChanged, onOpenRun }: {
             <button key={x.key} role="tab" aria-label={`${x.n} ${x.name}`} aria-selected={step === x.key} onClick={() => setStep(x.key)}
               className={cn('rounded-lg border px-3.5 py-2 text-left text-sm transition', step === x.key ? 'border-[#ECEDEF] bg-[#ECEDEF] text-[#0E0F12]' : 'border-[#343946] text-[#C9CCD2] hover:border-[#6B7280]')}>
               <span className="font-semibold">{x.n} {x.name}</span>
-              {k && <span className={cn('ml-2 text-xs', step === x.key ? 'text-[#3A3F4A]' : 'text-[#858B96]')}>{k.kept} kept{k.undecided ? ` · ${k.undecided} to decide` : ''}</span>}
+              {k && <span className={cn('ml-2 text-xs', step === x.key ? 'text-[#3A3F4A]' : 'text-[#858B96]')}>{data?.locks?.[x.key] ? 'locked · ' : ''}{k.kept} kept{k.undecided ? ` · ${k.undecided} to decide` : ''}</span>}
             </button>
           );
         })}
@@ -75,7 +85,7 @@ export function Worksheet({ meta, region, onStep, onChanged, onOpenRun }: {
 
       <div className="flex flex-wrap items-center gap-2">
         <GhostButton active={panel === 'paste'} aria-expanded={panel === 'paste'} onClick={() => setPanel(panel === 'paste' ? '' : 'paste')} title="Paste a table of copy written elsewhere: every line is checked, kept, and lands as a row in its step and asset">Paste copy</GhostButton>
-        {step !== 'on_image' && <GhostButton active={panel === 'more'} aria-expanded={panel === 'more'} onClick={() => setPanel(panel === 'more' ? '' : 'more')} title="Studio writes more for the shared pool, learning from what has been kept and cut">Write more</GhostButton>}
+        {step !== 'on_image' && !lock && <GhostButton active={panel === 'more'} aria-expanded={panel === 'more'} onClick={() => setPanel(panel === 'more' ? '' : 'more')} title="Studio writes more for the shared pool, learning from what has been kept and cut">Write more</GhostButton>}
         <span className="text-sm text-[#858B96]">or add a line at the bottom of the table</span>
       </div>
       {panel === 'paste' && (
@@ -96,10 +106,13 @@ export function Worksheet({ meta, region, onStep, onChanged, onOpenRun }: {
               {c.undecided > 0 && <> · <strong className="text-[#ECEDEF]">{c.undecided}</strong> to decide</>}
             </span>
           </div>
-          {state && (
-            <div className={cn('flex flex-wrap items-center gap-3 rounded-xl border px-4 py-2.5 text-base', state.done ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-100' : 'border-[#343946] bg-[#16181D] text-[#C9CCD2]')} role="status">
-              <span className="mr-auto">{state.words}</span>
-              {state.next && <GhostButton onClick={() => onStep(state.next!)}>{state.next === 'build' ? 'Go to 4 Build ads' : 'Go to 5 Assets'}</GhostButton>}
+          {(state || lock) && (
+            <div className={cn('flex flex-wrap items-center gap-3 rounded-xl border px-4 py-2.5 text-base', lock ? 'border-sky-400/40 bg-sky-400/10 text-sky-100' : state?.done ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-100' : 'border-[#343946] bg-[#16181D] text-[#C9CCD2]')} role="status">
+              <span className="mr-auto">{lock
+                ? `Locked by ${lockWho(lock)}, ${when(lock.at)}. Its lines are read-only everywhere in Studio (here, the sheet, Review, Build and Check copy) until it is unlocked.`
+                : state?.words}</span>
+              {canLock && rows.length > 0 && <GhostButton disabled={locking} onClick={toggleLock} title={lock ? 'Lets this step’s lines be kept, cut, edited and added to again' : 'Makes this step’s lines read-only everywhere until it is unlocked; who locked it and when are recorded'}>{lock ? 'Unlock' : `Lock ${s.name.toLowerCase()}`}</GhostButton>}
+              {state?.next && <GhostButton onClick={() => onStep(state.next!)}>{state.next === 'build' ? 'Go to 4 Build ads' : 'Go to 5 Assets'}</GhostButton>}
             </div>
           )}
           {!rows.length && <p className="rounded-xl border border-dashed border-[#343946] px-4 py-6 text-base text-[#858B96]">No lines here yet for {REGION_NAMES[region]}. {step === 'on_image' ? 'Paste the copy deck in Check copy' : 'Write them in the Shared captions context, or paste them in Check copy'} and they appear as rows.</p>}
@@ -131,14 +144,14 @@ export function Worksheet({ meta, region, onStep, onChanged, onOpenRun }: {
                       {g.shared && ownLines && (
                         <tr className="bg-[#16181D]"><td colSpan={6} className="border-t border-[#272B34] px-3 py-1.5 text-sm font-semibold text-[#ECEDEF]">Shared <span className="ml-1 font-normal text-[#858B96]">used under every persona’s assets</span></td></tr>
                       )}
-                      {g.rows.map(x => <Row key={x.id} meta={meta} x={x} step={step} who={who} onChanged={changed} onError={setError} />)}
+                      {g.rows.map(x => <Row key={x.id} meta={meta} x={x} step={step} who={who} locked={!!lock} onChanged={changed} onError={setError} />)}
                     </Fragment>
                   ))}
                 </tbody>
               </table>
             </div>
           )}
-          <AddLine meta={meta} step={step} region={region} onDone={changed} onError={setError} />
+          {!lock && <AddLine meta={meta} step={step} region={region} onDone={changed} onError={setError} />}
           <p className="text-sm text-[#A3A8B1]"><span className="font-semibold text-red-200">Red</span> breaks a client rule as written and needs a fix. <span className="font-semibold text-amber-200">Amber</span> is only “have a look”: it is yours to keep as it is. A line with nothing to say is <span className="text-emerald-300">clear</span>.</p>
           {data.other > 0 && <p className="text-xs text-[#646A75]">{data.other} other line{data.other === 1 ? '' : 's'} this month (a description, a TikTok hook or a video’s words) {data.other === 1 ? 'is' : 'are'} not on the worksheet. They are in Review.</p>}
         </>
@@ -277,6 +290,9 @@ function WriteMore({ meta, step, region, onDone, onError }: { meta: Meta; step: 
   );
 }
 
+/** "brook", or "brook for Nick Larson". */
+const lockWho = (l: { by: string; for?: string }) => { const by = l.by.split('@')[0]; return l.for && l.for !== l.by ? `${by} for ${l.for.split('@')[0]}` : by; };
+
 /**
  * Who made the call on a line, said the same way on every row: whose call it is, then who entered it when that was
  * someone else ("kept by nick · entered by brook"; "kept by brook" when it was their own). The records are as stored.
@@ -305,7 +321,7 @@ export function stepState(rows: WsRow[], step: WsStep): { words: string; done: b
   return { words: `Every line here is decided (${kept.length} kept).${locked} Next: ${step === 'on_image' ? 'finish steps 2 and 3, then ' : ''}build the ads from the kept lines (step 4).`, done: false, next: 'build' };
 }
 
-function Row({ meta, x, step, who, onChanged, onError }: { meta: Meta; x: WsRow; step: WsStep; who: string; onChanged: () => void; onError: (m: string) => void }) {
+function Row({ meta, x, step, who, locked: stepLocked, onChanged, onError }: { meta: Meta; x: WsRow; step: WsStep; who: string; locked?: boolean; onChanged: () => void; onError: (m: string) => void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(x.text);
   const [busy, setBusy] = useState('');
@@ -370,7 +386,7 @@ function Row({ meta, x, step, who, onChanged, onError }: { meta: Meta; x: WsRow;
               <PinkButton className="px-3 py-1.5 text-sm" onClick={save} disabled={!!busy}>Save and check</PinkButton>
               <GhostButton onClick={() => setEditing(false)} disabled={!!busy}>Cancel</GhostButton>
             </div>
-          ) : locked ? <span className="text-sm text-[#A3A8B1]">Signed off. To change it, edit it in Build (step 4) and sign off again.</span> : (
+          ) : locked ? <span className="text-sm text-[#A3A8B1]">Signed off. To change it, edit it in Build (step 4) and sign off again.</span> : stepLocked ? <span className="text-sm text-sky-200/80">Locked</span> : (
             <div className="flex flex-wrap gap-1.5" role="group" aria-label={`Your call on ${x.n}`}>
               <GhostButton active={x.call === 'keep'} disabled={!!busy} onClick={() => decide(x.call === 'keep' ? '' : 'keep')}>Keep</GhostButton>
               <GhostButton active={cut} disabled={!!busy} onClick={() => decide(cut ? '' : 'cut')}>Cut</GhostButton>

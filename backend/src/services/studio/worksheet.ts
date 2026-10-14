@@ -18,6 +18,7 @@ import { isCarousel, isSubField, signoffOnImage } from './versions.js';
 import { inView, roundOf, type RoundView } from './rounds.js';
 import { chipName } from '../../utils/flagChips.js';
 import { personaRank } from '../../utils/personaOrder.js';
+import * as Locks from './locks.js';
 
 export type Step = 'on_image' | 'primary' | 'headline';
 export const STEPS: Array<{ key: Step; tab: string; prefix: string; title: string }> = [
@@ -46,6 +47,8 @@ export interface Worksheet {
   counts: Record<Step, { total: number; kept: number; cut: number; undecided: number; red: number; amber: number; clear: number }>;
   /** Lines in the month that belong to none of the three steps (a persona's own post copy, TikTok hooks): not on the sheet. */
   other: number;
+  /** The steps locked for this round and region (none when the view is both regions). */
+  locks: Locks.Locks;
 }
 
 /**
@@ -139,7 +142,7 @@ export async function worksheet(view: RoundView, region: Region | 'all' = 'US'):
     };
   }
   const label = view.state.rounds.find(x => x.id === round);
-  return { round, round_label: (label as any)?.label || (label as any)?.name || round, region, rules: r.version, steps, counts, other };
+  return { round, round_label: (label as any)?.label || (label as any)?.name || round, region, rules: r.version, steps, counts, other, locks: region === 'all' ? {} : await Locks.getLocks(round, region) };
 }
 
 // ---------- the sheet ----------
@@ -413,9 +416,13 @@ export async function previewImport(sheet: SheetParse, view: RoundView, opts: { 
   const seenIds = new Set<string>();
   let matched = 0;
   const defaultRegion = (sheet.region === 'CA' ? 'CA' : 'US') as Region;
+  const locks: Record<Region, Locks.Locks> = { US: await Locks.getLocks(round, 'US'), CA: await Locks.getLocks(round, 'CA') };
   for (const x of sheet.rows) {
     const base = { tab: x.tab, row: x.row, n: x.n, step: x.step };
     if (x.call_raw && !x.call) { rows.push({ ...base, action: 'error', id: x.id || undefined, note: `"${x.call_raw}" isn't Keep, Cut or Rewrite` }); continue; }
+    // A locked step's rows are read but not applied (the lock is per round and region; locks.ts).
+    const stepLock = locks[/^ca/i.test(x.region) ? 'CA' : /^us/i.test(x.region) ? 'US' : defaultRegion][x.step];
+    if (stepLock && (x.call || x.rewrite.trim() || (!x.id && x.line.trim()))) { rows.push({ ...base, action: 'error', id: x.id || undefined, note: Locks.lockedWords(x.step, stepLock, /^ca/i.test(x.region) ? 'CA' : /^us/i.test(x.region) ? 'US' : defaultRegion) }); continue; }
     let byText = false;
     if (!x.id && x.line.trim()) {
       const region = /^ca/i.test(x.region) ? 'CA' : /^us/i.test(x.region) ? 'US' : defaultRegion;
@@ -520,6 +527,7 @@ export async function planAdd(a: AddLine, view: RoundView): Promise<{ place: { p
   const region: Region = a.region === 'CA' ? 'CA' : 'US';
   const place = placeNew({ tab: '', step: a.step, row: 0, n: '', id: '', hash: '', line: text, call: '', call_raw: '', rewrite: '', persona: '', asset: a.asset || '', where: a.where || '', region }, r);
   if ('error' in place) throw bad(place.error);
+  await Locks.assertUnlocked({ field: place.field, persona: place.persona, round: view.ids ? [...view.ids][0] : view.active.id, region });
   // The asset's run in this month and region, if it has one: the line joins it (no run per line). With several,
   // the one that already holds this step's lines (on-image copy with on-image copy), else the oldest.
   const runs: Array<{ id: string; created: string; sameStep: boolean }> = [];

@@ -64,3 +64,14 @@ Three ways to get lines onto the worksheet without leaving it. Nothing new is st
 - **Write more** (steps 2 and 3; `WriteMore`): Studio writes N more shared captions or headlines (the field's default count to start) into the shared pool's run, through the usual `/generate`, with the estimate shown. The writer learns from the lines kept and cut so far (taste). New lines arrive undecided at the end of the shared pool; the run's own summary ("9 lines ready, 4 near-duplicates removed…") stays on show.
 - Not here: writing more on-image copy for one asset (Write does that), dragging cards into order, the lock (PR 4), the default screen (PR 5).
 - Local note: in mock mode "Write more" on headlines returns nothing, because the mock writer's lines are longer than a headline allows; captions work.
+
+## PR 4: the lock (14 Oct)
+
+"The Friday lock, made explicit": each copy step (1 On-image copy, 2 Captions, 3 Headlines) can be locked, per month and region, with who locked it, for whom, and when (`services/studio/locks.ts`; `studio_inputs` `worksheet_locks:<round>:<region>`; no migration).
+
+- **Where:** the worksheet's state bar, "Lock headlines" / "Unlock". Locking with lines still undecided asks first (undecided lines stay out of Build). The step's tab says "locked". Locking and unlocking are the creative lead's or an admin's (the people who sign off); everyone sees the state.
+- **What it does:** while a step is locked its lines can't be kept, cut, edited or added to anywhere: the worksheet (rows show "Locked"; Add a line and Write more are hidden), the sheet import (its rows come back as "not applied", with the reason), Review and Build edits (`PATCH` line), "more like this", `/generate` and Check copy into that step. Each refusal is a 423 that says which step, who locked it and when, and "Unlock it on the worksheet". Re-checking a line and overrides are not blocked (they don't change wording or decisions).
+- **An asset's own captions and headlines** are in steps 2 and 3, so the lock covers them too.
+- **Build:** a note, never a block. "Not locked yet on the worksheet: 1 On-image copy, 2 Captions" sits beside the key dates until all three are locked for the header's region. (Brook's open question, "does an unlocked step block Build or warn": built as warn, in line with Studio informing rather than blocking; a block is a small change if wanted.)
+- **Note:** a copy fix asked for by Trupanion after the lock needs the step unlocked first, by design.
+- Tests: `tests/studioWorksheet.test.ts` (refusals per step, region and round; the sheet's locked rows), `tests/studioRouter.test.ts` (423 over HTTP for keep, more, generate and worksheet lines; unlock).

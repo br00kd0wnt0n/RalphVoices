@@ -262,3 +262,24 @@ test('the disclaimer by region (rules v2.16): an asset needs its own region\'s v
   // With only the US text known (rules before v2.16), the Canadian numbers would be left in: this is what the change fixes.
   assert.match(withoutSmallPrint(`Vet visits, calmer\n${CA.replace(/, /g, ',\n')}`, US), /603927|309-1277/);
 });
+
+test('the worksheet lock over HTTP: a locked step answers 423 in words to keep, more and generate; unlock and it works again', async () => {
+  const g = await call('POST', '/generate', { brief: { territory: 'OWN_CALM', n: 2, name: 'lock-run', fields: ['meta_primary'] } });
+  await events(g.body.job);
+  const run = (await call('GET', `/batches/${g.body.batch}`)).body;
+  const line = run.lines.find((l: any) => l.field === 'meta_primary').id;
+  const locked = await call('POST', '/worksheet/locks', { step: 'primary', locked: true, region: 'US' });
+  assert.equal(locked.status, 200);
+  assert.equal(locked.body.locks.primary.by, 'nick');
+  assert.equal((await call('GET', '/worksheet/locks?region=US')).body.locks.primary.by, 'nick');
+  const d = await call('PATCH', `/batches/${run.id}/lines/${line}`, { decision: 'keep' });
+  assert.deepEqual([d.status, d.body.locked], [423, 'primary']);
+  assert.match(d.body.error, /Step 2 Captions \(US\) is locked \(nick, .*\)\. Unlock it on the worksheet/);
+  assert.equal((await call('POST', `/batches/${run.id}/lines/${line}/more`, { k: 2 })).status, 423);
+  assert.equal((await call('POST', '/generate', { brief: { territory: 'OWN_CALM', n: 2, fields: ['meta_primary'] } })).status, 423);
+  assert.equal((await call('POST', '/worksheet/lines', { step: 'primary', text: 'Trupanion is medical insurance for pets. See how it works.' })).status, 423);
+  // Canada isn't locked.
+  assert.deepEqual((await call('GET', '/worksheet/locks?region=CA')).body.locks, {});
+  await call('POST', '/worksheet/locks', { step: 'primary', locked: false, region: 'US' });
+  assert.equal((await call('PATCH', `/batches/${run.id}/lines/${line}`, { decision: 'keep' })).status, 200);
+});
