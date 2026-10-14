@@ -1,4 +1,4 @@
-// The worksheet (Brook, 2 Oct; Round 2): the month's copy on one page, the way the Round 1 spreadsheet worked. Tabs
+// The worksheet (Brook, 2 Oct; Round 2; Studio's start screen since PR 5): the month's copy on one page, the way the Round 1 spreadsheet worked. Tabs
 // are the steps; one row is one line with what the check found, a count, and Keep / Cut / Edit. No persona or
 // territory to pick first, no runs, angles or tone. It is a view over the same lines the other screens use.
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';

@@ -34,13 +34,15 @@ import { CopyCheck } from '@/components/studio/CopyCheck';
 import { Worksheet } from '@/components/studio/Worksheet';
 import { inFrame, studioGate, type GateError } from '@/lib/studioGate';
 import { tabFrom, tabKey, urlFor, withState, type StudioTab } from '@/lib/studioRoute';
+import { getMode, isAdvancedTab, setMode, startTab, type StudioMode } from '@/lib/studioMode';
 
 type Tab = StudioTab;
 /** Screens that show everything in the round (the bar filters the view there, never the writing context). */
 const VIEW_TABS: Tab[] = ['assets', 'live'];
 // The four steps, in order, with their full names (never shortened).
 const FLOW: Array<[Tab, string]> = [['write', 'Write'], ['review', 'Review'], ['build', 'Build & sign off'], ['assets', 'Assets']];
-const tabNow = (): Tab => tabFrom(window.location.pathname, window.location.search);
+// /studio is the person's start: the worksheet in the simple view (the default), the round board in the advanced one.
+const tabNow = (): Tab => startTab(tabFrom(window.location.pathname, window.location.search), getMode());
 // An old link (?tab=assets, or an older key: brief, shortlist, ready, preflight, compliance) is redirected in place: the
 // address shows the step's path. The Shortlist is now Review's Kept tray.
 const linkedKey = tabKey(window.location.pathname, window.location.search);
@@ -90,6 +92,11 @@ export function Studio() {
     const next = urlFor(t, window.location.search, window.location.hash);
     if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== next) window.history.pushState({ tab: t }, '', next);
   }, []);
+  // The simple view (the worksheet's five steps) or the advanced one (everything, as before). Remembered per browser.
+  const [mode, setModeState] = useState<StudioMode>(getMode);
+  const switchMode = (m: StudioMode) => { setMode(m); setModeState(m); setTab(m === 'simple' ? 'worksheet' : 'home'); };
+  // An advanced screen opened from a link shows the advanced header, without changing the remembered choice.
+  const advanced = mode === 'advanced' || isAdvancedTab(tab);
   // Back and forward move between the steps.
   useEffect(() => {
     const onPop = () => setTabState(tabNow());
@@ -327,11 +334,20 @@ export function Studio() {
       {/* In a test round the header keeps an amber edge after the bar above scrolls away. */}
       <header className={cn('sticky top-0 z-20 flex min-h-16 flex-wrap items-center py-2 md:h-16 md:flex-nowrap md:py-0 gap-3 border-b bg-[#16181D] px-4 min-[1440px]:gap-4 min-[1440px]:px-6', meta?.rounds?.rounds.find(r => r.id === meta.rounds?.working)?.test ? 'border-b-4 border-amber-400' : 'border-[#272B34]')}>
         {HOSTED && <a href="/" title="Back to Voices" className="-mr-2 hidden rounded-lg p-1.5 text-[#858B96] hover:bg-[#1C1F26] hover:text-[#ECEDEF] sm:block"><ArrowLeft className="h-4 w-4" aria-label="Back to Voices" /></a>}
-        <span className="hidden min-[1700px]:block"><Lockup onHome={() => setTab('home')} /></span>
-        <button onClick={() => setTab('home')} className="shrink-0 min-[1700px]:hidden" aria-label="VOICES Studio: this month" title="Voices Studio × Trupanion"><img src="/ralph-world.png" alt="Ralph" className="h-7 w-7 object-contain" /></button>
+        <span className="hidden min-[1700px]:block"><Lockup onHome={() => setTab(startTab('home', mode))} /></span>
+        <button onClick={() => setTab(startTab('home', mode))} className="shrink-0 min-[1700px]:hidden" aria-label="VOICES Studio: this month" title="Voices Studio × Trupanion"><img src="/ralph-world.png" alt="Ralph" className="h-7 w-7 object-contain" /></button>
         {/* The region: one switch, here on every screen. US and Canada are separate ads, so everything below shows one. */}
         {meta && <RegionSwitch regions={(meta.regions || ['US', 'CA']) as Region[]} region={ctx.region} onChange={r => setCtx({ ...ctx, region: r })} />}
-        <nav aria-label="Studio steps" className="order-last flex w-full min-w-0 flex-nowrap items-center md:order-none md:w-auto gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {!advanced && (
+          <nav aria-label="Studio steps" className="order-last flex w-full min-w-0 flex-nowrap items-center md:order-none md:w-auto gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {([['worksheet', '1–3', 'Worksheet'], ['build', '4', 'Build ads'], ['assets', '5', 'Assets']] as Array<[Tab, string, string]>).map(([t, n, label]) => (
+              <GhostButton key={t} active={tab === t} aria-current={tab === t ? 'step' : undefined} onClick={() => goTab(t)} className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-2 py-1.5 text-sm hover:border-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D94D8F]">
+                <span className={cn('flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[11px] font-bold', tab === t ? 'bg-[#0E0F12] text-white' : 'bg-[#272B34] text-[#A3A8B1]')}>{n}</span>{label}
+              </GhostButton>
+            ))}
+          </nav>
+        )}
+        {advanced && <nav aria-label="Studio steps" className="order-last flex w-full min-w-0 flex-nowrap items-center md:order-none md:w-auto gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <GhostButton active={tab === 'howto'} onClick={() => setTab('howto')} title="How it works" aria-label="How it works" className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-2 py-1.5 text-sm">
             <HelpCircle className="h-4 w-4" aria-hidden />
           </GhostButton>
@@ -347,18 +363,26 @@ export function Studio() {
             className={cn('flex items-center gap-1 whitespace-nowrap rounded-lg px-1.5 py-1.5 text-sm', tab === 'live' ? 'text-[#ECEDEF]' : 'text-[#4A505D] hover:text-[#858B96]')}>
             Live <span className="rounded-full border border-[#343946] px-1.5 py-px text-[10px] uppercase tracking-wide">soon</span>
           </button>
-        </nav>
+        </nav>}
         <div className="ml-auto flex shrink-0 flex-nowrap items-center gap-1.5 text-sm text-[#858B96]">
           <span className="mr-1 hidden h-5 w-px bg-[#343946] sm:block" aria-hidden />
-          {utility('territories', 'Territories', <MapIcon className="h-4 w-4" aria-hidden />, 'Territories: edit, add or retire')}
-          {utility('rules', 'Rules', <ScrollText className="h-4 w-4" aria-hidden />, 'Rules: what every line is checked against')}
-          {utility('worksheet', 'Worksheet (preview)', <Table2 className="h-4 w-4" aria-hidden />, 'Worksheet (preview): the month’s copy on one page, one decision per line')}
-          {utility('check', 'Check copy', <ClipboardCheck className="h-4 w-4" aria-hidden />, 'Check copy: paste copy written elsewhere, check every line, share the report')}
+          {advanced && <>
+            {utility('territories', 'Territories', <MapIcon className="h-4 w-4" aria-hidden />, 'Territories: edit, add or retire')}
+            {utility('rules', 'Rules', <ScrollText className="h-4 w-4" aria-hidden />, 'Rules: what every line is checked against')}
+            {mode === 'advanced' && utility('worksheet', 'Worksheet', <Table2 className="h-4 w-4" aria-hidden />, 'Worksheet: the month’s copy on one page, one decision per line')}
+            {utility('check', 'Check copy', <ClipboardCheck className="h-4 w-4" aria-hidden />, 'Check copy: paste copy written elsewhere, check every line, share the report')}
+          </>}
+          {/* The simple view (the worksheet's steps) and everything else, behind "Advanced". */}
+          {mode === 'simple'
+            ? (advanced
+              ? <button onClick={() => setTab('worksheet')} className="whitespace-nowrap rounded-lg px-2 py-1.5 text-sm text-[#C9CCD2] underline-offset-2 hover:text-[#ECEDEF] hover:underline" title="Back to the worksheet (this screen is part of the advanced view)">← Worksheet</button>
+              : <button onClick={() => switchMode('advanced')} className="whitespace-nowrap rounded-lg px-2 py-1.5 text-sm text-[#858B96] underline-offset-2 hover:text-[#ECEDEF] hover:underline" title="Everything else: the round board, Write, Review, Territories, Rules, Check copy, Compare">Advanced</button>)
+            : <button onClick={() => switchMode('simple')} className="whitespace-nowrap rounded-lg px-2 py-1.5 text-sm text-[#858B96] underline-offset-2 hover:text-[#ECEDEF] hover:underline" title="Just the worksheet, Build ads and Assets">Simple view</button>}
           <RoundBadge meta={meta} onViewChange={() => setRoundKey(k => k + 1)} onWorkingChange={() => { refreshMeta().catch(() => {}); setRoundKey(k => k + 1); }} />
           <ExportMenu meta={meta} ctx={ctx} view={rview} batch={batch} onImported={m => { setNote(m); setRunsTick(t => t + 1); }} />
-          <button onClick={() => setTab('compare')} title="Blind compare: a separate exercise, outside the writing flow" aria-label="Blind compare" className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-dashed border-[#4B55A8] bg-[#1B2150] px-2.5 py-1.5 text-sm font-medium text-white hover:bg-[#232A5C]">
+          {advanced && <button onClick={() => setTab('compare')} title="Blind compare: a separate exercise, outside the writing flow" aria-label="Blind compare" className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-dashed border-[#4B55A8] bg-[#1B2150] px-2.5 py-1.5 text-sm font-medium text-white hover:bg-[#232A5C]">
             <Shuffle className="h-4 w-4" aria-hidden /><span className="hidden min-[1600px]:inline">Compare</span>
-          </button>
+          </button>}
           {/* "On behalf of": while set, every decision is recorded as this person's, entered by you. */}
           {actingFor && (
             <span role="status" className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-amber-400/60 bg-amber-400/10 px-2 py-0.5 text-xs font-medium text-amber-100" title="Your decisions are being recorded as this person's (entered by you). Permissions stay yours.">
@@ -402,7 +426,7 @@ export function Studio() {
         {meta && tab === 'assets' && <Assets meta={meta} view={rview} setView={setView} focus={assetFocus} onBuild={() => setTab('build')} onFixCopy={st => { setCtx({ persona: st.persona, territory: st.territory, region: regionOf(st) }); setTab('build'); }} />}
         {meta && tab === 'territories' && <Territories meta={meta} onSaved={() => refreshMeta()} onBrief={code => { const t = meta.territories[code]; setCtx({ persona: t.persona, territory: code, region: ctx.region }); setTab('write'); }} />}
         {tab === 'rules' && meta?.rounds && <RoundsPanel meta={meta} onSaved={() => refreshMeta().catch(() => {})} />}
-        {/* The worksheet (Round 2), in preview: everything on one page; it becomes the default screen on Brook's word. */}
+        {/* The worksheet (Round 2): everything on one page; the start screen in the simple view (lib/studioMode.ts). */}
         {meta && tab === 'worksheet' && <Worksheet meta={meta} region={ctx.region} onStep={t => goTab(t)} onChanged={() => setRunsTick(t => t + 1)} onOpenRun={id => { continueRun(id).catch(e => setErr(e.message)); }} />}
         {meta && tab === 'check' && <CopyCheck meta={meta} onOpenRun={id => { continueRun(id).catch(e => setErr(e.message)); }} />}
         {tab === 'rules' && (meta || admin) && <Rules meta={meta} admin={HOSTED && (!!meta?.user?.admin || admin)} onActivated={() => refreshMeta().then(() => setErr('')).catch(() => {})} />}
