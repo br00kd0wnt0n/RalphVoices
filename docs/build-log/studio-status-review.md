@@ -111,3 +111,13 @@ From the first real uploads (9 Oct): copy match ignores case and punctuation, so
 - **Where:** statics and video text (`copyMatch` in `services/audit/copyMatch.ts`, `stylingDiff`) and carousel cards, card by card (`cardMatch` in preflight.ts). The match itself is unchanged: a styled line is still a match, never "reworded" or "not on the asset".
 - **Older audits:** `PREFLIGHT_LOGIC_VERSION` is now 5, so the audits from before this say "Checked by an older version of the checks: audit again". Nothing else changes until an ad is audited again. Re-auditing the three DINK ads should add one styling amber to Have This (card 2), going by the coordinator's 9 Oct notes; I could not check that, because I can't see production.
 - **Limit:** the check reads the text the vision model returns. If the model transcribes capitals differently from the artwork, the amber can be wrong either way; there is still no OCR cross-check.
+
+## Pre-flight report speed (14 Oct)
+
+From the first real uploads (9 Oct): while three audits ran, `GET /preflight/stubs/:stub/report` took over 20 seconds or timed out.
+
+- **What was slow:** the reads, not the audits. One ad's report, the Assets list (`/preflight/stubs`) and the compliance view each asked for every sign-off and loaded the same runs again for each code, and again for each check on it (Ready to traffic, compliance, shared captions). The cost grows with codes × sign-offs, so production, with 54 codes and every earlier version of each set, paid far more than local data shows. Every one of those reads waited its turn on the database pool, behind the audits' own work, and Assets reloads its lists and the open report as each audit finishes.
+- **The fix** (`utils/requestMemo.ts`): inside a read-only route, sign-offs, runs, uploads, statuses and the rules are loaded once for the request (`withMemo` / `memo`, on Node's AsyncLocalStorage). Outside such a route nothing is cached, so writes and audit jobs always read fresh data. The routes: `/preflight/stubs`, `/preflight/stubs/:stub/report`, `/compliance`, `/preflight/flag-report.*`, `/preflight/handoff.csv`, `/preflight/features.csv`.
+- **Measured locally** (14 sign-offs, a handful of codes; in-process counts): report 36 → 12 queries and 259 → 135 KB read; the Assets list for all rounds 123 → 38 queries, 607 → 179 KB; the compliance view 184 → 43 queries, 1,079 → 192 KB. Production should gain more, since the old cost grew with codes × sign-offs, but I could not measure it there.
+- **Not changed:** the audits themselves (each size is still sent to the vision model at full resolution), and the few per-code queries that remain (upload, audit summary, status).
+- Tests: `tests/requestMemo.test.ts`.

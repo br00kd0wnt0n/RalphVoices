@@ -22,6 +22,7 @@ import {
   SHARED_PERSONA, SHARED_TERRITORY, checkBatch, similarFlag, finalText, getStore, keptLines, lineHash, loadBatch, loadRules, runLock, sha256, signedCodes, toCsv,
 } from './engine.js';
 import { disclaimerFor, disclaimerPlace } from './disclaimer.js';
+import { memo } from '../../utils/requestMemo.js';
 import { expectedSizes } from './sizes.js';
 import { personaRank } from '../../utils/personaOrder.js';
 import { DEFAULT_REGION, REGION_NAMES, adName, parseCode, territoryToken, type Region } from '../../utils/namingCode.js';
@@ -80,7 +81,8 @@ const visualOf = (code: string) => { const p = parseCode(code, null); return 'er
  */
 export async function latestSignoffs(filter: { persona?: string; territory?: string; region?: string; view?: RoundView } = {}): Promise<Signoff[]> {
   const latest = new Map<string, Signoff>();
-  for (const s of (await getStore().listSignoffs()) as Signoff[]) {
+  // Every sign-off, once per request inside `withMemo` (the Assets list asked for them once per code).
+  for (const s of (await memo('signoffs', () => getStore().listSignoffs())) as Signoff[]) {
     if (filter.persona && s.persona !== filter.persona) continue;
     if (filter.territory && s.territory !== filter.territory) continue;
     if (filter.region && regionOfSignoff(s) !== filter.region) continue;
