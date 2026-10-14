@@ -253,3 +253,31 @@ test('a line typed on the worksheet joins its asset’s run, is checked, kept an
   await assert.rejects(Ws.planAdd({ step: 'on_image', text: 'A line' }, view), /needs its asset/);
   await assert.rejects(Ws.planAdd({ step: 'on_image', text: 'A line', asset: 'Nowhere' }, view), /No asset called "Nowhere"/);
 });
+
+test('the lock: a locked step’s lines are refused everywhere they could change, per round and region, and unlock in one call', async () => {
+  const { still, shared } = await fresh();
+  const view = await roundView();
+  const Locks = await import('../src/services/studio/locks.js');
+  const round = view.active.id;
+  await Locks.setLock(round, 'US', 'primary', true, 'brook', 'nick');
+  const ws = await Ws.worksheet(view, 'US');
+  assert.deepEqual([ws.locks.primary?.by, ws.locks.primary?.for, !!ws.locks.on_image], ['brook', 'nick', false]);
+  // A line in the step, by id; a new line for the step; a sheet row for the step: all refused, in words.
+  const cap = shared.lines.find(l => l.field === 'meta_primary')!;
+  await assert.rejects(Locks.assertLineUnlocked(shared.id, cap.id), (e: any) => e.status === 423 && /Step 2 Captions \(US\) is locked \(brook for nick, \d+ \w+\)/.test(e.message));
+  await assert.rejects(Ws.planAdd({ step: 'primary', text: 'Trupanion is medical insurance for pets. Build your pet’s plan.' }, view), /is locked/);
+  await assert.rejects(Locks.assertBriefUnlocked({ persona: 'ALL', fields: ['meta_primary'], region: 'US' }, round), /is locked/);
+  const filled = await fill(await Ws.exportXlsx(ws), tab => { tab('2 Primary text').set('P1', 'Your call', 'Cut'); tab('3 Headlines').set('H1', 'Your call', 'Keep'); });
+  const p = await Ws.previewImport(await Ws.parseXlsx(filled), view);
+  assert.deepEqual(p.rows.map(x => [x.n, x.action]), [['P1', 'error'], ['H1', 'keep']], 'the locked step’s row is not applied; another step’s is');
+  // Other steps, the other region and another round are not locked.
+  await Locks.assertLineUnlocked(still.id, still.lines[0].id);
+  await Locks.assertUnlocked({ field: 'meta_primary', persona: 'ALL', round, region: 'CA' });
+  await Locks.assertUnlocked({ field: 'meta_primary', persona: 'ALL', round: 'R9', region: 'US' });
+  // An asset's own caption is step 2 too.
+  await assert.rejects(Locks.assertUnlocked({ field: 'meta_primary', persona: 'OWN', round, region: 'US' }), /is locked/);
+  // Unlocked: everything goes again.
+  await Locks.setLock(round, 'US', 'primary', false, 'brook');
+  await Locks.assertLineUnlocked(shared.id, cap.id);
+  assert.deepEqual((await Ws.worksheet(view, 'US')).locks, {});
+});

@@ -275,9 +275,14 @@ export interface WsRow {
   /** Steps 2 and 3: a line of the shared pool (false: written for one asset). */
   shared?: boolean;
 }
+/** The worksheet lock: a step's copy is read-only everywhere until unlocked. */
+export interface StepLock { by: string; for?: string; at: string }
+export type WsLocks = Partial<Record<WsStep, StepLock>>;
 export interface WorksheetData {
   round: string; round_label: string; region: Region | 'all'; rules?: string; steps: Record<WsStep, WsRow[]>;
   counts: Record<WsStep, { total: number; kept: number; cut: number; undecided: number; red: number; amber: number; clear: number }>; other: number;
+  /** The steps locked for this round and region (who, for whom, when). */
+  locks?: WsLocks;
 }
 /** Feedback rounds: the client's feedback per round (R1, R2) and per ad. Separate from the compliance decision; it only informs. */
 export type FeedbackState = 'none' | 'change' | 'done';
@@ -510,6 +515,9 @@ export const studio = {
   /** A line typed on the worksheet: placed by step and asset (none on steps 2 and 3: the shared pool), checked, kept. */
   worksheetAdd: (line: { step: WsStep; text: string; asset?: string; where?: string; region: Region }, confirm = false) =>
     req<{ job: string; run: string; estimate: number }>('/worksheet/lines', { method: 'POST', body: JSON.stringify({ ...line, confirm }) }),
+  worksheetLocks: (region: Region) => req<{ round: string; region: Region; locks: WsLocks; can_lock: boolean }>(`/worksheet/locks?region=${region}`),
+  setWorksheetLock: (step: WsStep, locked: boolean, region: Region) =>
+    req<{ round: string; region: Region; locks: WsLocks; can_lock: boolean }>('/worksheet/locks', { method: 'POST', body: JSON.stringify({ step, locked, region }) }),
   worksheetXlsx: (region: Region | 'all' = 'US') => download(`/worksheet.xlsx?region=${region}`, 'copy-worksheet.xlsx'),
   worksheetPreview: async (file: File, accept: string[] = []) => {
     const form = new FormData();
