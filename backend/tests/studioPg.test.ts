@@ -38,6 +38,10 @@ const adsOf = (primaryIds: string[], headId: string, visuals: Record<string, str
 const primaryOf = (so: any, code: string) => so.versions.find((v: any) => v.code === code).fields.meta_primary;
 const HEAD = { text: 'Calm, covered.', field: 'meta_headline' };
 
+/** Pre-flight passes only once the latest upload's imagery and footage are declared (declaration.ts). */
+const DECLARED = { no_ai: true, sources: ['stock'], reference: 'Test licence 1', member: 'none' };
+async function declared(pf: any, stub: string) { const up = (await pf.report(stub)).upload; if (up) await pf.declare(up.id, DECLARED, 'nick'); }
+
 test('rules come from the active database version; a second activation retires the first', { skip }, async () => {
   const r = await S.refreshRules();
   assert.equal((r as any).version, 'example-1');
@@ -258,10 +262,12 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   assert.equal((await pf.report(stub, 'brook')).flags[1].mine, false);
 
   // 3. Ready to traffic is blocked by the red, then allowed after an override with a reason.
+  await declared(pf, stub);   // the imagery and footage declared (declaration.ts)
   await assert.rejects(() => pf.setReady(stub, true, 'nick'), /1 red flag to fix/);
   await assert.rejects(() => pf.override(rep.flags[0].id, '', 'nick'), /written reason/);
   await assert.rejects(() => pf.override(rep.flags.find((f: any) => f.severity === 'grey').id, 'a grey note', 'nick'), /Only red flags/);
   await pf.override(rep.flags[0].id, 'The caveat is in the caption for this placement.', 'nick');
+  await declared(pf, stub);   // the imagery and footage declared (declaration.ts)
   assert.equal((await pf.setReady(stub, true, 'nick')).status, 'ready');
   rep = await pf.report(stub);
   assert.equal(rep.flags[0].override.by, 'nick');
@@ -270,10 +276,12 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   // 4. A new upload reopens the stub; a fixed asset clears copy match without an override.
   const up2 = await pf.upload(stub, [{ buffer: png(caveatLine), filename: 'static-v2.png', contentType: 'image/png' }], 'nick');
   assert.equal((await pf.report(stub)).status.status, 'open');
+  await declared(pf, stub);   // the imagery and footage declared (declaration.ts)
   await assert.rejects(() => pf.setReady(stub, true, 'nick'), /Run the audit on the latest upload/);
   await pf.runAudit(await pf.createAudit(up2.upload_id, 'nick'));
   assert.equal((await pf.report(stub)).flags.some((f: any) => f.check === 'copy_match'), false);
   assert.equal((await pf.agreement()).marked, 3, 'verdicts on the replaced upload still count towards the round');
+  await declared(pf, stub);   // the imagery and footage declared (declaration.ts)
   assert.equal((await pf.setReady(stub, true, 'brook')).status, 'ready');
   assert.equal((await pf.report(stub)).history.length, 2);
 
@@ -312,6 +320,7 @@ test('Pre-flight end to end: upload, audit, copy-match red, agree, override, Rea
   assert.equal(pr.post_copy[0].text, 'A second primary text, also post only.');
   assert.equal(hr.post_copy[0].text, 'Primary text that only runs in the post.');
   assert.ok(pr.audit!.result.copy_match.every((r: any) => r.status === 'match'), 'the shared headline matches for both codes');
+  await declared(pf, postStub);   // the imagery and footage declared (declaration.ts)
   assert.equal((await pf.setReady(postStub, true, 'nick')).status, 'ready');
   assert.equal((await pf.report(headlineStub)).status.status, 'open', 'each code is marked on its own');
   assert.deepEqual(await pf.estimate(shared.upload_id), shared.estimate, 'the estimate is stored at upload and reused');
@@ -477,6 +486,7 @@ test('Compliance after Pre-flight: per asset, copy and visual together; changes 
   await assert.rejects(() => pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', send_back: 'asset', client_by: 'J. Doe' }, 'vivan'), /what needs changing/);
 
   // Back to the visual: the codes stop being Ready to traffic, and Pre-flight shows the note.
+  await declared(pf, A1);   // the imagery and footage declared (declaration.ts)
   await pf.setReady(A1, true, 'nick').catch(() => {});
   await pf.setAssetCompliance(up.upload_id, { status: 'changes_requested', note: 'Disclaimer too small on the last card', send_back: 'asset', client_by: 'J. Doe (Trupanion legal)' }, 'vivan');
   view = await pf.complianceAssets();
@@ -532,6 +542,7 @@ test('Ready to traffic needs Pre-flight passed AND compliance cleared, per code 
   const png = () => [{ buffer: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from('fake VOICES_TEXT: Calm at the counter. One less worry. Home by nine.')]), filename: 'v.png', contentType: 'image/png' }];
   const up = await pf.upload(A1, png(), 'nick', [A2, A3]);
   await pf.runAudit(await pf.createAudit(up.upload_id));
+  await declared(pf, A1);   // the imagery and footage declared (declaration.ts): one upload for the visual
   for (const x of [A1, A2, A3]) await pf.setReady(x, true, 'nick');
   const t = async (x: string) => pf.traffic(x);
 
@@ -591,6 +602,7 @@ test('Ready to traffic needs Pre-flight passed AND compliance cleared, per code 
   const legacyCode = (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions: adsOf([run2.lines[0].id], run2.lines[1].id), expectation: { codes: ['OWN_CALM_UGC_A4_US_META'], reason: 'Old.' } }, 'nick')).signoff.versions![0].code;
   const up3 = await pf.upload(legacyCode, png(), 'nick');
   await pf.runAudit(await pf.createAudit(up3.upload_id));
+  await declared(pf, legacyCode);   // the imagery and footage declared (declaration.ts)
   await pf.setReady(legacyCode, true, 'nick');
   await (store as any).db.query(`UPDATE studio_asset_status SET ready_at = $2 WHERE stub = $1`, [legacyCode, new Date(Date.parse(COMPLIANCE_GATE_FROM) - 86400000)]);
   const legacy = await t(legacyCode);
@@ -1120,6 +1132,7 @@ test('sizes: a static in 3 sizes, one missing its on-image text → a flag on th
   rep = await report(still);
   assert.deepEqual(rep.flags.filter((f: any) => f.check === 'sizes').map((f: any) => [f.rule, f.severity, f.label]), [['SIZE_MISSING', 'amber', '9:16 not uploaded']]);
   assert.deepEqual(rep.sizes.missing, ['9:16']);
+  await declared(pf, still);   // the imagery and footage declared (declaration.ts)
   assert.equal((await pf.setReady(still, true, 'nick')).status, 'ready', 'a missing size is noted, not a block');
   const hand = S.parseCsv(await pf.handoffCsv());
   const row = hand.find(r => r[0] === still)!;
@@ -1279,11 +1292,13 @@ test('shared visual in 3 sizes: one verdict per text rule when the words are the
   assert.ok(rep.copy_overrides.some((o: any) => o.rule === 'FIG_UNSOURCED' && o.reason === 'The client confirmed the figure' && o.by === 'nick'));
 
   // 20: blocked by the open red on the asset; once overridden, both codes on the visual pass at once.
+  await declared(pf, A1);   // the imagery and footage declared (declaration.ts)
   const blocked = await pf.setReadyVisual(A1, 'nick');
   assert.deepEqual(blocked.passed, []);
   assert.equal(blocked.blocked.length, 2);
   for (const f of rep.flags.filter((x: any) => x.severity === 'red' && !x.override)) await pf.override(f.id, 'Same as at sign-off (nick): The client confirmed the figure', 'nick');
   for (const f of (await pf.report(A2)).flags.filter((x: any) => x.severity === 'red' && !x.override)) await pf.override(f.id, 'Same as at sign-off', 'nick');
+  await declared(pf, A1);   // the imagery and footage declared (declaration.ts)
   const both = await pf.setReadyVisual(A1, 'nick');
   assert.deepEqual(both.passed.sort(), [A1, A2].sort());
   assert.equal((await pf.report(A2)).status.status, 'ready');
@@ -1419,6 +1434,7 @@ test('on behalf of: by + for stored on sign-off, expectation, line versions, ove
     const flag = (await pf.report(code)).flags.find((x: any) => x.override)!;
     assert.deepEqual([flag.override.by, flag.override.for], ['brook', 'nick']);
     assert.equal((await call('POST', `/preflight/stubs/${code}/ready`, { ready: true }, 'vivan', 'nick')).status, 403, 'Vivan can\'t mark Pre-flight passed by naming Nick');
+    await declared(pf, code);   // the imagery and footage declared (declaration.ts)
     assert.equal((await call('POST', `/preflight/stubs/${code}/ready`, { ready: true }, 'brook', 'nick')).status, 200);
     const st = (await pf.report(code)).status;
     assert.deepEqual([st.status, st.ready_by, st.ready_for], ['ready', 'brook', 'nick']);
@@ -1500,6 +1516,7 @@ test('shared caption in 3 codes across 2 personas: one compliance decision appli
   const csv = S.parseCsv((await R.handoffPack()).csv);
   const cid = csv[0].indexOf('Caption ID'), sh = csv[0].indexOf('Shared caption');
   assert.deepEqual(csv.slice(1).map(r => [r[cid], r[sh]]), [[cap, 'yes'], [cap, 'yes'], [cap, 'yes']]);
+  await declared(pf, A1);   // the imagery and footage declared (declaration.ts)
   await pf.setReady(A1, true, 'nick').catch(() => {});
   const feats = S.parseCsv(await pf.featuresCsv());
   assert.equal(feats[1][feats[0].indexOf('caption_line_id')], cap);
@@ -1644,4 +1661,45 @@ test('removing a territory\'s sign-offs (unsign): three sign-offs with changing 
   assert.deepEqual([again.version, again.versions[0].code], [1, firstCodes[0]]);
   // Nothing left to remove for a territory with no sign-offs.
   assert.match((await planUnsign(db, 'OWN_NOPE', 'US')).blockers.join(), /No sign-offs/);
+});
+
+test('the upload declaration: no AI imagery, a source (with its reference) and the member answer, before Pre-flight passes; a new upload starts from the last answers', { skip }, async () => {
+  const { cleanDeclaration, declarationProblems, declarationWords } = await import('../src/services/studio/declaration.js');
+  assert.deepEqual(declarationProblems(null), ['Declare the imagery and footage']);
+  assert.deepEqual(declarationProblems({ no_ai: false, sources: ['stock'], member: 'none' }), ['Tick "No AI-generated imagery or video"', 'Add the licence, library or shoot reference']);
+  assert.deepEqual(declarationProblems({ no_ai: true, sources: ['animated'], member: null }), ['Name the approved ad it is animated from', 'Say whether a customer is shown or quoted']);
+  assert.deepEqual(declarationProblems({ no_ai: true, sources: ['shot'], member: 'member' }), [], 'shot for the campaign needs no reference');
+  assert.throws(() => cleanDeclaration({ no_ai: true, sources: ['ai'], member: 'none' }), (e: any) => e.status === 400 && /Say where the imagery or footage came from/.test(e.message));
+  assert.match(declarationWords({ no_ai: true, sources: ['animated'], based_on: 'DINK_SOCK_ST_A_US_META', member: 'none', by: 'brook', for: 'nick', at: '2026-10-14T10:00:00Z' }),
+    /^No AI imagery or video · Animated from an approved static or carousel \(DINK_SOCK_ST_A_US_META\) · no customer shown or quoted · brook for nick, 14 Oct$/);
+
+  const { R, api } = await freshStudio();
+  await store.putRules('example-declare', JSON.parse(fs.readFileSync(path.join(__dirname, '../scripts/studio/rules.example.json'), 'utf8')), { activate: true, by: 'test' });
+  await S.refreshRules();
+  const run = await S.generate(S.makeBrief({ territory: 'OWN_CALM', name: 'declare', own_lines: [{ field: 'meta_primary', text: 'Trupanion is medical insurance for pets. Get a quote.' }, { field: 'meta_headline', text: 'Calm, covered.' }] }), api, () => {}, { ownOnly: true, user: 'nick' });
+  for (const l of run.lines) {
+    await S.setDecision(run.id, l.id, { decision: 'keep' }, 'nick');
+    for (const f of R.unresolvedRed((await S.loadBatch(run.id)).lines.find((x: any) => x.id === l.id)!)) await R.overrideFlag(run.id, l.id, f.rule, 'Test line', 'nick');
+  }
+  const versions = [{ visual: 'A', fields: { meta_primary: run.lines[0].id, meta_headline: run.lines[1].id } }];
+  const v = await R.readyView('OWN', 'OWN_CALM', 'US', { versions, on_image: {} });
+  const stub = (await R.signOff({ persona: 'OWN', territory: 'OWN_CALM', versions, on_image: {}, expectation: { codes: [v.plan.versions[0].code], reason: 'x' } }, 'nick')).signoff.versions![0].code;
+  const { Preflight } = await import('../src/services/studio/preflight.js');
+  const { mockEngine } = await import('../src/services/studio/preflightEngine.js');
+  const pf = new Preflight((store as any).db, mockEngine, { storage: 'db' });
+  const png = (text: string) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from(`fake image VOICES_TEXT: ${text}`)]);
+  const up = await pf.upload(stub, [{ buffer: png('Calm at the counter.'), filename: 'a.png', contentType: 'image/png' }], 'nick');
+  await pf.runAudit(await pf.createAudit(up.upload_id));
+  for (const f of (await pf.report(stub)).flags.filter((x: any) => x.severity === 'red')) await pf.override(f.id, 'Accepted for the test', 'nick');
+  await assert.rejects(() => pf.setReady(stub, true, 'nick'), (e: any) => /Declare the imagery and footage first/.test(e.message) && e.blocking[0].rule === 'DECLARATION');
+  assert.equal((await pf.stubs()).find((x: any) => x.stub === stub)!.declared, false);
+  const d = await pf.declare(up.upload_id, { no_ai: true, sources: ['library'], reference: 'UGC bank #42', member: 'member' }, 'brook', 'nick');
+  assert.deepEqual([d.by, d.for, d.member], ['brook', 'nick', 'member']);
+  assert.equal((await pf.report(stub)).declaration!.reference, 'UGC bank #42');
+  assert.equal((await pf.setReady(stub, true, 'nick')).status, 'ready');
+  assert.match(await pf.handoffCsv(), /No AI imagery or video · Trupanion’s creator \/ UGC library \(UGC bank #42\) · a real member, with consent · brook for nick/);
+  // A new upload of the ad: not declared yet, with the last answers offered to start from.
+  const up2 = await pf.upload(stub, [{ buffer: png('Calm at the counter.'), filename: 'b.png', contentType: 'image/png' }], 'nick');
+  const r = await pf.report(stub);
+  assert.deepEqual([r.upload!.id, r.declaration, r.declaration_draft?.reference], [up2.upload_id, null, 'UGC bank #42']);
 });

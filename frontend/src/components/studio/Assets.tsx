@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { studio, type CodeCompliance, type ComplianceAsset, type ComplianceStatus, type ComplianceView, type Meta, type PfFlag, type PfReport, type PfStub, type StudioEvent } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { tabFrom, withState } from '@/lib/studioRoute';
+import { Declaration } from './Declaration';
 import { DateNote } from './KeyDates';
 import { FeedbackNote } from './Feedback';
 import { groupOverrides, overrideWhere } from '@/lib/overrideGroups';
@@ -351,7 +352,7 @@ function CodeView({ meta, row, report, stubs, onSelect, canReady, canCompliance,
   const shownSize = bySize.find(g => g.z === sizeTab) || bySize[0];
   const auditedLatest = auditForLatest && a!.status === 'done';
   const ready = report.status.status === 'ready';
-  const readyBlock = !up ? 'Upload the asset first.' : !auditForLatest ? 'Run the checks on this upload first.' : a!.status === 'running' || a!.status === 'queued' ? 'The checks are still running.' : a!.status === 'failed' ? (a!.result?.interrupted ? 'The checks were interrupted by a server restart; run them again.' : 'The checks failed; run them again.') : openRed ? `${openRed} red flag${openRed === 1 ? '' : 's'} to fix (a new upload) or override.` : '';
+  const readyBlock = !up ? 'Upload the asset first.' : !report.declaration ? 'Declare the imagery and footage first (under the asset).' : !auditForLatest ? 'Run the checks on this upload first.' : a!.status === 'running' || a!.status === 'queued' ? 'The checks are still running.' : a!.status === 'failed' ? (a!.result?.interrupted ? 'The checks were interrupted by a server restart; run them again.' : 'The checks failed; run them again.') : openRed ? `${openRed} red flag${openRed === 1 ? '' : 's'} to fix (a new upload) or override.` : '';
   const act = async (fn: () => Promise<unknown>) => { try { await fn(); await onChanged(); } catch (e: any) { onError(e.body?.blocking ? `${e.message}: ${e.body.blocking.map((b: any) => b.label || b.rule).join('; ')}` : e.message); } };
   const copyRows = res?.copy_match ?? res?.report?.copy_match;
   const sameVisual = (s: PfStub) => !!report.visual_key && s.visual_key === report.visual_key;
@@ -443,6 +444,7 @@ function CodeView({ meta, row, report, stubs, onSelect, canReady, canCompliance,
                 </div>
                 <div className="mt-2 text-sm text-[#858B96]">{up.kind} · {up.files.map(f => f.filename).join(', ')} · {up.uploaded_by}, {when(up.uploaded_at)}</div>
                 {report.same_visual_as.length > 0 && <p className="mt-1 text-sm text-[#A3A8B1]">Same visual as <span className="font-mono">{report.same_visual_as.join(', ')}</span>.</p>}
+                <Declaration uploadId={up.id} declared={report.declaration || null} draft={report.declaration_draft || null} adName={report.visual_key || report.stub} onSaved={() => { onChanged(); }} onError={onError} />
               </>
             ) : <p className="text-sm text-[#858B96]">Nothing uploaded yet.</p>}
             {report.format_note && <p className="mt-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm text-amber-100">{report.format_note}</p>}

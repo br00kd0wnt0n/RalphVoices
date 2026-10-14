@@ -32,6 +32,7 @@ import type { AssetKind, AuditEngine, AuditFlag, AuditResult, SignedCopy } from 
 import { COPY_MATCH_SOURCE, REWORD_MIN, bestMatch, copyMatch, normalise, stylingDiff } from '../audit/copyMatch.js';
 import { signedOffCopy } from './preflightB2.js';
 import { memo } from '../../utils/requestMemo.js';
+import { cleanDeclaration, declarationProblems, declarationWords, type Declaration } from './declaration.js';
 import { blocksToHtml, blocksToMarkdown, flagReportBlocks, flagReportRows, mergeAdFlags, type FlagReportInput, type ReportAd, type ReportFlag } from './flagReport.js';
 import { plainSource } from '../../utils/plainSource.js';
 
@@ -118,6 +119,8 @@ export interface StubRow {
   /** The sizes this code is expected in (by format), those uploaded, and those missing (amber, noted in the handoff). */
   sizes: { expected: Size[]; uploaded: Size[]; missing: Size[] };
   audit: { id: string; status: string; usd: number; red: number; amber: number; grey: number; open_red: number; finished_at: string | null; error: string | null; stale: string | null } | null;
+  /** The latest upload's imagery and footage are declared (declaration.ts): needed before Pre-flight is marked passed. */
+  declared?: boolean;
   /** Pre-flight passed (the creative lead's mark on the latest upload). Not the same as Ready to traffic: see `traffic`. */
   status: { status: 'open' | 'ready'; ready_by?: string; ready_for?: string; ready_at?: string; upload_id?: string };
   traffic: Traffic;
@@ -364,6 +367,7 @@ export class Preflight {
           copy: this.copyFor(s, stub),
           upload, sizes: this.sizesOf(stub, upload, rules), audit: await this.latestAuditSummary(stub), status: await this.status(stub), traffic: await this.traffic(stub),
           round: roundOf(s), test: view.isTest(roundOf(s)),
+          declared: upload ? !declarationProblems(await this.declaration(upload.id)).length : false,
         });
       }
     }
@@ -819,6 +823,9 @@ export class Preflight {
       on_asset_copy: copy.filter(c => !POST_COPY_FIELDS.has(c.field)), post_copy: copy.filter(c => POST_COPY_FIELDS.has(c.field)),
       audit: a ? { id: a.id, upload_id: a.upload_id, status: a.status, engine: a.engine, rules_version: a.rules_version, usd: Number(a.usd), error: a.error, started_by: a.started_by, started_at: new Date(a.started_at).toISOString(), finished_at: a.finished_at ? new Date(a.finished_at).toISOString() : null, result, stale: staleness(a) } : null,
       flags, status: await this.status(stub),
+      // The upload's declaration; for an upload not yet declared, the last answers given for this ad, to start from.
+      declaration: upload ? await this.declaration(upload.id) : null,
+      declaration_draft: upload && !(await this.declaration(upload.id)) ? await this.lastDeclaration(stub) : null,
       compliance: await this.codeCompliance(stub, upload?.id ?? null),
       traffic: await this.traffic(stub),
     };
@@ -860,6 +867,7 @@ export class Preflight {
         sizes: lead.sizes,
         audit: first?.audit ? { status: first.audit.status, finished_at: first.audit.finished_at, started_by: first.audit.started_by, rules_version: first.audit.rules_version, stale: first.audit.stale, error: first.audit.error, notes: first.audit.result?.notes || [] } : null,
         passed: passed ? whoWords(passed.ready_by, passed.ready_for) : undefined,
+        declaration: lead.upload ? declarationWords(await this.declaration(lead.upload.id)) : undefined,
         flags,
       });
     }
@@ -918,6 +926,29 @@ export class Preflight {
    * Mark the latest upload of a stub as passing Pre-flight (or take it back). Needs a finished audit and no unresolved red
    * flag. It's Ready to traffic once Trupanion's compliance is cleared too (traffic()).
    */
+  // ---------- the upload declaration (declaration.ts) ----------
+
+  /** An upload's declaration, or null. */
+  async declaration(uploadId: string): Promise<Declaration | null> {
+    return memo(`declaration:${uploadId}`, async () => (await this.db.query(`SELECT value FROM studio_inputs WHERE key = $1`, [`upload_declaration:${uploadId}`])).rows[0]?.value ?? null);
+  }
+  /** The declaration to start from on a new upload: the last one made for any code on the same ad. */
+  async lastDeclaration(stub: string): Promise<Declaration | null> {
+    const ad = visualKey(stub) || stub;
+    const r = (await this.db.query(
+      `SELECT i.value FROM studio_inputs i JOIN studio_upload_stubs us ON i.key = 'upload_declaration:' || us.upload_id
+        WHERE us.stub = $1 OR us.stub LIKE $2 ORDER BY i.updated_at DESC LIMIT 1`, [stub, `${ad.replace(/_([A-Z])_/, '_$1%_')}`])).rows[0];
+    return r?.value ?? null;
+  }
+  /** Declare an upload's imagery and footage; recorded with who (and for whom) and when. */
+  async declare(uploadId: string, body: unknown, user?: string, forWho?: string): Promise<Declaration> {
+    const u = (await this.db.query(`SELECT id FROM studio_asset_uploads WHERE id = $1`, [uploadId])).rows[0];
+    if (!u) throw new Error('No such upload');
+    const d: Declaration = { ...cleanDeclaration(body), by: user || 'unknown', ...(cleanFor(forWho, user) ? { for: cleanFor(forWho, user) } : {}), at: new Date().toISOString() };
+    await this.db.query(`INSERT INTO studio_inputs (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [`upload_declaration:${uploadId}`, JSON.stringify(d)]);
+    return d;
+  }
+
   async setReady(stub: string, ready: boolean, user?: string, forWho?: string) {
     await this.findStub(stub);
     const before = await this.status(stub);
@@ -930,6 +961,9 @@ export class Preflight {
       const a = await this.latestAuditRow(stub);
       if (!a || a.upload_id !== upload.id) throw new Error('Run the audit on the latest upload first');
       if (a.status !== 'done') throw new Error(a.status === 'failed' ? `The audit failed: ${a.error}. Run it again.` : 'The audit is still running');
+      // The declaration: no AI imagery, the source, and a real member when a customer is shown (Trupanion, 6 Oct).
+      const missing = declarationProblems(await this.declaration(upload.id));
+      if (missing.length) throw Object.assign(new Error(`Declare the imagery and footage first: ${missing.join('; ')}.`), { blocking: [{ rule: 'DECLARATION', label: missing.join('; ') }] });
       const open = (await this.flagsFor(a.id, stub)).filter(x => x.severity === 'red' && !x.override);
       if (open.length) throw Object.assign(new Error(`${open.length} red flag${open.length === 1 ? '' : 's'} to fix (a new upload) or override first`), { blocking: open.map(o => ({ flag_id: o.id, rule: o.rule, label: o.body.label })) });
       await this.setStatusRow(stub, 'ready', upload.id, a.id, user ? packActor(user, forWho) : null);
@@ -1015,7 +1049,7 @@ export class Preflight {
     const rounds = await getRounds();
     // A view of exactly one test round (a demo) includes its codes, marked TEST on the first line.
     const test = testOnly(await roundView(round, user));
-    const rows = [['Naming code', 'Region', 'Month', 'Persona', 'Territory', 'Kind', 'File', 'Sizes missing', 'Same visual as', 'Status', 'Ready to traffic', 'Pre-flight passed by', 'Pre-flight passed at', 'Open red flags', 'Amber flags', 'Overridden red flags', 'Compliance', 'Compliance note', 'Cleared at Trupanion by', 'Compliance recorded by', 'Decided by', 'Entered by']];
+    const rows = [['Naming code', 'Region', 'Month', 'Persona', 'Territory', 'Kind', 'File', 'Sizes missing', 'Same visual as', 'Status', 'Ready to traffic', 'Pre-flight passed by', 'Pre-flight passed at', 'Open red flags', 'Amber flags', 'Overridden red flags', 'Compliance', 'Compliance note', 'Cleared at Trupanion by', 'Compliance recorded by', 'Decided by', 'Entered by', 'Imagery and footage (declared)']];
     for (const s of await this.stubs({ round, user })) {
       if (s.test && !test) continue;
       let open = '', amber = '', overridden = '';
@@ -1035,7 +1069,8 @@ export class Preflight {
         s.status.status === 'ready' ? s.status.ready_by || '' : '', s.status.status === 'ready' ? s.status.ready_at || '' : '', open, amber, overridden,
         COMPLIANCE_WORDS[c.status], c.note || '', c.client_by || '', c.by ? `${c.by}, ${c.at?.slice(0, 16).replace('T', ' ')}` : '',
         // Pre-flight passed: whose call it was (the "for" person, else who marked it) and who entered it.
-        s.status.status === 'ready' ? decidedBy(s.status.ready_by, s.status.ready_for) : '', s.status.status === 'ready' ? s.status.ready_by || '' : '']);
+        s.status.status === 'ready' ? decidedBy(s.status.ready_by, s.status.ready_for) : '', s.status.status === 'ready' ? s.status.ready_by || '' : '',
+        s.upload ? declarationWords(await this.declaration(s.upload.id)) : '']);
     }
     return (test ? S.toCsv([['TEST – not for trafficking']]) : '') + S.toCsv(rows);
   }

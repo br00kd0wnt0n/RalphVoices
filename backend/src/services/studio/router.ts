@@ -491,6 +491,8 @@ export function createStudioRouter(o: StudioRouterOptions): Router {
       res.setHeader('Content-Length', String(f.size));
       await pipeline(f.stream!, res);
     }));
+    // The declaration for an upload: no AI imagery or video, the source, and a real member when a customer is shown.
+    r.post('/preflight/uploads/:id/declaration', wrap(async (req, res) => res.json(await pf.declare(req.params.id, req.body || {}, o.who(req), forOf(req)))));
     r.post('/preflight/flags/:id/agree', wrap(async (req, res) => res.json(await pf.agree(req.params.id, !!req.body?.agree, req.body?.note, o.who(req)))));
     r.post('/preflight/flags/:id/override', wrap(async (req, res) => {
       if (!o.preflight!.canSetReady(req)) return res.status(403).json({ error: 'Only the people who mark Pre-flight passed (the creative lead) can override a red flag' });

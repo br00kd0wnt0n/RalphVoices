@@ -121,3 +121,20 @@ From the first real uploads (9 Oct): while three audits ran, `GET /preflight/stu
 - **Measured locally** (14 sign-offs, a handful of codes; in-process counts): report 36 → 12 queries and 259 → 135 KB read; the Assets list for all rounds 123 → 38 queries, 607 → 179 KB; the compliance view 184 → 43 queries, 1,079 → 192 KB. Production should gain more, since the old cost grew with codes × sign-offs, but I could not measure it there.
 - **Not changed:** the audits themselves (each size is still sent to the vision model at full resolution), and the few per-code queries that remain (upload, audit summary, status).
 - Tests: `tests/requestMemo.test.ts`.
+
+## The upload declaration (14 Oct)
+
+Trupanion, 6 Oct: no AI-generated imagery or video; stock is approved. Pre-flight can't tell AI imagery from a file, so the person uploading declares it (Brook agreed: required before Pre-flight passes, statics too).
+
+- **Where:** Assets, under the uploaded asset, "Imagery and footage" (`components/studio/Declaration.tsx`):
+  - the no-AI tick ("No AI-generated imagery or video in this asset");
+  - where it came from, any of: shot for this campaign, licensed stock, Trupanion's creator / UGC library, animated from an approved static or carousel, other;
+  - the licence or reference (needed for stock, the library and other);
+  - the ad an animated version is made from;
+  - whether a customer is shown or quoted: "no customer", or "a real Trupanion member, with their consent".
+  It saves with who (and for whom) and when, and shows as one "Declared" line with Change.
+- **Per upload:** a new upload of the ad starts undeclared, with the last answers for that ad filled in to confirm.
+- **The gate:** "Mark Pre-flight passed" says "Declare the imagery and footage first" until the latest upload is declared (`setReady`, rule `DECLARATION` in the 409's blocking list). Codes already passed are not affected.
+- **Exports:** the asset handoff has an "Imagery and footage (declared)" column ("No AI imagery or video · Licensed stock (Getty 123456) · no customer shown or quoted · brook for nick, 14 Oct"), and the flag report's "What was checked" carries the same line. The compliance sheet for Trupanion is unchanged (final words only).
+- **Storage:** `studio_inputs` `upload_declaration:<upload id>` (no migration). `POST /preflight/uploads/:id/declaration`; the report has `declaration` and `declaration_draft`; the stubs list has `declared`. Rules in `services/studio/declaration.ts`.
+- **Not here:** linking "animated from" to a real ad (it's typed), and any check that the first-person words in a video's script match the member answer (that belongs with video in Pre-flight).
