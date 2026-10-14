@@ -227,3 +227,29 @@ test('a turn-off flag says who it puts off and what the rule asks, in the rules 
   assert.doesNotMatch(words, /turn-off|_T_/);
   assert.equal(Ws.flagWords('SHARED_CTA', r), 'no call to action', 'other flags keep their chip names');
 });
+
+test('a line typed on the worksheet joins its asset’s run, is checked, kept and recorded for the person named', async () => {
+  const { still, shared } = await fresh();
+  const view = await roundView();
+  // Step 1: a subhead for an asset, by its name; it joins the asset's run.
+  const sub = await Ws.addLine({ step: 'on_image', text: '  One little sock eater,  covered. ', asset: 'Sock Eater (dog)', where: 'Subhead' }, view, api(), { user: 'brook', for: 'nick' });
+  assert.equal(sub.run, still.id);
+  const l = (await S.loadBatch(still.id)).lines.find(x => x.id === sub.line)!;
+  assert.deepEqual([l.text, l.field, l.decision, l.decided_for, l.model, l.status], ['One little sock eater, covered.', 'meta_on_image_sub', 'keep', 'nick', 'human', 'checked']);
+  // A card on a carousel keeps its number.
+  const card = await Ws.addLine({ step: 'on_image', text: 'Then ask them why.', asset: 'OWN_CARDS', where: 'Card 2' }, view, api(), { user: 'brook' });
+  assert.equal((await S.loadBatch(card.run)).lines.find(x => x.id === card.line)!.card, 2);
+  // Steps 2 and 3: no asset is the shared pool; an asset is that asset's own caption.
+  const pool = await Ws.addLine({ step: 'primary', text: 'Trupanion is medical insurance for pets. Build your pet’s plan.' }, view, api(), { user: 'brook' });
+  assert.equal(pool.run, shared.id);
+  assert.equal((await S.loadBatch(pool.run)).lines.find(x => x.id === pool.line)!.flags.some(f => f.rule === 'SHARED_CTA'), false);
+  const own = await Ws.addLine({ step: 'headline', text: 'Sock eaters, sorted.', asset: 'OWN_STILL' }, view, api(), { user: 'brook' });
+  const ws = await Ws.worksheet(view, 'US');
+  assert.deepEqual(ws.steps.headline.filter(x => !x.shared).map(x => [x.asset, x.text, x.call]), [['Sock Eater (dog)', 'Sock eaters, sorted.', 'keep']]);
+  assert.ok(own.line);
+  // Refused in plain words: the same wording again, no wording, no asset on step 1, an unknown asset.
+  await assert.rejects(Ws.planAdd({ step: 'on_image', text: 'One little sock eater, covered.', asset: 'OWN_STILL', where: 'Subhead' }, view), /already on the worksheet/);
+  await assert.rejects(Ws.planAdd({ step: 'primary', text: '   ' }, view), /Type the line first/);
+  await assert.rejects(Ws.planAdd({ step: 'on_image', text: 'A line' }, view), /needs its asset/);
+  await assert.rejects(Ws.planAdd({ step: 'on_image', text: 'A line', asset: 'Nowhere' }, view), /No asset called "Nowhere"/);
+});

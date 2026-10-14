@@ -1,11 +1,12 @@
 // The worksheet (Brook, 2 Oct; Round 2): the month's copy on one page, the way the Round 1 spreadsheet worked. Tabs
 // are the steps; one row is one line with what the check found, a count, and Keep / Cut / Edit. No persona or
 // territory to pick first, no runs, angles or tone. It is a view over the same lines the other screens use.
-import { Fragment, useCallback, useEffect, useState } from 'react';
-import { REGION_NAMES, studio, type Batch, type Line, type Meta, type Region, type WorksheetData, type WsRow, type WsStep } from '@/lib/studioApi';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { REGION_NAMES, studio, type Batch, type Brief, type Line, type Meta, type Region, type StudioEvent, type WorksheetData, type WsRow, type WsStep } from '@/lib/studioApi';
+import { CopyCheck } from './CopyCheck';
 import { cn } from '@/lib/utils';
 import { personaColor, tint } from '@/lib/personaColors';
-import { regionLabel, ForPicker, GhostButton, LineHistory, PersonaDot, PinkButton, Src, angleLabel, useActingFor, when } from './ui';
+import { regionLabel, personaKeys, ForPicker, GhostButton, LineHistory, PersonaDot, PinkButton, Src, angleLabel, useActingFor, when } from './ui';
 
 const STEPS: Array<{ key: WsStep; n: number; name: string; what: string }> = [
   { key: 'on_image', n: 1, name: 'On-image copy', what: 'Every headline, subhead and carousel card that sits in the artwork, by persona and asset.' },
@@ -14,12 +15,16 @@ const STEPS: Array<{ key: WsStep; n: number; name: string; what: string }> = [
 ];
 const LEVEL: Record<string, string> = { red: 'border-red-500/50 bg-red-500/10 text-red-200', amber: 'border-amber-400/40 bg-amber-400/10 text-amber-200', grey: 'border-[#343946] bg-[#1C1F26] text-[#A3A8B1]' };
 
-export function Worksheet({ meta, region, onStep, onChanged }: {
+export function Worksheet({ meta, region, onStep, onChanged, onOpenRun }: {
   /** The region shown: the header's switch. */
   meta: Meta; region: Region;
   /** Steps 4 and 5 are the existing Build and Assets screens. */
   onStep: (step: 'build' | 'assets') => void; onChanged: () => void;
+  /** Open a run in Review (from a pasted check's report). */
+  onOpenRun?: (run: string) => void;
 }) {
+  // One panel open at a time above the table: paste a table of copy, or have Studio write more for the shared pool.
+  const [panel, setPanel] = useState<'' | 'paste' | 'more'>('');
   const [step, setStep] = useState<WsStep>('on_image');
   const [data, setData] = useState<WorksheetData | null>(null);
   const [error, setError] = useState('');
@@ -67,6 +72,18 @@ export function Worksheet({ meta, region, onStep, onChanged }: {
         <button role="tab" aria-selected={false} onClick={() => onStep('build')} className="rounded-lg border border-[#343946] px-3.5 py-2 text-sm font-semibold text-[#C9CCD2] hover:border-[#6B7280]">4 Build ads</button>
         <button role="tab" aria-selected={false} onClick={() => onStep('assets')} className="rounded-lg border border-[#343946] px-3.5 py-2 text-sm font-semibold text-[#C9CCD2] hover:border-[#6B7280]">5 Assets</button>
       </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <GhostButton active={panel === 'paste'} aria-expanded={panel === 'paste'} onClick={() => setPanel(panel === 'paste' ? '' : 'paste')} title="Paste a table of copy written elsewhere: every line is checked, kept, and lands as a row in its step and asset">Paste copy</GhostButton>
+        {step !== 'on_image' && <GhostButton active={panel === 'more'} aria-expanded={panel === 'more'} onClick={() => setPanel(panel === 'more' ? '' : 'more')} title="Studio writes more for the shared pool, learning from what has been kept and cut">Write more</GhostButton>}
+        <span className="text-sm text-[#858B96]">or add a line at the bottom of the table</span>
+      </div>
+      {panel === 'paste' && (
+        <div className="rounded-xl border border-[#343946] bg-[#121419] p-4">
+          <CopyCheck meta={meta} embedded region={region} onChecked={changed} onOpenRun={id => onOpenRun?.(id)} />
+        </div>
+      )}
+      {panel === 'more' && step !== 'on_image' && <WriteMore meta={meta} step={step} region={region} onDone={changed} onError={setError} />}
 
       {error && <p className="rounded-lg border-2 border-red-500/45 bg-red-500/10 px-3 py-2 text-base text-red-200">{error}</p>}
       {!data && !error && <p className="text-base text-[#858B96]">Loading the worksheet…</p>}
@@ -121,10 +138,141 @@ export function Worksheet({ meta, region, onStep, onChanged }: {
               </table>
             </div>
           )}
+          <AddLine meta={meta} step={step} region={region} onDone={changed} onError={setError} />
           <p className="text-sm text-[#A3A8B1]"><span className="font-semibold text-red-200">Red</span> breaks a client rule as written and needs a fix. <span className="font-semibold text-amber-200">Amber</span> is only “have a look”: it is yours to keep as it is. A line with nothing to say is <span className="text-emerald-300">clear</span>.</p>
           {data.other > 0 && <p className="text-xs text-[#646A75]">{data.other} other line{data.other === 1 ? '' : 's'} this month (a description, a TikTok hook or a video’s words) {data.other === 1 ? 'is' : 'are'} not on the worksheet. They are in Review.</p>}
         </>
       )}
+    </div>
+  );
+}
+
+/** Follow a job to its end: its status lines as they come, then resolve (or reject with what stopped it). */
+function follow(job: string, onStatus: (m: string) => void, keep: { current: { close: () => void } | null }): Promise<void> {
+  return new Promise((resolve, reject) => {
+    keep.current?.close();
+    keep.current = studio.events(job, (e: StudioEvent) => {
+      if (e.type === 'status') onStatus(e.message);
+      if (e.type === 'error') reject(new Error(e.message));
+      if (e.type === 'done') resolve();
+    });
+  });
+}
+const sel = 'rounded-lg border-2 border-[#343946] px-2 py-1.5 text-sm';
+const askFirst = (meta: Meta, usd: number) => window.confirm(`This is estimated at $${usd.toFixed(2)}, over the $${meta.ask_over ?? 2} ask-first line. Go ahead?`);
+
+/** Add a line at the bottom of the table: typed, placed by asset (steps 2 and 3: the shared pool unless an asset is chosen), checked, kept. */
+function AddLine({ meta, step, region, onDone, onError }: { meta: Meta; step: WsStep; region: Region; onDone: () => void; onError: (m: string) => void }) {
+  const [text, setText] = useState('');
+  const [asset, setAsset] = useState('');
+  const [where, setWhere] = useState('Headline');
+  const [busy, setBusy] = useState('');
+  const es = useRef<{ close: () => void } | null>(null);
+  useEffect(() => () => es.current?.close(), []);
+  // The month's assets, by persona: live territories that aren't the shared pool.
+  const assets = personaKeys(meta.personas).flatMap(p => Object.entries(meta.territories).filter(([, t]) => t.persona === p && t.status !== 'retired' && !t.shared).map(([k, t]) => ({ k, persona: p, name: t.name.replace(/\.$/, ''), format: String(t.format || '') })));
+  const chosen = assets.find(a => a.k === asset);
+  const carousel = /^CAR/i.test(chosen?.format || '');
+  const wheres = carousel ? ['Card', 'Card 1', 'Card 2', 'Card 3', 'Card 4', 'Card 5', 'Card 6', 'Card subhead'] : ['Headline', 'Subhead'];
+  useEffect(() => { if (!wheres.includes(where)) setWhere(wheres[0]); }, [carousel]); // eslint-disable-line react-hooks/exhaustive-deps
+  const needAsset = step === 'on_image' && !asset;
+  const add = async () => {
+    const line = { step, text: text.trim(), region, ...(asset ? { asset } : {}), ...(step === 'on_image' ? { where } : {}) };
+    if (!line.text || needAsset) return;
+    onError(''); setBusy('Checking the new line…');
+    try {
+      let r;
+      try { r = await studio.worksheetAdd(line); }
+      catch (e: any) {
+        if (e.status !== 409 || !e.body?.needs_confirm) throw e;
+        if (!askFirst(meta, e.body.estimate)) { setBusy(''); return; }
+        r = await studio.worksheetAdd(line, true);
+      }
+      await follow(r.job, setBusy, es);
+      setText(''); onDone();
+    } catch (e: any) { onError(`The line was not added: ${e.message}`); }
+    finally { setBusy(''); }
+  };
+  const noun = step === 'on_image' ? 'on-image line' : step === 'primary' ? 'caption' : 'headline';
+  return (
+    <div className="rounded-xl border border-dashed border-[#343946] px-4 py-3">
+      <div className="mb-2 text-sm font-semibold text-[#C9CCD2]">Add {step === 'on_image' ? 'an' : 'a'} {noun}</div>
+      <div className="flex flex-wrap items-start gap-2">
+        <select className={cn(sel, 'max-w-[16rem]')} value={asset} onChange={e => setAsset(e.target.value)} aria-label="Asset for the new line">
+          <option value="">{step === 'on_image' ? 'Choose the asset…' : 'Shared (every asset)'}</option>
+          {personaKeys(meta.personas).filter(p => assets.some(a => a.persona === p)).map(p => (
+            <optgroup key={p} label={(meta.personas[p]?.name || p).replace(/\s*\(.*\)$/, '')}>
+              {assets.filter(a => a.persona === p && (step !== 'headline' || !/^TIKTOK/i.test(a.format))).map(a => <option key={a.k} value={a.k}>{a.name}</option>)}
+            </optgroup>
+          ))}
+        </select>
+        {step === 'on_image' && (
+          <select className={sel} value={where} onChange={e => setWhere(e.target.value)} aria-label="Where the new line sits">
+            {wheres.map(w => <option key={w} value={w}>{w}</option>)}
+          </select>
+        )}
+        <textarea className="min-w-[16rem] flex-1 rounded-lg border-2 border-[#343946] bg-[#101216] p-2 text-base leading-snug" rows={Math.max(1, Math.ceil(text.length / 70))} value={text} placeholder={`Type the ${noun}`} aria-label={`New ${noun}`}
+          onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) add(); }} />
+        <PinkButton className="px-3 py-1.5 text-sm" onClick={add} disabled={!!busy || !text.trim() || needAsset}>Add and check</PinkButton>
+      </div>
+      <p className="mt-1.5 text-xs text-[#858B96]" role="status">
+        {busy ? <span className="animate-pulse text-[#F2C4DA]">{busy}</span> : needAsset && text.trim() ? 'Choose the asset the line is for.' : `It is checked like every other line and arrives kept${step === 'on_image' ? '' : asset ? ', as this asset’s own' : ', in the shared pool'}. ${[...text.trim()].length ? `${[...text.trim()].length} characters.` : ''}`}
+      </p>
+    </div>
+  );
+}
+
+/** Steps 2 and 3: Studio writes more for the shared pool, into the pool's run, learning from what was kept and cut. */
+function WriteMore({ meta, step, region, onDone, onError }: { meta: Meta; step: WsStep; region: Region; onDone: () => void; onError: (m: string) => void }) {
+  const field = step === 'primary' ? 'meta_primary' : 'meta_headline';
+  const persona = Object.keys(meta.personas).find(p => meta.personas[p].shared) || 'ALL';
+  const territory = Object.keys(meta.territories).find(t => meta.territories[t].shared) || 'SHARED';
+  const [n, setN] = useState(meta.fields[field]?.default_count || 5);
+  const [cost, setCost] = useState<number | null>(null);
+  const [busy, setBusy] = useState('');
+  // What the last run came to ("6 lines ready. 2 dropped before you saw them: …"), kept on show after it ends.
+  const [result, setResult] = useState('');
+  const es = useRef<{ close: () => void } | null>(null);
+  useEffect(() => () => es.current?.close(), []);
+  /** The pool's run for this region (new lines join it), and the brief: its own, with only this field and count. */
+  const plan = useCallback(async (): Promise<{ brief: Brief; run?: string }> => {
+    const run = (await studio.batches()).filter(r => r.persona === persona && r.territory === territory && (r.region || 'US') === region).sort((a, b) => a.created.localeCompare(b.created))[0]?.id;
+    const base: Brief = run ? (await studio.batch(run)).brief : { persona, territory, region, fields: [], tone: { dry_warm: 3, playful_plain: 3, short_long: 1 }, banned_words: [], banned_ideas: [], reference_lines: [], n, model: 'gpt-4o' };
+    return { brief: { ...base, region, fields: [field], field_counts: { [field]: n }, n, own_lines: [], carousel: undefined }, run };
+  }, [persona, territory, region, field, n]);
+  useEffect(() => {
+    let live = true;
+    setCost(null);
+    const t = setTimeout(() => { plan().then(p => studio.estimate(p.brief)).then(e => { if (live) setCost(e.usd); }).catch(() => {}); }, 300);
+    return () => { live = false; clearTimeout(t); };
+  }, [plan]);
+  const write = async () => {
+    onError(''); setResult(''); setBusy('Starting…');
+    try {
+      const p = await plan();
+      let r;
+      try { r = await studio.generate(p.brief, { batch: p.run }); }
+      catch (e: any) {
+        if (e.status !== 409 || !e.body?.needs_confirm) throw e;
+        if (!askFirst(meta, e.body.estimate)) { setBusy(''); return; }
+        r = await studio.generate(p.brief, { batch: p.run, confirm: true });
+      }
+      let ready = '';
+      await follow(r.job, m => { setBusy(m); if (/\blines? ready\b/.test(m)) ready = m.replace(/\s*Checking…$/, ''); }, es);
+      setResult(ready);
+      onDone();
+    } catch (e: any) { onError(`Nothing was written: ${e.message}`); }
+    finally { setBusy(''); }
+  };
+  const noun = step === 'primary' ? 'shared captions' : 'shared headlines';
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#343946] bg-[#121419] px-4 py-3">
+      <span className="text-base text-[#C9CCD2]">Write</span>
+      <input type="number" min={1} max={20} className={cn(sel, 'w-20')} value={n} aria-label={`How many ${noun} to write`} onChange={e => setN(Math.max(1, Math.min(20, Number(e.target.value) || 1)))} />
+      <span className="text-base text-[#C9CCD2]">more {noun} for {REGION_NAMES[region]}</span>
+      <PinkButton className="px-3 py-1.5 text-sm" onClick={write} disabled={!!busy}>Write and check</PinkButton>
+      <span className="text-sm text-[#858B96]" role="status">{busy ? <span className="animate-pulse text-[#F2C4DA]">{busy}</span> : `${cost === null ? '' : `About $${cost.toFixed(2)}. `}Studio learns from the lines kept and cut so far. New lines arrive undecided, as rows at the end of the shared pool.`}</span>
+      {result && !busy && <p className={cn('w-full text-sm', /^0 lines/.test(result) ? 'text-amber-200' : 'text-emerald-200')} role="status">{result}</p>}
     </div>
   );
 }

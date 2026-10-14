@@ -54,3 +54,13 @@ Not in this PR: targets and due dates (nothing stores them yet), paste / add a l
 - **A state line per step** (`stepState`): how many lines are left to decide; or that every line is decided and Build is next; or that the step is finished because every kept line is signed off, that a signed-off line is changed in Build and signed off again, and that Assets is next, with a button to the next step. A locked row says the same in its own cell.
 - **Attribution reads the same on every row** (`attribution`): whose call it is, then who entered it when that was someone else: "kept by Nick Larson · entered by brook", or "kept by brook". Nothing stored is rewritten, so a line Brook decided before the "for" picker existed still reads "kept by brook".
 - Not done here: targets per step (they belong on the month's record), paste / add a line in the worksheet (PR 3), the lock (PR 4).
+
+## PR 3: paste copy, add a line, write more (13 Oct)
+
+Three ways to get lines onto the worksheet without leaving it. Nothing new is stored: every line lands in a run, as before.
+
+- **Add a line** (under each table; `AddLine` in Worksheet.tsx, `POST /worksheet/lines`, `planAdd` / `addLine` in worksheet.ts): type it, choose the asset (step 1: required, with Headline / Subhead, or Card N on a carousel; steps 2 and 3: "Shared" unless an asset is chosen), then "Add and check". The line joins the asset's run for the month and region (the one that already holds that step's lines; a new run only if the asset has none), is checked in full, kept, and recorded for the "for" person, the same as a row typed in the sheet's N rows. The same wording twice, or a retired asset, is refused in words. Over the ask-first amount it asks first.
+- **Paste copy**: Check copy, opened in place (`CopyCheck` with `embedded`), on the header's region. When the check finishes the rows appear in their steps; the shareable report and the list of earlier checks are still there.
+- **Write more** (steps 2 and 3; `WriteMore`): Studio writes N more shared captions or headlines (the field's default count to start) into the shared pool's run, through the usual `/generate`, with the estimate shown. The writer learns from the lines kept and cut so far (taste). New lines arrive undecided at the end of the shared pool; the run's own summary ("9 lines ready, 4 near-duplicates removed…") stays on show.
+- Not here: writing more on-image copy for one asset (Write does that), dragging cards into order, the lock (PR 4), the default screen (PR 5).
+- Local note: in mock mode "Write more" on headlines returns nothing, because the mock writer's lines are longer than a headline allows; captions work.

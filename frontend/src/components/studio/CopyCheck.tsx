@@ -13,7 +13,8 @@ const TONE = { red: 'red', amber: 'amber', clear: 'outline', grey: 'grey' } as c
 const WORD = { red: 'Red', amber: 'Amber', clear: 'Clear' } as const;
 const secs = (n: number) => (n >= 90 ? `${Math.round(n / 60)} min` : `${Math.round(n)} s`);
 
-export function CopyCheck({ meta, onOpenRun }: { meta: Meta; onOpenRun: (run: string) => void }) {
+/** embedded: inside the worksheet ("Paste copy"): no page heading, the header's region, and `onChecked` when a check finishes. */
+export function CopyCheck({ meta, onOpenRun, embedded, region, onChecked }: { meta: Meta; onOpenRun: (run: string) => void; embedded?: boolean; region?: string; onChecked?: () => void }) {
   const [text, setText] = useState('');
   // Whose copy it is. Tied to the "for" picker: a name from the Studio list also sets who you're acting for (so keeping,
   // overriding and signing off these lines are recorded as theirs); anyone else (they may not use Studio) stays a name here.
@@ -22,7 +23,8 @@ export function CopyCheck({ meta, onOpenRun }: { meta: Meta; onOpenRun: (run: st
   const people = (meta.people || []).filter(p => p.toLowerCase() !== me);
   const listed = people.find(p => p.toLowerCase() === forWhom.trim().toLowerCase());
   useEffect(() => { if (listed && getActingFor() !== listed) setActingFor(listed); }, [listed]);
-  const [defaults, setDefaults] = useState<BulkDefaults>({ region: 'US' });
+  const [defaults, setDefaults] = useState<BulkDefaults>({ region: region || 'US' });
+  useEffect(() => { if (region) setDefaults(d => (d.region === region ? d : { ...d, region })); }, [region]);
   const [preview, setPreview] = useState<BulkPreview | null>(null);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
@@ -59,7 +61,7 @@ export function CopyCheck({ meta, onOpenRun }: { meta: Meta; onOpenRun: (run: st
       esRef.current = studio.events(r.job, (e: StudioEvent) => {
         if (e.type === 'status') setStatus(e.message);
         if (e.type === 'error') { setStatus(''); setError(`The check stopped: ${e.message}`); }
-        if (e.type === 'done') { setStatus(''); studio.bulkReport(id).then(setReport).catch(x => setError(x.message)); loadPast(); }
+        if (e.type === 'done') { setStatus(''); studio.bulkReport(id).then(setReport).catch(x => setError(x.message)); loadPast(); onChecked?.(); }
       });
     } catch (e: any) { setStatus(''); setError(e.message); }
   }
@@ -72,10 +74,12 @@ export function CopyCheck({ meta, onOpenRun }: { meta: Meta; onOpenRun: (run: st
 
   return (
     <div className="max-w-6xl space-y-5">
-      <Intro title="Check copy" line="Paste copy written elsewhere, check every line against the rules, and share the report back.">
-        <p>Copy a table from a Google Doc or Sheet with the columns <strong>persona</strong>, <strong>territory</strong> (optional), <strong>field</strong> and <strong>text</strong>, and paste it below. Field can be on-image, subhead, primary, headline, description, caption or hook. A header row is optional.</p>
-        <p>Primary text and headlines with no persona go to <strong>Shared captions</strong> (reused across personas). On-image headlines and subheads are persona-specific. Every line is kept, so it can be built into ads and signed off later.</p>
-      </Intro>
+      {embedded ? <p className="text-sm text-[#A3A8B1]">Paste a table copied from a Google Doc or Sheet: <strong>persona</strong>, <strong>territory</strong> (optional), <strong>field</strong> and <strong>text</strong>. Primary text and headlines with no persona join the shared pool. Every line is checked and kept, and appears as a row in its step.</p> : (
+        <Intro title="Check copy" line="Paste copy written elsewhere, check every line against the rules, and share the report back.">
+          <p>Copy a table from a Google Doc or Sheet with the columns <strong>persona</strong>, <strong>territory</strong> (optional), <strong>field</strong> and <strong>text</strong>, and paste it below. Field can be on-image, subhead, primary, headline, description, caption or hook. A header row is optional.</p>
+          <p>Primary text and headlines with no persona go to <strong>Shared captions</strong> (reused across personas). On-image headlines and subheads are persona-specific. Every line is kept, so it can be built into ads and signed off later.</p>
+        </Intro>
+      )}
 
       <section className="space-y-3 rounded-xl border border-[#272B34] bg-[#16181D] p-5">
         <div className="flex flex-wrap items-end gap-3">
