@@ -134,7 +134,9 @@ test('Pre-flight card match: in order passes, a card on the wrong card is amber,
   const read = (texts: string[]) => texts.map((t, i) => ({ where: `card ${i + 1}`, text: t }));
   const ok = cardMatch(copy, read(['VET BILL AT 2AM?', 'You pay the vet as normal.', 'We sort the rest', 'Terms apply']));
   assert.deepEqual(ok.rows.map(r => r.status), ['match', 'match', 'match']);
-  assert.equal(ok.flags.length, 0);
+  // Card 1 matches word for word but is set in capitals: amber on its card (a final full stop on card 2 doesn't count).
+  assert.deepEqual(ok.flags.map(f => [f.rule, f.severity, f.where, f.frame?.asset_position]), [['COPY_STYLING', 'amber', 'card 1', 0]]);
+  assert.match(ok.flags[0].quote!, /signed off: "Vet bill at 2am\?" · on card 1: "VET BILL AT 2AM\?"/);
   const swapped = cardMatch(copy, read(['Vet bill at 2am?', 'We sort the rest', 'You pay the vet as normal']));
   assert.deepEqual(swapped.flags.map(f => [f.rule, f.severity, f.why]), [['COPY_CARD_ORDER', 'amber', 'On card 3, expected card 2'], ['COPY_CARD_ORDER', 'amber', 'On card 2, expected card 3']]);
   assert.equal(swapped.flags[0].frame!.asset_position, 2, 'points at the card it was found on');

@@ -209,6 +209,7 @@ export function whatToDo(rule: string, f?: { visible?: number; max?: number }): 
     BR_NAMING: 'Say “medical insurance for pets”.',
     BR_CASE: 'Use sentence case; capitals are a design choice on the image.',
     COPY_CAVEAT: 'Put the caveat on the asset, as signed off.',
+    COPY_STYLING: 'Set the line with its signed-off capitals and punctuation, or sign off the new styling in Build.',
     COPY_MATCH: 'Use the signed-off wording on the asset.',
   };
   return map[rule] || '';

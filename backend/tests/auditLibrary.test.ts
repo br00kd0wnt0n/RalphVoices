@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { runAudit, estimateAudit, featuresRow, REPORT_VERSION, type AuditInput } from '../src/services/audit/index.js';
-import { copyMatch, normalise, bestMatch } from '../src/services/audit/copyMatch.js';
+import { copyMatch, normalise, bestMatch, stylingDiff } from '../src/services/audit/copyMatch.js';
 import { loadRules, loadRubric } from '../src/services/audit/rules.js';
 
 const FX = path.join(__dirname, 'fixtures/audit');
@@ -47,12 +47,25 @@ function png(dir: string, name: string, color = 'blue'): Buffer {
   return fs.readFileSync(p);
 }
 
+test('styling: all capitals, other capitals and changed punctuation are named; curly quotes, line breaks and a dropped full stop are not', () => {
+  assert.deepEqual(stylingDiff('You do have this.', ['YOU DO HAVE THIS!']), { found: 'YOU DO HAVE THIS!', caps: 'all capitals', punct: true, what: 'set in capitals and different punctuation' });
+  assert.equal(stylingDiff('You do have this.', ['Card one. You do have this']), null, 'the final full stop dropped');
+  assert.equal(stylingDiff('Your pet’s plan, sorted.', ["Your pet's plan,\nsorted."]), null);
+  assert.equal(stylingDiff('No kids.', ['Two incomes. No Kids.'])!.what, 'different capitals');
+  assert.equal(stylingDiff('Vet bills, covered.', ['Vet bills covered!'])!.what, 'different punctuation');
+  assert.equal(stylingDiff('Vet bills, covered.', ['Something else entirely']), null, 'not found word for word: not a styling question');
+});
+
 test('copy match: normalised match, rewording (amber, both quoted), missing hook (red), headline is post copy (Brook, 30 Sep), missing caveat (red)', () => {
   assert.equal(normalise('Your vet, paid\nat CHECKOUT!'), 'your vet paid at checkout');
   const onAsset = [{ where: 'card 1', text: 'YOUR VET CAN BE PAID\ndirectly at checkout.' }, { where: 'card 2', text: 'Trupanion' }];
   const same = copyMatch({ on_image: 'Your vet can be paid directly at checkout' }, onAsset, rules);
   assert.equal(same.rows[0].status, 'match');
-  assert.equal(same.flags.length, 0);
+  // The words match; part of the line is set in capitals: its own amber, both quoted (Brook, 9 Oct).
+  assert.deepEqual(same.flags.map(f => [f.rule, f.severity, f.where]), [['COPY_STYLING', 'amber', 'card 1']]);
+  assert.equal(same.flags[0].quote, 'signed off: "Your vet can be paid directly at checkout" · on the asset: "YOUR VET CAN BE PAID directly at checkout."');
+  assert.match(same.flags[0].label, /the words match, different capitals$/);
+  assert.equal(copyMatch({ on_image: 'Your vet can be paid directly at checkout' }, [{ where: 'image', text: 'Your vet can be\npaid directly at checkout.' }], rules).flags.length, 0, 'line breaks and a final full stop are not styling');
 
   const reworded = copyMatch({ on_image: 'Your vet can be paid directly at the counter' }, onAsset, rules);
   assert.equal(reworded.rows[0].status, 'reworded');

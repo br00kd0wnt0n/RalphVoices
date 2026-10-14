@@ -4,7 +4,8 @@
 // the asset (on-image text, the TikTok hook, and the headline when the creative
 // carries it) are looked for in the text read off the images and frames and in
 // the voice-over. Compared normalised: case, punctuation and line breaks don't
-// count. Amber when the wording differs materially; red when a required caveat
+// count for the match; a match whose capitals or punctuation differ from the
+// signed-off line is its own amber (COPY_STYLING, `stylingDiff`). Amber when the wording differs materially; red when a required caveat
 // in the signed-off copy (e.g. "at participating hospitals") is missing from the
 // asset. Both versions are quoted in the flag.
 import type { Flag, Rules } from './types.js';
@@ -40,6 +41,36 @@ export const REWORD_MIN = 0.5;
 export function normalise(s: string): string {
   return s.toLowerCase().replace(/[’‘]/g, "'").replace(/[“”]/g, '"').replace(/&/g, ' and ')
     .replace(/[^a-z0-9$%' ]+/g, ' ').replace(/'/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * A matching line set differently on the asset (Brook, 9 Oct: "YOU DO HAVE THIS!" passed against "You do have this.";
+ * the brand rule is sentence case). The asset's own words for the matched stretch, and what differs: capitals (all
+ * capitals, or other capitals) and punctuation (marks added, dropped or changed). A final full stop dropped from
+ * artwork is the usual design convention and doesn't count; curly and straight quotes are the same; line breaks too.
+ * Null when the asset sets the line as signed off (or the stretch can't be found word for word).
+ */
+export function stylingDiff(signed: string, texts: string[]): { found: string; caps: '' | 'all capitals' | 'different capitals'; punct: boolean; what: string } | null {
+  const want = normalise(signed);
+  if (!want) return null;
+  const n = want.split(' ').length;
+  for (const text of texts) {
+    const raw = text.split(/\s+/).filter(Boolean);
+    for (let i = 0; i < raw.length; i++) {
+      for (let j = i + 1; j <= Math.min(raw.length, i + n + 4); j++) {
+        if (normalise(raw.slice(i, j).join(' ')) !== want) continue;
+        const found = raw.slice(i, j).join(' ');
+        const letters = (x: string) => x.replace(/[^\p{L}]/gu, '');
+        const fl = letters(found), sl = letters(signed);
+        const caps: '' | 'all capitals' | 'different capitals' = fl === sl ? '' : fl.length > 1 && fl === fl.toUpperCase() && sl !== sl.toUpperCase() ? 'all capitals' : 'different capitals';
+        const marks = (x: string) => x.replace(/[’‘]/g, "'").replace(/[“”]/g, '"').replace(/[\p{L}\p{N}\s]/gu, '').replace(/\.$/, '');
+        const punct = marks(found) !== marks(signed.trim());
+        if (!caps && !punct) return null;
+        return { found, caps, punct, what: [caps === 'all capitals' ? 'set in capitals' : caps ? 'different capitals' : '', punct ? 'different punctuation' : ''].filter(Boolean).join(' and ') };
+      }
+    }
+  }
+  return null;
 }
 
 function lcs(a: string[], b: string[]): number {
@@ -111,7 +142,10 @@ export function copyMatch(copy: SignedOffCopy, assetText: Array<{ where: string;
     }
     const status: CopyMatchRow['status'] = exact ? 'match' : m.similarity >= REWORD_MIN ? 'reworded' : 'not on asset';
     rows.push({ field: k, signed_off: v, found: m.excerpt, similarity: m.similarity, status });
-    if (status === 'reworded') {
+    if (status === 'match') {
+      const st = stylingDiff(v, [...(m.where ? assetText.filter(t => t.where === m.where) : []), ...assetText].map(t => t.text));
+      if (st) flags.push({ severity: 'amber', rule: 'COPY_STYLING', label: `${def.label}: the words match, ${st.what}`, source: COPY_MATCH_SOURCE, quote: `signed off: "${v.trim()}" · on the asset: "${st.found}"`, where: m.where, why: 'The brand writes in sentence case; use the signed-off capitals and punctuation, or sign off the line as set', by: ['rule'] });
+    } else if (status === 'reworded') {
       flags.push({ severity: 'amber', rule: 'COPY_MATCH', label: `${def.label} differs from the signed-off wording`, source: COPY_MATCH_SOURCE, quote: `signed off: "${v.trim()}" · on the asset: "${m.excerpt}"`, where: m.where, why: `${Math.round(m.similarity * 100)}% of the words match, in order`, by: ['rule'] });
     } else if (status === 'not on asset') {
       flags.push({
