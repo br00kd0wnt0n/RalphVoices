@@ -206,6 +206,9 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy, focus }: { met
     return [p, [...sets.values()]] as const;
   });
   const formats = [...new Set(rows.filter(r => inViewFilter(r.s, view)).map(r => formatOf(r.s)))].sort();
+  // A format chosen for one audience doesn't follow to another that has only one format (the row is hidden then).
+  // (Set during render, guarded: this sits after the component's early return, where a hook can't.)
+  if (format !== 'all' && formats.length <= 1) setFormat('all');
   const chip = (on: boolean) => cn('rounded-full border px-3 py-1 text-sm transition', on ? 'border-[#ECEDEF] bg-[#ECEDEF] text-[#0E0F12]' : 'border-[#343946] text-[#C9CCD2] hover:border-[#6B7280]');
   const count = (f: Filter) => ads.filter(a => f === 'all' || a.bucket === f).length;
   const row = rows.find(r => r.s.stub === sel) || null;
@@ -243,8 +246,13 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy, focus }: { met
             return <button key={p} className="flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm transition" style={on ? { borderColor: pc.edge, background: tint(pc.base, 0.22), color: pc.light } : { borderColor: tint(pc.base, 0.45), color: pc.light }}
               onClick={() => setView({ ...view, persona: on ? 'all' : p, territory: 'all' })}><PersonaDot persona={p} />{meta.personas[p].name.replace(/\s*\(.*\)$/, '')}</button>;
           })}
-          <span className="ml-3 text-xs font-semibold uppercase tracking-wider text-[#646A75]">Format</span>
-          {['all', ...formats].map(f => <button key={f} className={chip(format === f)} onClick={() => setFormat(f)}>{f === 'all' ? 'All' : f.charAt(0) + f.slice(1).toLowerCase()}</button>)}
+          {/* A territory narrowed from a link or Build: one chip to clear it (the "Showing" dropdowns are gone). */}
+          {view.territory !== 'all' && <button className={cn(chip(true), 'flex items-center gap-1')} onClick={() => setView({ ...view, territory: 'all' })} title="Show every asset again">Only {territoryName(meta.territories[view.territory]).replace(/\.$/, '') || view.territory} <span aria-hidden>×</span></button>}
+          {/* Format only when the audience in view has more than one. */}
+          {formats.length > 1 && <>
+            <span className="ml-3 text-xs font-semibold uppercase tracking-wider text-[#646A75]">Format</span>
+            {['all', ...formats].map(f => <button key={f} className={chip(format === f)} onClick={() => setFormat(f)}>{f === 'all' ? 'All' : f.charAt(0) + f.slice(1).toLowerCase()}</button>)}
+          </>}
         </div>
       </div>
 

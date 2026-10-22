@@ -408,7 +408,8 @@ export function Studio() {
           {meta?.mock && <Chip tone="amber" className="hidden sm:inline-flex">mock</Chip>}
         </div>
       </header>
-      {showCtx && (viewMode
+      {/* Assets filters itself with its status and persona chips (Brook, 22 Oct): no "Showing" bar there. */}
+      {showCtx && tab !== 'assets' && (viewMode
         ? <ViewBar meta={meta!} view={rview} setView={setView} what={tab === 'live' ? 'Live' : 'Assets'} />
         : <ContextBar meta={meta!} ctx={ctx} setCtx={setCtx} step={stepIndex} onNewTerritory={() => setDrawer({ code: null })} />)}
       {drawer && meta && <TerritoryDrawer meta={meta} persona={ctx.persona} code={drawer.code} onClose={() => setDrawer(null)} onSaved={c => { territorySaved(c).catch(e => setErr(e.message)); }} />}

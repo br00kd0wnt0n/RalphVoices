@@ -59,7 +59,7 @@ test('the worksheet: on-image copy by persona and asset, then the shared pools; 
   assert.deepEqual(ws.steps.primary.map(x => [x.n, x.shared, x.shared ? '' : x.asset]), [['P1', true, ''], ['P2', true, ''], ['P3', true, ''], ['P4', false, 'Sock Eater (dog)']], 'the shared pool, then the caption written for one asset');
   assert.deepEqual(ws.steps.headline.map(x => [x.n, x.text]), [['H1', 'Vet bills? No sweat.']]);
   assert.equal(ws.other, 0);
-  assert.deepEqual(ws.counts.primary, { total: 4, kept: 0, cut: 0, undecided: 4, red: ws.counts.primary.red, amber: ws.counts.primary.amber, clear: ws.counts.primary.clear });
+  assert.deepEqual(ws.counts.primary, { previous: 0, total: 4, kept: 0, cut: 0, undecided: 4, red: ws.counts.primary.red, amber: ws.counts.primary.amber, clear: ws.counts.primary.clear });
   assert.ok(ws.steps.primary[1].flags.some(f => f.rule === 'SHARED_CTA' && f.level === 'amber'));
 });
 
@@ -280,4 +280,31 @@ test('the lock: a locked step’s lines are refused everywhere they could change
   await Locks.setLock(round, 'US', 'primary', false, 'brook');
   await Locks.assertLineUnlocked(shared.id, cap.id);
   assert.deepEqual((await Ws.worksheet(view, 'US')).locks, {});
+});
+
+test('previous versions (Brook, 22 Oct, option a): a line signed off before and in no ad’s latest sign-off is listed last, out of the counts, and a current line’s "similar line" to it is hidden', async () => {
+  const { still, shared } = await fresh();
+  const R = await import('../src/services/studio/ready.js');
+  const keepAll = async (id: string) => { for (const l of (await S.loadBatch(id)).lines) { await S.setDecision(id, l.id, { decision: 'keep' }, 'brook'); for (const f of R.unresolvedRed((await S.loadBatch(id)).lines.find(x => x.id === l.id)!)) await R.overrideFlag(id, l.id, f.rule, 'Test line', 'brook'); } };
+  await keepAll(still.id); await keepAll(shared.id);
+  const head = still.lines.find(l => l.field === 'meta_on_image')!.id;
+  const [cap1, cap2] = shared.lines.filter(l => l.field === 'meta_primary').map(l => l.id);
+  const h = shared.lines.find(l => l.field === 'meta_headline')!.id;
+  const sign = async (cap: string) => {
+    const draft = { versions: [{ visual: 'A', fields: { meta_primary: cap, meta_headline: h } }], on_image: { A: head } };
+    const v = await R.readyView('OWN', 'OWN_STILL', 'US', draft as any);
+    for (const x of v.plan.versions) for (const f of (x as any).checks?.flags || []) if (f.severity === 'red') await R.overrideFlag(shared.id, cap, f.rule, 'Test', 'brook').catch(() => {});
+    return R.signOff({ persona: 'OWN', territory: 'OWN_STILL', region: 'US', ...draft, expectation: { codes: [v.plan.versions[0].code], reason: 'x' }, expect_latest: v.latest?.id ?? null } as any, 'brook');
+  };
+  await sign(cap1);
+  let ws = await Ws.worksheet(await roundView(), 'US');
+  assert.deepEqual(ws.steps.primary.filter(x => x.signed_off).map(x => x.id), [cap1]);
+  await sign(cap2);   // the ad now runs the second caption: the first is a previous version
+  ws = await Ws.worksheet(await roundView(), 'US');
+  const p = ws.steps.primary;
+  assert.deepEqual([p.find(x => x.id === cap1)!.previous, p.find(x => x.id === cap2)!.signed_off], [true, true]);
+  assert.equal(p[p.length - 1].id, cap1, 'listed last');
+  assert.equal(ws.counts.primary.previous, 1);
+  assert.equal(ws.counts.primary.total, p.length - 1, 'previous versions are out of the counts');
+  assert.ok(!p.some(x => !x.previous && x.flags.some(f => f.rule === 'NEAR_DUP' && f.detail === `to ${p[p.length - 1].n}`)), 'no current line is "similar" to the previous version on screen');
 });
