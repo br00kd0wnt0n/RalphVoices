@@ -11,7 +11,7 @@ export type StudioTab = typeof STUDIO_TABS[number];
 export const MOVED: Record<string, StudioTab> = { brief: 'write', shortlist: 'review', ready: 'build', preflight: 'assets', compliance: 'assets' };
 const BASE = '/studio';
 /** Query keys that belong to one screen: dropped from the address when another screen opens. */
-const OWN: Partial<Record<StudioTab, string[]>> = { assets: ['stub', 'asset'], review: ['batch', 'open', 'view'], compare: ['compare'] };
+const OWN: Partial<Record<StudioTab, string[]>> = { assets: ['stub', 'asset'], review: ['batch', 'open', 'view'], compare: ['compare'], worksheet: ['step'] };
 /** Screens that work in one persona × territory: the address carries them. */
 const SCOPED: StudioTab[] = ['write', 'review', 'build'];
 

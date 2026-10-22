@@ -12,7 +12,7 @@
 // ready, preflight, compliance) land on the new paths.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { HOSTED, getUser, setActingFor, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type Line, type Meta, type Region, type StudioEvent } from '@/lib/studioApi';
+import { type WsStep, HOSTED, getUser, setActingFor, setSignedInUser, setUser, studio, studioAccess, type Batch, type Brief, type Line, type Meta, type Region, type StudioEvent } from '@/lib/studioApi';
 import { cn } from '@/lib/utils';
 import { ArrowLeft, ClipboardCheck, HelpCircle, Map as MapIcon, ScrollText, Shuffle, Table2 } from 'lucide-react';
 import { LivePage, RoundBadge, RoundsPanel, TestBar } from './StudioRounds';
@@ -95,6 +95,14 @@ export function Studio() {
   // The simple view (the worksheet's five steps) or the advanced one (everything, as before). Remembered per browser.
   const [mode, setModeState] = useState<StudioMode>(getMode);
   const switchMode = (m: StudioMode) => { setMode(m); setModeState(m); setTab(m === 'simple' ? 'worksheet' : 'home'); };
+  // The worksheet's step (on-image copy, captions, headlines): the header's steps in the simple view; ?step= in the address.
+  const [wsStep, setWsStepState] = useState<WsStep>(() => ({ captions: 'primary', headlines: 'headline' } as Record<string, WsStep>)[new URLSearchParams(window.location.search).get('step') || ''] || 'on_image');
+  const setWsStep = (x: WsStep) => {
+    setWsStepState(x);
+    const u = new URL(window.location.href);
+    if (x === 'on_image') u.searchParams.delete('step'); else u.searchParams.set('step', x === 'primary' ? 'captions' : 'headlines');
+    window.history.replaceState(window.history.state, '', u);
+  };
   // An advanced screen opened from a link shows the advanced header, without changing the remembered choice.
   const advanced = mode === 'advanced' || isAdvancedTab(tab);
   // Back and forward move between the steps.
@@ -340,11 +348,15 @@ export function Studio() {
         {meta && <RegionSwitch regions={(meta.regions || ['US', 'CA']) as Region[]} region={ctx.region} onChange={r => setCtx({ ...ctx, region: r })} />}
         {!advanced && (
           <nav aria-label="Studio steps" className="order-last flex w-full min-w-0 flex-nowrap items-center md:order-none md:w-auto gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {([['worksheet', '1–3', 'Worksheet'], ['build', '4', 'Build ads'], ['assets', '5', 'Assets']] as Array<[Tab, string, string]>).map(([t, n, label]) => (
-              <GhostButton key={t} active={tab === t} aria-current={tab === t ? 'step' : undefined} onClick={() => goTab(t)} className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-2 py-1.5 text-sm hover:border-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D94D8F]">
-                <span className={cn('flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[11px] font-bold', tab === t ? 'bg-[#0E0F12] text-white' : 'bg-[#272B34] text-[#A3A8B1]')}>{n}</span>{label}
+            {/* One row of steps (Brook, 22 Oct): the worksheet's three, then Build ads and Assets. */}
+            {([['worksheet', '1', 'On-image copy', 'on_image'], ['worksheet', '2', 'Captions', 'primary'], ['worksheet', '3', 'Headlines', 'headline'], ['build', '4', 'Build ads', ''], ['assets', '5', 'Assets', '']] as Array<[Tab, string, string, WsStep | '']>).map(([t, n, label, ws]) => {
+              const on = tab === t && (!ws || ws === wsStep);
+              return (
+              <GhostButton key={n} active={on} aria-current={on ? 'step' : undefined} onClick={() => { if (ws) setWsStep(ws); goTab(t); }} className="flex items-center gap-1.5 whitespace-nowrap border-transparent px-2 py-1.5 text-sm hover:border-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D94D8F]">
+                <span className={cn('flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[11px] font-bold', on ? 'bg-[#0E0F12] text-white' : 'bg-[#272B34] text-[#A3A8B1]')}>{n}</span>{label}
               </GhostButton>
-            ))}
+              );
+            })}
           </nav>
         )}
         {advanced && <nav aria-label="Studio steps" className="order-last flex w-full min-w-0 flex-nowrap items-center md:order-none md:w-auto gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -427,7 +439,7 @@ export function Studio() {
         {meta && tab === 'territories' && <Territories meta={meta} onSaved={() => refreshMeta()} onBrief={code => { const t = meta.territories[code]; setCtx({ persona: t.persona, territory: code, region: ctx.region }); setTab('write'); }} />}
         {tab === 'rules' && meta?.rounds && <RoundsPanel meta={meta} onSaved={() => refreshMeta().catch(() => {})} />}
         {/* The worksheet (Round 2): everything on one page; the start screen in the simple view (lib/studioMode.ts). */}
-        {meta && tab === 'worksheet' && <Worksheet meta={meta} region={ctx.region} onStep={t => goTab(t)} onChanged={() => setRunsTick(t => t + 1)} onOpenRun={id => { continueRun(id).catch(e => setErr(e.message)); }} />}
+        {meta && tab === 'worksheet' && <Worksheet meta={meta} region={ctx.region} {...(advanced ? {} : { step: wsStep, onStepChange: setWsStep })} onStep={t => goTab(t)} onChanged={() => setRunsTick(t => t + 1)} onOpenRun={id => { continueRun(id).catch(e => setErr(e.message)); }} />}
         {meta && tab === 'check' && <CopyCheck meta={meta} onOpenRun={id => { continueRun(id).catch(e => setErr(e.message)); }} />}
         {tab === 'rules' && (meta || admin) && <Rules meta={meta} admin={HOSTED && (!!meta?.user?.admin || admin)} onActivated={() => refreshMeta().then(() => setErr('')).catch(() => {})} />}
       </main>

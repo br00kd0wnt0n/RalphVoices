@@ -4,9 +4,10 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { REGION_NAMES, studio, type Batch, type Brief, type Line, type Meta, type Region, type StudioEvent, type WorksheetData, type WsRow, type WsStep } from '@/lib/studioApi';
 import { CopyCheck } from './CopyCheck';
+import { Lock as LockIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { personaColor, tint } from '@/lib/personaColors';
-import { regionLabel, personaKeys, ForPicker, GhostButton, LineHistory, PersonaDot, PinkButton, Src, angleLabel, useActingFor, when } from './ui';
+import { Intro, regionLabel, personaKeys, ForPicker, GhostButton, LineHistory, PersonaDot, PinkButton, Src, angleLabel, useActingFor, when } from './ui';
 
 const STEPS: Array<{ key: WsStep; n: number; name: string; what: string }> = [
   { key: 'on_image', n: 1, name: 'On-image copy', what: 'Every headline, subhead and carousel card that sits in the artwork, by persona and asset.' },
@@ -15,9 +16,14 @@ const STEPS: Array<{ key: WsStep; n: number; name: string; what: string }> = [
 ];
 const LEVEL: Record<string, string> = { red: 'border-red-500/50 bg-red-500/10 text-red-200', amber: 'border-amber-400/40 bg-amber-400/10 text-amber-200', grey: 'border-[#343946] bg-[#1C1F26] text-[#A3A8B1]' };
 
-export function Worksheet({ meta, region, onStep, onChanged, onOpenRun }: {
+export function Worksheet({ meta, region, onStep, onChanged, onOpenRun, step: stepProp, onStepChange }: {
   /** The region shown: the header's switch. */
   meta: Meta; region: Region;
+  /**
+   * The step, when the header shows the steps (the simple view: one row of steps, Brook 22 Oct). Without it the
+   * worksheet shows its own step tabs (the advanced view, where the header has the four-step flow).
+   */
+  step?: WsStep; onStepChange?: (s: WsStep) => void;
   /** Steps 4 and 5 are the existing Build and Assets screens. */
   onStep: (step: 'build' | 'assets') => void; onChanged: () => void;
   /** Open a run in Review (from a pasted check's report). */
@@ -25,7 +31,10 @@ export function Worksheet({ meta, region, onStep, onChanged, onOpenRun }: {
 }) {
   // One panel open at a time above the table: paste a table of copy, or have Studio write more for the shared pool.
   const [panel, setPanel] = useState<'' | 'paste' | 'more'>('');
-  const [step, setStep] = useState<WsStep>('on_image');
+  const [menu, setMenu] = useState(false);
+  const [ownStep, setOwnStep] = useState<WsStep>('on_image');
+  const step = stepProp || ownStep;
+  const setStep = (x: WsStep) => (onStepChange ? onStepChange(x) : setOwnStep(x));
   const [data, setData] = useState<WorksheetData | null>(null);
   const [error, setError] = useState('');
   const load = useCallback(() => studio.worksheet(region).then(d => { setData(d); setError(''); }).catch(e => setError(e.message)), [region]);
@@ -58,38 +67,46 @@ export function Worksheet({ meta, region, onStep, onChanged, onOpenRun }: {
 
   return (
     <div className="mx-auto max-w-6xl space-y-4">
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="mr-auto">
-          <h1 className="text-2xl font-semibold">{data?.round_label || 'This month'}: copy worksheet <span className="text-lg font-normal text-[#A3A8B1]">· {regionLabel(region)}</span></h1>
-          <p className="text-base text-[#A3A8B1]">Everything on one page. One decision per line: keep it, cut it, or edit it.</p>
+      {/* One short line; what the step is, what red and amber mean and the ways in are behind "?" (Brook, 22 Oct). */}
+      <Intro title={`${data?.round_label || 'This month'}: ${stepProp ? s.name.toLowerCase() : 'copy worksheet'} · ${regionLabel(region)}`} line="One decision per line: keep it, cut it, or edit it."
+        right={<div className="flex items-center gap-2">
+          <ForPicker meta={meta} doing="Working" />
+          <div className="relative">
+            <GhostButton aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>More ▾</GhostButton>
+            {menu && (
+              <div role="menu" className="absolute right-0 top-10 z-20 w-64 rounded-xl border border-[#343946] bg-[#16181D] p-1.5 shadow-2xl" onMouseLeave={() => setMenu(false)}>
+                <MenuItem onClick={() => { setMenu(false); setPanel('paste'); }} title="Paste a table of copy written elsewhere: every line is checked, kept, and lands as a row in its step and asset">Paste copy…</MenuItem>
+                {step !== 'on_image' && !lock && <MenuItem onClick={() => { setMenu(false); setPanel('more'); }} title="Studio writes more for the shared pool, learning from what has been kept and cut">Write more…</MenuItem>}
+                <MenuItem onClick={() => { setMenu(false); studio.worksheetXlsx(region).catch(e => setError(`Download failed: ${e.message}`)); }} title="The same three steps as a workbook (.xlsx), for Excel or Google Sheets. Import it back from the Export menu.">Download as a sheet</MenuItem>
+              </div>
+            )}
+          </div>
+        </div>}>
+        <p>{s.what}</p>
+        <p><span className="font-semibold text-red-200">Red</span> breaks a client rule as written and needs a fix. <span className="font-semibold text-amber-200">Amber</span> is only “have a look”: it is yours to keep as it is. A line with nothing to say is <span className="text-emerald-300">clear</span>.</p>
+        <p>Add a line at the bottom of the table, paste a table of copy, or (captions and headlines) have Studio write more: all under “More”. The same steps download as a sheet and import back from Export.</p>
+        {data && data.other > 0 && <p>{data.other} other line{data.other === 1 ? '' : 's'} this month (a description, a TikTok hook or a video’s words) {data.other === 1 ? 'is' : 'are'} not on the worksheet. They are in Review.</p>}
+      </Intro>
+
+      {/* The steps, when the header doesn't show them (the advanced view). */}
+      {!stepProp && (
+        <div role="tablist" aria-label="Steps" className="flex flex-wrap gap-1.5 border-b border-[#272B34] pb-2">
+          {STEPS.map(x => {
+            const k = data?.counts[x.key];
+            return (
+              <button key={x.key} role="tab" aria-label={`${x.n} ${x.name}`} aria-selected={step === x.key} onClick={() => setStep(x.key)}
+                className={cn('rounded-lg border px-3.5 py-2 text-left text-sm transition', step === x.key ? 'border-[#ECEDEF] bg-[#ECEDEF] text-[#0E0F12]' : 'border-[#343946] text-[#C9CCD2] hover:border-[#6B7280]')}>
+                <span className="font-semibold">{x.n} {x.name}</span>
+                {k && <span className={cn('ml-2 text-xs', step === x.key ? 'text-[#3A3F4A]' : 'text-[#858B96]')}>{data?.locks?.[x.key] ? 'locked · ' : ''}{k.kept} kept{k.undecided ? ` · ${k.undecided} to decide` : ''}</span>}
+              </button>
+            );
+          })}
         </div>
-        <ForPicker meta={meta} doing="Working" />
-        <GhostButton title="The same three steps as a workbook (.xlsx), for Excel or Google Sheets. Import it back from the Export menu." onClick={() => studio.worksheetXlsx(region).catch(e => setError(`Download failed: ${e.message}`))}>Download as a sheet</GhostButton>
-      </div>
+      )}
 
-      {/* The steps, in order. 4 and 5 are the existing screens. */}
-      <div role="tablist" aria-label="Steps" className="flex flex-wrap gap-1.5 border-b border-[#272B34] pb-2">
-        {STEPS.map(x => {
-          const k = data?.counts[x.key];
-          return (
-            <button key={x.key} role="tab" aria-label={`${x.n} ${x.name}`} aria-selected={step === x.key} onClick={() => setStep(x.key)}
-              className={cn('rounded-lg border px-3.5 py-2 text-left text-sm transition', step === x.key ? 'border-[#ECEDEF] bg-[#ECEDEF] text-[#0E0F12]' : 'border-[#343946] text-[#C9CCD2] hover:border-[#6B7280]')}>
-              <span className="font-semibold">{x.n} {x.name}</span>
-              {k && <span className={cn('ml-2 text-xs', step === x.key ? 'text-[#3A3F4A]' : 'text-[#858B96]')}>{data?.locks?.[x.key] ? 'locked · ' : ''}{k.kept} kept{k.undecided ? ` · ${k.undecided} to decide` : ''}</span>}
-            </button>
-          );
-        })}
-        <button role="tab" aria-selected={false} onClick={() => onStep('build')} className="rounded-lg border border-[#343946] px-3.5 py-2 text-sm font-semibold text-[#C9CCD2] hover:border-[#6B7280]">4 Build ads</button>
-        <button role="tab" aria-selected={false} onClick={() => onStep('assets')} className="rounded-lg border border-[#343946] px-3.5 py-2 text-sm font-semibold text-[#C9CCD2] hover:border-[#6B7280]">5 Assets</button>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <GhostButton active={panel === 'paste'} aria-expanded={panel === 'paste'} onClick={() => setPanel(panel === 'paste' ? '' : 'paste')} title="Paste a table of copy written elsewhere: every line is checked, kept, and lands as a row in its step and asset">Paste copy</GhostButton>
-        {step !== 'on_image' && !lock && <GhostButton active={panel === 'more'} aria-expanded={panel === 'more'} onClick={() => setPanel(panel === 'more' ? '' : 'more')} title="Studio writes more for the shared pool, learning from what has been kept and cut">Write more</GhostButton>}
-        <span className="text-sm text-[#858B96]">or add a line at the bottom of the table</span>
-      </div>
       {panel === 'paste' && (
-        <div className="rounded-xl border border-[#343946] bg-[#121419] p-4">
+        <div className="relative rounded-xl border border-[#343946] bg-[#121419] p-4">
+          <button className="absolute right-3 top-2 text-sm text-[#858B96] hover:text-[#ECEDEF]" aria-label="Close" onClick={() => setPanel('')}>×</button>
           <CopyCheck meta={meta} embedded region={region} onChecked={changed} onOpenRun={id => onOpenRun?.(id)} />
         </div>
       )}
@@ -99,22 +116,15 @@ export function Worksheet({ meta, region, onStep, onChanged, onOpenRun }: {
       {!data && !error && <p className="text-base text-[#858B96]">Loading the worksheet…</p>}
       {data && c && (
         <>
-          <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1 rounded-xl border border-[#272B34] bg-[#16181D] px-4 py-3">
-            <span className="text-base text-[#C9CCD2]">{s.what}</span>
-            <span className="ml-auto whitespace-nowrap text-sm text-[#A3A8B1]">
-              <strong className="text-lg text-[#ECEDEF]">{c.total - c.undecided}</strong> of {c.total} decided · <strong className="text-emerald-300">{c.kept}</strong> kept · {c.cut} cut
-              {c.undecided > 0 && <> · <strong className="text-[#ECEDEF]">{c.undecided}</strong> to decide</>}
-            </span>
+          {/* One status line: the counts, where the step stands (or who locked it), Lock and the next step. */}
+          <div className={cn('flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border px-4 py-2.5 text-sm', lock ? 'border-sky-400/40 bg-sky-400/10 text-sky-100' : state?.done ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-100' : 'border-[#343946] bg-[#16181D] text-[#C9CCD2]')} role="status">
+            <span className="whitespace-nowrap"><strong>{c.total - c.undecided}</strong> of {c.total} decided · {c.kept} kept{c.cut ? ` · ${c.cut} cut` : ''}</span>
+            <span className="mr-auto min-w-0">{lock ? `Locked by ${lockWho(lock)}, ${when(lock.at)}: read-only everywhere until unlocked.` : state?.words}</span>
+            {canLock && rows.length > 0 && <GhostButton className="px-2.5 py-1 text-sm" disabled={locking} onClick={toggleLock} title={lock ? 'Lets this step’s lines be kept, cut, edited and added to again' : 'Makes this step’s lines read-only everywhere until it is unlocked; who locked it and when are recorded'}>{lock ? 'Unlock' : 'Lock'}</GhostButton>}
+            {state?.next && <GhostButton className="px-2.5 py-1 text-sm" onClick={() => onStep(state.next!)}>{state.next === 'build' ? 'Build ads →' : 'Assets →'}</GhostButton>}
           </div>
-          {(state || lock) && (
-            <div className={cn('flex flex-wrap items-center gap-3 rounded-xl border px-4 py-2.5 text-base', lock ? 'border-sky-400/40 bg-sky-400/10 text-sky-100' : state?.done ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-100' : 'border-[#343946] bg-[#16181D] text-[#C9CCD2]')} role="status">
-              <span className="mr-auto">{lock
-                ? `Locked by ${lockWho(lock)}, ${when(lock.at)}. Its lines are read-only everywhere in Studio (here, the sheet, Review, Build and Check copy) until it is unlocked.`
-                : state?.words}</span>
-              {canLock && rows.length > 0 && <GhostButton disabled={locking} onClick={toggleLock} title={lock ? 'Lets this step’s lines be kept, cut, edited and added to again' : 'Makes this step’s lines read-only everywhere until it is unlocked; who locked it and when are recorded'}>{lock ? 'Unlock' : `Lock ${s.name.toLowerCase()}`}</GhostButton>}
-              {state?.next && <GhostButton onClick={() => onStep(state.next!)}>{state.next === 'build' ? 'Go to 4 Build ads' : 'Go to 5 Assets'}</GhostButton>}
-            </div>
-          )}
+          {/* "Signed off" said once (Brook, 22 Oct), not on every row. */}
+          {!lock && rows.some(x => x.signed_off) && <p className="flex items-center gap-1.5 px-1 text-sm text-[#A3A8B1]"><LockIcon className="h-3.5 w-3.5" aria-hidden /> Signed off in Build: change those in Build ads and sign off again.</p>}
           {!rows.length && <p className="rounded-xl border border-dashed border-[#343946] px-4 py-6 text-base text-[#858B96]">No lines here yet for {REGION_NAMES[region]}. {step === 'on_image' ? 'Paste the copy deck in Check copy' : 'Write them in the Shared captions context, or paste them in Check copy'} and they appear as rows.</p>}
           {rows.length > 0 && (
             <div className="overflow-x-auto rounded-xl border border-[#272B34]">
@@ -152,12 +162,14 @@ export function Worksheet({ meta, region, onStep, onChanged, onOpenRun }: {
             </div>
           )}
           {!lock && <AddLine meta={meta} step={step} region={region} onDone={changed} onError={setError} />}
-          <p className="text-sm text-[#A3A8B1]"><span className="font-semibold text-red-200">Red</span> breaks a client rule as written and needs a fix. <span className="font-semibold text-amber-200">Amber</span> is only “have a look”: it is yours to keep as it is. A line with nothing to say is <span className="text-emerald-300">clear</span>.</p>
-          {data.other > 0 && <p className="text-xs text-[#646A75]">{data.other} other line{data.other === 1 ? '' : 's'} this month (a description, a TikTok hook or a video’s words) {data.other === 1 ? 'is' : 'are'} not on the worksheet. They are in Review.</p>}
         </>
       )}
     </div>
   );
+}
+
+function MenuItem({ onClick, title, children }: { onClick: () => void; title?: string; children: React.ReactNode }) {
+  return <button role="menuitem" title={title} onClick={onClick} className="block w-full rounded-md px-3 py-1.5 text-left text-sm text-[#ECEDEF] hover:bg-[#272B34]">{children}</button>;
 }
 
 /** Follow a job to its end: its status lines as they come, then resolve (or reject with what stopped it). */
@@ -367,7 +379,6 @@ function Row({ meta, x, step, who, locked: stepLocked, onChanged, onError }: { m
           ) : <div className={cn('text-base leading-snug text-[#F2F3F5]', cut && 'line-through')}>{x.text}</div>}
           <div className="mt-1 flex flex-wrap items-center gap-x-3 text-xs text-[#646A75]">
             {x.edited && <span>edited</span>}
-            {x.signed_off && <span className="text-[#F2C4DA]">signed off in Build</span>}
             {x.decided_by && x.call && <span>{attribution(x)}</span>}
             {busy && <span className="animate-pulse text-[#F2C4DA]" role="status">{busy}</span>}
             <button onClick={() => setDetails(!details)} aria-expanded={details} className="underline-offset-2 hover:text-[#ECEDEF] hover:underline">{details ? 'hide details' : 'details'}</button>
@@ -386,7 +397,7 @@ function Row({ meta, x, step, who, locked: stepLocked, onChanged, onError }: { m
               <PinkButton className="px-3 py-1.5 text-sm" onClick={save} disabled={!!busy}>Save and check</PinkButton>
               <GhostButton onClick={() => setEditing(false)} disabled={!!busy}>Cancel</GhostButton>
             </div>
-          ) : locked ? <span className="text-sm text-[#A3A8B1]">Signed off. To change it, edit it in Build (step 4) and sign off again.</span> : stepLocked ? <span className="text-sm text-sky-200/80">Locked</span> : (
+          ) : locked ? <span className="inline-flex items-center gap-1 text-sm text-[#A3A8B1]" title="Signed off in Build: change it there and sign off again"><LockIcon className="h-3.5 w-3.5" aria-hidden /> signed off</span> : stepLocked ? <span className="text-sm text-sky-200/80">Locked</span> : (
             <div className="flex flex-wrap gap-1.5" role="group" aria-label={`Your call on ${x.n}`}>
               <GhostButton active={x.call === 'keep'} disabled={!!busy} onClick={() => decide(x.call === 'keep' ? '' : 'keep')}>Keep</GhostButton>
               <GhostButton active={cut} disabled={!!busy} onClick={() => decide(cut ? '' : 'cut')}>Cut</GhostButton>

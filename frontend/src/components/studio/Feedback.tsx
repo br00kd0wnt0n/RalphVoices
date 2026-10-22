@@ -140,27 +140,56 @@ function AdRow({ meta, a, review, onChanged, onError, onFix }: { meta: Meta; a: 
   );
 }
 
-/** In Build: the feedback on this asset's ads, newest round first, with "Done" on a change. Nothing when there is none. */
+/**
+ * Which feedback to show for an asset (Brook, 22 Oct: "too confusing to review"): per ad, the newest round that is
+ * still open (a change wanted, or a note), and the earlier open ones apart. A round marked done disappears.
+ */
+export function openFeedback(view: FeedbackView, persona: string, territory: string) {
+  const open = view.ads.filter(a => a.persona === persona && a.territory === territory)
+    .flatMap(a => [...view.reviews].reverse().map(r => ({ a, r, item: a.items[r.id] })).filter(x => x.item && x.item.state !== 'done' && (x.item.state === 'change' || !!x.item.note)));
+  const latestId = open[0] ? view.reviews.findIndex(r => r.id === open[0].r.id) : -1;
+  // The newest open round across the asset's ads leads; anything from an older round is "earlier".
+  const newest = open.filter(x => view.reviews.findIndex(r => r.id === x.r.id) === latestId);
+  return { latest: newest, earlier: open.filter(x => !newest.includes(x)) };
+}
+
+/** In Build and Assets: the latest open feedback on this asset, one line each, with "show"; earlier rounds folded away. */
 export function FeedbackNote({ region, persona, territory }: { region: Region; persona: string; territory: string }) {
   const { view, load, setError, error } = useFeedback(region);
+  const [earlierOpen, setEarlierOpen] = useState(false);
   if (!view) return null;
-  const rows = view.ads.filter(a => a.persona === persona && a.territory === territory)
-    .flatMap(a => [...view.reviews].reverse().map(r => ({ a, r, item: a.items[r.id] })).filter(x => x.item && (x.item.state !== 'none' || x.item.note)));
-  if (!rows.length) return null;
+  const { latest, earlier } = openFeedback(view, persona, territory);
+  if (!latest.length) return null;
   const done = async (ad: string, review: string) => { try { await studio.setAdFeedback(ad, review, 'done'); await load(); } catch (e: any) { setError(e.message); } };
   return (
-    <section aria-label="Client feedback" className="space-y-1.5">
-      {rows.map(({ a, r, item }) => (
-        <div key={`${a.ad}${r.id}`} className={cn('flex flex-wrap items-start gap-3 rounded-xl border px-4 py-2.5 text-sm', item!.state === 'change' ? 'border-amber-400/60 bg-amber-400/10 text-amber-50' : 'border-[#272B34] bg-[#16181D] text-[#A3A8B1]')}>
-          <span className="mr-auto min-w-0">
-            <span className="font-semibold">{r.label}: {WORDS[item!.state].toLowerCase()}</span>
-            {item!.note ? <span> · “{item!.note}”</span> : null}
-            <span className="ml-2 text-xs opacity-70">{whoWords((item!.by || '').split('@')[0], item!.for)}, {when(item!.at)}</span>
-          </span>
-          {item!.state === 'change' && <GhostButton onClick={() => done(a.ad, r.id)} title="The change is made here in Build; sign off again for it to count">Mark done</GhostButton>}
+    <section aria-label="Client feedback" className="space-y-1">
+      {latest.map(x => <FeedbackLine key={`${x.a.ad}${x.r.id}`} x={x} several={latest.length > 1} onDone={done} />)}
+      {earlier.length > 0 && (
+        <div className="pl-1 text-xs text-[#858B96]">
+          <button className="underline-offset-2 hover:text-[#ECEDEF] hover:underline" aria-expanded={earlierOpen} onClick={() => setEarlierOpen(!earlierOpen)}>{earlierOpen ? 'hide earlier rounds' : `earlier rounds (${earlier.length})`}</button>
+          {earlierOpen && <div className="mt-1 space-y-1">{earlier.map(x => <FeedbackLine key={`${x.a.ad}${x.r.id}`} x={x} several onDone={done} quiet />)}</div>}
         </div>
-      ))}
+      )}
       {error && <p className="text-xs text-red-200">{error}</p>}
     </section>
+  );
+}
+
+function FeedbackLine({ x, several, quiet, onDone }: { x: { a: FeedbackAd; r: FeedbackView['reviews'][number]; item?: FeedbackAd['items'][string] }; several?: boolean; quiet?: boolean; onDone: (ad: string, review: string) => void }) {
+  const [show, setShow] = useState(false);
+  const item = x.item!;
+  const change = item.state === 'change';
+  const note = item.note || '';
+  const long = note.length > 90;
+  return (
+    <div className={cn('flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-1.5 text-sm', change && !quiet ? 'border-amber-400/50 bg-amber-400/10 text-amber-50' : 'border-[#272B34] bg-[#16181D] text-[#A3A8B1]')}>
+      <span className="min-w-0 flex-1">
+        <span className="font-semibold">{x.r.label}{several ? ` · ad ${x.a.ad.replace(/^.*_([A-Z])_[A-Z]{2}_[A-Z]+$/, '$1')}` : ''}: {WORDS[item.state].toLowerCase()}</span>
+        {note && <span> · “{show || !long ? note : `${note.slice(0, 90).trimEnd()}…`}”</span>}
+        {show && <span className="ml-2 text-xs opacity-70">{whoWords((item.by || '').split('@')[0], item.for)}, {when(item.at)}</span>}
+      </span>
+      {(long || !show) && <button className="text-xs underline-offset-2 opacity-80 hover:underline" aria-expanded={show} onClick={() => setShow(!show)}>{show ? 'less' : 'show'}</button>}
+      {change && <GhostButton className="px-2.5 py-0.5 text-xs" onClick={() => onDone(x.a.ad, x.r.id)} title="The change is made here in Build; sign off again for it to count">Mark done</GhostButton>}
+    </div>
   );
 }
