@@ -150,3 +150,13 @@ Brook: "too confusing to review". Brief: `Claude outputs/voices-r1/studio/brief-
 5. **"Signed off" said once.** One line above the table; each signed-off row shows a lock and "signed off" (the reason on hover).
 
 Not in this PR: proposals 6 to 8 (quiet ambers on kept lines, previous versions by sign-off, fewer filters on Assets) and the Review screen.
+
+## Simpler screens, PR 2 (22 Oct)
+
+The brief's proposals 6 to 8; Brook chose option (a) for 7.
+
+6. **Quiet what's been decided.** On the worksheet a kept line shows its ambers and notes as one small dot with a count (hover for the names); reds always show as chips, and an over-length count is no longer red on a kept line. Undecided lines are unchanged. (Worksheet only; Review and Build show flags as before.)
+7. **Previous versions, by sign-off (option a).** `WsRow.previous`: a line signed off before (`line.ready`) that is in no ad's latest sign-off now (worksheet.ts reads every latest sign-off's copy options and on-image lines). Such lines are listed last, folded under "Show previous versions (n)", read-only, and left out of the step's counts (`counts.previous`). A current line's "similar line" pointing at a previous version is hidden (the flag stays stored). "Signed off" (`signed_off`) now means "in an ad's latest sign-off", from the same reading. A line only becomes a previous version once the ad is signed off again without it: Nick's new captions replace the old ones when they're signed off in Build.
+8. **Fewer filters on Assets.** The "Showing" persona and territory bar is gone from Assets (Live keeps it). Format chips show only when the audience in view has more than one format. A territory narrowed by a link or from Build shows as one "Only <asset> ×" chip.
+
+Tests: `tests/studioWorksheet.test.ts` (previous versions: last, out of the counts, no "similar line" to them). The sheet export keeps previous versions as rows, after the current ones.

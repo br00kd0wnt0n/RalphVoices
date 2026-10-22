@@ -281,13 +281,15 @@ export interface WsRow {
   call: 'keep' | 'cut' | ''; edited: boolean; sha256: string; decided_by?: string; decided_for?: string; signed_off?: boolean;
   /** Steps 2 and 3: a line of the shared pool (false: written for one asset). */
   shared?: boolean;
+  /** Signed off once, in no ad's latest sign-off now: listed last, under "previous versions", out of the counts. */
+  previous?: boolean;
 }
 /** The worksheet lock: a step's copy is read-only everywhere until unlocked. */
 export interface StepLock { by: string; for?: string; at: string }
 export type WsLocks = Partial<Record<WsStep, StepLock>>;
 export interface WorksheetData {
   round: string; round_label: string; region: Region | 'all'; rules?: string; steps: Record<WsStep, WsRow[]>;
-  counts: Record<WsStep, { total: number; kept: number; cut: number; undecided: number; red: number; amber: number; clear: number }>; other: number;
+  counts: Record<WsStep, { total: number; kept: number; cut: number; undecided: number; red: number; amber: number; clear: number; previous?: number }>; other: number;
   /** The steps locked for this round and region (who, for whom, when). */
   locks?: WsLocks;
 }

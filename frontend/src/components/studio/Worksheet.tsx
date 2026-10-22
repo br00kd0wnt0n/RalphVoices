@@ -46,14 +46,17 @@ export function Worksheet({ meta, region, onStep, onChanged, onOpenRun, step: st
   const c = data?.counts[step];
   // Step 1 reads persona, then asset. Steps 2 and 3: the shared pool first, then each asset's own lines the same way.
   const groups: Array<{ key: string; persona?: string; asset?: string; shared?: boolean; rows: WsRow[] }> = [];
-  const ownLines = step !== 'on_image' && rows.some(x => x.shared === false);
-  for (const x of rows) {
+  // Previous versions (signed off once, in no ad's latest sign-off now) are folded away at the end (Brook, 22 Oct).
+  const current = rows.filter(x => !x.previous), previous = rows.filter(x => x.previous);
+  const [showPrevious, setShowPrevious] = useState(false);
+  const ownLines = step !== 'on_image' && current.some(x => x.shared === false);
+  for (const x of current) {
     const byAsset = step === 'on_image' || x.shared === false;
     const key = byAsset ? `${x.persona}|${x.territory}|${x.region}` : 'pool';
     const g = groups[groups.length - 1];
     if (g && g.key === key) g.rows.push(x); else groups.push({ key, ...(byAsset ? { persona: x.persona, asset: x.asset } : { shared: true }), rows: [x] });
   }
-  const state = c ? stepState(rows, step) : null;
+  const state = c ? stepState(current, step) : null;
   // The lock (the Friday lock, made explicit): this step's lines are read-only everywhere until it is unlocked.
   const lock = data?.locks?.[step];
   const [canLock, setCanLock] = useState(false);
@@ -157,6 +160,13 @@ export function Worksheet({ meta, region, onStep, onChanged, onOpenRun, step: st
                       {g.rows.map(x => <Row key={x.id} meta={meta} x={x} step={step} who={who} locked={!!lock} onChanged={changed} onError={setError} />)}
                     </Fragment>
                   ))}
+                  {previous.length > 0 && (
+                    <tr className="bg-[#101216]"><td colSpan={6} className="border-t border-[#272B34] px-3 py-1.5 text-sm text-[#858B96]">
+                      <button className="underline-offset-2 hover:text-[#ECEDEF] hover:underline" aria-expanded={showPrevious} onClick={() => setShowPrevious(!showPrevious)}>{showPrevious ? 'Hide' : 'Show'} previous versions ({previous.length})</button>
+                      <span className="ml-2 text-xs">signed off before, in no ad’s latest sign-off now</span>
+                    </td></tr>
+                  )}
+                  {showPrevious && previous.map(x => <Row key={x.id} meta={meta} x={x} step={step} who={who} locked onChanged={changed} onError={setError} />)}
                 </tbody>
               </table>
             </div>
@@ -364,6 +374,10 @@ function Row({ meta, x, step, who, locked: stepLocked, onChanged, onError }: { m
   };
   const n = [...(editing ? draft : x.text)].length;
   const over = x.visible > 0 && n > x.visible;
+  // A line that's been decided (kept) shows its ambers and notes as one dot (hover for them); reds always show (Brook, 22 Oct).
+  const quiet = x.call === 'keep' && !editing;
+  const loud = quiet ? x.flags.filter(f => f.level === 'red') : x.flags;
+  const hushed = quiet ? x.flags.filter(f => f.level !== 'red') : [];
   const cut = x.call === 'cut';
   const cols = step === 'on_image' ? 6 : 5;
   const locked = !!x.signed_off;
@@ -386,11 +400,12 @@ function Row({ meta, x, step, who, locked: stepLocked, onChanged, onError }: { m
         </td>
         <td className="px-3 py-3">
           <div className="flex flex-wrap gap-1">
+            {hushed.length > 0 && <span className="inline-flex cursor-help items-center gap-1 text-xs text-[#858B96]" title={`Kept with ${hushed.map(f => f.name + (f.rule === 'NEAR_DUP' && f.detail ? ` ${f.detail}` : '')).join(', ')} (have a look, nothing to fix)`}><span className={cn('h-2 w-2 rounded-full', hushed.some(f => f.level === 'amber') ? 'bg-amber-300/70' : 'bg-[#646A75]')} aria-hidden />{hushed.length}</span>}
             {!x.flags.length && <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-0.5 text-[13px] font-medium text-emerald-200">clear</span>}
-            {x.flags.map(f => <span key={f.rule} className={cn('rounded-full border px-2.5 py-0.5 text-[13px] font-medium', LEVEL[f.level])} title={`${f.level === 'red' ? 'Red: needs a fix' : f.level === 'amber' ? 'Amber: have a look' : 'A note'}${meta.what_to_do?.[f.rule] ? `. ${meta.what_to_do[f.rule]}` : ''}`}>{f.name}{f.rule === 'NEAR_DUP' && f.detail ? ` ${f.detail}` : ''}</span>)}
+            {loud.map(f => <span key={f.rule} className={cn('rounded-full border px-2.5 py-0.5 text-[13px] font-medium', LEVEL[f.level])} title={`${f.level === 'red' ? 'Red: needs a fix' : f.level === 'amber' ? 'Amber: have a look' : 'A note'}${meta.what_to_do?.[f.rule] ? `. ${meta.what_to_do[f.rule]}` : ''}`}>{f.name}{f.rule === 'NEAR_DUP' && f.detail ? ` ${f.detail}` : ''}</span>)}
           </div>
         </td>
-        <td className={cn('whitespace-nowrap px-3 py-3 text-right font-mono text-sm', over ? 'font-bold text-red-300' : 'text-[#858B96]')} title={x.card || /^CAR/i.test(String(meta.territories[x.territory]?.format || '')) ? 'The guide for a carousel card' : step === 'on_image' ? 'The guide for text in the artwork: nothing is cut off' : 'What shows before the feed cuts it off'}>{n}{x.visible ? `/${x.visible}` : ''}</td>
+        <td className={cn('whitespace-nowrap px-3 py-3 text-right font-mono text-sm', over && !quiet ? 'font-bold text-red-300' : 'text-[#858B96]')} title={x.card || /^CAR/i.test(String(meta.territories[x.territory]?.format || '')) ? 'The guide for a carousel card' : step === 'on_image' ? 'The guide for text in the artwork: nothing is cut off' : 'What shows before the feed cuts it off'}>{n}{x.visible ? `/${x.visible}` : ''}</td>
         <td className="px-3 py-3">
           {editing ? (
             <div className="flex flex-wrap gap-1.5">

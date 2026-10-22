@@ -14,7 +14,7 @@ import type { Api, Line, Rules, StudioEvent } from './engine.js';
 import type { Region } from '../../utils/namingCode.js';
 import * as Bulk from './bulk.js';
 import * as R from './ready.js';
-import { isCarousel, isSubField, signoffOnImage } from './versions.js';
+import { isCarousel, isSubField, signoffOnImage, signoffVersions } from './versions.js';
 import { inView, roundOf, type RoundView } from './rounds.js';
 import { chipName } from '../../utils/flagChips.js';
 import { personaRank } from '../../utils/personaOrder.js';
@@ -40,11 +40,16 @@ export interface WsRow {
   sha256: string; decided_by?: string; decided_for?: string; signed_off?: boolean;
   /** Steps 2 and 3: a line of the shared pool (false: written for one asset). */
   shared?: boolean;
+  /**
+   * A previous version (Brook, 22 Oct, option a): signed off once, but in no ad's latest sign-off any more. Listed
+   * last, under "previous versions", and left out of the counts; current lines' "similar line" against it is hidden.
+   */
+  previous?: boolean;
 }
 export interface Worksheet {
   round: string; round_label: string; region: Region | 'all'; rules?: string;
   steps: Record<Step, WsRow[]>;
-  counts: Record<Step, { total: number; kept: number; cut: number; undecided: number; red: number; amber: number; clear: number }>;
+  counts: Record<Step, { total: number; kept: number; cut: number; undecided: number; red: number; amber: number; clear: number; previous: number }>;
   /** Lines in the month that belong to none of the three steps (a persona's own post copy, TikTok hooks): not on the sheet. */
   other: number;
   /** The steps locked for this round and region (none when the view is both regions). */
@@ -94,7 +99,12 @@ export async function worksheet(view: RoundView, region: Region | 'all' = 'US'):
   let other = 0;
   // A carousel line pasted without a card number has one once it is placed in Build and signed off.
   const cardOf = new Map<string, number>();
-  for (const so of await R.latestSignoffs({ view })) for (const o of signoffOnImage(so)) if (o.card) cardOf.set(o.line_id, o.card);
+  // Every line in an ad's latest sign-off: signed off now. A line signed off before and in none of them is a previous version.
+  const inLatest = new Set<string>();
+  for (const so of await R.latestSignoffs({ view })) {
+    for (const o of signoffOnImage(so)) { inLatest.add(o.line_id); if (o.card) cardOf.set(o.line_id, o.card); }
+    for (const v of signoffVersions(so)) for (const f of Object.values(v.fields)) inLatest.add(f.line_id);
+  }
   for (const run of await S.listBatches(undefined, view)) {
     const b = await S.loadBatch(run.id);
     for (const l of b.lines) {
@@ -117,7 +127,7 @@ export async function worksheet(view: RoundView, region: Region | 'all' = 'US'):
         status: flags.some(x => x.level === 'red') ? 'red' : flags.some(x => x.level === 'amber') ? 'amber' : 'clear', flags,
         call: l.decision === 'cut' ? 'cut' : isKept(l) ? 'keep' : '', edited: S.isEdited(l),
         sha256: S.lineHash(l), ...(l.decided_by ? { decided_by: l.decided_by } : {}), ...(l.decided_for ? { decided_for: l.decided_for } : {}),
-        ...(l.ready && !l.ready.superseded_by ? { signed_off: true } : {}),
+        ...(inLatest.has(l.id) ? { signed_off: true } : l.ready ? { previous: true } : {}),
       });
     }
   }
@@ -127,7 +137,7 @@ export async function worksheet(view: RoundView, region: Region | 'all' = 'US'):
   const rank = (x: Omit<WsRow, 'n'>) => (x.card ? x.card * 2 + (isSubField(x.field, r) ? 1 : 0) : (/^Card/.test(x.where) ? 1000 : 0) + (isSubField(x.field, r) ? 1 : 0));
   const idx = (list: string[], k: string) => { const i = list.indexOf(k); return i < 0 ? list.length : i; };
   const cmp = (a: Omit<WsRow, 'n'>, b: Omit<WsRow, 'n'>) =>
-    Number(a.shared === false) - Number(b.shared === false) || personaRank(a.persona, personaOrder) - personaRank(b.persona, personaOrder) || idx(territoryOrder, a.territory) - idx(territoryOrder, b.territory) || a.territory.localeCompare(b.territory)
+    Number(!!a.previous) - Number(!!b.previous) || Number(a.shared === false) - Number(b.shared === false) || personaRank(a.persona, personaOrder) - personaRank(b.persona, personaOrder) || idx(territoryOrder, a.territory) - idx(territoryOrder, b.territory) || a.territory.localeCompare(b.territory)
     || a.region.localeCompare(b.region) || (a.step === 'on_image' ? rank(a) - rank(b) : 0) || a.id.localeCompare(b.id, undefined, { numeric: true });
   const steps = {} as Worksheet['steps'], counts = {} as Worksheet['counts'];
   for (const s of STEPS) {
@@ -135,9 +145,15 @@ export async function worksheet(view: RoundView, region: Region | 'all' = 'US'):
     steps[s.key] = rows;
     // "Similar line" names its neighbour by the sheet's own number (P6), not the run's.
     for (const x of rows) for (const f of x.flags) if (f.rule === 'NEAR_DUP') { const o = all.find(y => y.id === f.detail); const on = o && STEPS.flatMap(t => steps[t.key] || []).find(y => y.id === o.id); f.detail = on ? `to ${on.n}` : undefined; if (!f.detail) delete f.detail; }
-    const live = rows.filter(x => x.call !== 'cut');
+    // A current line "similar" to a previous version only: the old line is the one being replaced, so the flag is hidden here (it stays stored).
+    for (const x of rows.filter(r => !r.previous)) {
+      const kept = x.flags.filter(f => !(f.rule === 'NEAR_DUP' && f.detail && rows.some(y => y.previous && `to ${y.n}` === f.detail)));
+      if (kept.length !== x.flags.length) { x.flags = kept; x.status = kept.some(f => f.level === 'red') ? 'red' : kept.some(f => f.level === 'amber') ? 'amber' : 'clear'; }
+    }
+    const current = rows.filter(x => !x.previous);
+    const live = current.filter(x => x.call !== 'cut');
     counts[s.key] = {
-      total: rows.length, kept: rows.filter(x => x.call === 'keep').length, cut: rows.filter(x => x.call === 'cut').length, undecided: rows.filter(x => !x.call).length,
+      total: current.length, kept: current.filter(x => x.call === 'keep').length, cut: current.filter(x => x.call === 'cut').length, undecided: current.filter(x => !x.call).length, previous: rows.length - current.length,
       red: live.filter(x => x.status === 'red').length, amber: live.filter(x => x.status === 'amber').length, clear: live.filter(x => x.status === 'clear').length,
     };
   }
