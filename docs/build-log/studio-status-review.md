@@ -138,3 +138,15 @@ Trupanion, 6 Oct: no AI-generated imagery or video; stock is approved. Pre-fligh
 - **Exports:** the asset handoff has an "Imagery and footage (declared)" column ("No AI imagery or video · Licensed stock (Getty 123456) · no customer shown or quoted · brook for nick, 14 Oct"), and the flag report's "What was checked" carries the same line. The compliance sheet for Trupanion is unchanged (final words only).
 - **Storage:** `studio_inputs` `upload_declaration:<upload id>` (no migration). `POST /preflight/uploads/:id/declaration`; the report has `declaration` and `declaration_draft`; the stubs list has `declared`. Rules in `services/studio/declaration.ts`.
 - **Not here:** linking "animated from" to a real ad (it's typed), and any check that the first-person words in a video's script match the member answer (that belongs with video in Pre-flight).
+
+## Simpler screens, PR 1 (22 Oct)
+
+Brook: "too confusing to review". Brief: `Claude outputs/voices-r1/studio/brief-simplify-screens-2026-10-22.md`, proposals 1 to 5. Frontend only.
+
+1. **Names first.** Assets heads the open ad with its name ("One Bill Shouldn't Break the Summer · Busy Families · static", plus "ad B" when the asset has more than one), with the code in a small line under it; the list shows "Ad A · static" with the code on hover (`adTitle`, `adLetter` in ui.tsx). Build's "Ad A" carries the code as a tooltip instead of beside it.
+2. **Latest feedback only.** Build and Assets show, per ad, the newest round still open (a change wanted, or a note) as one line, the note cut at 90 characters with "show", and "Mark done". Earlier open rounds sit behind "earlier rounds (n)"; a round marked done disappears (`openFeedback` in Feedback.tsx). The board's feedback panel is unchanged.
+3. **One row of steps.** In the simple view the header is 1 On-image copy · 2 Captions · 3 Headlines · 4 Build ads · 5 Assets, and the worksheet has no tabs of its own (the step is `?step=captions|headlines` in the address). The advanced view keeps the worksheet's own tabs.
+4. **Explanations behind "?".** The worksheet is a title, one line and "?" (what the step is, red and amber, the ways in); Paste copy, Write more and Download as a sheet are under "More"; the counts, the state, Lock and the next step are one status line. In Build, each step's hint is behind a "?" and the required small print is one line with "show" (Assets still shows the whole text to copy).
+5. **"Signed off" said once.** One line above the table; each signed-off row shows a lock and "signed off" (the reason on hover).
+
+Not in this PR: proposals 6 to 8 (quiet ambers on kept lines, previous versions by sign-off, fewer filters on Assets) and the Review screen.

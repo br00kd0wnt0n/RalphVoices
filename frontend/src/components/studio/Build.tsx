@@ -228,10 +228,8 @@ export function Build({ meta, ctx, user, onNext, onReview, onAsset }: { meta: Me
                 return (
                   <section key={`${p}${letter}`} className="rounded-xl border border-l-4 border-[#272B34] bg-[#121419] p-4 sm:p-5" style={personaEdge(pt.persona)}>
                     <div className="mb-4 flex flex-wrap items-center gap-3">
-                      <h2 className="text-xl font-semibold" style={{ color: color.light }}>Ad {letter}</h2>
+                      <h2 className="text-xl font-semibold" style={{ color: color.light }} title={vs[0]?.p?.code ? `${vs[0].p.code.replace(/_([A-Z])\d+_/, '_$1_')}: what it is trafficked and reported under` : undefined}>Ad {letter}</h2>
                       <span className="text-sm text-[#858B96]">{p === 'TT' ? 'TikTok' : 'Meta'} · one ad · {vs.length} copy option{vs.length === 1 ? '' : 's'}</span>
-                      {/* The ad's name: its copy options' codes without the option number. What it is trafficked and reported under. */}
-                      {vs[0]?.p?.code && <span className="font-mono text-xs text-[#858B96]" title="The ad's name: what it is trafficked and reported under (the date is added at trafficking). The copy options' codes below are Studio's own ids.">{vs[0].p.code.replace(/_([A-Z])\d+_/, '_$1_')}</span>}
                       {/* The whole visual: its ads and its on-image text. Nothing is deleted from the kept lines; the letter is free again. */}
                       <button className="ml-auto text-xs text-[#858B96] underline-offset-2 hover:text-red-200 hover:underline" title="Takes this ad, its copy options and its on-image text out of the set. The lines stay kept." aria-label={`Remove ad ${letter}`}
                         onClick={() => { if (vs.length + cards.filter(Boolean).length <= 1 || window.confirm(`Remove ad ${letter}: its ${vs.length} copy option${vs.length === 1 ? '' : 's'}${cards.some(Boolean) ? ' and its on-image text' : ''}? The lines stay kept.`)) change(d => removeVisual(d, letter, p, platformOf)); }}>Remove this ad</button>
@@ -267,7 +265,7 @@ export function Build({ meta, ctx, user, onNext, onReview, onAsset }: { meta: Me
                     )}
                     {hookField && oiFields.length === 0 && <p className="mb-3 text-sm text-[#858B96]">The hook goes on the video: choose it in each ad below.</p>}
                     {/* The small print the artwork must carry: the region's approved disclaimer, and where it sits. */}
-                    <DisclaimerNote meta={meta} region={pt.region} format={t?.format} className="mb-4" />
+                    <DisclaimerNote meta={meta} region={pt.region} format={t?.format} className="mb-4" compact />
                     </div>
                     {showArtwork && (
                       <Artwork className="mb-4 self-start" stubs={assets} edited={vs.some(x => statusOf(x.i) === 'edited')} onOpen={onAsset!}
@@ -373,7 +371,8 @@ function Step({ n, title, hint, children }: { n: number; title: string; hint?: s
       <div className="mb-2 flex items-baseline gap-2">
         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#272B34] text-sm font-bold text-[#ECEDEF]">{n}</span>
         <h3 className="text-base font-semibold">{title}</h3>
-        {hint && <span className="text-sm text-[#858B96]">{hint}</span>}
+        {/* The step's explanation behind "?" (Brook, 22 Oct: one short line per screen; the rest on request). */}
+        {hint && <span className="cursor-help rounded-full border border-[#343946] px-1.5 text-xs text-[#858B96]" title={hint} aria-label={hint}>?</span>}
       </div>
       {children}
     </div>

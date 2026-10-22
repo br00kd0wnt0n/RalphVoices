@@ -15,7 +15,7 @@ import { keepSelection, uploadFor, uploadLabel } from '@/lib/uploadTarget';
 import { SIZES, detectFileSize } from '@/lib/studioSizes';
 import { personaEdge } from '@/lib/personaColors';
 import { personaColor, tint } from '@/lib/personaColors';
-import { AuthMedia, DisclaimerNote, ForPicker, whoWords, PersonaChip, PersonaDot, inViewFilter, personaKeys, type ViewFilter, Chip, CodeChip, COMPLIANCE_TONE, COMPLIANCE_WORDS, COPY_STATUS, GhostButton, Intro, Label, NAMING_TIP, PINK, PinkButton, SEV_ORDER, chipName, codeState, inRegion, plainSource, regionOf, territoryName, when, whatToDo } from './ui';
+import { adLetter, adTitle, AuthMedia, DisclaimerNote, ForPicker, whoWords, PersonaChip, PersonaDot, inViewFilter, personaKeys, type ViewFilter, Chip, CodeChip, COMPLIANCE_TONE, COMPLIANCE_WORDS, COPY_STATUS, GhostButton, Intro, Label, PINK, PinkButton, SEV_ORDER, chipName, codeState, inRegion, plainSource, regionOf, territoryName, when, whatToDo } from './ui';
 
 type Filter = 'needs' | 'awaiting' | 'changes' | 'ready' | 'all';
 const FILTERS: Array<[Filter, string]> = [['needs', 'Needs upload or review'], ['awaiting', 'Awaiting Trupanion'], ['changes', 'Changes requested'], ['ready', 'Ready to traffic'], ['all', 'All']];
@@ -275,7 +275,8 @@ export function Assets({ meta, view, setView, onBuild, onFixCopy, focus }: { met
                       <li key={a.key}>
                         {/* One row per ad; its copy options are inside (the first that holds it back opens). */}
                         <button onClick={() => { if (!on) setSel(a.lead.s.stub); }} aria-current={on ? 'true' : undefined} className={cn('w-full rounded-lg border px-3 py-2 text-left transition', on ? 'border-[#D94D8F] bg-[#D94D8F]/10' : 'border-[#272B34] hover:border-[#4A505D]')}>
-                          <div className="break-all font-mono text-sm" title="The ad's name: what it is trafficked and reported under">{a.ad}</div>
+                          {/* Names first (Brook, 22 Oct); the ad's name for trafficking is in the tooltip and on the open ad. */}
+                          <div className="text-sm font-semibold text-[#ECEDEF]" title={`${a.ad}: what it is trafficked and reported under`}>{adLetter(a.ad) ? `Ad ${adLetter(a.ad)}` : 'Ad'} · {String(meta.territories[a.lead.s.territory]?.format || '').toLowerCase()}</div>
                           <div className="mt-1 flex items-center gap-2">
                             <Track r={a.lead} compact />
                             <span className="text-xs text-[#858B96]">{a.codes.length} copy option{a.codes.length === 1 ? '' : 's'}</span>
@@ -370,7 +371,8 @@ function CodeView({ meta, row, report, stubs, onSelect, canReady, canCompliance,
       <div className="space-y-3 rounded-xl border border-l-4 border-[#272B34] bg-[#16181D] px-5 py-4" style={personaEdge(report.persona)}>
         <div className="flex flex-wrap items-center gap-3">
           <div className="mr-auto min-w-0">
-            <div className="flex flex-wrap items-center gap-2"><span className="break-all font-mono text-lg font-semibold" title="The ad's name: what it is trafficked and reported under">{report.visual_key || report.stub}</span><CodeChip state={stateOf(row)} /></div>
+            <div className="flex flex-wrap items-center gap-2"><span className="text-lg font-semibold">{adTitle(meta, { persona: report.persona, territory: report.territory, code: report.visual_key || report.stub }, stubs.some(x => x.territory === report.territory && regionOf(x) === regionOf(report) && x.visual_key !== report.visual_key))}</span><CodeChip state={stateOf(row)} /></div>
+            <div className="break-all font-mono text-xs text-[#646A75]" title="The ad's name: what it is trafficked and reported under">{report.visual_key || report.stub}</div>
             {/* The ad's copy options (Studio's own codes): one artwork, one Pre-flight pass and one decision cover them; pick one to see its copy and flags. */}
             {options.length > 1 && (
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-sm" role="group" aria-label="Copy options on this ad">
@@ -379,7 +381,6 @@ function CodeView({ meta, row, report, stubs, onSelect, canReady, canCompliance,
                   <button key={o.stub} onClick={() => onSelect(o.stub)} aria-pressed={o.stub === report.stub} title={o.stub}
                     className={cn('rounded-full border px-2.5 py-0.5 font-mono text-[13px]', o.stub === report.stub ? 'border-[#ECEDEF] bg-[#ECEDEF] text-[#0E0F12]' : 'border-[#343946] text-[#C9CCD2] hover:border-[#6B7280]')}>{optionOf(o.stub)}</button>
                 ))}
-                <span className="font-mono text-xs text-[#646A75]" title={NAMING_TIP}>{report.stub}</span>
               </div>
             )}
             <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-[#858B96]"><PersonaChip meta={meta} persona={report.persona} short /><span>{territoryName(meta.territories[report.territory]) || report.territory}{inRegion(report.region)} · signed off in {report.signoff_id}</span></div>

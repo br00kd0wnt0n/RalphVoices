@@ -100,6 +100,17 @@ export function territoryName(t?: Territory): string {
   return t.status === 'springboard' ? `${name} (idea from the research; not in the pitch)` : name;
 }
 export const personaName = (meta: Meta, code: string) => meta.personas[code]?.name || code;
+/** An ad's letter (A, B…) from its name or one of its codes; '' for an older v# code. */
+export const adLetter = (code: string) => /_([A-Z])\d*_(?:US|CA)_[A-Z]+(?:_\d{6})?$/.exec(code || '')?.[1] || '';
+/**
+ * An ad as people say it (Brook, 22 Oct: names first, codes hidden): "Easy Checkout · DINKs with pets · static", with
+ * "ad B" when the asset has more than one ad. The code goes in a tooltip or a small details line.
+ */
+export function adTitle(meta: Meta, x: { persona: string; territory: string; code: string }, several = false): string {
+  const t = meta.territories[x.territory];
+  return [territoryName(t).replace(/\.$/, '') || x.territory, (meta.personas[x.persona]?.name || x.persona).replace(/\s*\(.*\)$/, ''), String(t?.format || '').toLowerCase(), several && adLetter(x.code) ? `ad ${adLetter(x.code)}` : '']
+    .filter(Boolean).join(' · ');
+}
 /** One persona order everywhere (the database doesn't keep the rules file's key order). */
 export const PERSONA_ORDER = ['DINK', 'CUR', 'FAM'];
 /** The personas, in deck order. The shared captions pool's built-in persona isn't one of them (it has its own entry in the pickers). */
@@ -127,10 +138,21 @@ export const disclaimerPlace = (format?: string) => (/^CAR/i.test(format || '') 
  * The required small print (Brook, 7 Oct): the approved disclaimer for the ad's region, with where it must sit and a
  * button to copy it. It was only visible when an upload failed the check. Nothing when the rules carry no text yet.
  */
-export function DisclaimerNote({ meta, region, format, className }: { meta: Meta; region: Region; format?: string; className?: string }) {
+/** compact: one line with "show" (Build, where the text is a reminder; Assets shows it whole, to copy before upload). */
+export function DisclaimerNote({ meta, region, format, className, compact }: { meta: Meta; region: Region; format?: string; className?: string; compact?: boolean }) {
   const d = meta.disclaimers?.[region];
   const [copied, setCopied] = useState(false);
+  const [open, setOpen] = useState(!compact);
   if (!d) return null;
+  if (!open) {
+    return (
+      <div className={cn('flex flex-wrap items-center gap-x-2 text-xs text-[#858B96]', className)}>
+        <span className="font-semibold uppercase tracking-wider">Required small print</span>
+        <span>{regionLabel(region)} disclaimer on {disclaimerPlace(format)}, {d.chars} characters</span>
+        <button className="underline-offset-2 hover:text-[#ECEDEF] hover:underline" aria-expanded={false} onClick={() => setOpen(true)}>show</button>
+      </div>
+    );
+  }
   return (
     <div className={cn('rounded-lg border border-[#343946] bg-[#101216] px-3 py-2 text-sm', className)}>
       <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1">
